@@ -154,7 +154,7 @@ fn main() -> eframe::Result<()> {
     logger.init();
     log_panics(dirs.panic_log());
     let settings = settings::Settings::load(&dirs.settings_file());
-    let demo_persistence = demo.then(|| dirs.state.join("window.ron"));
+    let window_persistence = window_persistence(&dirs);
 
     #[allow(unused_mut)]
     let mut app = if demo {
@@ -201,7 +201,7 @@ fn main() -> eframe::Result<()> {
         let creator_tour_events = cli.demo_tour_events.clone();
         eframe::run_native(
             "ZapTide",
-            native_options(demo_persistence.clone()),
+            native_options(window_persistence.clone(), demo),
             Box::new(move |cc| {
                 creator_waker.attach(&cc.egui_ctx);
                 let mut app = creator_slot
@@ -328,9 +328,12 @@ fn demo_size_arg() -> Option<[f32; 2]> {
     Some([w.parse::<f32>().ok()?, h.parse::<f32>().ok()?])
 }
 
-fn native_options(demo_persistence: Option<std::path::PathBuf>) -> eframe::NativeOptions {
+fn window_persistence(dirs: &paths::AppDirs) -> std::path::PathBuf {
+    dirs.state.join("window.ron")
+}
+
+fn native_options(window_persistence: std::path::PathBuf, demo: bool) -> eframe::NativeOptions {
     let demo_size = demo_size_arg().unwrap_or([1180.0, 780.0]);
-    let demo = demo_persistence.is_some();
     let viewport = egui::ViewportBuilder::default()
         .with_title(if demo { "ZapTide Demo" } else { "ZapTide" })
         .with_app_id(if demo {
@@ -347,7 +350,7 @@ fn native_options(demo_persistence: Option<std::path::PathBuf>) -> eframe::Nativ
         .with_title_shown(false);
     eframe::NativeOptions {
         viewport,
-        persistence_path: demo_persistence,
+        persistence_path: Some(window_persistence),
         // Do not restore window size during fixed-size screenshot runs.
         persist_window: !demo,
         // Disable vsync because hidden Wayland windows may stop receiving frame
@@ -533,5 +536,21 @@ mod tests {
         assert_eq!(cli.demo_tour_delay, Some(5000));
         assert!(Cli::try_parse_from(["zaptide", "--demo-tour-delay", "5000"]).is_err());
         assert!(Cli::try_parse_from(["zaptide", "--demo-tour", "--demo-page", "login",]).is_err());
+    }
+}
+
+#[cfg(test)]
+mod persistence_tests {
+    use super::*;
+
+    #[test]
+    fn normal_windows_persist_in_the_zaptide_state_directory() {
+        let dirs = paths::AppDirs::under(std::path::Path::new("/tmp/zaptide-test"));
+        let path = dirs.state.clone().join("window.ron");
+        assert_eq!(window_persistence(&dirs), path);
+        assert_eq!(
+            native_options(window_persistence(&dirs), false).persistence_path,
+            Some(window_persistence(&dirs))
+        );
     }
 }

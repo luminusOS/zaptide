@@ -1,6 +1,8 @@
 name: Packaging
 
 on:
+  push:
+  pull_request:
   workflow_dispatch:
     inputs:
       version:
@@ -32,18 +34,30 @@ permissions:
 
 jobs:
   packaging:
+    if: github.event_name != 'pull_request'
     permissions:
       contents: write
     uses: crmne/native-packages/.github/workflows/package.yml@f002ce91c1180528734538fa47d235d387fd351f # v0.6.0
     with:
       targets: linux-amd64,linux-arm64
-      version: ${{ inputs.version }}
+      version: ${{ inputs.version || '0.0.0-dev' }}
       publish: ${{ inputs.publish == true }}
     secrets: inherit
 
+  packaging-pr:
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+    uses: crmne/native-packages/.github/workflows/package.yml@f002ce91c1180528734538fa47d235d387fd351f # v0.6.0
+    with:
+      targets: linux-amd64,linux-arm64
+      version: 0.0.0-dev
+      publish: false
+
   installation:
     name: Install (${{ matrix.os }}, ${{ matrix.image }})
-    needs: packaging
+    if: always() && (needs.packaging.result == 'success' || needs.packaging-pr.result == 'success')
+    needs: [packaging, packaging-pr]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
