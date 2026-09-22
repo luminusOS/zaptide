@@ -494,7 +494,7 @@ mod tests {
 
     #[test]
     fn a_wastickers_archive_becomes_a_named_pack() {
-        let root = std::env::temp_dir().join(format!("zapfast-packs-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("zaptide-packs-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let archive_path = root.join("in").join("Frogs.wastickers");
         std::fs::create_dir_all(archive_path.parent().expect("dir")).expect("dirs");
@@ -572,14 +572,14 @@ mod tests {
         assert!(decoder.has_animation(), "the motion survives");
     }
 
-    /// Imports Signal's example pack from the live CDN. `ZAPFAST_TEST_PACK`
+    /// Imports Signal's example pack from the live CDN. `ZAPTIDE_TEST_PACK`
     /// can provide another signal.art link.
     #[test]
     #[ignore = "network"]
     fn fetches_a_real_pack_from_signal_on_this_machine() {
-        let root = std::env::temp_dir().join(format!("zapfast-signal-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("zaptide-signal-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        let url = std::env::var("ZAPFAST_TEST_PACK").unwrap_or_else(|_| {
+        let url = std::env::var("ZAPTIDE_TEST_PACK").unwrap_or_else(|_| {
             "https://signal.art/addstickers/#pack_id=9acc9e8aba563d26a4994e69263e3b25&pack_key=5a6dff3948c28efb9b7aaf93ecc375c69fc316e78077ed26867a14d10a0f6a12"
                 .to_owned()
         });

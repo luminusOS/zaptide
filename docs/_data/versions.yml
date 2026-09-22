@@ -1,8 +1,8 @@
-current: v0.14.0
+current: main
 items:
-  - id: v0.14.0
-    title: v0.14.0
-    url: /download/
+  - id: main
+    title: Unreleased
+    url: /zaptide/download/
   - title: Changelog
-    url: https://github.com/crmne/zapfast/releases
+    url: https://github.com/luminusOS/zaptide/releases
     external: true

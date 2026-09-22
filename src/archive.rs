@@ -1854,7 +1854,7 @@ pub(crate) mod tests {
 
     #[test]
     fn read_positions_and_pending_sync_survive_reopening_the_archive() {
-        let dir = std::env::temp_dir().join(format!("zapfast-read-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("zaptide-read-test-{}", std::process::id()));
         let path = dir.join("archive.db");
         let _ = std::fs::remove_dir_all(&dir);
         let chat = "1@s.whatsapp.net";

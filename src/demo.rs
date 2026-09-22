@@ -963,11 +963,11 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 };
                 app.update = Some(crate::updates::Release {
                     version: "99.0.0".to_owned(),
-                    url: "https://github.com/crmne/zapfast/releases/latest".to_owned(),
+                    url: "https://github.com/luminusOS/zaptide/releases/latest".to_owned(),
                 });
                 app.show_update = true;
                 let installation = Installation {
-                    executable: "/demo/zapfast".into(),
+                    executable: "/demo/zaptide".into(),
                     kind: Kind::Portable,
                 };
                 app.update_support = Some(Ok(installation.clone()));
@@ -1313,7 +1313,7 @@ mod tests {
 
     pub(super) fn app() -> App {
         let root = std::env::temp_dir().join(format!(
-            "zapfast-demo-{}-{:?}",
+            "zaptide-demo-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ));

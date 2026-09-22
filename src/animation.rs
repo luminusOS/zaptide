@@ -540,7 +540,7 @@ mod tests {
             .add_frame(&square(40, 40, [0, 255, 0, 255]), 100)
             .expect("frame");
         let webp = encoder.finalize(200).expect("finalizes");
-        let dir = std::env::temp_dir().join(format!("zapfast-ghost-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("zaptide-ghost-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("dir");
         let path = dir.join("moving.webp");
         std::fs::write(&path, &webp).expect("writes");
@@ -557,7 +557,7 @@ mod tests {
     #[test]
     fn animated_webp_decodes_into_frames() {
         // Two frames 100 ms apart.
-        let dir = std::env::temp_dir().join(format!("zapfast-anim-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("zaptide-anim-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("dir");
         let path = dir.join("two.gif");
         {
@@ -587,7 +587,7 @@ mod tests {
         if !can_play_video() {
             return;
         }
-        let dir = std::env::temp_dir().join(format!("zapfast-mp4-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("zaptide-mp4-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("dir");
         let path = dir.join("clip.mp4");
         let made = Command::new("ffmpeg")
@@ -618,7 +618,7 @@ mod tests {
 
     #[test]
     fn a_still_webp_is_not_an_animation() {
-        let dir = std::env::temp_dir().join(format!("zapfast-still-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("zaptide-still-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("dir");
         let path = dir.join("still.webp");
         image::RgbaImage::from_pixel(4, 4, image::Rgba([1, 2, 3, 255]))
@@ -633,12 +633,12 @@ mod tests {
 mod probe {
     use super::*;
 
-    /// Decodes the file in `ZAPFAST_MP4_PROBE`:
-    /// `ZAPFAST_MP4_PROBE=some.mp4 cargo test --all-features probe -- --ignored --nocapture`.
+    /// Decodes the file in `ZAPTIDE_MP4_PROBE`:
+    /// `ZAPTIDE_MP4_PROBE=some.mp4 cargo test --all-features probe -- --ignored --nocapture`.
     #[test]
     #[ignore = "needs a file to look at"]
     fn decodes_the_file_named_by_the_environment() {
-        let Some(path) = std::env::var_os("ZAPFAST_MP4_PROBE") else {
+        let Some(path) = std::env::var_os("ZAPTIDE_MP4_PROBE") else {
             return;
         };
         let started = Instant::now();

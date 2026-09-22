@@ -1,12 +1,9 @@
-title: ZapFast
-zapfast_version: "0.14.0"
-release_asset_prefix: zapfast
-release_app_name: ZapFast
+title: ZapTide
 description: A fast, lightweight WhatsApp app for Linux, macOS, and Windows.
 lang: en-US
 timezone: Europe/Berlin
-url: https://zapfast.rocks
-baseurl: ""
+url: https://luminusos.github.io
+baseurl: /zaptide
 logo: /assets/images/logo.svg
 image: /screenshot.png
 
@@ -51,28 +48,28 @@ jekyll_vitepress:
     page_type: TechArticle
     image:
       path: /screenshot.png
-      alt: ZapFast showing a chat with a photo, a voice message, a quoted reply, and a link preview
+      alt: ZapTide showing a chat with a photo, a voice message, a quoted reply, and a link preview
     publisher:
-      type: Person
-      name: Carmine Paolino
-      url: https://paolino.me
+      type: Organization
+      name: LuminusOS
+      url: https://github.com/luminusOS
       same_as:
-        - https://github.com/crmne/zapfast
+        - https://github.com/luminusOS/zaptide
   llms:
-    title: ZapFast
+    title: ZapTide
     description: >-
-      Documentation for ZapFast, a native WhatsApp client for chats, voice
+      Documentation for ZapTide, a native WhatsApp client for chats, voice
       messages, attachments, and notifications on Linux, macOS, and Windows.
     full: true
     details: >-
       Covers installation, phone linking, everyday use, settings, and the
       WhatsApp connection. Source is on
-      [GitHub](https://github.com/crmne/zapfast).
+      [GitHub](https://github.com/luminusOS/zaptide).
   branding:
-    site_title: ZapFast
+    site_title: ZapTide
     logo:
       default: /assets/images/logo.svg
-      alt: ZapFast
+      alt: ZapTide
   syntax:
     light_theme: github
     dark_theme: github.dark
@@ -80,9 +77,9 @@ jekyll_vitepress:
     enabled: true
     show_on_docs: false
     message: >-
-      Brought to you by <a href="https://paolino.me" target="_blank" rel="noreferrer">Carmine Paolino</a>, maker of
+      ZapTide is maintained by LuminusOS.
     copyright: >-
-      <span class="footer-brand-links"><a href="https://chatwithwork.com" class="footer-chatwithwork-link" target="_blank" rel="noreferrer"><img class="footer-chatwithwork-logo theme-image light" src="https://chatwithwork.com/logotype.svg" alt="Chat with Work"><img class="footer-chatwithwork-logo theme-image dark" src="https://chatwithwork.com/logotype-dark.svg" alt="Chat with Work"></a><a href="https://rubyllm.com" class="footer-rubyllm-link" target="_blank" rel="noreferrer"><img class="footer-rubyllm-logo theme-image light" src="https://rubyllm.com/assets/images/logotype.svg" alt="RubyLLM"><img class="footer-rubyllm-logo theme-image dark" src="https://rubyllm.com/assets/images/logotype_dark.svg" alt="RubyLLM"></a><a href="https://paolino.me/projects" target="_blank" rel="noreferrer" aria-label="More projects by Carmine Paolino">and more</a></span><br><span class="footer-built-with">Docs built with <a href="https://jekyll-vitepress.dev" target="_blank" rel="noreferrer">Jekyll VitePress</a>. ZapFast is an independent project, not affiliated with or endorsed by WhatsApp LLC or Meta. WhatsApp is a trademark of WhatsApp LLC.</span>
+      Docs built with <a href="https://jekyll-vitepress.dev" target="_blank" rel="noreferrer">Jekyll VitePress</a>. ZapTide is an independent project, not affiliated with or endorsed by WhatsApp LLC or Meta. WhatsApp is a trademark of WhatsApp LLC.
   doc_footer:
     enabled: true
     previous_label: Previous page
@@ -93,17 +90,15 @@ jekyll_vitepress:
     format: "%Y-%m-%d %H:%M"
   edit_link:
     enabled: true
-    pattern: "https://github.com/crmne/zapfast/edit/main/docs/:path"
+    pattern: "https://github.com/luminusOS/zaptide/edit/main/docs/:path"
     text: Edit this page on GitHub
   github_star:
     enabled: true
-    repository: crmne/zapfast
+    repository: luminusOS/zaptide
     text: Star
     show_count: true
   github_sponsor:
-    enabled: true
-    user: crmne
-    text: Sponsor
+    enabled: false
 
 plugins:
   - jekyll-redirect-from

@@ -58,7 +58,7 @@ fn empty(app: &mut App, ui: &mut egui::Ui) {
     ui.painter().text(
         center,
         Align2::CENTER_CENTER,
-        "ZapFast",
+        "ZapTide",
         theme::bold(24.0),
         palette.text,
     );
@@ -709,7 +709,7 @@ fn composer(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
             if !chat.can_send() {
                 if chat.kind == crate::model::ChatKind::Broadcast {
                     ui.vertical_centered(|ui| {
-                        theme::text(ui, "Channels are read-only in ZapFast", theme::regular(13.5), palette.secondary);
+                        theme::text(ui, "Channels are read-only in ZapTide", theme::regular(13.5), palette.secondary);
                     });
                     return;
                 }
@@ -1624,7 +1624,7 @@ impl SelectionLeash {
 
 impl egui::plugin::Plugin for SelectionLeash {
     fn debug_name(&self) -> &'static str {
-        "zapfast-selection-leash"
+        "zaptide-selection-leash"
     }
 
     fn input_hook(&mut self, _ctx: &egui::Context, input: &mut egui::RawInput) {

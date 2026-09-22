@@ -6,7 +6,7 @@ use windows_sys::Win32::System::Registry::{
 };
 use winrt_notification::{IconCrop, Toast};
 
-const APPLICATION_ID: &str = "me.paolino.zapfast";
+const APPLICATION_ID: &str = "dev.luminusos.ZapTide";
 
 fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(Some(0)).collect()
@@ -17,7 +17,7 @@ fn register_identity() -> std::io::Result<()> {
         r"Software\Classes\AppUserModelId\{APPLICATION_ID}"
     ));
     let name = wide("DisplayName");
-    let value = wide("ZapFast");
+    let value = wide("ZapTide");
     let mut key = std::ptr::null_mut();
     // All buffers are NUL-terminated UTF-16 and remain alive during each call.
     let status = unsafe { RegCreateKeyW(HKEY_CURRENT_USER, path.as_ptr(), &mut key) };
@@ -66,7 +66,7 @@ mod tests {
 
     #[test]
     fn installer_shortcuts_use_the_toast_identity() {
-        let installer = include_str!("../../packaging/windows/zapfast.iss");
+        let installer = include_str!("../../packaging/windows/zaptide.iss");
         let shortcuts: Vec<_> = installer
             .lines()
             .filter(|line| {

@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 
 const LIMIT: u64 = 2 * 1024 * 1024 * 1024;
 #[cfg(not(target_os = "macos"))]
-const MARKER: &str = "zapfast-portable-v1";
+const MARKER: &str = "zaptide-portable-v1";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Kind {
@@ -85,9 +85,9 @@ pub fn detect_at(executable: &Path) -> Result<Installation> {
     {
         let installed = std::env::var_os("LOCALAPPDATA")
             .map(PathBuf::from)
-            .map(|base| base.join("Programs/ZapFast/zapfast.exe"));
-        if fs::read_to_string(directory.join("zapfast-installer.txt"))
-            .is_ok_and(|value| value.trim() == "zapfast-installer-v1")
+            .map(|base| base.join("Programs/ZapTide/zaptide.exe"));
+        if fs::read_to_string(directory.join("zaptide-installer.txt"))
+            .is_ok_and(|value| value.trim() == "zaptide-installer-v1")
             || (installed
                 .and_then(|path| path.canonicalize().ok())
                 .as_deref()
@@ -111,7 +111,7 @@ pub fn detect_at(executable: &Path) -> Result<Installation> {
     #[cfg(not(target_os = "macos"))]
     {
         ensure!(
-            fs::read_to_string(directory.join("zapfast-portable.txt"))
+            fs::read_to_string(directory.join("zaptide-portable.txt"))
                 .is_ok_and(|value| value.trim() == MARKER),
             "This installation does not identify itself as a portable download. Use the download page to install an update-enabled build."
         );
@@ -157,7 +157,7 @@ pub fn staging(installation: &Installation) -> Result<PathBuf> {
         .root()?
         .parent()
         .context("Missing installation directory")?;
-    let directory = parent.join(format!(".zapfast-update-{:016x}", rand::random::<u64>()));
+    let directory = parent.join(format!(".zaptide-update-{:016x}", rand::random::<u64>()));
     fs::create_dir(&directory).context("Cannot write to the installation directory")?;
     #[cfg(unix)]
     {
@@ -251,7 +251,7 @@ pub fn verify_version(executable: &Path, expected: &str) -> Result<()> {
                 .take(4096)
                 .read_to_string(&mut version)?;
             ensure!(
-                version.trim() == format!("zapfast {expected}"),
+                version.trim() == format!("zaptide {expected}"),
                 "The downloaded app has the wrong version"
             );
             return Ok(());
@@ -613,7 +613,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         for starts in [true, false] {
             let directory = tempfile::tempdir().unwrap();
-            let target = directory.path().join("zapfast");
+            let target = directory.path().join("zaptide");
             let original =
                 b"#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$(dirname \"$0\")/restart-arguments\"\n";
             fs::write(&target, original).unwrap();
@@ -695,9 +695,9 @@ mod tests {
             }
         }
         let directory =
-            std::env::temp_dir().join(format!("zapfast-backup-test-{}", rand::random::<u64>()));
+            std::env::temp_dir().join(format!("zaptide-backup-test-{}", rand::random::<u64>()));
         fs::create_dir(&directory).unwrap();
-        let target = directory.join("zapfast");
+        let target = directory.join("zaptide");
         fs::write(&target, b"working executable").unwrap();
         let backup = directory.join("previous");
         let permissions = fs::metadata(&target).unwrap().permissions();
@@ -736,10 +736,10 @@ mod tests {
     #[test]
     fn unknown_and_package_managed_paths_are_not_portable() {
         for path in [
-            "/usr/bin/zapfast",
-            "/nix/store/package/bin/zapfast",
-            "/home/test/.cargo/bin/zapfast",
-            "/unknown/zapfast",
+            "/usr/bin/zaptide",
+            "/nix/store/package/bin/zaptide",
+            "/home/test/.cargo/bin/zaptide",
+            "/unknown/zaptide",
         ] {
             assert!(detect_at(Path::new(path)).is_err());
         }
@@ -748,21 +748,21 @@ mod tests {
     #[test]
     fn installer_arguments_use_paths_inno_setup_accepts() {
         assert_eq!(
-            installer_path(Path::new(r"\\?\C:\Users\test\ZapFast")),
-            r"C:\Users\test\ZapFast"
+            installer_path(Path::new(r"\\?\C:\Users\test\ZapTide")),
+            r"C:\Users\test\ZapTide"
         );
         assert_eq!(
-            installer_path(Path::new(r"\\?\UNC\server\share\ZapFast")),
-            r"\\server\share\ZapFast"
+            installer_path(Path::new(r"\\?\UNC\server\share\ZapTide")),
+            r"\\server\share\ZapTide"
         );
     }
 
     #[test]
     fn replacement_verifies_before_touching_the_current_executable() {
         let directory =
-            std::env::temp_dir().join(format!("zapfast-updater-test-{}", rand::random::<u64>()));
+            std::env::temp_dir().join(format!("zaptide-updater-test-{}", rand::random::<u64>()));
         fs::create_dir(&directory).unwrap();
-        let target = directory.join("zapfast");
+        let target = directory.join("zaptide");
         fs::write(&target, b"old").unwrap();
         let installation = Installation {
             executable: target.clone(),

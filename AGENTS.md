@@ -1,6 +1,6 @@
-# ZapFast agent guide
+# ZapTide agent guide
 
-ZapFast is a small native WhatsApp client: Rust, egui, and the
+ZapTide is a Linux-first native WhatsApp client forked from ZapFast: Rust, egui, and the
 [whatsapp-rust](https://github.com/oxidezap/whatsapp-rust) library for the
 protocol. These notes are for coding agents and new contributors.
 
@@ -65,7 +65,7 @@ protocol. These notes are for coding agents and new contributors.
 - `src/updates/` downloads verified GitHub releases and hands installation to a
   helper after an explicit restart action. Keep package-manager detection, asset
   checksums, startup acknowledgement and rollback intact. Portable releases carry
-  `packaging/zapfast-portable.txt`; the Windows installer has its own marker.
+  `packaging/zaptide-portable.txt`; the Windows installer has its own marker.
 - `src/theme/custom.rs` scans local JSON palettes off the UI thread, caching the
   last usable choice in settings, with shared Spotifast palettes embedded as
   defaults. On Linux filesystem notifications reload the catalog and the active
@@ -155,16 +155,16 @@ protocol. These notes are for coding agents and new contributors.
   player must use an explicit `Layout::left_to_right` at their own width.
   `src/ui/picker.rs` is the emoji/GIF/sticker panel. GIF search uses the
   key from Settings, else one baked in at build time from
-  `ZAPFAST_GIPHY_KEY` (`option_env!`); the repository carries none. The
+  `ZAPTIDE_GIPHY_KEY` (`option_env!`); the repository carries none. The
   phone's recently used stickers arrive in `HistorySync.recent_stickers`
   when the device links and live in the archive's `stickers` table as raw
   `StickerMetadata`, fetched when the picker opens; favourite stickers sync
   through app state (`FavoriteSticker`), which whatsapp-rust does not
   surface, so they are not shown.
-- `src/paths.rs` moves a setup left by the app's earlier name
-  (`fastsapp`, then `fastwhatsapp`) over once, so the linked device survives
-  the rename. Migration runs after the single-instance guard and outside demos;
-  keep the guard's `fastsapp:` wire identity compatible with running old copies.
+- `src/paths.rs` uses a ZapTide-only XDG namespace. Never adopt or open ZapFast,
+  FastsApp, or FastWhatsApp data automatically. The keyring service and single-instance
+  wire identity must remain separate too. Any importer requires explicit consent and a
+  separately reviewed migration plan.
 - The app outlives the window, as in Spotifast: `main` runs
   `eframe::run_native` in a loop; closing the window with "keep running"
   on sets `hide_intent`, the window is destroyed, and a headless loop keeps
@@ -251,18 +251,18 @@ A release is not finished when the tag is pushed. Do these in order:
    and `Fixed`, credit contributors and reporters where it helps, and end
    with a full-changelog link comparing the previous tag. Write about what
    changed for the user, not the commit history.
-4. After the release files exist, update both `zapfast_version` in
+4. After the release files exist, update both `zaptide_version` in
    `docs/_config.yml` and the version menu in `docs/_data/versions.yml`.
    The menu lists only the current version, which points to `/download/`,
    and the Changelog link; do not add older versions to it. Never point the
    download page at files that do not exist yet. Set `release_asset_prefix` to
-   `zapfast` and `release_app_name` to `ZapFast` only once those assets exist.
+   `zaptide` and `release_app_name` to `ZapTide` only once those assets exist.
 5. Update the AUR packages from the templates in `packaging/arch/`. The shared
    packaging workflow generates versions, hashes and `.SRCINFO` after the
    release exists, and publishes when `PUBLISH_AUR` and the required secrets
    are configured. Otherwise use `native-packages` to build, stage,
    review and publish the generated recipes; see `PACKAGING.md`. Validate
-   native builds with `makepkg -f`. A recipe-only `zapfast-git` change does
+   native builds with `makepkg -f`. A recipe-only `zaptide-git` change does
    not require an application release.
 
 ## Definition of done

@@ -1,17 +1,12 @@
 name: Packaging
 
 on:
-  push:
-    branches: [main, master]
-    paths: [native-packages.yaml, packaging/**, contrib/omarchy/**, .github/workflows/packaging.yml, .github/workflows/release.yml]
-  pull_request:
-    paths: [native-packages.yaml, packaging/**, contrib/omarchy/**, .github/workflows/packaging.yml, .github/workflows/release.yml]
   workflow_dispatch:
     inputs:
       version:
-        description: Published version (empty tests the published v0.13.1 fixture)
+        description: Published ZapTide version
         type: string
-        default: ''
+        required: true
       publish:
         description: Attach packages and run enabled downstream publishers
         type: boolean
@@ -42,8 +37,8 @@ jobs:
     uses: crmne/native-packages/.github/workflows/package.yml@f002ce91c1180528734538fa47d235d387fd351f # v0.6.0
     with:
       targets: linux-amd64,linux-arm64
-      version: ${{ inputs.version || 'v0.13.1' }}
-      publish: ${{ inputs.publish == true && inputs.version != '' }}
+      version: ${{ inputs.version }}
+      publish: ${{ inputs.publish == true }}
     secrets: inherit
 
   installation:

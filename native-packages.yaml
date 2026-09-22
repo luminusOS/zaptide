@@ -10,41 +10,38 @@ libraries:
     deb: libasound2t64
     rpm: alsa-lib
 nfpm:
-  name: zapfast
-  maintainer: Carmine Paolino <carmine@paolino.me>
-  homepage: https://zapfast.rocks
+  name: zaptide
+  maintainer: LuminusOS
+  homepage: https://github.com/luminusOS/zaptide
   description: Fast native WhatsApp client
   license: MIT
-  provides: [fastsapp]
-  conflicts: [fastsapp]
-  replaces: [fastsapp]
   contents:
-  - src: "@PAYLOAD@/zapfast-v@VERSION@-@TARGET@/zapfast"
-    dst: "/usr/bin/zapfast"
+  - src: "@PAYLOAD@/zaptide-v@VERSION@-@TARGET@/zaptide"
+    dst: "/usr/bin/zaptide"
     file_info:
       mode: 493
-  - src: "@PAYLOAD@/zapfast-v@VERSION@-@TARGET@/LICENSE"
-    dst: "/usr/share/licenses/zapfast/LICENSE"
+  - src: "@PAYLOAD@/zaptide-v@VERSION@-@TARGET@/LICENSE"
+    dst: "/usr/share/licenses/zaptide/LICENSE"
     file_info:
       mode: 420
-  - src: "@PAYLOAD@/zapfast-v@VERSION@-@TARGET@/README.md"
-    dst: "/usr/share/doc/zapfast/README.md"
+  - src: "@PAYLOAD@/zaptide-v@VERSION@-@TARGET@/README.md"
+    dst: "/usr/share/doc/zaptide/README.md"
     file_info:
       mode: 420
-  - src: "@PAYLOAD@/zapfast-v@VERSION@-@TARGET@/packaging/applications/zapfast.desktop"
-    dst: "/usr/share/applications/zapfast.desktop"
+  - src: "@PAYLOAD@/zaptide-v@VERSION@-@TARGET@/packaging/applications/dev.luminusos.ZapTide.desktop"
+    dst: "/usr/share/applications/dev.luminusos.ZapTide.desktop"
     file_info:
       mode: 420
-  - src: "@PAYLOAD@/zapfast-v@VERSION@-@TARGET@/packaging/icons/zapfast.svg"
-    dst: "/usr/share/icons/hicolor/scalable/apps/zapfast.svg"
+  - src: "@PAYLOAD@/zaptide-v@VERSION@-@TARGET@/packaging/icons/zaptide.svg"
+    dst: "/usr/share/icons/hicolor/scalable/apps/zaptide.svg"
     file_info:
       mode: 420
-  - src: contrib/omarchy/zapfast.json.tpl
-    dst: /usr/share/zapfast/omarchy/zapfast.json.tpl
+  - src: contrib/omarchy/zaptide.json.tpl
+    dst: /usr/share/zaptide/omarchy/zaptide.json.tpl
     file_info:
       mode: 420
-  - src: contrib/omarchy/zapfast-theme
-    dst: /usr/share/zapfast/omarchy/zapfast-theme
+  - src: contrib/omarchy/zaptide-theme
+    dst: /usr/share/zaptide/omarchy/zaptide-theme
     file_info:
       mode: 493
   overrides:
@@ -98,7 +95,7 @@ targets:
       local: dist/macos-input
     native:
       command: [ruby, packaging/macos/dmg.rb, '@PAYLOAD@', '@PACKAGE@']
-      output: 'zapfast-@TAG@-macos-universal.dmg'
+      output: 'zaptide-@TAG@-macos-universal.dmg'
   linux-amd64:
     platform: linux
     arch: amd64
@@ -108,8 +105,8 @@ targets:
     - deb
     - rpm
     input:
-      local: dist/zapfast-v@VERSION@-x86_64-unknown-linux-gnu.tar.gz
-      release_asset: zapfast-v@VERSION@-x86_64-unknown-linux-gnu.tar.gz
+      local: dist/zaptide-v@VERSION@-x86_64-unknown-linux-gnu.tar.gz
+      release_asset: zaptide-v@VERSION@-x86_64-unknown-linux-gnu.tar.gz
   linux-arm64:
     platform: linux
     arch: arm64
@@ -119,75 +116,75 @@ targets:
     - deb
     - rpm
     input:
-      local: dist/zapfast-v@VERSION@-aarch64-unknown-linux-gnu.tar.gz
-      release_asset: zapfast-v@VERSION@-aarch64-unknown-linux-gnu.tar.gz
+      local: dist/zaptide-v@VERSION@-aarch64-unknown-linux-gnu.tar.gz
+      release_asset: zaptide-v@VERSION@-aarch64-unknown-linux-gnu.tar.gz
 release:
-  repository: crmne/zapfast
+  repository: luminusOS/zaptide
   checksums: checksums.txt
 assets:
   AMD64:
-    file: zapfast-v@VERSION@-x86_64-unknown-linux-gnu.tar.gz
-    local: dist/zapfast-v@VERSION@-x86_64-unknown-linux-gnu.tar.gz
+    file: zaptide-v@VERSION@-x86_64-unknown-linux-gnu.tar.gz
+    local: dist/zaptide-v@VERSION@-x86_64-unknown-linux-gnu.tar.gz
   ARM64:
-    file: zapfast-v@VERSION@-aarch64-unknown-linux-gnu.tar.gz
-    local: dist/zapfast-v@VERSION@-aarch64-unknown-linux-gnu.tar.gz
+    file: zaptide-v@VERSION@-aarch64-unknown-linux-gnu.tar.gz
+    local: dist/zaptide-v@VERSION@-aarch64-unknown-linux-gnu.tar.gz
   MACOS:
-    file: zapfast-v@VERSION@-macos-universal.dmg
-    local: dist/zapfast-v@VERSION@-macos-universal.dmg
+    file: zaptide-v@VERSION@-macos-universal.dmg
+    local: dist/zaptide-v@VERSION@-macos-universal.dmg
   SOURCE:
-    file: zapfast-@VERSION@.tar.gz
-    url: https://github.com/crmne/zapfast/archive/refs/tags/v@VERSION@.tar.gz
+    file: zaptide-@VERSION@.tar.gz
+    url: https://github.com/luminusOS/zaptide/archive/refs/tags/v@VERSION@.tar.gz
     checksummed: false
-    local: dist/zapfast-@VERSION@.tar.gz
+    local: dist/zaptide-@VERSION@.tar.gz
 templates:
-  homebrew/zapfast.rb: packaging/homebrew/zapfast.rb.in
-  arch/zapfast/PKGBUILD: packaging/arch/zapfast/PKGBUILD.in
-  arch/zapfast/zapfast.install: packaging/arch/zapfast.install
-  arch/zapfast-bin/PKGBUILD: packaging/arch/zapfast-bin/PKGBUILD.in
-  arch/zapfast-bin/zapfast-bin.install: packaging/arch/zapfast.install
-  arch/zapfast-git/PKGBUILD: packaging/arch/zapfast-git/PKGBUILD.in
-  arch/zapfast-git/zapfast-git.install: packaging/arch/zapfast.install
+  homebrew/zaptide.rb: packaging/homebrew/zaptide.rb.in
+  arch/zaptide/PKGBUILD: packaging/arch/zaptide/PKGBUILD.in
+  arch/zaptide/zaptide.install: packaging/arch/zaptide.install
+  arch/zaptide-bin/PKGBUILD: packaging/arch/zaptide-bin/PKGBUILD.in
+  arch/zaptide-bin/zaptide-bin.install: packaging/arch/zaptide.install
+  arch/zaptide-git/PKGBUILD: packaging/arch/zaptide-git/PKGBUILD.in
+  arch/zaptide-git/zaptide-git.install: packaging/arch/zaptide.install
 repositories:
   homebrew:
-    url: https://github.com/crmne/homebrew-tap.git
-    push_url: https://github.com/crmne/homebrew-tap.git
+    url: https://github.com/luminusOS/homebrew-tap.git
+    push_url: https://github.com/luminusOS/homebrew-tap.git
     branch: main
     package_path: Casks
     files:
-      homebrew/zapfast.rb: Casks/zapfast.rb
-    version_file: Casks/zapfast.rb
+      homebrew/zaptide.rb: Casks/zaptide.rb
+    version_file: Casks/zaptide.rb
     version_pattern: 'version "([^"]+)"'
     publish: push
   aur-source:
     group: aur
-    url: https://aur.archlinux.org/zapfast.git
-    push_url: ssh://aur@aur.archlinux.org/zapfast.git
+    url: https://aur.archlinux.org/zaptide.git
+    push_url: ssh://aur@aur.archlinux.org/zaptide.git
     branch: master
     package_path: "."
     files:
-      arch/zapfast: "."
+      arch/zaptide: "."
     version_file: ".SRCINFO"
     version_pattern: "^\\s*pkgver = (\\S+)"
     publish: push
   aur-bin:
     group: aur
-    url: https://aur.archlinux.org/zapfast-bin.git
-    push_url: ssh://aur@aur.archlinux.org/zapfast-bin.git
+    url: https://aur.archlinux.org/zaptide-bin.git
+    push_url: ssh://aur@aur.archlinux.org/zaptide-bin.git
     branch: master
     package_path: "."
     files:
-      arch/zapfast-bin: "."
+      arch/zaptide-bin: "."
     version_file: ".SRCINFO"
     version_pattern: "^\\s*pkgver = (\\S+)"
     publish: push
   aur-git:
     group: aur
-    url: https://aur.archlinux.org/zapfast-git.git
-    push_url: ssh://aur@aur.archlinux.org/zapfast-git.git
+    url: https://aur.archlinux.org/zaptide-git.git
+    push_url: ssh://aur@aur.archlinux.org/zaptide-git.git
     branch: master
     package_path: "."
     files:
-      arch/zapfast-git: "."
+      arch/zaptide-git: "."
     version_file: ".SRCINFO"
     version_pattern: "^\\s*pkgver = (\\S+)"
     publish: push

@@ -329,7 +329,7 @@ macro_rules! icons {
     ($($variant:ident => $file:literal),* $(,)?) => {
         &[$((
             Icon::$variant,
-            concat!("bytes://zapfast-icon-", $file, ".svg"),
+            concat!("bytes://zaptide-icon-", $file, ".svg"),
             include_bytes!(concat!("../assets/icons/", $file, ".svg")).as_slice(),
         )),*]
     };
@@ -584,7 +584,7 @@ pub fn circle_button(
 /// Draws the app logo.
 pub fn logo(ui: &egui::Ui, center: egui::Pos2, diameter: f32, disc: Color32, glyph: Color32) {
     ui.painter().circle_filled(center, diameter / 2.0, disc);
-    // Match `packaging/icons/zapfast.svg`.
+    // Match `packaging/icons/zaptide.svg`.
     let icon_size = diameter * 0.56;
     let icon_rect = egui::Rect::from_center_size(
         center - Vec2::new(0.0, diameter * 0.02),

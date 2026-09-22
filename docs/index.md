@@ -1,32 +1,32 @@
 ---
 layout: home
-title: ZapFast
+title: ZapTide
 description: A fast, lightweight WhatsApp app for Linux, macOS, and Windows.
 permalink: /
 hero:
-  name: ZapFast
+  name: ZapTide
   text: WhatsApp, native and fast
   tagline: A lightweight WhatsApp app for Linux, macOS, and Windows. Chat, send voice messages, and share files.
   actions:
     - theme: brand
       text: Download
-      link: /download/
+      link: /zaptide/download/
     - theme: alt
-      text: What is ZapFast?
-      link: /what-is-zapfast/
+      text: What is ZapTide?
+      link: /zaptide/what-is-zaptide/
     - theme: alt
       text: GitHub
-      link: https://github.com/crmne/zapfast
+      link: https://github.com/luminusOS/zaptide
   image:
-    src: /screenshot.png
-    alt: "ZapFast showing a chat with a photo, a document, a voice message, a quoted reply, and a link preview"
+    src: /zaptide/screenshot.png
+    alt: "ZapTide showing a chat with a photo, a document, a voice message, a quoted reply, and a link preview"
     width: 1387
     height: 1040
 
 features:
   - icon: ⚡
     title: Lightweight
-    details: Opens in under a second and uses 150MB of RAM. No browser engine.
+    details: No browser engine. The inherited ZapFast baseline measured 150 MB of idle RAM.
   - icon: 🎤
     title: Voice messages
     details: Play, seek, and record voice messages in the chat. OGG/Opus support is built in.
@@ -35,14 +35,14 @@ features:
     details: Photos, GIFs, stickers, documents, polls, locations, and link previews appear in the chat. Add captions before sending files.
   - icon: 🔔
     title: Background mode
-    details: Closing the window keeps ZapFast linked in the tray. Notifications show the chat picture, and muted chats stay quiet.
+    details: Closing the window keeps ZapTide linked in the tray. Notifications show the chat picture, and muted chats stay quiet.
   - icon: ⌨️
     title: Keyboard shortcuts
     details: Search, switch chats, reply, and record with shortcuts. Select and copy text, including across messages.
   - icon: 🔓
     title: Open source
     details: MIT-licensed Rust built with egui and whatsapp-rust. The linking process is documented.
-    link: https://github.com/crmne/zapfast
+    link: https://github.com/luminusOS/zaptide
     link_text: Read the source
 ---
 

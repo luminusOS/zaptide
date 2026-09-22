@@ -5,11 +5,10 @@ it pins the shared CLI and nFPM versions and declares Linux amd64/arm64 inputs,
 DEB/RPM contents, dependencies, recipe templates and downstream repositories.
 Application assets and native recipes stay in `packaging/`.
 
-Version 0.13.0 introduces the ZapFast name and `zapfast` binary. Its AUR recipes
-provide and replace the corresponding FastsApp packages. The GitHub repository is
-`crmne/zapfast`, so source archives extract into `zapfast-VERSION`. Use the
-configuration from the matching tag to rebuild an older FastsApp release.
-Existing release files keep their original names.
+ZapTide uses the `zaptide` binary and an isolated package identity. It does not
+provide, conflict with, replace, or migrate ZapFast or FastsApp packages. The
+GitHub repository is `luminusOS/zaptide`, so source archives extract into
+`zaptide-VERSION`. No stable ZapTide packages have been published yet.
 
 ```sh
 gem install native-packages --version 0.6.0
@@ -93,8 +92,8 @@ their original signatures; this setup does not replace release assets.
 
 Linux releases build on Ubuntu 24.04 (glibc 2.39). DEB/RPM recipes declare
 runtime-loaded Wayland, X11 and EGL libraries as well as ALSA and its PulseAudio
-plugin. Packaging CI builds both architectures from the published v0.13.1 fixture
-on PRs; release runs use their own tag. Clean Ubuntu, Debian and Fedora containers
+plugin. Packaging runs for an explicit published ZapTide version through manual
+dispatch or a release workflow call. Clean Ubuntu, Debian and Fedora containers
 install and remove each package, check GUI libraries loaded with `dlopen`, and
 verify desktop and theme assets. Run the same check locally with
 `bash packaging/test-install.sh ubuntu:24.04 /path/to/native-packages-output`. The macOS job selects `macos-universal`
@@ -103,7 +102,7 @@ recipe generation to the Linux packaging job after release assets exist.
 
 ## Flatpak
 
-`packaging/flatpak/rocks.zapfast.ZapFast.yml` builds from source, with offline Cargo
+`packaging/flatpak/dev.luminusos.ZapTide.yml` builds from source, with offline Cargo
 sources generated from the selected revision's lockfile. The adjacent bundle
 manifest reuses the Linux release binary, as in Spotifast. Both grant Wayland/X11,
 GPU, audio, network, keyring and tray access; attachments chosen by the user use
@@ -114,11 +113,11 @@ Generate a pinned Flathub checkout (Python needs `aiohttp`, `tomlkit` and `PyYAM
 
 ```sh
 packaging/flatpak/flathub.sh vX.Y.Z /path/to/flathub-checkout
-flatpak-builder --user --install --force-clean build-dir /path/to/flathub-checkout/rocks.zapfast.ZapFast.yml
+flatpak-builder --user --install --force-clean build-dir /path/to/flathub-checkout/dev.luminusos.ZapTide.yml
 ```
 
 Flathub submission/review is a separate publication step; the manifest alone does
-not make ZapFast available in Flathub. A maintainer must submit it manually:
+not make ZapTide available in Flathub. A maintainer must submit it manually:
 [Flathub's requirements](https://docs.flathub.org/docs/for-app-authors/requirements#generative-ai-policy)
 prohibit AI agents from submitting or writing submission interactions and require
 disclosure of generated material. Review the manifests and these changes before

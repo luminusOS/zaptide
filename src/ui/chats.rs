@@ -407,7 +407,7 @@ fn chat_lock_hint(app: &mut App, ui: &mut egui::Ui) {
         ui.painter().text(
             pos2(rect.left() + 52.0, rect.top() + 38.0),
             egui::Align2::LEFT_CENTER,
-            "This code is local to ZapFast",
+            "This code is local to ZapTide",
             theme::regular(11.5),
             palette.secondary,
         );
@@ -1041,7 +1041,7 @@ mod tests {
     #[test]
     fn alt_navigation_scrolls_the_destination_chat_into_view() {
         let root = std::env::temp_dir().join(format!(
-            "zapfast-chat-list-{}-{:?}",
+            "zaptide-chat-list-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ));

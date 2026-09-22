@@ -2,13 +2,13 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use zapfast::{app, backend, paths, settings, single_instance};
+use zaptide::{app, backend, paths, settings, single_instance};
 
 use clap::Parser;
 
 /// A fast, native WhatsApp client.
 #[derive(Debug, Parser)]
-#[command(name = "zapfast", version, about)]
+#[command(name = "zaptide", version, about)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Control>,
@@ -68,14 +68,14 @@ struct Cli {
 
 #[derive(Debug, clap::Subcommand)]
 enum Control {
-    /// Reload palettes in an already-running ZapFast without showing its window.
+    /// Reload palettes in an already-running ZapTide without showing its window.
     ReloadThemes,
 }
 
 fn main() -> eframe::Result<()> {
     let arguments: Vec<_> = std::env::args_os().collect();
     if arguments.len() == 3 && arguments[1] == "--apply-update" {
-        return zapfast::updates::install::run_helper(std::path::Path::new(&arguments[2]))
+        return zaptide::updates::install::run_helper(std::path::Path::new(&arguments[2]))
             .map_err(|error| eframe::Error::AppCreation(error.into()));
     }
     let cli = Cli::parse();
@@ -96,31 +96,26 @@ fn main() -> eframe::Result<()> {
         match single_instance::acquire(&waker) {
             single_instance::Outcome::Only(guard) => Some(guard),
             single_instance::Outcome::Surfaced => {
-                eprintln!("ZapFast or FastsApp is already running; asked it to show its window");
+                eprintln!("ZapTide is already running; asked it to show its window");
                 return Ok(());
             }
         }
     };
     let default_filter = if cli.verbose {
-        "info,zapfast=debug,whatsapp_rust=debug,wacore=debug"
+        "info,zaptide=debug,whatsapp_rust=debug,wacore=debug"
     } else {
-        "warn,zapfast=info"
+        "warn,zaptide=info"
     };
-    // A demo must not create empty ZapFast directories that would prevent a
-    // later real launch from adopting the existing FastsApp session.
+    // Demo data stays in a temporary namespace and never touches the linked account.
     let dirs = if demo {
         paths::AppDirs::under(&std::env::temp_dir().join(format!(
-            "zapfast-demo-{}-{}",
+            "zaptide-demo-{}-{}",
             std::process::id(),
             jiff::Timestamp::now().as_millisecond(),
         )))
     } else {
         paths::AppDirs::discover()
     };
-    if !demo {
-        dirs.adopt_previous_names()
-            .map_err(|error| eframe::Error::AppCreation(error.into()))?;
-    }
     // Do not open logs, settings, or either database unless their parent
     // directories have been created and secured successfully.
     dirs.ensure()
@@ -140,10 +135,10 @@ fn main() -> eframe::Result<()> {
     logger.format(|buffer, record| {
         use std::io::Write;
         let message = record.args().to_string();
-        let message = if zapfast::diagnostics::is_protocol_target(record.target())
-            || zapfast::diagnostics::is_protocol_target(record.module_path().unwrap_or_default())
+        let message = if zaptide::diagnostics::is_protocol_target(record.target())
+            || zaptide::diagnostics::is_protocol_target(record.module_path().unwrap_or_default())
         {
-            zapfast::diagnostics::protocol_summary(&message)
+            zaptide::diagnostics::protocol_summary(&message)
         } else {
             &message
         };
@@ -178,10 +173,10 @@ fn main() -> eframe::Result<()> {
     }
     #[cfg(feature = "demo")]
     if demo {
-        zapfast::demo::populate(&mut app);
-        zapfast::demo::apply_flags(&mut app, cli.demo_page.as_deref());
+        zaptide::demo::populate(&mut app);
+        zaptide::demo::apply_flags(&mut app, cli.demo_page.as_deref());
         if cli.demo_tour {
-            zapfast::demo::tour::prepare(&mut app);
+            zaptide::demo::tour::prepare(&mut app);
         }
     }
     #[cfg(feature = "demo")]
@@ -205,7 +200,7 @@ fn main() -> eframe::Result<()> {
         #[cfg(feature = "demo")]
         let creator_tour_events = cli.demo_tour_events.clone();
         eframe::run_native(
-            "ZapFast",
+            "ZapTide",
             native_options(demo_persistence.clone()),
             Box::new(move |cc| {
                 creator_waker.attach(&cc.egui_ctx);
@@ -217,7 +212,7 @@ fn main() -> eframe::Result<()> {
                 app.attach(&cc.egui_ctx);
                 #[cfg(feature = "demo")]
                 if cli.demo_macos {
-                    zapfast::theme::preview_macos(&cc.egui_ctx);
+                    zaptide::theme::preview_macos(&cc.egui_ctx);
                 }
                 Ok(Box::new(Shell {
                     app: Some(app),
@@ -227,7 +222,7 @@ fn main() -> eframe::Result<()> {
                     shot: creator_shot,
                     #[cfg(feature = "demo")]
                     tour: cli.demo_tour.then(|| {
-                        zapfast::demo::tour::Tour::new(
+                        zaptide::demo::tour::Tour::new(
                             cli.demo_tour_delay.map(std::time::Duration::from_millis),
                             creator_tour_events,
                         )
@@ -262,7 +257,7 @@ fn main() -> eframe::Result<()> {
                     break;
                 }
             }
-            zapfast::tray::idle(std::time::Duration::from_millis(150));
+            zaptide::tray::idle(std::time::Duration::from_millis(150));
         }
         let quit = slot
             .lock()
@@ -303,7 +298,7 @@ fn log_panics(path: std::path::PathBuf) {
     std::panic::set_hook(Box::new(move |info| {
         let thread = std::thread::current();
         let entry = format!(
-            "{} zapfast {} on thread {:?}, panic at {} (payload omitted)\n",
+            "{} zaptide {} on thread {:?}, panic at {} (payload omitted)\n",
             jiff::Timestamp::now(),
             env!("CARGO_PKG_VERSION"),
             thread.name().unwrap_or("unnamed"),
@@ -337,11 +332,11 @@ fn native_options(demo_persistence: Option<std::path::PathBuf>) -> eframe::Nativ
     let demo_size = demo_size_arg().unwrap_or([1180.0, 780.0]);
     let demo = demo_persistence.is_some();
     let viewport = egui::ViewportBuilder::default()
-        .with_title(if demo { "ZapFast Demo" } else { "ZapFast" })
+        .with_title(if demo { "ZapTide Demo" } else { "ZapTide" })
         .with_app_id(if demo {
-            "zapfast-demo".to_owned()
+            "zaptide-demo".to_owned()
         } else {
-            std::env::var("FLATPAK_ID").unwrap_or_else(|_| "zapfast".to_owned())
+            std::env::var("FLATPAK_ID").unwrap_or_else(|_| "dev.luminusos.ZapTide".to_owned())
         })
         .with_inner_size(demo_size)
         .with_min_inner_size([720.0, 480.0])
@@ -373,7 +368,7 @@ struct Shell {
     #[cfg(feature = "demo")]
     shot: Option<Shot>,
     #[cfg(feature = "demo")]
-    tour: Option<zapfast::demo::tour::Tour>,
+    tour: Option<zaptide::demo::tour::Tour>,
 }
 
 impl Drop for Shell {
@@ -451,7 +446,7 @@ impl eframe::App for Shell {
             }
             app.background_frame(ctx);
             #[cfg(target_os = "macos")]
-            zapfast::macos::update_window(_frame, ctx, app.is_linked());
+            zaptide::macos::update_window(_frame, ctx, app.is_linked());
         }
         #[cfg(feature = "demo")]
         {
@@ -474,7 +469,7 @@ impl eframe::App for Shell {
             let startup = app.backend.take_startup();
             if let Some(receipt) = self.update_receipt.take() {
                 std::thread::spawn(move || {
-                    if let Err(error) = zapfast::updates::install::acknowledge(&receipt) {
+                    if let Err(error) = zaptide::updates::install::acknowledge(&receipt) {
                         log::warn!("could not acknowledge the update: {error:#}");
                         return;
                     }
@@ -517,7 +512,7 @@ fn app_icon() -> egui::IconData {
     {
         const SIZE: usize = 128;
         egui::IconData {
-            rgba: zapfast::util::app_icon_rgba(SIZE),
+            rgba: zaptide::util::app_icon_rgba(SIZE),
             width: SIZE as u32,
             height: SIZE as u32,
         }
@@ -530,13 +525,13 @@ mod tests {
 
     #[test]
     fn tour_cli_accepts_manual_and_delayed_starts() {
-        let cli = Cli::try_parse_from(["zapfast", "--demo-tour"]).unwrap();
+        let cli = Cli::try_parse_from(["zaptide", "--demo-tour"]).unwrap();
         assert!(cli.demo_tour);
         assert!(cli.demo_tour_delay.is_none());
         let cli =
-            Cli::try_parse_from(["zapfast", "--demo-tour", "--demo-tour-delay", "5000"]).unwrap();
+            Cli::try_parse_from(["zaptide", "--demo-tour", "--demo-tour-delay", "5000"]).unwrap();
         assert_eq!(cli.demo_tour_delay, Some(5000));
-        assert!(Cli::try_parse_from(["zapfast", "--demo-tour-delay", "5000"]).is_err());
-        assert!(Cli::try_parse_from(["zapfast", "--demo-tour", "--demo-page", "login",]).is_err());
+        assert!(Cli::try_parse_from(["zaptide", "--demo-tour-delay", "5000"]).is_err());
+        assert!(Cli::try_parse_from(["zaptide", "--demo-tour", "--demo-page", "login",]).is_err());
     }
 }

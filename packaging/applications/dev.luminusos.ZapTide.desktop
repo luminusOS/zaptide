@@ -1,11 +1,11 @@
 [Desktop Entry]
 Type=Application
-Name=ZapFast
+Name=ZapTide
 GenericName=WhatsApp Client
 Comment=A native WhatsApp client
-Exec=zapfast
-Icon=zapfast
+Exec=zaptide
+Icon=zaptide
 Terminal=false
 Categories=Network;InstantMessaging;Chat;
 Keywords=whatsapp;chat;messaging;
-StartupWMClass=zapfast
+StartupWMClass=dev.luminusos.ZapTide

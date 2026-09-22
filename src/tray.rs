@@ -16,12 +16,12 @@ pub enum TrayCommand {
     Quit,
 }
 
-struct FastTray {
+struct ZapTideTray {
     commands: Sender<TrayCommand>,
     wake: Arc<dyn Fn() + Send + Sync>,
 }
 
-impl FastTray {
+impl ZapTideTray {
     fn send(&self, command: TrayCommand) {
         if self.commands.send(command).is_ok() {
             (self.wake)();
@@ -29,13 +29,13 @@ impl FastTray {
     }
 }
 
-impl ksni::Tray for FastTray {
+impl ksni::Tray for ZapTideTray {
     fn id(&self) -> String {
-        "zapfast".into()
+        "zaptide".into()
     }
 
     fn title(&self) -> String {
-        "ZapFast".into()
+        "ZapTide".into()
     }
 
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
@@ -62,7 +62,7 @@ impl ksni::Tray for FastTray {
         use ksni::menu::*;
         vec![
             StandardItem {
-                label: "Show or hide ZapFast".into(),
+                label: "Show or hide ZapTide".into(),
                 activate: Box::new(|tray: &mut Self| tray.send(TrayCommand::ShowHide)),
                 ..Default::default()
             }
@@ -79,7 +79,7 @@ impl ksni::Tray for FastTray {
 }
 
 pub struct TrayService {
-    _handle: ksni::blocking::Handle<FastTray>,
+    _handle: ksni::blocking::Handle<ZapTideTray>,
     commands: Receiver<TrayCommand>,
 }
 
@@ -87,7 +87,7 @@ impl TrayService {
     /// Registers the tray item, or returns `None` without a host.
     pub fn spawn(wake: impl Fn() + Send + Sync + 'static) -> Option<Self> {
         let (sender, commands) = std::sync::mpsc::channel();
-        let tray = FastTray {
+        let tray = ZapTideTray {
             commands: sender,
             wake: Arc::new(wake),
         };

@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 mod windows;
 
 #[cfg(any(target_os = "macos", test))]
-const MACOS_APPLICATION_ID: &str = "me.paolino.fastsapp";
+const MACOS_APPLICATION_ID: &str = "dev.luminusos.ZapTide";
 
 #[cfg(target_os = "macos")]
 fn macos_application_ready() -> bool {
@@ -118,11 +118,16 @@ fn deliver(
         return;
     }
     let mut notification = notify_rust::Notification::new();
+    let icon = if std::env::var_os("FLATPAK_ID").is_some() {
+        "dev.luminusos.ZapTide"
+    } else {
+        "zaptide"
+    };
     notification
-        .appname("ZapFast")
+        .appname("ZapTide")
         .summary(title)
         .body(body)
-        .icon("zapfast")
+        .icon(icon)
         .action("default", "Open");
     if let Some(picture) = picture {
         notification.image_path(&picture.to_string_lossy());
@@ -198,7 +203,7 @@ fn deliver(
         return;
     }
     let mut notification = notify_rust::Notification::new();
-    notification.appname("ZapFast").summary(title).body(body);
+    notification.appname("ZapTide").summary(title).body(body);
     // Windows uses the image; macOS always uses the app icon.
     if let Some(picture) = picture {
         notification.image_path(&picture.to_string_lossy());
@@ -265,7 +270,7 @@ mod tests {
         let mut notifications = Notifications::default();
         notifications.show(
             "Ada Lovelace".into(),
-            "A test from ZapFast, with a picture".into(),
+            "A test from ZapTide, with a picture".into(),
             picture,
             "test".into(),
             Default::default(),

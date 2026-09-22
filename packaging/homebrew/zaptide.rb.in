@@ -1,0 +1,16 @@
+cask "zaptide" do
+  version "@VERSION@"
+  sha256 "@MACOS_SHA256@"
+
+  url "https://github.com/luminusOS/zaptide/releases/download/v#{version}/zaptide-v#{version}-macos-universal.dmg"
+  name "ZapTide"
+  desc "Native WhatsApp client"
+  homepage "https://github.com/luminusOS/zaptide"
+
+  livecheck do
+    url :url
+    strategy :github_latest
+  end
+
+  app "ZapTide.app"
+end

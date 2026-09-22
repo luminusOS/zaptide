@@ -1,19 +1,19 @@
-# ZapFast
+# ZapTide
 
-**WhatsApp, native and fast.** ZapFast is a WhatsApp client written in Rust
+**WhatsApp, native and fast.** ZapTide is a Linux-first WhatsApp client written in Rust
 with [egui](https://github.com/emilk/egui). It uses
 [whatsapp-rust](https://github.com/oxidezap/whatsapp-rust) for the WhatsApp Web
-protocol. It runs on Linux, macOS, and Windows, links to your phone as a
-companion device, and has no browser engine. In our Linux test, it opened in
+protocol. It links to your phone as a companion device and has no browser engine. ZapTide is a
+[ZapFast](https://github.com/crmne/zapfast) fork migrating to a native GTK4/libadwaita shell. The
+current transition baseline still uses the inherited eframe shell. In ZapFast's Linux test, it opened in
 under a second and used about 150 MB of idle RAM, compared with 1.13 GB for
-WhatsApp Web and its Chromium processes. [See the measurements](https://zapfast.rocks/benchmarks/).
+WhatsApp Web and its Chromium processes. [See the upstream measurements](https://zapfast.rocks/benchmarks/).
 
-ZapFast is a sibling of [Spotifast](https://spotifast.rocks),
-with the same native UI for a different service.
+ZapTide retains ZapFast's native egui interface and direct WhatsApp protocol implementation.
 
-![ZapFast showing a chat with a photo, a document, a voice message, a quoted reply, and a link](docs/screenshot.png)
+![ZapTide showing a chat with a photo, a document, a voice message, a quoted reply, and a link](docs/screenshot.png)
 
-See **[zapfast.rocks](https://zapfast.rocks)** for downloads and guides.
+Development happens at **[github.com/luminusOS/zaptide](https://github.com/luminusOS/zaptide)**.
 
 ![A group chat with sender names and pictures, a photo with reactions, a reply with a mention, and a poll](docs/screenshot-group.png)
 
@@ -43,13 +43,13 @@ See **[zapfast.rocks](https://zapfast.rocks)** for downloads and guides.
   Group messages show two gray checks after every recipient has received
   them, and blue checks after every recipient has read them. The recipient
   list and individual receipts are saved locally; later membership changes
-  do not change that list. If the original recipients are unknown, ZapFast
+  do not change that list. If the original recipients are unknown, ZapTide
   waits for the phone's aggregate status instead of guessing from one reader.
 - **WhatsApp formatting.** Bold, italic, strikethrough, code, lists, quotes,
   mentions, and link previews are supported. Links are clickable. Hebrew and
   Arabic RTL paragraphs keep logical word order by reordering font runs; this
   is not a full Unicode Bidirectional Algorithm. Emoji use the bundled Noto
-  Color Emoji on macOS and Windows. On Linux, ZapFast prefers an installed
+  Color Emoji on macOS and Windows. On Linux, ZapTide prefers an installed
   Noto Color Emoji and falls back to the bundled copy. Emoji-only messages
   are larger.
 - **Screen-reader access.** AccessKit exposes the interface to desktop
@@ -88,12 +88,12 @@ See **[zapfast.rocks](https://zapfast.rocks)** for downloads and guides.
   after they expire on the phone.
   A clock badge on chat avatars shows enabled timers and follows changes from
   the phone. Changing the default timer for new chats leaves existing chats alone.
-- **View attachments.** ZapFast downloads files up to 64 MB automatically or
+- **View attachments.** ZapTide downloads files up to 64 MB automatically or
   on click. Photos, stickers, GIFs, voice messages, audio, locations, contacts,
   polls, and link previews appear in the chat. Videos and documents open in
   their default desktop apps. Profile pictures and downloaded images support
   Windows drive paths and filenames with spaces or non-ASCII characters.
-  If an attachment has expired, ZapFast asks your
+  If an attachment has expired, ZapTide asks your
   phone to upload it again.
 - **Polls.** Use the checklist button beside the paperclip to create a poll with
   2–12 answers. Turn off **Allow multiple answers** for a single-choice poll.
@@ -105,7 +105,7 @@ See **[zapfast.rocks](https://zapfast.rocks)** for downloads and guides.
   Voting needs the original poll's key;
   if that key is missing, the message explains that voting is available on your
   phone. Creating polls in disappearing-message chats is not yet supported by
-  the protocol library's poll API, so ZapFast blocks it instead of ignoring the timer.
+  the protocol library's poll API, so ZapTide blocks it instead of ignoring the timer.
 - **Emoji, GIF, and sticker picker.** Search emoji and GIFs, use recent emoji
   and stickers, and save stickers with a right-click. Emoji autocomplete and
   picker search select their first match; use the arrow keys and Enter to
@@ -127,20 +127,20 @@ See **[zapfast.rocks](https://zapfast.rocks)** for downloads and guides.
   when validation fails. Private read-state updates run one at a time. Failures
   pause the whole queue with backoff from 30 seconds to 15 minutes; pending reads
   remain saved and resume automatically. New messages can still arrive.
-- **Runs in the background.** Closing the window keeps ZapFast linked in the
+- **Runs in the background.** Closing the window keeps ZapTide linked in the
   system tray. Reopen it from the tray or by launching it again. Quit from the
   tray or with `Ctrl+Q`, or disable this behavior in Settings.
 - **Desktop notifications.** Get notifications with the chat picture when you
   are away from the open chat. Muted chats do not notify you, and archived
   chats stay quiet until you unarchive them. Windows notifications
-  identify ZapFast as the sender and show chat pictures as small circular icons;
+  identify ZapTide as the sender and show chat pictures as small circular icons;
   installed and portable builds register this identity in the current user's registry.
   On Linux,
   clicking a notification opens the chat, and reading the chat here or on another
   device dismisses its outstanding notifications. On macOS, notifications use
-  the installed ZapFast application's identity without an application chooser;
+  the installed ZapTide application's identity without an application chooser;
   unregistered development builds skip notifications if that identity is unavailable.
-- **Update notices.** ZapFast checks GitHub once a day and shows a download
+- **Update notices.** ZapTide checks GitHub once a day and shows a download
   link when a newer release is available. You can turn this off in Settings.
 - **Themes.** Light, dark, follow the system, or a local JSON palette. Native
   Linux packages can follow Omarchy colors without restarting the app. Zoom with
@@ -167,70 +167,30 @@ See **[zapfast.rocks](https://zapfast.rocks)** for downloads and guides.
 
 ## Installing
 
-On macOS with Homebrew: `brew install --cask crmne/tap/zapfast`.
-
-ZapFast was previously called FastsApp. Version 0.13.0 introduces the new
-package and executable names. On Arch Linux:
+ZapTide has no stable release yet. Build the transition baseline from source or use its Nix flake:
 
 ```sh
-yay -S zapfast-bin      # the released build, ready made
-yay -S zapfast          # the release, built from source
-yay -S zapfast-git      # built from the latest commit
-```
-
-With [Nix](https://nixos.org), install the package directly from its flake:
-
-```sh
-nix profile install github:crmne/zapfast
+nix profile install github:luminusOS/zaptide
 ```
 
 NixOS configurations can add the repository as a flake input and include
-`inputs.zapfast.packages.${pkgs.system}.default` in
+`inputs.zaptide.packages.${pkgs.system}.default` in
 `environment.systemPackages`.
 
-Builds for every release are on the
-[releases page](https://github.com/crmne/zapfast/releases):
-
-| Platform | File |
-| --- | --- |
-| Linux x86_64 and arm64 | `zapfast-vX.Y.Z-<target>.tar.gz`, with the desktop file and icon in `packaging/` |
-| Windows x64 and arm64 | `zapfast-vX.Y.Z-<target>-setup.exe` (no administrator rights needed), or the `.zip` |
-| macOS, universal | `zapfast-vX.Y.Z-macos-universal.dmg` |
-
-On macOS, the rounded Dock icon matches the app bundle. Native menus provide
-Settings, editing, search, view controls, and window commands. The traffic
-lights share the chat header, leaving more room for conversations in a normal
-window. Settings is also available with `⌘,`.
-
-The macOS release process signs the app with Developer ID, submits the DMG
-to Apple's notarization service, and staples and validates its ticket before
-publishing. Open the DMG and drag **ZapFast** to Applications.
-When upgrading from FastsApp on macOS, quit the old app and remove its
-application bundle after installing ZapFast.
-
-Releases before 0.13.0 keep their original FastsApp filenames.
-
-### Flatpak
-
-Flatpak packaging lives in `packaging/flatpak/`, following Spotifast's source
-manifest and release-bundle setup. Future releases will attach an x86_64
-`.flatpak` bundle; install a downloaded bundle with `flatpak install --user FILE`
-and run `flatpak run rocks.zapfast.ZapFast`. Flathub publication is pending;
-ZapFast is not yet listed there. See [PACKAGING.md](PACKAGING.md) for local builds
-and preparing a Flathub submission. File selection uses desktop portals;
-the sandbox has no general access to your home directory.
+Native and Flatpak packaging will be published after the GTK/libadwaita migration passes its
+release gates. Existing ZapFast packages are not ZapTide packages and do not share application data.
 
 ### Archive encryption
 
 The archive key is a random 256-bit secret in Secret Service on Linux, Keychain
 on macOS, or Windows Credential Manager. Linux needs a working Secret Service
 provider (for example GNOME Keyring or KeePassXC with Secret Service enabled).
-If the keyring is locked or unavailable, unlock it and click Retry; ZapFast keeps
+If the keyring is locked or unavailable, unlock it and click Retry; ZapTide keeps
 its archive intact and waits before connecting. It never saves a replacement
 plaintext archive. Back up both the archive and its OS keyring key: copying only
 `archive.db` to another computer is insufficient.
 
-A missing key is different from a locked keyring. If ZapFast says the key is
+A missing key is different from a locked keyring. If ZapTide says the key is
 missing, restore the original OS credential store or use the original profile
 location. Do not delete the archive or create replacement credentials: neither
 can decrypt the existing archive. For help, report the OS, app version, whether
@@ -247,7 +207,7 @@ while your login is unlocked.
 
 ### From source
 
-ZapFast needs Rust, a C/C++ toolchain, CMake and Perl (for bundled OpenSSL). `rust-toolchain.toml` pins the exact version. On Linux,
+ZapTide needs Rust, a C/C++ toolchain, CMake and Perl (for bundled OpenSSL). `rust-toolchain.toml` pins the exact version. On Linux,
 it also needs GUI development packages:
 
 ```sh
@@ -261,19 +221,19 @@ Then:
 
 ```sh
 cargo install --path .
-zapfast
+zaptide
 ```
 
 With Nix, `nix develop` provides the pinned Rust toolchain and all native build
-dependencies. From the checkout, use `nix build .#zapfast` to build the package
-or `nix run .#zapfast` to run it.
+dependencies. From the checkout, use `nix build .#zaptide` to build the package
+or `nix run .#zaptide` to run it.
 
 The desktop file and icon are in `packaging/`.
 
 `whatsapp-rust` is pinned to a Git commit because version 0.7.0 on crates.io
 enables a `simd` feature that needs nightly Rust. The pinned commit builds on
 stable Rust and includes the upstream fixes for missing app-state snapshots and
-conflicts that make no progress. ZapFast does not reset your session to recover
+conflicts that make no progress. ZapTide does not reset your session to recover
 a collection.
 
 ## Using it
@@ -325,22 +285,18 @@ startup rollback; an unused legacy column is retained for 0.14 compatibility.
 
 | What | Linux | Notes |
 | --- | --- | --- |
-| Settings | `~/.config/zapfast/settings.json` | JSON, safe to edit |
-| Device keys | `~/.local/state/zapfast/session.db` | Owned by whatsapp-rust; deleting it unlinks |
-| Messages | `~/.local/state/zapfast/archive.db` | SQLCipher-encrypted SQLite, unlocked by the OS keyring; raw messages retain attachment keys |
-| Attachments, avatars | `~/.cache/zapfast/` | Safe to delete |
-| Saved stickers and packs | `~/.local/state/zapfast/stickers/` | Plain WebP files; each pack is a folder |
-| Log of the last run | `~/.local/state/zapfast/zapfast.log` | `--verbose` for more |
+| Settings | `~/.config/zaptide/settings.json` | JSON, safe to edit |
+| Device keys | `~/.local/state/zaptide/session.db` | Owned by whatsapp-rust; deleting it unlinks |
+| Messages | `~/.local/state/zaptide/archive.db` | SQLCipher-encrypted SQLite, unlocked by the OS keyring; raw messages retain attachment keys |
+| Attachments, avatars | `~/.cache/zaptide/` | Safe to delete |
+| Saved stickers and packs | `~/.local/state/zaptide/stickers/` | Plain WebP files; each pack is a folder |
+| Log of the last run | `~/.local/state/zaptide/zaptide.log` | `--verbose` for more |
 
-macOS and Windows use the standard platform directories selected by the
-`directories` crate. On first start, ZapFast moves settings, the linked session,
-message archive, saved stickers, caches, and window state from `fastsapp`
-(or the earlier `fastwhatsapp`) paths. Existing ZapFast directories take
-precedence and are never overwritten. Quit FastsApp before starting ZapFast;
-if an older copy is still running, the new launch brings its window forward.
-Your phone may keep showing the old linked-device name until you link again.
+ZapTide has its own XDG directories, keyring service, process identity, and single-instance wire
+protocol. It never opens, moves, copies, or deletes ZapFast, FastsApp, or FastWhatsApp data
+automatically. Link ZapTide as a separate companion device.
 
-On Linux and macOS, ZapFast restricts its configuration, state, and cache
+On Linux and macOS, ZapTide restricts its configuration, state, and cache
 directories to the current user (`0700`), including existing installations.
 Startup stops if those directories cannot be created or secured, before opening
 logs or databases. Windows uses the permissions inherited from your user profile.
@@ -364,7 +320,7 @@ specified. Color names match `Palette`
 in `src/theme.rs`; use `#RRGGBB` or `#RRGGBBAA`. The last accepted palette is cached
 in settings, so a missing or damaged theme file does not reset your appearance.
 Linux watches the themes folder for changes without periodic repaints. On other
-platforms, use `zapfast reload-themes` after editing. The command also works while
+platforms, use `zaptide reload-themes` after editing. The command also works while
 the window is closed and never launches a stopped app.
 
 On Omarchy, **Follow system** and **Omarchy** read the active desktop palette and
@@ -374,9 +330,9 @@ packages additionally register a missing per-user template and theme hook on
 first launch; existing user files are preserved. Flatpak uses the desktop's
 light/dark preference and does not read host theme files or install desktop hooks.
 
-### Updating ZapFast
+### Updating ZapTide
 
-ZapFast checks GitHub once a day when **Check for updates** is enabled.
+ZapTide checks GitHub once a day when **Check for updates** is enabled.
 Click **Update** in the banner to download and verify a newer release, then
 **Restart to update** when convenient. **Download updates automatically** is
 optional and off by default; it downloads in the background and still waits for
@@ -385,7 +341,7 @@ checked against the release's SHA-256 checksums. The updater keeps a backup and
 restores it if the updated app cannot start.
 
 The in-app updater supports marked portable downloads, the Windows installer,
-and the macOS app in Applications. Keep `zapfast-portable.txt` beside a portable
+and the macOS app in Applications. Keep `zaptide-portable.txt` beside a portable
 executable. AUR, DEB, RPM, Flatpak, Cargo and Homebrew installations use their
 package manager. Older portable downloads without the marker need one manual
 upgrade. No account or additional service is needed.
@@ -405,10 +361,8 @@ To include a default GIPHY key for GIF search, set it at build time. A key in
 Settings overrides it:
 
 ```sh
-ZAPFAST_GIPHY_KEY=your-key cargo build --release
+ZAPTIDE_GIPHY_KEY=your-key cargo build --release
 ```
-
-The earlier `FASTSAPP_GIPHY_KEY` build variable remains supported as a fallback.
 
 `AGENTS.md` describes the architecture and the rules for changes.
 
@@ -420,10 +374,10 @@ WhatsApp, or register a tray icon. You can run it alongside your regular app.
 
 ```sh
 cargo build --locked --features demo
-./target/debug/zapfast --demo-tour --demo-size 1280x800
+./target/debug/zaptide --demo-tour --demo-size 1280x800
 ```
 
-The **ZapFast Demo** window waits for **Space**. The 41-second tour starts with
+The **ZapTide Demo** window waits for **Space**. The 41-second tour starts with
 search, switches chats with keyboard shortcuts, scrolls, right-clicks a message
 and selects Reply, types quickly, completes emoji and mentions, searches the GIF
 picker and sends a still sticker, opens group information and the shortcut list,
@@ -439,7 +393,7 @@ For deterministic theme screenshots, `--demo-page settings,omarchy` and
 palettes without changing the desktop theme.
 
 On Omarchy, run `omarchy screenrecord`, select the demo window, then press Space
-in ZapFast. Recording has no audio unless you explicitly enable desktop or
+in ZapTide. Recording has no audio unless you explicitly enable desktop or
 microphone audio. Stop with `omarchy screenrecord --stop-recording` after the
 tour finishes. The default capture records a fixed rectangle, so keep the demo
 window visible and stationary until recording stops.
@@ -460,7 +414,7 @@ trace contains only pointer coordinates and shortcut labels, not typed text.
 
 ## Disclaimer
 
-ZapFast is an unofficial client and is not affiliated with WhatsApp or
+ZapTide is an unofficial client and is not affiliated with WhatsApp or
 Meta. Using an unofficial client may be against WhatsApp's terms of service
 and could get an account suspended. Use it at your own risk.
 

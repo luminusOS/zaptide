@@ -1,21 +1,21 @@
 [package]
-name = "zapfast"
+name = "zaptide"
 version = "0.14.0"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT"
-description = "A native WhatsApp client built with Rust and egui"
-homepage = "https://zapfast.rocks"
-repository = "https://github.com/crmne/zapfast"
+description = "A Linux-first native WhatsApp client built with Rust and egui"
+homepage = "https://github.com/luminusOS/zaptide"
+repository = "https://github.com/luminusOS/zaptide"
 keywords = ["whatsapp", "chat", "egui", "messaging"]
 categories = ["gui"]
 
 [lib]
-name = "zapfast"
+name = "zaptide"
 path = "src/lib.rs"
 
 [[bin]]
-name = "zapfast"
+name = "zaptide"
 path = "src/main.rs"
 
 [dependencies]

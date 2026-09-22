@@ -5,6 +5,9 @@ permalink: /benchmarks/
 nav_order: 4
 ---
 
+These measurements come from ZapFast 0.13.1, ZapTide's upstream baseline. They
+are retained as provenance, not as measurements of a released ZapTide build.
+
 ## Results
 
 ZapFast used **150 MB of idle RAM**, compared with **1.13 GB for WhatsApp Web
@@ -28,8 +31,8 @@ one row in the page. Both include detection and window-placement overhead.
 They illustrate what we observed; they do not establish a precise multiplier
 for time to a fully usable or synchronized conversation.*
 
-[Download the memory chart](/assets/benchmarks/2026-09-15/memory.png) ·
-[Download the startup chart](/assets/benchmarks/2026-09-15/startup.png)
+[Download the memory chart]({{ site.baseurl }}/assets/benchmarks/2026-09-15/memory.png) ·
+[Download the startup chart]({{ site.baseurl }}/assets/benchmarks/2026-09-15/startup.png)
 
 ## The four runs
 
@@ -44,8 +47,8 @@ units.
 | 3 | 143.1 | 1,057.3 | 150.3 ms | 548.6 ms |
 | 4 | 129.4 | 1,078.9 | 150.8 ms | 529.6 ms |
 
-[Download every sample as CSV](/assets/benchmarks/2026-09-15/measurements.csv)
-or [JSON](/assets/benchmarks/2026-09-15/measurements.json).
+[Download every sample as CSV]({{ site.baseurl }}/assets/benchmarks/2026-09-15/measurements.csv)
+or [JSON]({{ site.baseurl }}/assets/benchmarks/2026-09-15/measurements.json).
 All completed pairs are included. A fifth pair was interrupted before its
 first memory sample and is excluded.
 
@@ -104,4 +107,4 @@ Windows. On Arch Linux:
 yay -S zapfast-bin
 ```
 
-[Download ZapFast](/download/).
+[Download ZapFast](https://github.com/crmne/zapfast/releases).

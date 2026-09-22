@@ -30,7 +30,7 @@ impl Source {
     fn release(&self, version: &str) -> String {
         match self {
             Self::GitHub => {
-                format!("https://api.github.com/repos/crmne/zapfast/releases/tags/v{version}")
+                format!("https://api.github.com/repos/luminusOS/zaptide/releases/tags/v{version}")
             }
             #[cfg(feature = "demo")]
             Self::Local(base) => format!("{base}/latest.json"),
@@ -154,7 +154,7 @@ pub fn download_for(
     );
     let policy = source.clone();
     let http = reqwest::blocking::Client::builder()
-        .user_agent(concat!("ZapFast/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("ZapTide/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(15 * 60))
         .redirect(reqwest::redirect::Policy::custom(move |attempt| {
@@ -185,7 +185,7 @@ pub fn download_for(
         ("macos", "aarch64" | "x86_64") => "macos-universal",
         _ => bail!("Use the download page for this operating system or architecture"),
     };
-    let stem = format!("zapfast-v{}-{target}", release.version);
+    let stem = format!("zaptide-v{}-{target}", release.version);
     let name = match installation.kind {
         #[cfg(target_os = "macos")]
         install::Kind::MacBundle => format!("{stem}.dmg"),
@@ -206,7 +206,7 @@ pub fn download_for(
                 url.host_str() == Some("github.com")
                     && url.path()
                         == format!(
-                            "/crmne/zapfast/releases/download/v{}/{}",
+                            "/luminusOS/zaptide/releases/download/v{}/{}",
                             release.version, candidate.name
                         ),
                 "Update asset does not belong to this release"
@@ -272,9 +272,9 @@ pub fn download_for(
             archive.clone()
         } else {
             let executable = if cfg!(windows) {
-                "zapfast.exe"
+                "zaptide.exe"
             } else {
-                "zapfast"
+                "zaptide"
             };
             let payload = directory.join(executable);
             install::extract(&archive, &format!("{stem}/{executable}"), &payload)?;
@@ -312,7 +312,7 @@ mod tests {
             } else {
                 "unknown-linux-gnu.tar.gz"
             };
-            let name = format!("zapfast-v0.8.0-{}-{platform}", std::env::consts::ARCH);
+            let name = format!("zaptide-v0.8.0-{}-{platform}", std::env::consts::ARCH);
             let payload = b"damaged download";
             let hash = if interrupted {
                 crate::updates::hex(&Sha256::digest(payload))
@@ -372,9 +372,9 @@ mod tests {
                 }
             });
             let directory = std::env::temp_dir()
-                .join(format!("zapfast-download-test-{}", rand::random::<u64>()));
+                .join(format!("zaptide-download-test-{}", rand::random::<u64>()));
             fs::create_dir(&directory).unwrap();
-            let target = directory.join("zapfast");
+            let target = directory.join("zaptide");
             fs::write(&target, b"original").unwrap();
             let installation = install::Installation {
                 executable: target.clone(),

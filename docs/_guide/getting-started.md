@@ -1,21 +1,20 @@
 ---
 title: Getting Started
-description: Install ZapFast, link your phone, and load chat history.
+description: Install ZapTide, link your phone, and load chat history.
 nav_order: 2
 ---
 
 ## Install
 
-The [Download page](/download/) has packages and archives for Linux,
-macOS, and Windows.
+ZapTide has no stable packages yet. Build the transition baseline from source.
 
 Or build from source with a recent stable [Rust](https://rustup.rs):
 
 ```sh
-git clone https://github.com/crmne/zapfast zapfast
-cd zapfast
+git clone https://github.com/luminusOS/zaptide zaptide
+cd zaptide
 cargo install --path .
-zapfast
+zaptide
 ```
 
 On Linux, the build needs egui's development libraries, ALSA, and CMake.
@@ -31,11 +30,11 @@ On Debian or Ubuntu:
 sudo apt install build-essential cmake libasound2-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev
 ```
 
-A desktop entry ships in `packaging/applications/zapfast.desktop`.
+A desktop entry ships in `packaging/applications/dev.luminusos.ZapTide.desktop`.
 
 ## Link with your phone
 
-ZapFast links as a companion device, like WhatsApp Web. Start it and either:
+ZapTide links as a companion device, like WhatsApp Web. Start it and either:
 
 - scan the QR code with your phone (WhatsApp, **Settings**, **Linked
   devices**, **Link a device**), or
@@ -43,14 +42,14 @@ ZapFast links as a companion device, like WhatsApp Web. Start it and either:
   phone.
 
 The link survives restarts. Your phone does not need to stay on the same
-network or be online to read messages already stored in ZapFast.
+network or be online to read messages already stored in ZapTide.
 
 ## Message history
 
 After linking, the phone sends recent history. The chat list appears within
-seconds, and messages can take a few minutes to finish loading. ZapFast stores
+seconds, and messages can take a few minutes to finish loading. ZapTide stores
 new messages in its own archive. When you scroll past the stored history,
-ZapFast asks your phone for older messages. The phone must be online.
+ZapTide asks your phone for older messages. The phone must be online.
 
 ## Try it in your own chat
 

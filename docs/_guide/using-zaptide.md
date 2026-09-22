@@ -1,8 +1,6 @@
 ---
-title: Using ZapFast
+title: Using ZapTide
 description: Send messages and use attachments, voice messages, and keyboard shortcuts.
-redirect_from:
-  - /using-fastsapp/
 nav_order: 3
 ---
 
@@ -38,7 +36,7 @@ Paste a picture, drop files on the window, or select them with the paperclip.
 They stay above the composer until you send them, with the typed text as a
 caption. Press Escape or click a file's close button to remove it. Incoming
 attachments up to 64 MB download when they enter view, or on click if automatic
-downloads are off. If an attachment has expired, ZapFast asks your phone to
+downloads are off. If an attachment has expired, ZapTide asks your phone to
 upload it again.
 
 ## Voice messages
@@ -49,7 +47,7 @@ is remembered for later messages. The speaker's pitch stays the same at every
 speed. The first play sends
 a played receipt. When the composer is empty, the send button becomes a
 microphone. Press Enter or the send button to send the recording, or Escape or
-the delete button to discard it. ZapFast raises the volume of quiet recordings.
+the delete button to discard it. ZapTide raises the volume of quiet recordings.
 Starting a reply before recording includes the quoted message.
 
 ## Copying
@@ -73,7 +71,7 @@ The chips under the search bar narrow the list to **Unread**, **Private**
 (one-to-one chats), or **Groups**. A chip with unread chats shows how many it
 has. Click the active chip again, or **All**, to see every chat. The
 filter applies only to this list: search and the archive still show everything,
-and it resets when ZapFast restarts.
+and it resets when ZapTide restarts.
 
 Right-click a chat to pin, archive, or mute it for eight hours, one week, or
 indefinitely. These changes also apply on your phone. Click the chat header to
@@ -81,7 +79,7 @@ see its picture, number, and group members.
 
 ## Notifications and the tray
 
-Closing the window keeps ZapFast linked in the tray. Click the tray icon or
+Closing the window keeps ZapTide linked in the tray. Click the tray icon or
 launch the app again to reopen it. Notifications show the chat picture and open
 the chat when clicked. Muted chats do not send notifications, and archived
 chats stay quiet until you unarchive them. You can change both settings.

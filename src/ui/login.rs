@@ -55,7 +55,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                         egui::Color32::WHITE,
                     );
                     ui.add_space(4.0);
-                    theme::text(ui, "ZapFast", theme::bold(28.0), palette.text);
+                    theme::text(ui, "ZapTide", theme::bold(28.0), palette.text);
                     theme::text(
                         ui,
                         "A native WhatsApp client.",

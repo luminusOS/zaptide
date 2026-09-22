@@ -372,7 +372,7 @@ mod tests {
     ];
 
     fn rtl_font() -> PathBuf {
-        std::env::var_os("ZAPFAST_TEST_RTL_FONT")
+        std::env::var_os("ZAPTIDE_TEST_RTL_FONT")
             .map(PathBuf::from)
             .filter(|path| path.is_file())
             .or_else(|| {
@@ -382,7 +382,7 @@ mod tests {
                     .find(|path| path.is_file())
             })
             .expect(
-                "set ZAPFAST_TEST_RTL_FONT or install a Hebrew/Arabic-capable sans \
+                "set ZAPTIDE_TEST_RTL_FONT or install a Hebrew/Arabic-capable sans \
                  (DejaVu, Liberation, Arial) for RTL layout tests",
             )
     }

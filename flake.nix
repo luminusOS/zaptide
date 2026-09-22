@@ -66,7 +66,7 @@
               libxrandr
             ]
           );
-          ZAPFAST_TEST_RTL_FONT = "${pkgs.dejavu_fonts}/share/fonts/truetype/DejaVuSans.ttf";
+          ZAPTIDE_TEST_RTL_FONT = "${pkgs.dejavu_fonts}/share/fonts/truetype/DejaVuSans.ttf";
         };
       });
 
@@ -87,8 +87,8 @@
             libxi
             libxrandr
           ];
-          zapfast = rustPlatform.buildRustPackage rec {
-            pname = "zapfast";
+          zaptide = rustPlatform.buildRustPackage rec {
+            pname = "zaptide";
             version = (pkgs.lib.importTOML ./Cargo.toml).package.version;
             src = self;
 
@@ -111,37 +111,37 @@
               libGL
               libx11
             ];
-            ZAPFAST_TEST_RTL_FONT = "${pkgs.dejavu_fonts}/share/fonts/truetype/DejaVuSans.ttf";
+            ZAPTIDE_TEST_RTL_FONT = "${pkgs.dejavu_fonts}/share/fonts/truetype/DejaVuSans.ttf";
 
             # The GUI dlopens its Wayland, X11 and GL libraries at run time.
             postFixup = ''
-              wrapProgram $out/bin/zapfast \
+              wrapProgram $out/bin/zaptide \
                 --prefix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath runtimeLibs}
             '';
 
             postInstall = ''
-              install -Dm644 packaging/applications/zapfast.desktop \
-                $out/share/applications/zapfast.desktop
-              install -Dm644 packaging/icons/zapfast.svg \
-                $out/share/icons/hicolor/scalable/apps/zapfast.svg
-              install -Dm644 contrib/omarchy/zapfast.json.tpl \
-                $out/share/zapfast/omarchy/zapfast.json.tpl
-              install -Dm755 contrib/omarchy/zapfast-theme \
-                $out/share/zapfast/omarchy/zapfast-theme
+              install -Dm644 packaging/applications/dev.luminusos.ZapTide.desktop \
+                $out/share/applications/dev.luminusos.ZapTide.desktop
+              install -Dm644 packaging/icons/zaptide.svg \
+                $out/share/icons/hicolor/scalable/apps/zaptide.svg
+              install -Dm644 contrib/omarchy/zaptide.json.tpl \
+                $out/share/zaptide/omarchy/zaptide.json.tpl
+              install -Dm755 contrib/omarchy/zaptide-theme \
+                $out/share/zaptide/omarchy/zaptide-theme
             '';
 
             meta = {
               description = "Fast native WhatsApp client";
-              homepage = "https://zapfast.rocks";
+              homepage = "https://github.com/luminusOS/zaptide";
               license = pkgs.lib.licenses.mit;
-              mainProgram = "zapfast";
+              mainProgram = "zaptide";
               platforms = pkgs.lib.platforms.linux;
             };
           };
         in
         {
-          default = zapfast;
-          inherit zapfast;
+          default = zaptide;
+          inherit zaptide;
         }
       );
 

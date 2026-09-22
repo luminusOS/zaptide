@@ -21,8 +21,8 @@ sources:
 - src/*.rs
 - src/backend/*.rs
 documentation:
-  docs/_guide/*.md: https://zapfast.rocks/%{name}/
-  docs/_reference/*.md: https://zapfast.rocks/%{name}/
+  docs/_guide/*.md: https://luminusos.github.io/zaptide/%{name}/
+  docs/_reference/*.md: https://luminusos.github.io/zaptide/%{name}/
 replies:
   version: Which version are you using?
   reproduction: What are the shortest steps that reproduce this?
@@ -55,7 +55,7 @@ instructions: |
   Keep replies short, direct, and free of status chatter, implementation
   plans, headings, and em dashes.
 
-  ZapFast is a native WhatsApp client using whatsapp-rust. A protobuf field
+  ZapTide is a native WhatsApp client using whatsapp-rust. A protobuf field
   alone does not prove a supported capability. No browser engine, telemetry,
   hosted backend, or second account system. Leave uncertain protocol support
   to the maintainer. Never repeat messages, phone numbers, device keys,
