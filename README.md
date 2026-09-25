@@ -139,6 +139,9 @@ Development happens at **[github.com/luminusOS/zaptide](https://github.com/lumin
 - **Themes.** Light, dark, follow the system, or a local JSON palette. Native
   Linux packages can follow Omarchy colors without restarting the app. Zoom with
   Ctrl+plus and Ctrl+minus.
+- **Message bubbles.** Incoming messages align left, outgoing messages align
+  right. Right-click a message or focus it and press Menu or Shift+F10 for
+  reply, edit, react, forward, poll voting, and other available actions.
 - **Copy text.** Select part of a message or copy across messages in
   WhatsApp's `[time, date] Name:` format. Contact names and numbers are also
   selectable.

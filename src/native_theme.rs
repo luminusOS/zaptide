@@ -63,6 +63,10 @@ pub fn css_for_palette(palette: &Palette) -> String {
     let danger = css_color(palette.danger);
     let danger_text = css_color(readable_foreground(palette.danger, palette.text));
     let chat = css_color(palette.chat);
+    let bubble_in = css_color(palette.bubble_in);
+    let bubble_out = css_color(palette.bubble_out);
+    let bubble_in_text = css_color(readable_foreground(palette.bubble_in, palette.text));
+    let bubble_out_text = css_color(readable_foreground(palette.bubble_out, palette.text));
 
     format!(
         "@define-color window_bg_color {window};\n\
@@ -84,6 +88,10 @@ pub fn css_for_palette(palette: &Palette) -> String {
          @define-color destructive_fg_color {danger_text};\n\
          @define-color borders {outline};\n\
          @define-color secondary_text_color {secondary};\n\
+         @define-color zaptide_bubble_in {bubble_in};\n\
+         @define-color zaptide_bubble_out {bubble_out};\n\
+         @define-color zaptide_bubble_in_text {bubble_in_text};\n\
+         @define-color zaptide_bubble_out_text {bubble_out_text};\n\
          window, .background {{ background-color: @window_bg_color; color: @window_fg_color; }}\n\
          headerbar, .titlebar, .sidebar {{ background-color: @headerbar_bg_color; color: @headerbar_fg_color; }}\n\
          .view, list, listview, textview {{ background-color: @view_bg_color; color: @view_fg_color; }}\n\
@@ -111,6 +119,14 @@ mod tests {
 
         assert!(css.contains("@define-color window_bg_color #123456"));
         assert!(css.contains("@define-color accent_bg_color #abcdef"));
+        assert!(css.contains(&format!(
+            "@define-color zaptide_bubble_in {};",
+            css_color(palette.bubble_in)
+        )));
+        assert!(css.contains(&format!(
+            "@define-color zaptide_bubble_out {};",
+            css_color(palette.bubble_out)
+        )));
         assert!(css.contains("button.suggested-action"));
         assert!(!css.contains("border-radius"));
         assert!(!css.contains("padding"));
@@ -125,6 +141,22 @@ mod tests {
             "@define-color destructive_fg_color {};",
             css_color(foreground)
         )));
+    }
+
+    #[test]
+    fn bubble_foregrounds_keep_readable_contrast_with_custom_palette() {
+        let mut palette = Palette::dark();
+        palette.bubble_in = crate::color::Color::from_rgb(0x15, 0x25, 0x35);
+        palette.bubble_out = crate::color::Color::from_rgb(0xdd, 0xee, 0xbb);
+        let css = css_for_palette(&palette);
+        for (name, background) in [("in", palette.bubble_in), ("out", palette.bubble_out)] {
+            let foreground = readable_foreground(background, palette.text);
+            assert!(contrast_ratio(background, foreground) >= 4.5);
+            assert!(css.contains(&format!(
+                "@define-color zaptide_bubble_{name}_text {};",
+                css_color(foreground)
+            )));
+        }
     }
 
     #[test]

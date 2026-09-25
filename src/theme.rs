@@ -1,7 +1,6 @@
-//! Colors, typography, icons, and base widgets.
+//! Conversation and interface colors.
 //!
-//! [`Palette`] holds all light and dark theme colors. [`Icon`] provides
-//! SVG icon URIs for GTK icon themes.
+//! [`Palette`] holds light and dark theme colors, including message bubbles.
 
 use crate::color::Color;
 

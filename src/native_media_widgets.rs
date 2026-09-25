@@ -203,6 +203,7 @@ fn add_label(parent: &gtk::Box, text: &str) {
     let label = gtk::Label::new(Some(text));
     label.set_xalign(0.0);
     label.set_wrap(true);
+    label.set_max_width_chars(52);
     parent.append(&label);
 }
 

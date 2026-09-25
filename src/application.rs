@@ -252,7 +252,6 @@ struct MessageRow {
     sender: String,
     sender_class: &'static str,
     avatar: Option<std::path::PathBuf>,
-    time: String,
     quote: String,
     /// Selectable text: the message body, or a caption.
     body: String,
@@ -298,16 +297,23 @@ impl Ord for MessageRow {
 struct MessageRowWidgets {
     separator: gtk::Label,
     avatar: adw::Avatar,
+    leading_space: gtk::Box,
+    trailing_space: gtk::Box,
+    bubble: gtk::Box,
     header: gtk::Box,
     name: gtk::Label,
-    time: gtk::Label,
     quote: gtk::Label,
     body: gtk::Label,
     footer: gtk::Label,
     media: gtk::Box,
     action_generation: std::rc::Rc<std::cell::Cell<u64>>,
     decode_token: Option<crate::native_media::DecodeToken>,
+    menu_target: MenuTarget,
 }
+
+/// The bound message and its sender, read by the row's context-menu gesture.
+type MenuTarget =
+    std::rc::Rc<std::cell::RefCell<Option<(String, ComponentSender<NativeApplication>)>>>;
 
 impl RelmListItem for MessageRow {
     type Root = gtk::Box;
@@ -318,7 +324,9 @@ impl RelmListItem for MessageRow {
             .orientation(gtk::Orientation::Vertical)
             .margin_start(12)
             .margin_end(12)
+            .focusable(true)
             .build();
+        root.add_css_class("zaptide-message-item");
         let separator = gtk::Label::builder()
             .halign(gtk::Align::Center)
             .justify(gtk::Justification::Center)
@@ -329,82 +337,154 @@ impl RelmListItem for MessageRow {
         root.append(&separator);
         let row = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
-            .spacing(12)
+            .spacing(8)
             .build();
         row.add_css_class("zaptide-message-row");
+        let leading_space = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        leading_space.set_hexpand(true);
+        row.append(&leading_space);
         let avatar = adw::Avatar::new(36, None, true);
         avatar.set_valign(gtk::Align::Start);
         row.append(&avatar);
-        let content = gtk::Box::builder()
+        let bubble = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(2)
-            .hexpand(true)
             .build();
+        bubble.add_css_class("zaptide-bubble");
         let header = gtk::Box::builder().spacing(6).build();
         let name = gtk::Label::builder()
             .xalign(0.0)
             .ellipsize(gtk::pango::EllipsizeMode::End)
             .css_classes(["heading"])
             .build();
-        let time = gtk::Label::builder()
-            .xalign(1.0)
-            .hexpand(true)
-            .css_classes(["dim-label", "caption", "numeric"])
-            .build();
         header.append(&name);
-        header.append(&time);
-        content.append(&header);
+        bubble.append(&header);
         let quote = gtk::Label::builder()
             .xalign(0.0)
             .wrap(true)
             .wrap_mode(gtk::pango::WrapMode::WordChar)
+            .max_width_chars(52)
             .css_classes(["zaptide-quote"])
             .build();
-        content.append(&quote);
+        bubble.append(&quote);
         // A wrapped TextView inside a ListView measures its height at the wrong
         // width and leaves tall blank rows; a Label measures height-for-width.
         let body = gtk::Label::builder()
             .xalign(0.0)
             .wrap(true)
             .wrap_mode(gtk::pango::WrapMode::WordChar)
+            .max_width_chars(52)
             .selectable(true)
             .build();
-        content.append(&body);
+        bubble.append(&body);
         let media = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        content.append(&media);
+        bubble.append(&media);
         let footer = gtk::Label::builder()
-            .xalign(0.0)
+            .xalign(1.0)
             .wrap(true)
+            .max_width_chars(52)
             .css_classes(["dim-label", "caption"])
             .build();
-        content.append(&footer);
-        row.append(&content);
+        bubble.append(&footer);
+        let clamp = adw::Clamp::builder()
+            .maximum_size(480)
+            .tightening_threshold(360)
+            .child(&bubble)
+            .build();
+        row.append(&clamp);
+        let trailing_space = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        trailing_space.set_hexpand(true);
+        row.append(&trailing_space);
         root.append(&row);
+        let menu_target: MenuTarget = std::rc::Rc::default();
+        let context_click = gtk::GestureClick::new();
+        context_click.set_button(gtk::gdk::BUTTON_SECONDARY);
+        context_click.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let gesture_target = menu_target.clone();
+        let focus_row = root.downgrade();
+        context_click.connect_pressed(move |gesture, _, x, y| {
+            if let (Some((id, sender)), Some(row)) =
+                (gesture_target.borrow().clone(), gesture.widget())
+            {
+                if let Some(root) = focus_row.upgrade() {
+                    root.grab_focus();
+                }
+                if let Some(point) = message_menu_position(&row, x, y) {
+                    sender.input(Input::ShowMessageMenu {
+                        id,
+                        x: point.x(),
+                        y: point.y(),
+                    });
+                }
+            }
+        });
+        bubble.add_controller(context_click);
+        let menu_keys = gtk::EventControllerKey::new();
+        menu_keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let key_target = menu_target.clone();
+        menu_keys.connect_key_pressed(move |controller, key, _, modifiers| {
+            if key != gtk::gdk::Key::Menu
+                && !(key == gtk::gdk::Key::F10
+                    && modifiers.contains(gtk::gdk::ModifierType::SHIFT_MASK))
+            {
+                return gtk::glib::Propagation::Proceed;
+            }
+            if let (Some((id, sender)), Some(row)) =
+                (key_target.borrow().clone(), controller.widget())
+                && let Some(point) = message_menu_position(&row, 24.0, row.height() as f64 / 2.0)
+            {
+                sender.input(Input::ShowMessageMenu {
+                    id,
+                    x: point.x(),
+                    y: point.y(),
+                });
+                return gtk::glib::Propagation::Stop;
+            }
+            gtk::glib::Propagation::Proceed
+        });
+        root.add_controller(menu_keys);
         let action_generation = std::rc::Rc::new(std::cell::Cell::new(0));
         (
             root,
             MessageRowWidgets {
                 separator,
                 avatar,
+                leading_space,
+                trailing_space,
+                bubble,
                 header,
                 name,
-                time,
                 quote,
                 body,
                 footer,
                 media,
                 action_generation,
                 decode_token: None,
+                menu_target,
             },
         )
     }
 
     fn bind(&mut self, widgets: &mut Self::Widgets, root: &mut Self::Root) {
+        root.update_property(&[
+            gtk::accessible::Property::Label(&self.accessible_label),
+            gtk::accessible::Property::Description("Press Menu or Shift+F10 for actions"),
+        ]);
+        let outgoing = self.message.from_me;
+        widgets.leading_space.set_visible(outgoing);
+        widgets.trailing_space.set_visible(!outgoing);
+        widgets.avatar.set_visible(!outgoing);
+        widgets
+            .bubble
+            .remove_css_class(if outgoing { "incoming" } else { "outgoing" });
+        widgets
+            .bubble
+            .add_css_class(if outgoing { "outgoing" } else { "incoming" });
         root.set_margin_top(if self.show_sender { 6 } else { 0 });
         root.set_margin_bottom(if self.show_timestamp { 6 } else { 0 });
         widgets.separator.set_label(&self.separator);
         widgets.separator.set_visible(!self.separator.is_empty());
-        // Continuation rows keep the avatar's space so text stays aligned.
+        // Continuation rows keep the avatar's space so incoming bubbles align.
         widgets
             .avatar
             .set_opacity(if self.show_sender { 1.0 } else { 0.0 });
@@ -418,12 +498,11 @@ impl RelmListItem for MessageRow {
             })
         });
         widgets.avatar.set_custom_image(image.as_ref());
-        widgets.header.set_visible(self.show_sender);
+        widgets.header.set_visible(self.show_sender && !outgoing);
         widgets.name.set_label(&self.sender);
         widgets
             .name
             .set_css_classes(&["heading", self.sender_class]);
-        widgets.time.set_label(&self.time);
         widgets.quote.set_label(&self.quote);
         widgets.quote.set_visible(!self.quote.is_empty());
         widgets.body.set_label(&self.body);
@@ -431,6 +510,7 @@ impl RelmListItem for MessageRow {
         widgets
             .body
             .update_property(&[gtk::accessible::Property::Label(&self.accessible_label)]);
+        *widgets.menu_target.borrow_mut() = Some((self.id.clone(), self.pointer_sender.clone()));
         widgets.footer.set_label(&self.footer);
         widgets.footer.set_visible(!self.footer.is_empty());
         if let Some(token) = widgets.decode_token.take() {
@@ -458,6 +538,12 @@ impl RelmListItem for MessageRow {
         widgets.media.append(&rendered.widget);
         widgets.decode_token = Some(rendered.decode_token);
     }
+}
+
+/// Express a row-local click in the list's coordinates without sending GTK objects across threads.
+fn message_menu_position(row: &gtk::Widget, x: f64, y: f64) -> Option<gtk::graphene::Point> {
+    let list = row.ancestor(gtk::ListView::static_type())?;
+    row.compute_point(&list, &gtk::graphene::Point::new(x as f32, y as f32))
 }
 
 pub struct Init {
@@ -494,7 +580,7 @@ pub struct NativeApplication {
     typing_until: std::collections::HashMap<String, std::time::Instant>,
     composing_until: std::collections::HashMap<String, std::time::Instant>,
     presence: std::collections::HashMap<String, (bool, Option<i64>)>,
-    messages: TypedListView<MessageRow, gtk::SingleSelection>,
+    messages: TypedListView<MessageRow, gtk::NoSelection>,
     qr_texture: Option<gtk::gdk::Texture>,
     history_complete: bool,
     loading_older: bool,
@@ -508,7 +594,8 @@ pub struct NativeApplication {
     selected_voice_message: Option<String>,
     media: crate::services::media::MediaService,
     voice_send_pending: bool,
-    poll_choices: gtk::StringList,
+    message_target: Option<String>,
+    message_menu: gtk::PopoverMenu,
     poll_choice: usize,
     sticker_packs: Vec<crate::model::StickerPack>,
     recent_stickers: Vec<std::path::PathBuf>,
@@ -570,7 +657,11 @@ pub enum Input {
     SetMutedFilter(bool),
     Reconnect,
     SelectMessage(u32),
-    ClearMessageSelection,
+    ShowMessageMenu {
+        id: String,
+        x: f32,
+        y: f32,
+    },
     OpenQuoted,
     ReplySelected,
     EditSelected,
@@ -593,8 +684,7 @@ pub enum Input {
     ShowForward,
     ForwardSelected(String),
     DeleteSelected(bool),
-    PollChoiceChanged(usize),
-    VoteSelected,
+    VoteOption(usize),
     CreatePoll {
         question: String,
         first: String,
@@ -1006,6 +1096,7 @@ impl SimpleComponent for NativeApplication {
                                     set_description: Some("Choose a chat from the list to start messaging."),
                                 },
 
+                                #[name = "conversation_body"]
                                 add_named[Some("conversation")] = &gtk::Box {
                                     set_orientation: gtk::Orientation::Vertical,
 
@@ -1027,113 +1118,9 @@ impl SimpleComponent for NativeApplication {
                                         #[local_ref]
                                         message_view -> gtk::ListView {
                                             add_css_class: "zaptide-transcript",
+                                            set_single_click_activate: true,
+                                            connect_activate[sender] => move |_, position| sender.input(Input::SelectMessage(position)),
                                         },
-                                    },
-
-                                    append = &gtk::Box {
-                                        add_css_class: "toolbar",
-                                        set_halign: gtk::Align::Center,
-                                        set_spacing: 6,
-                                        #[watch]
-                                        set_visible: model.selected_message().is_some(),
-                                        #[watch]
-                                        set_tooltip_text: Some(&model.selected_message_summary()),
-
-                                        append = &gtk::DropDown {
-                                            set_model: Some(&model.poll_choices),
-                                            #[watch]
-                                            set_visible: model.poll_option_count() > 0,
-                                            #[watch]
-                                            set_selected: model.poll_choice as u32,
-                                            connect_selected_notify[sender] => move |dropdown| sender.input(Input::PollChoiceChanged(dropdown.selected() as usize)),
-                                        },
-                                        append = &gtk::Button {
-                                            set_label: "Vote",
-                                            #[watch]
-                                            set_visible: model.poll_option_count() > 0,
-                                            #[watch]
-                                            set_sensitive: model.selected_poll_can_vote(),
-                                            connect_clicked => Input::VoteSelected,
-                                        },
-                                        append = &gtk::Button {
-                                            set_icon_name: "folder-download-symbolic",
-                                            set_tooltip_text: Some("Download attachment, or open downloaded file"),
-                                            #[watch]
-                                            set_visible: model.selected_attachment().is_some(),
-                                            #[watch]
-                                            set_sensitive: model.attachment_action_available(),
-                                            connect_clicked => Input::ActivateSelectedAttachment,
-                                        },
-                                        append = &gtk::Button {
-                                            set_icon_name: "document-save-as-symbolic",
-                                            set_tooltip_text: Some("Save attachment copy…"),
-                                            #[watch]
-                                            set_visible: model.selected_message().is_some_and(|message| message.content.media().is_some_and(|media| media.path.is_some())),
-                                            connect_clicked => Input::SaveSelectedAttachment,
-                                        },
-                                        append = &gtk::Button {
-                                            set_icon_name: "web-browser-symbolic",
-                                            set_tooltip_text: Some("Open link…"),
-                                            #[watch]
-                                            set_visible: model.selected_message().is_some_and(|message| matches!(&message.content, crate::model::Content::Text { preview: Some(_), .. })),
-                                            connect_clicked => Input::OpenSelectedUri,
-                                        },
-                                        append = &gtk::Button {
-                                            set_icon_name: "go-up-symbolic",
-                                            set_tooltip_text: Some("Open quoted message"),
-                                            #[watch]
-                                            set_visible: model.selected_message().is_some_and(|message| message.quoted.is_some()),
-                                            connect_clicked => Input::OpenQuoted,
-                                        },
-                                        append = &gtk::Button {
-                                            set_icon_name: "mail-reply-sender-symbolic",
-                                            set_tooltip_text: Some("Reply"),
-                                            connect_clicked => Input::ReplySelected,
-                                        },
-                                        append = &gtk::Button {
-                                            set_icon_name: "document-edit-symbolic",
-                                            set_tooltip_text: Some("Edit"),
-                                            #[watch]
-                                            set_visible: model.selected_message().is_some_and(|message| model.editable_messages.contains_key(&message.id)),
-                                            connect_clicked => Input::EditSelected,
-                                        },
-                                        append = &gtk::Button {
-                                            set_label: "👍",
-                                            set_tooltip_text: Some("React 👍"),
-                                            connect_clicked => Input::ReactSelected("👍".into()),
-                                        },
-                                        append = &gtk::Button {
-                                            set_icon_name: "mail-forward-symbolic",
-                                            set_tooltip_text: Some("Forward to chat…"),
-                                            connect_clicked => Input::ShowForward,
-                                        },
-                                        append = &gtk::Button {
-                                            set_icon_name: "user-trash-symbolic",
-                                            set_tooltip_text: Some("Delete for me"),
-                                            connect_clicked => Input::DeleteSelected(false),
-                                        },
-                                        append = &gtk::Button {
-                                            set_label: "Delete for Everyone",
-                                            add_css_class: "destructive-action",
-                                            #[watch]
-                                            set_visible: model.selected_message().is_some_and(|message| message.from_me),
-                                            connect_clicked => Input::DeleteSelected(true),
-                                        },
-                                        append = &gtk::Button {
-                                            set_icon_name: "window-close-symbolic",
-                                            set_tooltip_text: Some("Close message actions"),
-                                            add_css_class: "flat",
-                                            connect_clicked => Input::ClearMessageSelection,
-                                        },
-                                    },
-
-                                    append = &gtk::Label {
-                                        set_margin_start: 16,
-                                        set_margin_end: 16,
-                                        #[watch]
-                                        set_visible: model.selected_poll_options().is_some(),
-                                        #[watch]
-                                        set_label: &model.poll_summary(),
                                     },
 
                                     append = &gtk::Box {
@@ -1494,16 +1481,7 @@ impl SimpleComponent for NativeApplication {
             }
         });
         chat_view.add_controller(chat_keys);
-        let messages: TypedListView<MessageRow, gtk::SingleSelection> = TypedListView::new();
-        // Populating the conversation must not select a row by itself, or the
-        // message action toolbar appears over an unselected conversation.
-        messages.selection_model.set_autoselect(false);
-        let selection_sender = sender.clone();
-        messages
-            .selection_model
-            .connect_selected_notify(move |selection| {
-                selection_sender.input(Input::SelectMessage(selection.selected()))
-            });
+        let messages: TypedListView<MessageRow, gtk::NoSelection> = TypedListView::new();
         let message_view = &messages.view.clone();
         let composer_buffer = gtk::TextBuffer::new(None);
         let enter_sends = std::rc::Rc::new(std::cell::Cell::new(true));
@@ -1664,7 +1642,8 @@ impl SimpleComponent for NativeApplication {
             selected_voice_message: None,
             media: media_service,
             voice_send_pending: false,
-            poll_choices: gtk::StringList::new(&[]),
+            message_target: None,
+            message_menu: gtk::PopoverMenu::from_model(None::<&gtk::gio::MenuModel>),
             poll_choice: 0,
             sticker_packs: Vec::new(),
             recent_stickers: Vec::new(),
@@ -1737,6 +1716,10 @@ impl SimpleComponent for NativeApplication {
         model.muted_filter = Some(widgets.muted_filter.clone());
         model.chat_kind_filter = Some(widgets.chat_kind_filter.clone());
         model.composer_view = Some(widgets.composer.clone());
+        model.message_menu.set_parent(&widgets.conversation_body);
+        model.message_menu.set_has_arrow(false);
+        model.message_menu.set_halign(gtk::Align::Start);
+        install_message_actions(&root, &sender);
         widgets
             .status_label
             .set_accessible_role(gtk::AccessibleRole::Status);
@@ -2126,11 +2109,9 @@ impl SimpleComponent for NativeApplication {
                             if let Some((target_chat, target_id)) =
                                 self.pending_quote_navigation.clone()
                                 && target_chat == chat
-                                && let Some(position) =
-                                    self.message_ids.iter().position(|id| id == &target_id)
+                                && self.message_ids.contains(&target_id)
                             {
                                 self.pending_quote_navigation = None;
-                                self.messages.selection_model.set_selected(position as u32);
                                 self.scroll_message_into_view(&target_id);
                             }
                         }
@@ -2338,9 +2319,7 @@ impl SimpleComponent for NativeApplication {
                 self.draft = self.composer.draft(&chat).to_owned();
                 self.composer_buffer.set_text(&self.draft);
                 self.messages.clear();
-                self.messages
-                    .selection_model
-                    .set_selected(gtk::INVALID_LIST_POSITION);
+                self.message_target = None;
                 self.history_complete = false;
                 self.loading_older = false;
                 self.message_ids.clear();
@@ -2586,36 +2565,22 @@ impl SimpleComponent for NativeApplication {
                     self.status = "Backend unavailable".into();
                 }
             }
-            Input::ClearMessageSelection => self
-                .messages
-                .selection_model
-                .set_selected(gtk::INVALID_LIST_POSITION),
+            Input::ShowMessageMenu { id, x, y } => self.show_message_menu(id, x, y),
             Input::SelectMessage(position) => {
-                let Some((chat, message)) = self
-                    .active_chat
-                    .as_ref()
-                    .zip(self.message_ids.get(position as usize))
-                    .map(|(chat, message)| (chat.clone(), message.clone()))
-                else {
+                if self.active_chat.is_none() {
+                    return;
+                }
+                let Some(message) = self.message_ids.get(position as usize) else {
                     return;
                 };
                 self.selected_voice_message = self
                     .message_snapshots
-                    .get(&message)
+                    .get(message)
                     .and_then(|message| self.project_voice(message).map(|_| message.id.clone()));
                 self.selected_voice = self
                     .message_snapshots
-                    .get(&message)
+                    .get(message)
                     .and_then(|message| self.project_voice(message));
-                self.poll_choice = 0;
-                self.sync_poll_choices(&message);
-                let chat_name = self
-                    .chat_snapshots
-                    .iter()
-                    .find(|known| known.id == chat)
-                    .map(|known| known.name.as_str())
-                    .unwrap_or("conversation");
-                self.status = format!("Selected message in {chat_name}");
             }
             Input::OpenQuoted => {
                 let Some(message) = self.selected_message().cloned() else {
@@ -2624,8 +2589,7 @@ impl SimpleComponent for NativeApplication {
                 let Some(quoted_id) = message.quoted.map(|quoted| quoted.id) else {
                     return;
                 };
-                if let Some(position) = self.message_ids.iter().position(|id| id == &quoted_id) {
-                    self.messages.selection_model.set_selected(position as u32);
+                if self.message_ids.contains(&quoted_id) {
                     self.scroll_message_into_view(&quoted_id);
                 } else if let Some(backend) = &self.backend {
                     self.pending_quote_navigation = Some((message.chat.clone(), quoted_id.clone()));
@@ -2986,10 +2950,10 @@ impl SimpleComponent for NativeApplication {
                 dialog.present(Some(&self.window));
             }
             Input::ConfirmDelete(everyone) => self.delete_selected(everyone),
-            Input::PollChoiceChanged(choice) => {
+            Input::VoteOption(choice) => {
                 self.poll_choice = choice;
+                self.vote_selected();
             }
-            Input::VoteSelected => self.vote_selected(),
             Input::CreatePoll {
                 question,
                 first,
@@ -3209,22 +3173,28 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
         },
     );
     adw::StyleManager::default().set_color_scheme(scheme);
-    let mut css = palette.map_or_else(String::new, |palette| {
-        crate::native_theme::css_for_palette(&palette)
-    });
+    let mut css = "@define-color zaptide_bubble_in @card_bg_color;\n\
+                   @define-color zaptide_bubble_out color-mix(in srgb, @success_bg_color 60%, @card_bg_color);\n\
+                   @define-color zaptide_bubble_in_text @window_fg_color;\n\
+                   @define-color zaptide_bubble_out_text @window_fg_color;\n".to_owned();
+    if let Some(palette) = palette {
+        css.push_str(&crate::native_theme::css_for_palette(&palette));
+    }
     css.push_str(
-        // Fractal-style: no bubbles, minimal text with subtle hover/selected states.
         ".zaptide-transcript, .zaptide-transcript textview, .zaptide-transcript text { background: none; }\n\
-         .zaptide-message-row { padding: 2px 6px; border-radius: 9px; }\n\
-         .zaptide-media-card { padding: 8px 12px; margin-top: 4px; }\n\
+         .zaptide-message-row { padding: 2px 6px; }\n\
+         .zaptide-bubble { padding: 8px 11px; border-radius: 13px; }\n\
+         .zaptide-bubble.incoming { background-color: @zaptide_bubble_in; color: @zaptide_bubble_in_text; }\n\
+         .zaptide-bubble.outgoing { background-color: @zaptide_bubble_out; color: @zaptide_bubble_out_text; }\n\
+         .zaptide-message-item:focus-visible .zaptide-bubble { outline: 2px solid @accent_color; outline-offset: 2px; }\n\
+         .zaptide-media-card { padding: 8px 12px; margin-top: 4px; background-color: color-mix(in srgb, currentColor 8%, transparent); }\n\
          .zaptide-sender-blue { color: @blue_3; }\n\
          .zaptide-sender-green { color: @green_4; }\n\
          .zaptide-sender-yellow { color: @yellow_5; }\n\
          .zaptide-sender-orange { color: @orange_4; }\n\
          .zaptide-sender-red { color: @red_3; }\n\
          .zaptide-sender-purple { color: @purple_3; }\n\
-         .zaptide-message-row:hover { background-color: color-mix(in srgb, currentColor 7%, transparent); }\n\
-         .zaptide-message-row:selected { background-color: color-mix(in srgb, currentColor 10%, transparent); }\n\
+         .zaptide-bubble:hover { box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 12%, transparent); }\n\
          .zaptide-message-timestamp { min-width: 36px; font-weight: normal; }\n\
          .zaptide-unread-pill { font-weight: bold; font-size: 0.8em; border-radius: 9999px; min-width: 1.4em; padding: 2px 6px; color: @accent_fg_color; background-color: @accent_bg_color; }\n\
          .zaptide-composer { border-radius: 18px; background-color: color-mix(in srgb, currentColor 8%, transparent); }\n\
@@ -3368,10 +3338,7 @@ fn message_row(
     if !reactions.is_empty() {
         footer.push(reactions.trim().to_owned());
     }
-    // Delivery always shows; clock only on last message of group.
-    if show_timestamp && !show_sender {
-        footer.push(clock.clone());
-    }
+    footer.push(clock.clone());
     if !delivery.is_empty() {
         footer.push(delivery.trim_start_matches(" · ").to_owned());
     }
@@ -3392,7 +3359,6 @@ fn message_row(
         sender_class: SENDER_CLASSES
             [crate::util::hue(&message.sender) as usize * SENDER_CLASSES.len() / 360],
         avatar,
-        time: clock,
         quote,
         body,
         footer: footer.join(" · "),
@@ -3805,10 +3771,107 @@ impl NativeApplication {
         self.chat_projection.selected_chat()
     }
 
+    fn show_message_menu(&mut self, id: String, x: f32, y: f32) {
+        if !self.message_ids.contains(&id) {
+            return;
+        }
+        let Some(parent) = self.message_menu.parent() else {
+            return;
+        };
+        let Some(point) = self
+            .messages
+            .view
+            .compute_point(&parent, &gtk::graphene::Point::new(x, y))
+        else {
+            return;
+        };
+        self.message_target = Some(id);
+        self.message_menu
+            .set_menu_model(Some(&self.message_menu_model()));
+        self.message_menu
+            .set_pointing_to(Some(&gtk::gdk::Rectangle::new(
+                point.x() as i32,
+                point.y() as i32,
+                1,
+                1,
+            )));
+        self.message_menu.popup();
+    }
+
+    /// Actions for the right-clicked message, grouped as GNOME menus are.
+    fn message_menu_model(&self) -> gtk::gio::Menu {
+        let menu = gtk::gio::Menu::new();
+        let Some(message) = self.selected_message() else {
+            return menu;
+        };
+        let open = gtk::gio::Menu::new();
+        if self.attachment_action_available() {
+            let downloaded = message
+                .content
+                .media()
+                .is_some_and(|media| media.path.is_some());
+            open.append(
+                Some(if downloaded {
+                    "Open Attachment"
+                } else {
+                    "Download Attachment"
+                }),
+                Some("message.attachment"),
+            );
+            if downloaded {
+                open.append(Some("Save Attachment…"), Some("message.save"));
+            }
+        }
+        if matches!(
+            &message.content,
+            crate::model::Content::Text {
+                preview: Some(_),
+                ..
+            }
+        ) {
+            open.append(Some("Open Link"), Some("message.open-link"));
+        }
+        if message.quoted.is_some() {
+            open.append(Some("Go to Quoted Message"), Some("message.quoted"));
+        }
+        let respond = gtk::gio::Menu::new();
+        respond.append(Some("Reply"), Some("message.reply"));
+        if self.editable_messages.contains_key(&message.id) {
+            respond.append(Some("Edit"), Some("message.edit"));
+        }
+        respond.append(Some("React 👍"), Some("message.react"));
+        respond.append(Some("Forward…"), Some("message.forward"));
+        let vote = gtk::gio::Menu::new();
+        if self.selected_poll_can_vote() {
+            for (index, option) in self
+                .selected_poll_options()
+                .unwrap_or_default()
+                .iter()
+                .enumerate()
+            {
+                let item = gtk::gio::MenuItem::new(Some(&format!("Vote: {option}")), None);
+                item.set_action_and_target_value(
+                    Some("message.vote"),
+                    Some(&(index as u32).to_variant()),
+                );
+                vote.append_item(&item);
+            }
+        }
+        let delete = gtk::gio::Menu::new();
+        delete.append(Some("Delete for Me"), Some("message.delete"));
+        if message.from_me {
+            delete.append(Some("Delete for Everyone"), Some("message.delete-everyone"));
+        }
+        for section in [open, respond, vote, delete] {
+            if section.n_items() > 0 {
+                menu.append_section(None, &section);
+            }
+        }
+        menu
+    }
+
     fn selected_message_id(&self) -> Option<String> {
-        self.message_ids
-            .get(self.messages.selection_model.selected() as usize)
-            .cloned()
+        self.message_target.clone()
     }
 
     fn participant_label(&self, id: &str, index: usize) -> String {
@@ -3830,12 +3893,6 @@ impl NativeApplication {
             .and_then(|id| self.message_snapshots.get(&id))
     }
 
-    fn selected_message_summary(&self) -> String {
-        self.selected_message()
-            .map(crate::model::Message::summary)
-            .unwrap_or_default()
-    }
-
     fn selected_attachment(&self) -> Option<crate::native_attachments::AttachmentPresentation> {
         self.selected_message()
             .and_then(crate::native_attachments::project)
@@ -3854,41 +3911,9 @@ impl NativeApplication {
         }
     }
 
-    fn poll_option_count(&self) -> usize {
-        self.selected_poll_options().map_or(0, <[String]>::len)
-    }
-
-    fn sync_poll_choices(&self, id: &str) {
-        let options: Vec<String> = self
-            .message_snapshots
-            .get(id)
-            .and_then(|message| match &message.content {
-                crate::model::Content::Poll { options, .. } => Some(options.clone()),
-                _ => None,
-            })
-            .unwrap_or_default();
-        let choices: Vec<&str> = options.iter().map(String::as_str).collect();
-        self.poll_choices
-            .splice(0, self.poll_choices.n_items(), &choices);
-    }
-
     fn selected_poll_can_vote(&self) -> bool {
         matches!(&self.selected_message().map(|message| &message.content),
             Some(crate::model::Content::Poll { state, .. }) if state.can_vote)
-    }
-
-    fn poll_summary(&self) -> String {
-        self.selected_poll_options()
-            .map(|options| {
-                options
-                    .iter()
-                    .take(2)
-                    .enumerate()
-                    .map(|(index, option)| format!("{}: {option}", index + 1))
-                    .collect::<Vec<_>>()
-                    .join("   ")
-            })
-            .unwrap_or_default()
     }
 
     fn recording_active(&self) -> bool {
@@ -4604,9 +4629,6 @@ impl NativeApplication {
                 .insert(message.id.clone(), message.clone());
             self.rebuild_message_rows();
             self.sync_transcript();
-            if self.selected_message_id().as_deref() == Some(&message.id) {
-                self.sync_poll_choices(&message.id);
-            }
             self.refresh_selected_voice();
         }
     }
@@ -5305,6 +5327,41 @@ fn synthetic_older_message(chat: &str) -> crate::model::Message {
     message.timestamp = 1_700_000_001;
     message.content = crate::model::Content::text("Earlier synthetic history row");
     message
+}
+
+fn install_message_actions(
+    window: &adw::ApplicationWindow,
+    sender: &ComponentSender<NativeApplication>,
+) {
+    let group = gtk::gio::SimpleActionGroup::new();
+    type MessageAction = (&'static str, fn() -> Input);
+    let actions: [MessageAction; 10] = [
+        ("attachment", || Input::ActivateSelectedAttachment),
+        ("save", || Input::SaveSelectedAttachment),
+        ("open-link", || Input::OpenSelectedUri),
+        ("quoted", || Input::OpenQuoted),
+        ("reply", || Input::ReplySelected),
+        ("edit", || Input::EditSelected),
+        ("react", || Input::ReactSelected("👍".into())),
+        ("forward", || Input::ShowForward),
+        ("delete", || Input::DeleteSelected(false)),
+        ("delete-everyone", || Input::DeleteSelected(true)),
+    ];
+    for (name, input) in actions {
+        let action = gtk::gio::SimpleAction::new(name, None);
+        let sender = sender.clone();
+        action.connect_activate(move |_, _| sender.input(input()));
+        group.add_action(&action);
+    }
+    let vote = gtk::gio::SimpleAction::new("vote", Some(gtk::glib::VariantTy::UINT32));
+    let vote_sender = sender.clone();
+    vote.connect_activate(move |_, choice| {
+        if let Some(choice) = choice.and_then(gtk::glib::Variant::get::<u32>) {
+            vote_sender.input(Input::VoteOption(choice as usize));
+        }
+    });
+    group.add_action(&vote);
+    window.insert_action_group("message", Some(&group));
 }
 
 fn install_window_actions(
