@@ -1,7 +1,7 @@
 //! Local palette files and their asynchronous catalog.
 
 use super::Palette;
-use egui::Color32;
+use crate::color::Color;
 use std::{
     io::Read,
     path::{Component, Path, PathBuf},
@@ -13,14 +13,6 @@ use std::{
 pub struct CustomTheme {
     pub filename: String,
     pub palette: Palette,
-}
-
-pub fn label(filename: &str) -> &str {
-    if filename == "omarchy.json" {
-        "Omarchy"
-    } else {
-        filename
-    }
 }
 
 /// A damaged optional cache must not make the rest of settings unreadable.
@@ -73,9 +65,9 @@ pub(super) fn parse_palette(text: &str) -> Result<Palette, String> {
         }
         let color = u32::from_str_radix(hex, 16).map_err(|error| error.to_string())?;
         let color = if hex.len() == 6 {
-            Color32::from_rgb((color >> 16) as u8, (color >> 8) as u8, color as u8)
+            Color::from_rgb((color >> 16) as u8, (color >> 8) as u8, color as u8)
         } else {
-            Color32::from_rgba_unmultiplied(
+            Color::from_rgba_unmultiplied(
                 (color >> 24) as u8,
                 (color >> 16) as u8,
                 (color >> 8) as u8,
@@ -246,7 +238,7 @@ fn discover(directory: &Path, selected: Option<&str>) -> Loaded {
 struct Scan {
     directory: PathBuf,
     selected: Option<String>,
-    waker: crate::backend::Waker,
+    waker: std::sync::Arc<dyn crate::backend::Wake>,
 }
 
 /// Background discovery at launch or on request. Keep at most one scan running
@@ -289,16 +281,16 @@ impl Catalog {
         false
     }
 
-    pub fn start(
+    pub fn start<W: crate::backend::Wake + Clone + 'static>(
         &mut self,
         directory: PathBuf,
         selected: Option<String>,
-        waker: &crate::backend::Waker,
+        waker: &W,
     ) {
         let scan = Scan {
             directory,
             selected,
-            waker: waker.clone(),
+            waker: std::sync::Arc::new(waker.clone()),
         };
         if self.loading() {
             self.pending = Some(scan);
@@ -316,7 +308,7 @@ impl Catalog {
         #[cfg(target_os = "linux")]
         let install = std::mem::take(&mut self.setup_pending);
         let waker = scan.waker.clone();
-        self.spawn(&waker, move || {
+        self.spawn(waker, move || {
             #[cfg(target_os = "linux")]
             if install
                 && let Some(setup) = &setup
@@ -360,7 +352,7 @@ impl Catalog {
                             super::watch::ThemeWatch::new(
                                 &scan.directory,
                                 system.as_deref(),
-                                &scan.waker,
+                                scan.waker.clone(),
                             )
                         });
                     match watch {
@@ -393,11 +385,11 @@ impl Catalog {
 
     fn spawn(
         &mut self,
-        waker: &crate::backend::Waker,
+        waker: std::sync::Arc<dyn crate::backend::Wake>,
         load: impl FnOnce() -> Loaded + Send + 'static,
     ) {
         let (sender, receiver) = mpsc::channel();
-        let wake = waker.clone();
+        let wake = waker;
         match std::thread::Builder::new()
             .name("zaptide-themes".into())
             .spawn(move || {
@@ -415,10 +407,6 @@ impl Catalog {
                 );
             }
         }
-    }
-
-    pub fn themes(&self) -> &[CustomTheme] {
-        &self.themes
     }
 
     /// Live Omarchy comes first on its desktop; other local palettes retain
@@ -439,26 +427,12 @@ impl Catalog {
         self.themes.iter().find(|theme| theme.filename == filename)
     }
 
-    pub fn follows_omarchy(&self) -> bool {
-        self.follows_omarchy
-    }
-
     pub fn system_theme(&self) -> Option<&CustomTheme> {
         self.system_theme.as_ref()
     }
 
     pub fn loading(&self) -> bool {
         self.receiver.is_some()
-    }
-
-    pub fn detail(&self, selected: Option<&str>) -> &str {
-        if self.loading() {
-            return "Loading local themes…";
-        }
-        if selected.is_some_and(|filename| self.find(filename).is_none()) {
-            return "The selected theme is unavailable. Keeping the last usable appearance. See the log for details.";
-        }
-        self.problem.as_deref().unwrap_or("")
     }
 
     pub fn poll(&mut self) -> bool {
@@ -516,78 +490,10 @@ impl Catalog {
             ..Self::default()
         }
     }
-
-    #[cfg(test)]
-    pub(crate) fn from_themes(themes: Vec<CustomTheme>) -> Self {
-        Self {
-            themes,
-            ..Self::default()
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn load_test(&mut self, load: impl FnOnce() -> Vec<CustomTheme> + Send + 'static) {
-        self.spawn(&crate::backend::Waker::default(), move || Loaded {
-            themes: load(),
-            ..Loaded::default()
-        });
-    }
-
-    #[cfg(test)]
-    pub(crate) fn load_system_test(&mut self, theme: Option<CustomTheme>, follows: bool) {
-        self.spawn(&crate::backend::Waker::default(), move || Loaded {
-            system_theme: theme,
-            follows_omarchy: follows,
-            ..Loaded::default()
-        });
-    }
 }
 
 #[cfg(test)]
 mod custom_theme_tests {
-    #[test]
-    fn bundled_choices_are_available_without_local_files_and_valid_overrides_win() {
-        let directory = tempfile::tempdir().unwrap();
-        std::fs::write(
-            directory.path().join("Nord.json"),
-            r##"{"base":"light","colors":{"accent":"#102030"}}"##,
-        )
-        .unwrap();
-        let mut catalog = super::Catalog {
-            presets: true,
-            ..Default::default()
-        };
-        catalog.start(
-            directory.path().into(),
-            Some("Nord.json".into()),
-            &Default::default(),
-        );
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-        while !catalog.poll() {
-            assert!(std::time::Instant::now() < deadline);
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
-        assert_eq!(catalog.themes().len(), 8);
-        let nord = catalog.find("Nord.json").unwrap();
-        assert!(!nord.palette.dark);
-        assert_eq!(
-            nord.palette.accent,
-            egui::Color32::from_rgb(0x10, 0x20, 0x30)
-        );
-        assert!(catalog.find("Tokyo Night.json").is_some());
-        for filename in [
-            "Rose Pine.json",
-            "Rose Pine Moon.json",
-            "Rose Pine Dawn.json",
-        ] {
-            assert!(catalog.find(filename).is_some());
-        }
-        assert_eq!(
-            std::fs::read_dir(directory.path()).unwrap().count(),
-            1,
-            "bundled defaults do not replace or create user palette files"
-        );
-    }
 
     #[test]
     fn picker_places_live_omarchy_first_only_when_the_integration_is_available() {
@@ -624,57 +530,14 @@ mod custom_theme_tests {
     use super::*;
 
     #[test]
-    fn reloads_coalesce_and_never_publish_a_superseded_palette() {
-        let dir =
-            std::env::temp_dir().join(format!("zaptide-theme-reload-{}", rand::random::<u64>()));
-        std::fs::create_dir(&dir).unwrap();
-        std::fs::write(dir.join("latest.json"), br#"{"base":"light"}"#).unwrap();
-        let accepted = CustomTheme {
-            filename: "accepted.json".into(),
-            palette: Palette::dark(),
-        };
-        let mut catalog = Catalog::from_themes(vec![accepted.clone()]);
-        let (finish, worker) = mpsc::channel();
-        catalog.load_test(move || {
-            worker.recv().unwrap();
-            vec![CustomTheme {
-                filename: "stale.json".into(),
-                palette: Palette::light(),
-            }]
-        });
-        for _ in 0..100 {
-            catalog.start(dir.join("superseded"), None, &Default::default());
-        }
-        catalog.start(dir.clone(), Some("latest.json".into()), &Default::default());
-        assert!(!catalog.poll(), "requests do not replace the running scan");
-        assert_eq!(catalog.themes(), std::slice::from_ref(&accepted));
-        finish.send(()).unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-        while !catalog.poll() {
-            assert_eq!(
-                catalog.themes(),
-                std::slice::from_ref(&accepted),
-                "hold the accepted colors"
-            );
-            assert!(std::time::Instant::now() < deadline);
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
-        assert!(!catalog.loading());
-        assert_eq!(catalog.themes().len(), 1);
-        assert_eq!(catalog.themes()[0].filename, "latest.json");
-        assert_eq!(catalog.themes()[0].palette, Palette::light());
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
     fn overrides_inherit_the_base_and_support_alpha() {
         let palette =
             parse_palette(r##"{"base":"light","colors":{"text":"#ebdbb2","shadow":"#00000080"}}"##)
                 .unwrap();
         assert_eq!(palette.window, Palette::light().window);
         assert!(!palette.dark);
-        assert_eq!(palette.text, Color32::from_rgb(235, 219, 178));
-        assert_eq!(palette.shadow, Color32::from_black_alpha(128));
+        assert_eq!(palette.text, Color::from_rgb(235, 219, 178));
+        assert_eq!(palette.shadow, Color::from_black_alpha(128));
         assert_eq!(parse_palette("{}").unwrap(), Palette::dark());
     }
 

@@ -71,7 +71,7 @@ mod tests {
 
     #[test]
     fn rose_pine_dawn_hovered_primary_buttons_keep_readable_content() {
-        fn luminance(color: egui::Color32) -> f64 {
+        fn luminance(color: crate::color::Color) -> f64 {
             let linear = [color.r(), color.g(), color.b()].map(|channel| {
                 let value = f64::from(channel) / 255.0;
                 if value <= 0.04045 {

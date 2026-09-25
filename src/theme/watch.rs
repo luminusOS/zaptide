@@ -19,11 +19,11 @@ impl ThemeWatch {
     pub(super) fn new(
         local: &Path,
         system: Option<&Path>,
-        waker: &crate::backend::Waker,
+        waker: Arc<dyn crate::backend::Wake>,
     ) -> notify::Result<Self> {
         let changed = Arc::new(AtomicBool::new(false));
         let signal = changed.clone();
-        let wake = waker.clone();
+        let wake = waker;
         let mut watcher =
             notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
                 let changed = event.is_ok_and(|event| {
@@ -64,7 +64,7 @@ mod tests {
         fs::create_dir_all(&local).unwrap();
         fs::create_dir_all(&system).unwrap();
         let watch =
-            ThemeWatch::new(&local, Some(&system), &crate::backend::Waker::default()).unwrap();
+            ThemeWatch::new(&local, Some(&system), Arc::new(crate::backend::Waker)).unwrap();
         assert!(!watch.take_changed());
         let temporary = directory.path().join("next");
         fs::write(&temporary, "{}").unwrap();

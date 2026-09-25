@@ -2,98 +2,14 @@
 //!
 //! libopus is built into the app.
 
-use std::io::Cursor;
-
 /// Opus sample rate used for every mono clip.
 pub const RATE: u32 = 48_000;
 /// One Opus frame: 20 ms.
 const FRAME: usize = 960;
-/// Maximum decoded Opus packet size: 120 ms of stereo.
-const LONGEST_PACKET: usize = 5760 * 2;
 /// Number of bars in a WhatsApp voice-message waveform.
 pub const BARS: usize = 64;
 /// Target bitrate for speech, similar to the phone.
 const BITRATE: i32 = 32_000;
-
-/// Mono samples at `RATE` from an OGG/Opus file.
-pub fn decode(bytes: &[u8]) -> Result<Vec<f32>, String> {
-    let mut reader = ogg::PacketReader::new(Cursor::new(bytes));
-    let mut stream: Option<Stream> = None;
-    let mut out = Vec::new();
-    let mut scratch = vec![0f32; LONGEST_PACKET];
-    loop {
-        let packet = match reader.read_packet() {
-            Ok(Some(packet)) => packet,
-            Ok(None) => break,
-            Err(error) => return Err(format!("bad OGG stream: {error}")),
-        };
-        let Some(current) = stream.as_mut() else {
-            stream = Some(Stream::open(&packet.data)?);
-            continue;
-        };
-        if !current.tagged {
-            // Skip the optional Opus comment header.
-            current.tagged = true;
-            continue;
-        }
-        let frames = current
-            .decoder
-            .decode_float(&packet.data, &mut scratch, false)
-            .map_err(|error| format!("bad Opus packet: {error}"))?;
-        let decoded = &scratch[..frames * current.channels];
-        let mono: Vec<f32> = if current.channels == 2 {
-            decoded
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|[left, right]| (left + right) * 0.5)
-                .collect()
-        } else {
-            decoded.to_vec()
-        };
-        // Remove the encoder lookahead from the decoded output.
-        let skip = current.skip.min(mono.len());
-        current.skip -= skip;
-        out.extend_from_slice(&mono[skip..]);
-    }
-    if stream.is_none() {
-        return Err("not an OGG stream".to_owned());
-    }
-    Ok(out)
-}
-
-struct Stream {
-    decoder: opus::Decoder,
-    channels: usize,
-    skip: usize,
-    tagged: bool,
-}
-
-impl Stream {
-    /// Reads the Opus identification header.
-    fn open(head: &[u8]) -> Result<Self, String> {
-        let head = head
-            .strip_prefix(b"OpusHead")
-            .ok_or_else(|| "not an Opus stream".to_owned())?;
-        if head.len() < 11 {
-            return Err("truncated Opus header".to_owned());
-        }
-        let channels = usize::from(head[1]);
-        let skip = usize::from(u16::from_le_bytes([head[2], head[3]]));
-        let layout = match channels {
-            1 => opus::Channels::Mono,
-            2 => opus::Channels::Stereo,
-            other => return Err(format!("{other} channels")),
-        };
-        let decoder = opus::Decoder::new(RATE, layout).map_err(|error| error.to_string())?;
-        Ok(Self {
-            decoder,
-            channels,
-            skip,
-            tagged: false,
-        })
-    }
-}
 
 /// An OGG/Opus file from mono samples at `RATE`.
 pub fn encode(samples: &[f32]) -> Result<Vec<u8>, String> {
@@ -247,27 +163,6 @@ mod tests {
             .collect()
     }
 
-    fn rms(samples: &[f32]) -> f32 {
-        (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
-    }
-
-    #[test]
-    fn a_clip_survives_the_trip_through_opus() {
-        let original = tone(1.0);
-        let bytes = encode(&original).expect("encodes");
-        assert!(bytes.starts_with(b"OggS"));
-        let decoded = decode(&bytes).expect("decodes");
-        let drift = decoded.len() as i64 - original.len() as i64;
-        assert!(
-            drift.abs() <= FRAME as i64,
-            "{} samples back",
-            decoded.len()
-        );
-        let end = decoded.len().min(original.len());
-        let (before, after) = (rms(&original[4800..end]), rms(&decoded[4800..end]));
-        assert!((before - after).abs() < 0.08, "{before} in, {after} out");
-    }
-
     #[test]
     fn the_waveform_follows_the_loudness() {
         let mut samples = tone(1.0);
@@ -309,33 +204,5 @@ mod tests {
         normalize(&mut loud);
         assert_eq!(loud, vec![0.95]);
         normalize(&mut []);
-    }
-
-    #[test]
-    fn what_is_not_opus_is_refused() {
-        assert!(decode(b"not an ogg file at all").is_err());
-        assert!(decode(&[]).is_err());
-    }
-
-    /// Decodes the file in `ZAPTIDE_OGG_PROBE`:
-    /// `ZAPTIDE_OGG_PROBE=note.ogg cargo test voice::tests::probe -- --ignored --nocapture`.
-    #[test]
-    #[ignore = "needs a file to look at"]
-    fn probe() {
-        let Some(path) = std::env::var_os("ZAPTIDE_OGG_PROBE") else {
-            return;
-        };
-        let bytes = std::fs::read(path).expect("readable");
-        let started = std::time::Instant::now();
-        let samples = decode(&bytes).expect("decodes");
-        eprintln!(
-            "{} samples ({:.2} s), loudness {:.3}, in {:?}; bars {:?}",
-            samples.len(),
-            samples.len() as f32 / RATE as f32,
-            rms(&samples),
-            started.elapsed(),
-            &waveform(&samples)[..8]
-        );
-        assert!(!samples.is_empty());
     }
 }

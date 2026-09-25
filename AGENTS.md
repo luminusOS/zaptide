@@ -1,6 +1,6 @@
 # ZapTide agent guide
 
-ZapTide is a Linux-first native WhatsApp client forked from ZapFast: Rust, egui, and the
+ZapTide is a Linux-first native WhatsApp client forked from ZapFast: Rust, GTK4/libadwaita through Relm4, and the
 [whatsapp-rust](https://github.com/oxidezap/whatsapp-rust) library for the
 protocol. These notes are for coding agents and new contributors.
 
@@ -28,9 +28,10 @@ protocol. These notes are for coding agents and new contributors.
 
 ## Architecture
 
-- `src/ui/` draws views and pushes `model::Action`s; `src/app.rs` applies
-  them after the frame. Never mutate application state from inside a view
-  beyond the view's own fields (composer text, search text, flags).
+- `src/application.rs` is the Relm4 root component: the link page, the chat
+  sidebar, and the conversation. Widgets send `Input`s; `update` applies them.
+  Never mutate application state from a signal handler beyond the widget's own
+  value (composer text, search text, toggles).
 - `src/backend.rs` is the interface's handle to a tokio runtime on its own
   thread; `src/backend/worker.rs` runs there. It owns the whatsapp-rust
   `Bot`, the message archive, downloads, and profile pictures. The two
@@ -73,44 +74,11 @@ protocol. These notes are for coding agents and new contributors.
   packaged assets. Native packages ship optional hooks and templates, preserving
   existing per-user files. `reload-themes` uses the single-instance channel
   without opening a window.
-- `src/theme.rs` owns colours, fonts, and icons; `src/ui/widgets.rs` the
-  shared controls. New icons go in `assets/icons/` as 24px Lucide-style SVGs
-  and in the `icons!` table.
-- `src/markup.rs` turns WhatsApp's text markup, links, and mentions into an
-  egui `LayoutJob`; `src/emoji.rs` swaps every emoji for a placeholder
-  glyph at layout time and paints the desktop's colour emoji bitmap over
-  it afterwards (resolving sequences through the font's GSUB ligatures).
-  Any text that can hold an emoji goes through `widgets::line` /
-  `widgets::rich_text` or `markup::layout`, never a bare `Label`.
-- `src/animation.rs` plays animated stickers and GIFs: WebP/GIF frames
-  decode in-process, and so do MP4s (the `mp4` crate demuxes, `openh264`
-  decodes the H.264 WhatsApp uses, samples converted from AVCC to Annex
-  B); `ffmpeg` is only a fallback for other codecs. `openh264` compiles
-  its C++ from source with the C++ compiler of the host; `nasm` is
-  optional and only adds the SIMD paths (the AUR recipes leave it out,
-  the build works without it). Frames become textures on the interface
-  thread and are dropped when unseen.
-- Message bodies paint through `markup::paint_selectable` and single lines
-  through `widgets::selectable_rich_text`: both hand the galley to
-  `egui::text_selection::LabelSelectionState` (which paints it) and only
-  overlay the colour emoji, so text can be swept and copied while
-  `style.interaction.selectable_labels` stays false for every other label.
-  The response must sense clicks and drags. `SelectionLeash` (an egui
-  `input_hook` plugin) clamps a drag that started in the message view to
-  just inside its edge once the pointer strays out (the platform keeps
-  reporting a grabbed pointer beyond the window), and drops mid-drag
-  `PointerGone`, so the selection keeps a row under it while the edge
-  scroll brings more past. A copy that sweeps across
-  messages is rebuilt by `src/transcript.rs` with `[time, date] Name:`
-  per message (the phone's sharing format): every drawn body lands in
-  `App::copy_rows` each frame, and the `CopyAnnotator` egui plugin
-  rewrites the queued `CopyText` in `output_hook`, the only hook that
-  runs after the selection plugin's own end-of-pass flush (plugins run
-  in registration order and the built-ins come first, so end-pass
-  callbacks fire too early).
-  Selection galleys share the message viewport's horizontal bounds while
-  retaining their glyph positions: otherwise egui considers short incoming
-  and outgoing messages separate columns and will not sweep across them.
+- `src/native_theme.rs` turns a palette into GTK CSS; structural styling lives
+  beside `apply_theme` in `src/application.rs`. Use libadwaita style classes and
+  symbolic icons from the icon theme before adding custom CSS.
+- Message rows and media widgets live in `src/native_media_widgets.rs`; text
+  selection and copy across messages in `src/native_transcript.rs`.
 - Group names and members come from `groups().get_metadata`, asked one
   turn at a time (two per 5 s tick, `pump_group_info`): dozens of unnamed
   groups arrive with history sync and a burst of queries hits the
@@ -129,10 +97,6 @@ protocol. These notes are for coding agents and new contributors.
   history request for such a chat is anchored at the present with an
   empty message id (`worker::fetch_older`), and the app asks the phone
   as soon as such a chat loads or opens, instead of never.
-- `eframe`'s `glow_options` turn vsync off: a Wayland compositor stops
-  sending frame callbacks to a window on a hidden workspace, a vsync wait
-  there blocks the event loop and its ping replies, and Hyprland then
-  calls the app unresponsive. Repaints are event-driven, so nothing spins.
 - `src/voice.rs` is the codec for voice messages: OGG/Opus in and out
   (the `ogg` crate for the container, `opus` with libopus bundled and
   built by cmake for the codec, so cmake is a build dependency), plus
@@ -150,36 +114,15 @@ protocol. These notes are for coding agents and new contributors.
   (`voice::normalize`, quiet takes up to just under full scale, gain
   capped), encodes and sends push-to-talk with the waveform and the reply
   quote if one was open; `Command::MarkPlayed` sends the played receipt
-  once per incoming voice message. Own bubbles lay out right-aligned,
-  where egui turns `ui.horizontal` right to left: rows like the voice
-  player must use an explicit `Layout::left_to_right` at their own width.
-  `src/ui/picker.rs` is the emoji/GIF/sticker panel. GIF search uses the
-  key from Settings, else one baked in at build time from
-  `ZAPTIDE_GIPHY_KEY` (`option_env!`); the repository carries none. The
-  phone's recently used stickers arrive in `HistorySync.recent_stickers`
-  when the device links and live in the archive's `stickers` table as raw
-  `StickerMetadata`, fetched when the picker opens; favourite stickers sync
-  through app state (`FavoriteSticker`), which whatsapp-rust does not
-  surface, so they are not shown.
+  once per incoming voice message.
 - `src/paths.rs` uses a ZapTide-only XDG namespace. Never adopt or open ZapFast,
-  FastsApp, or FastWhatsApp data automatically. The keyring service and single-instance
-  wire identity must remain separate too. Any importer requires explicit consent and a
+  FastsApp, or FastWhatsApp data automatically. The keyring service must remain
+  separate too. Any importer requires explicit consent and a
   separately reviewed migration plan.
-- The app outlives the window, as in Spotifast: `main` runs
-  `eframe::run_native` in a loop; closing the window with "keep running"
-  on sets `hide_intent`, the window is destroyed, and a headless loop keeps
-  calling `App::background_frame` (the link, the archive, the tray) until
-  the tray, a clicked notification, or another launch sets `wants_show`,
-  when a new window is made. `src/tray.rs` is the Linux status notifier
-  (ksni), `src/tray_native.rs` the Windows and macOS item (tray-icon; on
-  macOS made with the first window and pumped by `tray::idle` while none
-  exists). `src/single_instance.rs` holds a loopback port so a second
-  launch surfaces the first. `src/notify.rs` sends desktop notifications
-  for `Event::Incoming` (live messages from others, not history) when the
-  reader is away from that chat. macOS has no title bar: the content runs
-  to the top. `src/macos.rs` keeps native application menus alive across window
-  recreation and aligns traffic lights with the chat header. Linking retains
-  `ui::titlebar_strip`; other headers reserve horizontal space for the buttons.
+- Quitting shuts the backend down on a thread and then calls
+  `relm4::main_application().quit()`. GApplication provides single-instance
+  activation. `src/native_notifications.rs` sends GNotifications for live
+  messages when the reader is away from that chat.
 - Group delivery uses `archive::receipts`: save the recipients when filing an
   outgoing message, record each person's receipt, then take the least advanced
   recipient. Never promote a group from one reader, apply a receipt to earlier
@@ -200,19 +143,6 @@ protocol. These notes are for coding agents and new contributors.
   when it is exhausted.
 - Platform-specific code belongs behind `cfg` blocks; a change for one
   platform must keep the other two compiling.
-
-Three egui pitfalls this code has already hit:
-
-- `consume_key(Modifiers::NONE, key)` also matches the key with Shift held
-  (egui only insists on the modifiers you ask for), so the composer
-  inspects the events itself to tell Enter from Shift+Enter.
-- `with_layout(..., Align::Center)` directly inside a vertical container
-  claims the whole available height; wrap it in `ui.horizontal`.
-- `ui.horizontal` inside a right-aligned bubble lays out right to left;
-  see `mirrored_row`. A bubble's own click target is registered before its
-  contents (from last frame's rect) so links and quotes inside win clicks.
-  The empty strip beside it is registered earlier still, before the row. A
-  double-click on either replies; the body keeps it for selecting the word.
 - `Popup::context_menu` opens on the *response's* right-click, which those
   inner widgets take for themselves; the bubble reads the right-click from
   the input over its own rect and opens `Popup::menu` itself, so the menu
@@ -263,7 +193,14 @@ A release is not finished when the tag is pushed. Do these in order:
    are configured. Otherwise use `native-packages` to build, stage,
    review and publish the generated recipes; see `PACKAGING.md`. Validate
    native builds with `makepkg -f`. A recipe-only `zaptide-git` change does
-   not require an application release.
+    not require an application release.
+
+## Platform dependencies
+
+- `gtk::EmojiChooser` renders emoji through the system's color emoji font.
+  On Fedora, install `google-noto-emoji-color-fonts`; on Arch,
+  `noto-fonts-emoji`; on Debian/Ubuntu, `fonts-noto-color-emoji`. Without
+  the font, emoji fall back to monochrome glyphs or render as boxes.
 
 ## Definition of done
 

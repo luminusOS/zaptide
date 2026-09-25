@@ -19,14 +19,6 @@ pub enum Source {
 }
 
 impl Source {
-    pub fn latest(&self) -> String {
-        match self {
-            Self::GitHub => super::LATEST_RELEASE_URL.into(),
-            #[cfg(feature = "demo")]
-            Self::Local(base) => format!("{base}/latest.json"),
-        }
-    }
-
     fn release(&self, version: &str) -> String {
         match self {
             Self::GitHub => {
@@ -129,21 +121,24 @@ fn checksum(text: &str, name: &str) -> Result<String> {
     found.context("The release is missing the update checksum")
 }
 
-pub fn download(
+pub fn download_cancellable(
     release: &Release,
     source: &Source,
+    cancelled: impl Fn() -> bool,
     progress: impl Fn(u64, u64),
 ) -> Result<install::Prepared> {
     let installation = install::detect()?;
-    download_for(release, source, installation, progress)
+    download_for_cancellable(release, source, installation, cancelled, progress)
 }
 
-pub fn download_for(
+pub fn download_for_cancellable(
     release: &Release,
     source: &Source,
     installation: install::Installation,
+    cancelled: impl Fn() -> bool,
     progress: impl Fn(u64, u64),
 ) -> Result<install::Prepared> {
+    ensure!(!cancelled(), "Update download cancelled");
     ensure!(
         super::parse(&release.version).is_some_and(|(_, pre)| !pre)
             && release
@@ -171,6 +166,7 @@ pub fn download_for(
             .error_for_status()?
             .take(1024 * 1024),
     )?;
+    ensure!(!cancelled(), "Update download cancelled");
     ensure!(
         !metadata.draft
             && !metadata.prerelease
@@ -219,6 +215,7 @@ pub fn download_for(
         .error_for_status()?
         .take(1024 * 1024)
         .read_to_string(&mut checksum_text)?;
+    ensure!(!cancelled(), "Update download cancelled");
     let expected = checksum(&checksum_text, &name)?;
     let directory = install::staging(&installation)?;
     let result = (|| -> Result<install::Prepared> {
@@ -232,6 +229,7 @@ pub fn download_for(
         let mut received = 0;
         let mut buffer = [0; 64 * 1024];
         loop {
+            ensure!(!cancelled(), "Update download cancelled");
             let count = response.read(&mut buffer)?;
             if count == 0 {
                 break;
@@ -247,6 +245,7 @@ pub fn download_for(
                 progress(received, package.size);
             }
         }
+        ensure!(!cancelled(), "Update download cancelled");
         output.sync_all()?;
         drop(output);
         ensure!(
@@ -299,6 +298,23 @@ pub fn download_for(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn update_download_can_be_cancelled_before_network_access() {
+        let release = Release {
+            version: "0.14.1".into(),
+            url: "https://example.invalid/release".into(),
+        };
+        let installation = install::Installation {
+            executable: std::path::PathBuf::from("/tmp/zaptide"),
+            kind: install::Kind::Portable,
+        };
+
+        let error =
+            download_for_cancellable(&release, &Source::GitHub, installation, || true, |_, _| {})
+                .expect_err("cancelled download must stop before network access");
+        assert!(error.to_string().contains("Update download cancelled"));
+    }
 
     #[cfg(all(feature = "demo", any(target_os = "windows", target_os = "linux")))]
     #[test]
@@ -384,10 +400,11 @@ mod tests {
                 version: "0.8.0".into(),
                 url: base.clone(),
             };
-            let error = download_for(
+            let error = download_for_cancellable(
                 &release,
                 &Source::local(&base).unwrap(),
                 installation,
+                || false,
                 |_, _| {},
             )
             .unwrap_err();

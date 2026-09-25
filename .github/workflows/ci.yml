@@ -18,109 +18,145 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  quality:
-    name: quality
-    runs-on: ubuntu-latest
+  check-deps:
+    name: check-deps
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Reject forbidden UI dependencies
+        run: |
+          chmod +x scripts/check-native-ui-deps.sh
+          scripts/check-native-ui-deps.sh
+
+  fmt:
+    name: fmt
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
-      - name: GUI build dependencies
+          components: clippy
+      - name: System dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libwayland-dev libgl1-mesa-dev libasound2-dev cmake perl
+          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libasound2-dev cmake
       - uses: Swatinem/rust-cache@v2
-      - name: Formatting
-        run: cargo fmt --all --check
-      - name: Clippy (default features)
-        run: cargo clippy --locked --all-targets -- -D warnings
-      - name: Clippy (all features)
-        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+        with:
+          key: clippy
+      - run: cargo clippy --locked --all-targets --features demo -- -D warnings
+
+  clippy-all:
+    name: clippy (all features)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libasound2-dev cmake
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: clippy-all
+      - run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+  test:
+    name: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libasound2-dev cmake
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: test
+      - run: cargo test --locked --all-targets --features demo
+
+  test-all:
+    name: test (all features)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libasound2-dev cmake
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: test-all
+      - run: cargo test --locked --all-targets --all-features
+
+  doc:
+    name: doc
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libasound2-dev cmake
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: doc
       - name: Rustdoc
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --locked --all-features --no-deps
 
-  test:
-    name: test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+  tree-dupes:
+    name: tree-dupes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - name: GUI build dependencies
-        if: runner.os == 'Linux'
+      - name: System dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libwayland-dev libgl1-mesa-dev libasound2-dev cmake perl
+          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libasound2-dev cmake
       - uses: Swatinem/rust-cache@v2
-      # The demo feature carries the headless layout test of every screen.
-      - name: Tests (default features)
-        run: cargo test --locked --all-targets
-      - name: Tests (all features)
-        run: cargo test --locked --all-targets --all-features
-      - name: Build macOS demo
-        if: runner.os == 'macOS'
-        run: cargo build --locked --features demo
-      - name: macOS window smoke test
-        if: runner.os == 'macOS'
-        timeout-minutes: 3
+        with:
+          key: tree-dupes
+      - name: Check for duplicate GTK/GLib/libadwaita/Relm4 crates
         run: |
-          target/debug/zaptide --demo --demo-shot "$RUNNER_TEMP/zaptide-content.png" --demo-shot-delay 8000 &
-          demo_pid=$!
-          sleep 6
-          screencapture -x "$RUNNER_TEMP/zaptide-window.png" || true
-          wait "$demo_pid"
-          test -s "$RUNNER_TEMP/zaptide-content.png"
-      - name: macOS preview
-        if: runner.os == 'macOS'
-        uses: actions/upload-artifact@v7
-        with:
-          name: macos-preview
-          path: ${{ runner.temp }}/zaptide-*.png
+          OUTPUT=$(cargo tree -d 2>&1)
+          echo "$OUTPUT"
+          if echo "$OUTPUT" | grep -qiE '(gtk|glib|libadwaita|relm|adw)'; then
+            echo "ERROR: Duplicate GTK/GLib/libadwaita/Relm4 crates found in dependency tree"
+            exit 1
+          fi
 
-  windows-arm64:
-    name: compile (Windows arm64)
-    runs-on: windows-latest
-    timeout-minutes: 40
+  packaging-check:
+    name: packaging-check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-pc-windows-msvc
-      - run: rustup target add aarch64-pc-windows-msvc
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: windows-arm64
-      - run: cargo check --locked --all-targets --all-features --target aarch64-pc-windows-msvc
-
-  nix:
-    name: Nix package (${{ matrix.system }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            system: x86_64-linux
-          - os: ubuntu-24.04-arm
-            system: aarch64-linux
-    steps:
-      - uses: actions/checkout@v7
-      - uses: wimpysworld/nothing-but-nix@v9
-      - uses: cachix/install-nix-action@v31
-      - uses: nix-community/cache-nix-action@v7
-        with:
-          primary-key: nix-${{ matrix.system }}-${{ hashFiles('**/flake.lock') }}
-          restore-prefixes-first-match: nix-${{ matrix.system }}-
-      - name: Check flake outputs
-        run: nix flake check --no-build
-      - name: Build package
-        run: nix build .#default
+      - name: Run packaging check
+        run: |
+          chmod +x packaging/check.sh
+          ./packaging/check.sh

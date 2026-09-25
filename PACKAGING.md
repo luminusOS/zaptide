@@ -105,7 +105,7 @@ recipe generation to the Linux packaging job after release assets exist.
 `packaging/flatpak/dev.luminusos.ZapTide.yml` builds from source, with offline Cargo
 sources generated from the selected revision's lockfile. The adjacent bundle
 manifest reuses the Linux release binary, as in Spotifast. Both grant Wayland/X11,
-GPU, audio, network, keyring and tray access; attachments chosen by the user use
+GPU, audio, network and keyring access; attachments chosen by the user use
 portals. No home-directory permission is granted. `--persist=.local/state` keeps
 the archive and session on Flatpak versions without `XDG_STATE_HOME`.
 
@@ -124,3 +124,126 @@ disclosure of generated material. Review the manifests and these changes before
 submitting. The manifests use the current Freedesktop 26.08 runtime; the CI builder
 container is 25.08 and installs the runtime and SDK named by the manifest. The GitHub release job includes the bundle
 in `checksums.txt`. No existing release files are replaced by this change.
+
+## Supported distributions
+
+- **Fedora 40+**: GTK 4.14, libadwaita 1.5.
+- **Ubuntu 24.04 LTS**: GTK 4.12+, libadwaita 1.4+ (may require PPA for newer GTK).
+- **Arch Linux**: rolling release, always has latest GTK and libadwaita.
+- **Flatpak**: GNOME 46 runtime (Freedesktop 26.08 in manifests).
+
+## Build dependencies
+
+| Dependency | Fedora | Ubuntu/Debian | Arch | Notes |
+|------------|--------|---------------|------|-------|
+| Rust 1.75+ | `rust cargo` | `rustc cargo` | `rust` | Stable channel |
+| GTK 4.14+ | `gtk4-devel` | `libgtk-4-dev` | `gtk4` | 4.12+ acceptable on Ubuntu |
+| libadwaita 1.5+ | `libadwaita-devel` | `libadwaita-1-dev` | `libadwaita` | 1.4+ acceptable on Ubuntu |
+| ALSA | `alsa-lib-devel` | `libasound2-dev` | `alsa-lib` | Required for audio |
+| cmake | `cmake` | `cmake` | `cmake` | Builds libopus via opusic-sys |
+| gettext | `gettext` | `gettext` | `gettext` | Compiles i18n catalogs |
+| glib2-devel | `glib2-devel` | `libglib2.0-dev-bin` | `glib2` | Provides glib-compile-schemas |
+| desktop-file-utils | `desktop-file-utils` | `desktop-file-utils` | `desktop-file-utils` | desktop-file-validate |
+| appstream | `appstream` | `appstream` | `appstream` | appstreamcli for metainfo |
+
+SQLCipher, OpenSSL, openh264, and libopus are bundled via their respective `-sys` crates and compiled from source. No system packages required beyond cmake for libopus.
+
+## Build instructions
+
+### Install dependencies
+
+**Fedora:**
+
+```sh
+sudo dnf install rust cargo gtk4-devel libadwaita-devel alsa-lib-devel cmake gettext glib2-devel desktop-file-utils appstream
+```
+
+**Ubuntu/Debian:**
+
+```sh
+sudo apt install rustc cargo libgtk-4-dev libadwaita-1-dev libasound2-dev cmake gettext libglib2.0-dev-bin desktop-file-utils appstream
+```
+
+**Arch:**
+
+```sh
+sudo pacman -S rust gtk4 libadwaita alsa-lib cmake gettext glib2 desktop-file-utils appstream
+```
+
+### Build and test
+
+```sh
+cargo build --release --locked --features native-shell
+cargo test --locked --features native-shell
+```
+
+### Manual installation
+
+```sh
+sudo install -Dm755 target/release/zaptide /usr/local/bin/zaptide
+sudo install -Dm644 data/dev.luminusos.ZapTide.desktop /usr/share/applications/
+sudo install -Dm644 data/dev.luminusos.ZapTide.metainfo.xml /usr/share/metainfo/
+sudo install -Dm644 data/dev.luminusos.ZapTide.gschema.xml /usr/share/glib-2.0/schemas/
+sudo glib-compile-schemas /usr/share/glib-2.0/schemas/
+sudo install -Dm644 packaging/icons/zaptide.svg /usr/share/icons/hicolor/scalable/apps/dev.luminusos.ZapTide.svg
+```
+
+For automated DEB/RPM packaging, use `native-packages` as described above.
+
+## Flatpak sandbox limitations
+
+- **Microphone**: requires `--socket=pulseaudio` (already in manifest).
+- **Background mode**: requires `--talk-name=org.freedesktop.portal.Background` (add if not present).
+- **Tray icon**: GNOME does not support StatusNotifierItem by default; requires optional extension (TopIcons Plus or similar).
+- **Native builds**: no sandbox limitations beyond standard XDG directory access.
+
+Flatpak grants Wayland/X11, GPU, audio, network, keyring access. No home-directory permission is granted; `--persist=.local/state` keeps archive and session on versions without `XDG_STATE_HOME`.
+
+## Data locations
+
+| Type | Path | Notes |
+|------|------|-------|
+| Config | `$XDG_CONFIG_HOME/zaptide/` | Typically `~/.config/zaptide/` |
+| Cache | `$XDG_CACHE_HOME/zaptide/` | Typically `~/.cache/zaptide/` |
+| Logs | `$XDG_STATE_HOME/zaptide/` | Typically `~/.local/state/zaptide/` |
+| Flatpak | `$HOME/.var/app/dev.luminusos.ZapTide/` | All data under this prefix |
+
+ZapTide uses an isolated XDG namespace. Never reads ZapFast, FastsApp, or FastWhatsApp data. See `src/paths.rs`.
+
+## Privacy model
+
+- Archive encrypted with SQLCipher; key stored in OS keyring (not config file).
+- No telemetry, no hosted backend, no analytics.
+- Notifications are content-free by default (no message preview).
+- Logs redact message content, phone numbers, keys, and QR payloads.
+- ZapTide's keyring service and single-instance wire identity are separate from ZapFast.
+
+## Relationship to ZapFast
+
+ZapTide is a fork of ZapFast (commit `0d8cc506`). It preserves:
+
+- whatsapp-rust protocol implementation
+- Encrypted archive (SQLCipher)
+- Backend worker architecture
+- Message history and media handling
+
+Replaced:
+
+- ZapFast's egui/eframe interface with native GTK4/libadwaita/Relm4
+- ZapFast's package identity and XDG namespace (isolated; no data migration)
+
+ZapFast upstream fixes can be imported via the process documented in `UPSTREAM.md`. ZapTide does not provide, conflict with, replace, or migrate ZapFast packages.
+
+## Packaging scripts
+
+| Script | Purpose |
+|--------|---------|
+| `packaging/build-metadata.sh` | Generates `.desktop`, metainfo, compiles schemas |
+| `packaging/check.sh` | Validates metadata, checks for forbidden dependencies |
+| `packaging/smoke-test.sh` | Builds and launches synthetic smoke session |
+| `packaging/test-install.sh` | Tests DEB/RPM installation in clean containers |
+| `scripts/check-native-ui-deps.sh` | Scans for forbidden UI frameworks (egui, webkit, etc.) |
+| `scripts/perf-native-ui.sh` | Performance measurement script |
+| `packaging/flatpak/flathub.sh` | Generates pinned Flathub checkout from release tag |
+
+Run `bash packaging/check.sh` before submitting releases to validate metadata and dependencies.

@@ -15,7 +15,6 @@ finish-args:
   - --share=network
   # Archive encryption key.
   - --talk-name=org.freedesktop.secrets
-  - --talk-name=org.kde.StatusNotifierWatcher
   - --persist=.local/state
 modules:
   - name: zaptide

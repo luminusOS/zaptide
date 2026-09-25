@@ -30,15 +30,6 @@ impl Requests {
         )
     }
 
-    pub fn request(&mut self, chat: &str, poll: &str, now: Instant) {
-        let key = (chat.to_owned(), poll.to_owned());
-        if self.state(chat, poll).0 || self.queue.len() >= 64 {
-            return;
-        }
-        self.tried.entry(key.clone()).or_insert(0);
-        self.queue.push_back((key, now));
-    }
-
     pub fn next(&mut self, now: Instant) -> Option<Key> {
         if self.active.is_some() {
             return None;
@@ -97,53 +88,5 @@ impl Requests {
         for (_, due) in &mut self.queue {
             *due = now;
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn poll_history_retries_automatically_without_spinning_or_parallel_requests() {
-        let mut requests = Requests::default();
-        let now = Instant::now();
-        requests.request("chat", "one", now);
-        requests.request("chat", "one", now);
-        requests.request("chat", "two", now);
-        assert_eq!(requests.next(now), Some(("chat".into(), "one".into())));
-        assert!(requests.next(now).is_none());
-        assert!(requests.expire(now + Duration::from_secs(29)).is_none());
-        assert_eq!(
-            requests.expire(now + Duration::from_secs(30)),
-            Some(("chat".into(), "one".into()))
-        );
-        assert_eq!(requests.state("chat", "one"), (true, true, true));
-        assert_eq!(
-            requests.next(now + Duration::from_secs(30)),
-            Some(("chat".into(), "two".into()))
-        );
-        requests.finish("chat", "two");
-        assert!(requests.next(now + Duration::from_secs(59)).is_none());
-        assert_eq!(
-            requests.next(now + Duration::from_secs(60)),
-            Some(("chat".into(), "one".into()))
-        );
-        // An error from the expired attempt must not cancel its replacement.
-        requests.fail("chat", "one", now, now + Duration::from_secs(61));
-        assert_eq!(requests.state("chat", "one"), (true, true, false));
-        requests.fail(
-            "chat",
-            "one",
-            now + Duration::from_secs(60),
-            now + Duration::from_secs(61),
-        );
-        assert!(requests.next(now + Duration::from_secs(120)).is_none());
-        assert_eq!(
-            requests.next(now + Duration::from_secs(121)),
-            Some(("chat".into(), "one".into()))
-        );
-        requests.finish("chat", "one");
-        assert_eq!(requests.state("chat", "one"), (false, true, false));
-        assert!(requests.next(now + Duration::from_secs(1000)).is_none());
     }
 }

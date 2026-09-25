@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=ZapTide
+GenericName=Messenger
+Comment=A Linux-first native WhatsApp client
+Exec=zaptide
+Icon=dev.luminusos.ZapTide
+Terminal=false
+Type=Application
+Categories=Network;Chat;InstantMessaging;
+Keywords=whatsapp;chat;messaging;matrix;
+StartupNotify=true

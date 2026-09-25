@@ -6,6 +6,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
@@ -37,12 +38,13 @@ mod device_store;
 mod poll_history;
 mod polls;
 
-use super::{Command, Event, LinkStatus, Waker, read_sync::ReadSync};
-use crate::app::PAGE;
+use super::{Command, Event, LinkStatus, Wake, read_sync::ReadSync};
 use crate::archive::Archive;
+
+const PAGE: usize = 60;
 use crate::model::{
-    Chat, ChatId, ChatKind, Contact, Content, Delivery, Gif, GifError, LinkPreview, Media,
-    MentionRef, Message, Quoted, Reaction,
+    Chat, ChatId, ChatKind, Contact, Content, Delivery, LinkPreview, Media, MentionRef, Message,
+    Quoted, Reaction,
 };
 use crate::paths::AppDirs;
 
@@ -79,6 +81,7 @@ async fn receipts_allowed(
     client: &Client,
     jid: &Jid,
     commands: &mpsc::UnboundedSender<Command>,
+    session_generation: u64,
 ) -> bool {
     if jid.is_group() {
         return true;
@@ -86,7 +89,10 @@ async fn receipts_allowed(
     match client.fetch_privacy_settings().await {
         Ok(settings) => {
             let allowed = account_allows_receipts(&settings);
-            let _ = commands.send(Command::ReceiptsPrivacy { disabled: !allowed });
+            let _ = commands.send(Command::ReceiptsPrivacy {
+                session_generation,
+                disabled: !allowed,
+            });
             allowed
         }
         Err(error) => {
@@ -146,18 +152,141 @@ fn sticker_hash(sha256: Option<&[u8]>, enc_sha256: Option<&[u8]>) -> Option<Stri
     Some(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
+fn archive_cleanup_markers(dirs: &AppDirs) -> [PathBuf; 3] {
+    [
+        dirs.state.join("archive-cleanup-required"),
+        dirs.config.join("archive-cleanup-required"),
+        dirs.cache.join("archive-cleanup-required"),
+    ]
+}
+
+fn persist_archive_cleanup_marker(markers: &[PathBuf; 3]) -> bool {
+    let mut persisted = false;
+    for marker in markers {
+        match std::fs::write(marker, b"required\n") {
+            Ok(()) => persisted = true,
+            Err(error) => log::error!("could not persist archive cleanup marker: {error}"),
+        }
+    }
+    persisted
+}
+
+fn remove_archive_cleanup_markers(markers: &[PathBuf; 3]) -> std::io::Result<()> {
+    for marker in markers {
+        match std::fs::remove_file(marker) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+fn remove_if_present(path: PathBuf) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+fn clear_logged_out_data(dirs: &AppDirs, archive: &Archive) -> anyhow::Result<()> {
+    archive.clear()?;
+    let session = dirs.session_db();
+    for suffix in ["", "-wal", "-shm", "-journal"] {
+        let mut path = session.clone().into_os_string();
+        path.push(suffix);
+        remove_if_present(PathBuf::from(path))?;
+    }
+    for directory in [
+        dirs.avatar_cache_dir(),
+        dirs.media_cache_dir(),
+        dirs.sticker_cache_dir(),
+    ] {
+        match std::fs::remove_dir_all(directory) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
+async fn write_session_cache_file(
+    directory: &Path,
+    path: &Path,
+    bytes: &[u8],
+    generation: u64,
+    current_generation: &AtomicU64,
+    request_generation: Option<(u64, &AtomicU64)>,
+    cache_lock: &tokio::sync::Mutex<()>,
+) -> Result<PathBuf, String> {
+    let _guard = cache_lock.lock().await;
+    let active = || {
+        current_generation.load(Ordering::Acquire) == generation
+            && request_generation
+                .is_none_or(|(expected, current)| current.load(Ordering::Acquire) == expected)
+    };
+    if !active() {
+        return Err("The linked account changed during the download".to_owned());
+    }
+    tokio::fs::create_dir_all(directory)
+        .await
+        .map_err(|error| error.to_string())?;
+    if !active() {
+        return Err("The linked account changed during the download".to_owned());
+    }
+    tokio::fs::write(path, bytes)
+        .await
+        .map_err(|error| error.to_string())?;
+    if !active() {
+        let _ = tokio::fs::remove_file(path).await;
+        return Err("The linked account changed during the download".to_owned());
+    }
+    Ok(path.to_owned())
+}
+
 pub async fn run(
     dirs: AppDirs,
     events: std::sync::mpsc::Sender<Event>,
     commands: mpsc::UnboundedSender<Command>,
     mut inbox: mpsc::UnboundedReceiver<Command>,
-    waker: Waker,
+    waker: Arc<dyn Wake>,
 ) {
     let archive = loop {
         let path = dirs.archive_db();
-        let opened = tokio::task::spawn_blocking(move || Archive::open(&path)).await;
+        let cleanup_dirs = dirs.clone();
+        let cleanup_markers = archive_cleanup_markers(&dirs);
+        let cleanup_required = cleanup_markers.iter().any(|marker| marker.exists());
+        let opened = tokio::task::spawn_blocking(move || {
+            let archive = Archive::open(&path)?;
+            if cleanup_required {
+                clear_logged_out_data(&cleanup_dirs, &archive)?;
+            }
+            Ok::<_, anyhow::Error>(archive)
+        })
+        .await;
         match opened {
-            Ok(Ok(archive)) => break archive,
+            Ok(Ok(archive)) => {
+                if cleanup_required
+                    && let Err(error) = remove_archive_cleanup_markers(&cleanup_markers)
+                {
+                    log::error!("could not remove archive cleanup marker: {error}");
+                    let _ = events.send(Event::Link(LinkStatus::Failed(
+                        "Local conversation cleanup could not be finalized".to_owned(),
+                    )));
+                    waker.wake();
+                    loop {
+                        match inbox.recv().await {
+                            Some(Command::Reconnect) => break,
+                            Some(Command::Shutdown) | None => return,
+                            _ => {}
+                        }
+                    }
+                } else {
+                    break archive;
+                }
+            }
             result => {
                 let error = match result {
                     Ok(Err(error)) => format!("{error:#}"),
@@ -199,6 +328,7 @@ pub async fn run(
         client: None,
         handle: None,
         wa_sender,
+        wa_events,
         me_pn: None,
         me_lid: None,
         me_name: None,
@@ -206,8 +336,14 @@ pub async fn run(
         lid_to_pn: HashMap::new(),
         contacts: HashMap::new(),
         status: LinkStatus::Starting,
+        session_generation: 0,
+        session_generation_shared: Arc::new(AtomicU64::new(0)),
+        avatar_generation_shared: Arc::new(AtomicU64::new(0)),
+        session_cache_lock: Arc::new(tokio::sync::Mutex::new(())),
         pairing_phone: None,
         pair_code: None,
+        pair_request_id: 0,
+        archive_cleanup_failed: false,
         qr: None,
         syncing: false,
         sync_deadline: None,
@@ -221,6 +357,8 @@ pub async fn run(
         pending_avatars: HashMap::new(),
         sticker_fetches: HashSet::new(),
         sticker_downloads: HashSet::new(),
+        next_attachment_batch: 0,
+        update_cancel: None,
         read_sync: ReadSync::default(),
         poll_decrypting: 0,
         poll_history: Default::default(),
@@ -230,7 +368,6 @@ pub async fn run(
     worker.backfill();
     worker.relocate_media();
     worker.start_bot().await;
-    let mut wa_events = wa_events;
     let mut tick = tokio::time::interval(Duration::from_secs(5));
     loop {
         let deadline = worker.sync_deadline;
@@ -241,7 +378,7 @@ pub async fn run(
                     Some(command) => worker.handle_command(command).await,
                 }
             }
-            Some(event) = wa_events.recv() => match event {
+            Some(event) = worker.wa_events.recv() => match event {
                 RuntimeEvent::WhatsApp(event) => worker.handle_wa_event(event).await,
                 RuntimeEvent::PreferencesRecovered { generation, success } => {
                     worker.preferences_recovered(generation, success);
@@ -296,11 +433,12 @@ struct Worker {
     dirs: AppDirs,
     events: std::sync::mpsc::Sender<Event>,
     commands: mpsc::UnboundedSender<Command>,
-    waker: Waker,
+    waker: Arc<dyn Wake>,
     archive: Archive,
     client: Option<Arc<Client>>,
     handle: Option<BotHandle>,
     wa_sender: mpsc::UnboundedSender<RuntimeEvent>,
+    wa_events: mpsc::UnboundedReceiver<RuntimeEvent>,
     me_pn: Option<String>,
     me_lid: Option<String>,
     me_name: Option<String>,
@@ -309,8 +447,14 @@ struct Worker {
     lid_to_pn: HashMap<String, String>,
     contacts: HashMap<String, Contact>,
     status: LinkStatus,
+    session_generation: u64,
+    session_generation_shared: Arc<AtomicU64>,
+    avatar_generation_shared: Arc<AtomicU64>,
+    session_cache_lock: Arc<tokio::sync::Mutex<()>>,
     pairing_phone: Option<String>,
     pair_code: Option<String>,
+    pair_request_id: u64,
+    archive_cleanup_failed: bool,
     qr: Option<String>,
     syncing: bool,
     sync_deadline: Option<Instant>,
@@ -333,6 +477,9 @@ struct Worker {
     sticker_fetches: HashSet<String>,
     /// Active chat-sticker downloads by chat and message id.
     sticker_downloads: HashSet<(ChatId, String)>,
+    /// Correlates selected-file completion events without exposing error details.
+    next_attachment_batch: u64,
+    update_cancel: Option<Arc<AtomicBool>>,
 }
 
 /// Decoded history chunk waiting to be canonicalized and archived.
@@ -415,14 +562,6 @@ impl Worker {
             .filter(|expiration| *expiration > 0)
     }
 
-    fn default_ephemeral_expiration(&self) -> Option<u32> {
-        self.archive
-            .meta("default_ephemeral_expiration")
-            .ok()
-            .flatten()
-            .and_then(|value| value.parse().ok())
-    }
-
     fn apply_ephemeral(&self, chat: &str, message: &mut wa::Message) -> Option<u32> {
         apply_ephemeral_expiration(message, self.ephemeral_expiration(chat))
     }
@@ -443,7 +582,6 @@ impl Worker {
                     | Event::MessageUpdated(_)
                     | Event::Incoming { .. }
                     | Event::Contacts(_)
-                    | Event::SearchHits { .. }
                     | Event::Typing { .. }
             )
         {
@@ -473,11 +611,15 @@ impl Worker {
         match self.archive.chats() {
             Ok(mut chats) => {
                 // Early preference sync can create an empty privacy-id row.
-                // Once mapped, its preferences live on the canonical chat.
-                chats.retain(|chat| chat.last.is_some() || self.canonical_str(&chat.id) == chat.id);
+                // Once mapped, its preferences live on the canonical chat, so
+                // the mapped duplicate hides here. History sync also brings
+                // chats with no messages at all; those stay visible, as on
+                // the phone, and opening one asks the phone for its history.
+                chats.retain(|chat| self.canonical_str(&chat.id) == chat.id);
                 for chat in &mut chats {
                     self.polish_chat(chat);
                 }
+                log::info!("chat list holds {} chats", chats.len());
                 self.emit(Event::Chats(chats));
             }
             Err(error) => log::warn!("could not list chats: {error}"),
@@ -540,6 +682,16 @@ impl Worker {
         self.me_pn.as_deref() == Some(id) || self.me_lid.as_deref() == Some(id)
     }
 
+    fn archive_matches_account(&self, pn: Option<&str>, lid: Option<&str>) -> bool {
+        match (self.me_pn.as_deref(), pn) {
+            (Some(previous), Some(current)) => previous == current,
+            _ => match (self.me_lid.as_deref(), lid) {
+                (Some(previous), Some(current)) => previous == current,
+                _ => true,
+            },
+        }
+    }
+
     fn load_state(&mut self) {
         self.me_pn = self.archive.meta("me_pn").ok().flatten();
         self.me_lid = self.archive.meta("me_lid").ok().flatten();
@@ -553,13 +705,6 @@ impl Worker {
                 .into_iter()
                 .map(|contact| (contact.id.clone(), contact))
                 .collect();
-        }
-        if let Some(id) = self.me_pn.clone().or_else(|| self.me_lid.clone()) {
-            self.emit(Event::Me {
-                id,
-                name: self.me_name.clone(),
-                about: self.me_about.clone(),
-            });
         }
         self.emit(Event::Contacts(self.contacts.values().cloned().collect()));
         self.emit_chats();
@@ -1022,6 +1167,7 @@ impl Worker {
             .flatten()
             .collect();
         let lids = self.lid_to_pn.clone();
+        let session_generation = self.session_generation;
         tokio::spawn(async move {
             match client.groups().get_metadata(&jid).await {
                 Ok(metadata) => {
@@ -1053,6 +1199,7 @@ impl Worker {
                         participants.push(id);
                     }
                     let _ = commands.send(Command::GroupInfo {
+                        session_generation,
                         chat,
                         name: (!metadata.subject.is_empty()).then(|| metadata.subject.clone()),
                         participants,
@@ -1075,7 +1222,11 @@ impl Worker {
                         .iter()
                         .any(|word| text.contains(word));
                     log::warn!("could not fetch group metadata");
-                    let _ = commands.send(Command::GroupInfoFailed { chat, permanent });
+                    let _ = commands.send(Command::GroupInfoFailed {
+                        session_generation,
+                        chat,
+                        permanent,
+                    });
                 }
             }
         });
@@ -1117,6 +1268,16 @@ impl Worker {
                 }
             }
             E::PairSuccess(pair) => {
+                let pn = pair.id.to_non_ad_string();
+                let lid = pair.lid.to_non_ad_string();
+                if !self.archive_matches_account(Some(&pn), Some(&lid)) {
+                    self.emit(Event::Error(
+                        "This archive belongs to another account; clearing it before linking."
+                            .to_owned(),
+                    ));
+                    self.on_logged_out().await;
+                    return;
+                }
                 self.qr = None;
                 self.pair_code = None;
                 self.pairing_phone = None;
@@ -1128,6 +1289,16 @@ impl Worker {
                     Some(client) => (client.pn(), client.lid(), Some(client.push_name())),
                     None => (None, None, None),
                 };
+                let pn_label = pn.as_ref().map(Jid::to_non_ad_string);
+                let lid_label = lid.as_ref().map(Jid::to_non_ad_string);
+                if !self.archive_matches_account(pn_label.as_deref(), lid_label.as_deref()) {
+                    self.emit(Event::Error(
+                        "This archive belongs to another account; clearing it before linking."
+                            .to_owned(),
+                    ));
+                    self.on_logged_out().await;
+                    return;
+                }
                 self.remember_identity(pn, lid, name);
                 self.set_status(LinkStatus::Connected);
                 self.refresh_legacy_preferences();
@@ -1139,6 +1310,7 @@ impl Worker {
                 if let Some(client) = self.client.clone() {
                     let me = self.me_pn.clone().and_then(|pn| Self::jid_of(&pn));
                     let commands = self.commands.clone();
+                    let session_generation = self.session_generation;
                     tokio::spawn(async move {
                         if let Err(error) = client.presence().set_available().await {
                             log::debug!("presence not announced: {error}");
@@ -1147,7 +1319,10 @@ impl Worker {
                         match client.fetch_privacy_settings().await {
                             Ok(settings) => {
                                 let disabled = !account_allows_receipts(&settings);
-                                let _ = commands.send(Command::ReceiptsPrivacy { disabled });
+                                let _ = commands.send(Command::ReceiptsPrivacy {
+                                    session_generation,
+                                    disabled,
+                                });
                             }
                             Err(error) => log::debug!("privacy settings not fetched: {error}"),
                         }
@@ -1162,7 +1337,10 @@ impl Worker {
                                         .get(&me)
                                         .and_then(|info| info.status.clone())
                                         .filter(|about| !about.is_empty());
-                                    let _ = commands.send(Command::MeInfo { about });
+                                    let _ = commands.send(Command::MeInfo {
+                                        session_generation,
+                                        about,
+                                    });
                                 }
                                 Err(error) => log::debug!("own info not fetched: {error}"),
                             }
@@ -1352,9 +1530,13 @@ impl Worker {
                 }
             }
             E::PictureUpdate(update) => {
+                self.avatar_generation_shared.fetch_add(1, Ordering::AcqRel);
                 let id = self.canonical(&update.jid);
-                let _ = std::fs::remove_file(self.avatar_file(&id, false));
-                let _ = std::fs::remove_file(self.avatar_file(&id, true));
+                {
+                    let _cache_guard = self.session_cache_lock.lock().await;
+                    let _ = std::fs::remove_file(self.avatar_file(&id, false));
+                    let _ = std::fs::remove_file(self.avatar_file(&id, true));
+                }
                 if update.removed {
                     self.emit(Event::Avatar {
                         id: id.clone(),
@@ -1374,11 +1556,6 @@ impl Worker {
             E::SelfPushNameUpdated(update) => {
                 self.me_name = Some(update.new_name.clone());
                 let _ = self.archive.set_meta("me_name", &update.new_name);
-                self.emit(Event::Me {
-                    id: self.me(),
-                    name: self.me_name.clone(),
-                    about: self.me_about.clone(),
-                });
             }
             E::OfflineSyncCompleted(_) => self.emit_chats(),
             _ => {}
@@ -1405,18 +1582,59 @@ impl Worker {
             let _ = self.archive.set_meta("me_name", &name);
             self.me_name = Some(name);
         }
-        self.emit(Event::Me {
-            id: self.me(),
-            name: self.me_name.clone(),
-            about: self.me_about.clone(),
-        });
     }
 
     async fn on_logged_out(&mut self) {
         self.privacy_generation = self.privacy_generation.wrapping_add(1);
+        self.pair_request_id = self.pair_request_id.wrapping_add(1);
+        self.session_generation = self.session_generation.wrapping_add(1);
+        self.session_generation_shared
+            .store(self.session_generation, Ordering::Release);
+        self.avatar_generation_shared.fetch_add(1, Ordering::AcqRel);
         self.stop_bot().await;
-        if let Err(error) = self.archive.clear() {
-            log::warn!("could not clear the archive: {error}");
+        let (wa_sender, wa_events) = mpsc::unbounded_channel();
+        self.wa_sender = wa_sender;
+        self.wa_events = wa_events;
+        let markers = archive_cleanup_markers(&self.dirs);
+        if !persist_archive_cleanup_marker(&markers) {
+            log::error!("cleanup marker unavailable; attempting immediate logout cleanup");
+        }
+        let cleanup_result = {
+            let _cache_guard = self.session_cache_lock.lock().await;
+            clear_logged_out_data(&self.dirs, &self.archive)
+        };
+        if let Err(error) = cleanup_result {
+            log::warn!("could not clear account data: {error}");
+            self.archive_cleanup_failed = true;
+            self.privacy_ready = false;
+            self.privacy_recovering = false;
+            self.emit(Event::Link(LinkStatus::LoggedOut));
+            self.emit(Event::Chats(Vec::new()));
+            self.emit(Event::Contacts(Vec::new()));
+            self.emit(Event::Error(
+                "Local conversations could not be cleared. Restart is blocked to protect data."
+                    .to_owned(),
+            ));
+            self.set_status(LinkStatus::Failed(
+                "Local conversation cleanup failed".to_owned(),
+            ));
+            return;
+        }
+        if let Err(error) = remove_archive_cleanup_markers(&markers) {
+            log::warn!("could not remove archive cleanup marker: {error}");
+            self.archive_cleanup_failed = true;
+            self.privacy_ready = false;
+            self.privacy_recovering = false;
+            self.emit(Event::Link(LinkStatus::LoggedOut));
+            self.emit(Event::Chats(Vec::new()));
+            self.emit(Event::Error(
+                "Local conversations were cleared, but cleanup could not be finalized. Restart is blocked."
+                    .to_owned(),
+            ));
+            self.set_status(LinkStatus::Failed(
+                "Local conversation cleanup could not be finalized".to_owned(),
+            ));
+            return;
         }
         self.lid_to_pn.clear();
         self.contacts.clear();
@@ -1426,10 +1644,13 @@ impl Worker {
         self.group_info_retry.clear();
         self.presence_subscribed.clear();
         self.read_sync = ReadSync::default();
+        self.poll_decrypting = 0;
         self.poll_sending.clear();
         self.poll_history = Default::default();
         self.pending_older.clear();
         self.pending_avatars.clear();
+        self.sticker_fetches.clear();
+        self.sticker_downloads.clear();
         self.me_pn = None;
         self.me_lid = None;
         self.me_name = None;
@@ -1438,15 +1659,8 @@ impl Worker {
         self.pair_code = None;
         self.pairing_phone = None;
         self.set_syncing(false);
-        let session = self.dirs.session_db();
-        for suffix in ["", "-wal", "-shm", "-journal"] {
-            let mut path = session.clone().into_os_string();
-            path.push(suffix);
-            let _ = std::fs::remove_file(path);
-        }
-        let _ = std::fs::remove_dir_all(self.dirs.avatar_cache_dir());
-        let _ = std::fs::remove_dir_all(self.dirs.media_cache_dir());
         self.emit(Event::Chats(Vec::new()));
+        self.emit(Event::Contacts(Vec::new()));
         self.privacy_ready = false;
         self.privacy_recovering = false;
         self.privacy_retry = Instant::now();
@@ -2104,9 +2318,6 @@ impl Worker {
         if !on_demand {
             self.sync_deadline = Some(Instant::now() + SYNC_QUIET);
             self.set_syncing(true);
-            if let Some(progress) = lazy.progress() {
-                self.emit(Event::SyncProgress(progress.min(100)));
-            }
         }
         let compressed = lazy.compressed_bytes().clone();
         let parsed = tokio::task::spawn_blocking(move || parse_history(&compressed)).await;
@@ -2463,6 +2674,9 @@ impl Worker {
     }
 
     fn fetch_older(&mut self, chat: ChatId) {
+        if self.archive_cleanup_failed {
+            return;
+        }
         if self.pending_older.contains_key(&chat) {
             return;
         }
@@ -2479,6 +2693,7 @@ impl Worker {
         self.pending_older
             .insert(chat.clone(), (Instant::now(), (timestamp, id.clone())));
         let commands = self.commands.clone();
+        let session_generation = self.session_generation;
         tokio::spawn(async move {
             if let Err(error) = client
                 // Despite its `Ms` name, the protocol field takes Unix seconds.
@@ -2488,6 +2703,7 @@ impl Worker {
             {
                 log::warn!("could not request older messages");
                 let _ = commands.send(Command::OlderFailed {
+                    session_generation,
                     chat: chat.clone(),
                     error: format!("Could not request older messages from your phone: {error}"),
                 });
@@ -2504,7 +2720,6 @@ impl Worker {
             | Command::SendFiles { chat, .. }
             | Command::SendImage { chat, .. }
             | Command::SendSticker { chat, .. }
-            | Command::SendGif { chat, .. }
             | Command::CreatePoll { chat, .. } => Some(chat),
             Command::Forward { to_chat, .. } => Some(to_chat),
             _ => None,
@@ -2525,17 +2740,26 @@ impl Worker {
                     });
                 } else {
                     self.emit(Event::Error(error));
+                    if matches!(&command, Command::SendText { .. }) {
+                        self.emit(Event::Sent {
+                            chat: chat.clone(),
+                            success: false,
+                        });
+                    }
                 }
                 return;
             }
         }
         match command {
-            Command::RefreshPoll { chat, message } => self.refresh_poll(chat, message),
             Command::PollHistoryFailed {
+                session_generation,
                 chat,
                 message,
                 requested,
             } => {
+                if session_generation != self.session_generation {
+                    return;
+                }
                 self.poll_history
                     .fail(&chat, &message, requested, Instant::now());
                 self.emit_message(&chat, &message);
@@ -2543,23 +2767,44 @@ impl Worker {
             }
             Command::CreatePoll { chat, draft } => self.create_poll(chat, draft),
             Command::PollCreated {
+                session_generation,
                 chat,
                 draft,
                 result,
-            } => self.poll_created(chat, draft, result),
+            } => {
+                if session_generation != self.session_generation {
+                    return;
+                }
+                self.poll_created(chat, draft, result)
+            }
             Command::VotePoll {
                 chat,
                 message,
                 choices,
             } => self.vote_poll(chat, message, choices),
             Command::PollVoted {
+                session_generation,
                 chat,
                 message,
                 choices,
                 at,
                 result,
-            } => self.poll_voted(chat, message, choices, at, result),
-            Command::PollDecoded { vote, choices } => self.poll_decoded(vote, choices),
+            } => {
+                if session_generation != self.session_generation {
+                    return;
+                }
+                self.poll_voted(chat, message, choices, at, result)
+            }
+            Command::PollDecoded {
+                session_generation,
+                vote,
+                choices,
+            } => {
+                if session_generation != self.session_generation {
+                    return;
+                }
+                self.poll_decoded(vote, choices)
+            }
             Command::SendText {
                 chat,
                 text,
@@ -2588,10 +2833,14 @@ impl Worker {
             }
             Command::MarkRead { chat, receipts } => self.mark_read(chat, receipts),
             Command::ReadSyncFinished {
+                session_generation,
                 chat,
                 through,
                 success,
             } => {
+                if session_generation != self.session_generation {
+                    return;
+                }
                 if !self
                     .read_sync
                     .finish(&chat, through, success, Instant::now())
@@ -2606,25 +2855,6 @@ impl Worker {
             Command::LoadChat { chat, before } => self.load_chat(chat, before),
             Command::FetchOlder(chat) => self.fetch_older(chat),
             Command::LoadUntil { chat, id, before } => self.load_until(chat, id, before),
-            Command::SearchMessages { query } => self.search_messages(query),
-            Command::EnsureChat { chat, name } => {
-                let is_new = self.archive.chat(&chat).ok().flatten().is_none();
-                if let Err(error) = self.archive.ensure_chat(&chat, &name) {
-                    log::warn!("could not create the chat: {error}");
-                } else if is_new
-                    && ChatKind::from_id(&chat) == ChatKind::Direct
-                    && let Some(expiration) = self.default_ephemeral_expiration()
-                {
-                    let timestamp = self
-                        .archive
-                        .meta("default_ephemeral_setting_timestamp")
-                        .ok()
-                        .flatten()
-                        .and_then(|value| value.parse().ok())
-                        .unwrap_or_default();
-                    let _ = self.archive.set_ephemeral(&chat, expiration, timestamp);
-                }
-            }
             Command::Download { chat, message } => self.download(chat, message),
             Command::FetchAvatar { id, full } => self.fetch_avatar(id, full),
             Command::EditText {
@@ -2643,24 +2873,34 @@ impl Worker {
                     self.emit_chat(&chat);
                 }
             }
-            Command::PickFiles(chat) => {
-                let commands = self.commands.clone();
-                tokio::task::spawn_blocking(move || {
-                    let paths = rfd::FileDialog::new()
-                        .set_title("Send to WhatsApp")
-                        .pick_files()
-                        .unwrap_or_default();
-                    let _ = commands.send(Command::Picked { chat, paths });
-                });
+            Command::AttachmentCompleted {
+                chat,
+                session_generation,
+                batch,
+                index,
+                total,
+                path,
+                success,
+            } => {
+                if session_generation == self.session_generation {
+                    self.emit(Event::AttachmentCompleted {
+                        chat,
+                        batch,
+                        index,
+                        total,
+                        path,
+                        success,
+                    });
+                }
             }
-            Command::Picked { chat, paths } => self.emit(Event::Picked { chat, paths }),
             Command::SendFiles {
                 chat,
                 paths,
                 caption,
+                quoting,
                 mentions,
             } => {
-                self.send_files(chat, paths, caption, mentions);
+                self.send_files(chat, paths, caption, quoting, mentions);
             }
             Command::SendImage {
                 chat,
@@ -2668,57 +2908,56 @@ impl Worker {
                 height,
                 rgba,
                 caption,
+                quoting,
                 mentions,
-            } => self.send_pasted_image(chat, width, height, rgba, caption, mentions),
-            Command::Outbound { chat, row, raw } => self.outbound(chat, *row, raw),
+            } => self.send_pasted_image(
+                chat,
+                PastedImageRequest {
+                    width,
+                    height,
+                    rgba,
+                    caption,
+                    quoting,
+                    mentions,
+                },
+            ),
+            Command::Outbound {
+                chat,
+                session_generation,
+                row,
+                raw,
+            } => self.outbound(chat, session_generation, *row, raw),
+            Command::OutboundBatch {
+                chat,
+                session_generation,
+                row,
+                raw,
+                sent,
+            } => self.outbound_batch(chat, session_generation, *row, raw, sent),
             Command::SendSticker { chat, path } => self.send_sticker(chat, path),
-            Command::SaveSticker { path } => match self.save_sticker(&path) {
-                Ok(()) => self.emit_stickers(),
-                Err(error) => self.emit(Event::Error(format!("Could not save sticker: {error}"))),
-            },
-            Command::ForgetSticker { path } => {
-                // Restrict deletion to files in the saved-sticker directory.
-                if path.starts_with(self.dirs.saved_sticker_dir())
-                    && std::fs::remove_file(&path).is_ok()
-                {
-                    self.emit_stickers();
-                }
-            }
-            Command::ImportStickerUrl { url } => {
-                let commands = self.commands.clone();
-                let packs = self.packs_dir();
-                tokio::task::spawn_blocking(move || {
-                    let result = super::sticker_import::import_signal_pack(&url, &packs);
-                    let _ = commands.send(Command::StickerPackImported { result });
-                });
-            }
-            Command::PickStickerArchive => {
-                let commands = self.commands.clone();
-                let packs = self.packs_dir();
-                tokio::task::spawn_blocking(move || {
-                    let result = match rfd::FileDialog::new()
-                        .set_title("Add a sticker pack")
-                        .add_filter("Sticker packs", &["wastickers", "zip"])
-                        .pick_file()
-                    {
-                        Some(path) => super::sticker_import::import_archive(&path, &packs),
-                        // Ignore file-picker cancellation.
-                        None => Err(String::new()),
-                    };
-                    let _ = commands.send(Command::StickerPackImported { result });
-                });
-            }
             Command::SaveContact {
+                session_generation,
                 id,
                 full_name,
                 first_name,
                 to_phone,
             } => {
+                if !self.privacy_ready
+                    || self.archive_cleanup_failed
+                    || session_generation
+                        .is_some_and(|generation| generation != self.session_generation)
+                {
+                    self.emit(Event::Error(
+                        "Contact cannot be saved until account sync is ready.".to_owned(),
+                    ));
+                    return;
+                }
                 let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&id)) else {
                     self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
                     return;
                 };
                 let commands = self.commands.clone();
+                let session_generation = self.session_generation;
                 tokio::spawn(async move {
                     let error = client
                         .chat_actions()
@@ -2727,13 +2966,22 @@ impl Worker {
                         .err()
                         .map(|error| error.to_string());
                     let _ = commands.send(Command::ContactSaved {
+                        session_generation,
                         id,
                         name: full_name,
                         error,
                     });
                 });
             }
-            Command::ContactSaved { id, name, error } => {
+            Command::ContactSaved {
+                session_generation,
+                id,
+                name,
+                error,
+            } => {
+                if session_generation != self.session_generation {
+                    return;
+                }
                 if let Some(error) = error {
                     self.emit(Event::Error(format!("Could not save contact: {error}")));
                     return;
@@ -2758,37 +3006,62 @@ impl Worker {
                 first_name,
                 to_phone,
             } => {
+                if !self.privacy_ready || self.archive_cleanup_failed {
+                    self.emit(Event::Error(
+                        "Wait for account sync to finish before adding a contact.".to_owned(),
+                    ));
+                    return;
+                }
                 let Some(client) = self.client.clone() else {
                     self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
                     return;
                 };
                 let commands = self.commands.clone();
                 let jid = Jid::pn(&phone);
+                let session_generation = self.session_generation;
                 tokio::spawn(async move {
                     // Use WhatsApp's registration check before opening the chat.
-                    let registered = match client.contacts().is_on_whatsapp(&[jid]).await {
-                        Ok(results) => results.iter().any(|result| result.is_registered),
-                        Err(error) => {
-                            log::debug!("number check failed, trusting the number: {error}");
-                            true
+                    match client.contacts().is_on_whatsapp(&[jid]).await {
+                        Ok(results) => {
+                            let registered = results.iter().any(|result| result.is_registered);
+                            let _ = commands.send(Command::ContactChecked {
+                                session_generation,
+                                phone,
+                                full_name,
+                                first_name,
+                                to_phone,
+                                registered,
+                            });
                         }
-                    };
-                    let _ = commands.send(Command::ContactChecked {
-                        phone,
-                        full_name,
-                        first_name,
-                        to_phone,
-                        registered,
-                    });
+                        Err(_) => {
+                            log::debug!("number registration check failed");
+                            let _ =
+                                commands.send(Command::ContactCheckFailed { session_generation });
+                        }
+                    }
                 });
             }
+            Command::ContactCheckFailed { session_generation } => {
+                if session_generation == self.session_generation {
+                    self.emit(Event::Error(
+                        "Could not verify this phone number. Try again later.".to_owned(),
+                    ));
+                }
+            }
             Command::ContactChecked {
+                session_generation,
                 phone,
                 full_name,
                 first_name,
                 to_phone,
                 registered,
             } => {
+                if session_generation != self.session_generation
+                    || !self.privacy_ready
+                    || self.archive_cleanup_failed
+                {
+                    return;
+                }
                 if !registered {
                     self.emit(Event::Error(format!(
                         "{} is not on WhatsApp",
@@ -2799,6 +3072,7 @@ impl Worker {
                 let id = format!("{phone}@s.whatsapp.net");
                 if let Some(full_name) = full_name.clone() {
                     let _ = self.commands.send(Command::SaveContact {
+                        session_generation: Some(session_generation),
                         id: id.clone(),
                         full_name,
                         first_name,
@@ -2809,22 +3083,6 @@ impl Worker {
                     id,
                     name: full_name,
                 });
-            }
-            Command::StickerPackImported { result } => match result {
-                Ok(name) => {
-                    self.emit_stickers();
-                    self.emit(Event::Info(format!("Added sticker pack \"{name}\"")));
-                }
-                Err(error) if error.is_empty() => self.emit_stickers(),
-                Err(error) => {
-                    self.emit(Event::Error(format!("Could not add sticker pack: {error}")))
-                }
-            },
-            Command::DeleteStickerPack { dir } => {
-                let root = self.packs_dir();
-                if dir.starts_with(&root) && dir != root && std::fs::remove_dir_all(&dir).is_ok() {
-                    self.emit_stickers();
-                }
             }
             Command::SendVoice {
                 chat,
@@ -2841,17 +3099,13 @@ impl Worker {
                     self.mark_played(chat, message, sender);
                 }
             }
-            Command::SendGif { chat, gif } => self.send_gif(chat, gif),
-            Command::SearchGifs { query, key } => {
-                let commands = self.commands.clone();
-                let dir = self.dirs.cache.join("gifs");
-                tokio::task::spawn_blocking(move || {
-                    let results = search_gifs(&query, &key, &dir);
-                    let _ = commands.send(Command::GifResults { query, results });
-                });
-            }
-            Command::ReceiptsPrivacy { disabled } => {
-                self.emit(Event::ReceiptsPrivacy { disabled });
+            Command::ReceiptsPrivacy {
+                session_generation,
+                disabled,
+            } => {
+                if session_generation == self.session_generation {
+                    self.emit(Event::ReceiptsPrivacy { disabled });
+                }
             }
             Command::InspectUpdate => {
                 let events = self.events.clone();
@@ -2864,18 +3118,33 @@ impl Worker {
                 });
             }
             Command::DownloadUpdate { release, source } => {
+                if let Some(cancel) = self.update_cancel.take() {
+                    cancel.store(true, Ordering::Release);
+                }
+                let cancel = Arc::new(AtomicBool::new(false));
+                self.update_cancel = Some(cancel.clone());
                 let events = self.events.clone();
                 let waker = self.waker.clone();
                 tokio::task::spawn_blocking(move || {
-                    let result = crate::updates::download(&release, &source, |received, total| {
-                        let _ = events.send(Event::UpdateProgress { received, total });
-                        waker.wake();
-                    })
+                    let result = crate::updates::download_cancellable(
+                        &release,
+                        &source,
+                        || cancel.load(Ordering::Acquire),
+                        |received, total| {
+                            let _ = events.send(Event::UpdateProgress { received, total });
+                            waker.wake();
+                        },
+                    )
                     .map(Box::new)
                     .map_err(|error| format!("{error:#}"));
                     let _ = events.send(Event::UpdateDownloaded(result));
                     waker.wake();
                 });
+            }
+            Command::CancelUpdate => {
+                if let Some(cancel) = &self.update_cancel {
+                    cancel.store(true, Ordering::Release);
+                }
             }
             Command::InstallUpdate {
                 prepared,
@@ -2893,28 +3162,30 @@ impl Worker {
             Command::CheckForUpdates => {
                 let events = self.events.clone();
                 let waker = self.waker.clone();
-                tokio::task::spawn_blocking(move || match crate::updates::newer_release() {
-                    Ok(Some(release)) => {
-                        let _ = events.send(Event::UpdateAvailable {
-                            version: release.version,
-                            url: release.url,
-                        });
-                        waker.wake();
+                tokio::task::spawn_blocking(move || {
+                    let result = crate::updates::newer_release().map_err(|error| {
+                        log::debug!("could not check for a newer release: {error:#}");
+                        "Could not check for updates. Try again later.".to_owned()
+                    });
+                    if matches!(result, Ok(None)) {
+                        log::debug!("this is the newest release");
                     }
-                    Ok(None) => log::debug!("this is the newest release"),
-                    Err(error) => {
-                        log::debug!("could not check for a newer release: {error:#}")
-                    }
+                    let _ = events.send(Event::UpdateCheckFinished(result));
+                    waker.wake();
                 });
-            }
-            Command::GifResults { query, results } => {
-                self.emit(Event::Gifs { query, results });
             }
             Command::RecentStickers => {
                 self.fetch_missing_stickers();
                 self.emit_stickers();
             }
-            Command::StickerFetched { hash, result } => {
+            Command::StickerFetched {
+                hash,
+                session_generation,
+                result,
+            } => {
+                if session_generation != self.session_generation {
+                    return;
+                }
                 self.sticker_fetches.remove(&hash);
                 match result {
                     Ok(path) => {
@@ -2926,7 +3197,13 @@ impl Worker {
                 }
                 self.emit_stickers();
             }
-            Command::MeInfo { about } => {
+            Command::MeInfo {
+                session_generation,
+                about,
+            } => {
+                if session_generation != self.session_generation {
+                    return;
+                }
                 self.me_about = about;
                 match &self.me_about {
                     Some(about) => {
@@ -2936,11 +3213,6 @@ impl Worker {
                         let _ = self.archive.set_meta("me_about", "");
                     }
                 }
-                self.emit(Event::Me {
-                    id: self.me(),
-                    name: self.me_name.clone(),
-                    about: self.me_about.clone(),
-                });
             }
             Command::React {
                 chat,
@@ -2988,18 +3260,6 @@ impl Worker {
                     .map_err(|error| error.to_string())
                 });
             }
-            Command::SetLocked(chat, locked) => {
-                let _ = self.archive.set_locked(&chat, locked);
-                self.emit_chat(&chat);
-                self.tell_phone(&chat, move |client, jid| async move {
-                    if locked {
-                        client.chat_actions().lock_chat(&jid).await
-                    } else {
-                        client.chat_actions().unlock_chat(&jid).await
-                    }
-                    .map_err(|error| error.to_string())
-                });
-            }
             Command::PairWithPhone(phone) => {
                 let Some(client) = self.client.clone() else {
                     self.emit(Event::Error("Not connected to WhatsApp yet".to_owned()));
@@ -3007,6 +3267,8 @@ impl Worker {
                 };
                 self.pairing_phone = Some(phone.clone());
                 self.pair_code = None;
+                self.pair_request_id = self.pair_request_id.wrapping_add(1);
+                let request_id = self.pair_request_id;
                 let status = self.unlinked();
                 self.set_status(status);
                 let commands = self.commands.clone();
@@ -3018,53 +3280,125 @@ impl Worker {
                         })
                         .await
                         .map_err(|error| error.to_string());
-                    let _ = commands.send(Command::PairCode { result });
+                    let _ = commands.send(Command::PairCode { request_id, result });
                 });
             }
-            Command::PairCode { result } => match result {
-                Ok(code) => {
-                    self.pair_code = Some(code);
-                    let status = self.unlinked();
-                    self.set_status(status);
+            Command::PairCode { request_id, result } => {
+                if request_id != self.pair_request_id {
+                    return;
                 }
-                Err(error) => {
-                    self.pairing_phone = None;
-                    self.emit(Event::Error(format!(
-                        "Could not link by phone number: {error}"
-                    )));
-                    let status = self.unlinked();
-                    self.set_status(status);
+                match result {
+                    Ok(code) => {
+                        self.pair_code = Some(code);
+                        let status = self.unlinked();
+                        self.set_status(status);
+                    }
+                    Err(error) => {
+                        self.pairing_phone = None;
+                        self.emit(Event::Error(format!(
+                            "Could not link by phone number: {error}"
+                        )));
+                        let status = self.unlinked();
+                        self.set_status(status);
+                    }
                 }
-            },
+            }
             Command::Unlink => {
                 if let Some(client) = self.client.clone() {
+                    let markers = archive_cleanup_markers(&self.dirs);
+                    if !persist_archive_cleanup_marker(&markers) {
+                        self.emit(Event::Error(
+                            "Could not prepare safe conversation cleanup. This device remains linked."
+                                .to_owned(),
+                        ));
+                        return;
+                    }
                     client.logout().await;
                 } else {
                     self.on_logged_out().await;
                 }
             }
             Command::Reconnect => {
+                if self.archive_cleanup_failed {
+                    self.emit(Event::Error(
+                        "Local conversations could not be cleared; restart is blocked to protect data."
+                            .to_owned(),
+                    ));
+                    return;
+                }
                 if let Some(client) = self.client.clone() {
                     tokio::spawn(async move { client.reconnect_immediately().await });
                 } else {
                     self.start_bot().await;
                 }
             }
-            Command::Shutdown => {}
-            Command::OlderFailed { chat, error } => {
+            Command::Shutdown => {
+                if let Some(cancel) = &self.update_cancel {
+                    cancel.store(true, Ordering::Release);
+                }
+            }
+            Command::OlderFailed {
+                session_generation,
+                chat,
+                error,
+            } => {
+                if session_generation != self.session_generation {
+                    return;
+                }
                 self.pending_older.remove(&chat);
                 self.emit(Event::OlderFetched { chat, more: true });
                 self.emit(Event::Error(error));
             }
-            Command::GroupInfoFailed { chat, permanent } => {
+            Command::GroupInfoFailed {
+                session_generation,
+                chat,
+                permanent,
+            } => {
+                if session_generation != self.session_generation {
+                    return;
+                }
                 self.handle_failed_group(chat, permanent);
             }
-            Command::Sent { chat, id, error } => {
+            Command::Edited {
+                chat,
+                id,
+                session_generation,
+                success,
+                content,
+                mentions,
+            } => {
+                if session_generation != self.session_generation {
+                    return;
+                }
+                if success
+                    && let Ok(true) = self
+                        .archive
+                        .set_edited_text(&chat, &id, &content, &mentions)
+                {
+                    self.emit_message(&chat, &id);
+                    self.emit_chat(&chat);
+                }
+                self.emit(Event::Edited { chat, id, success });
+            }
+            Command::Sent {
+                chat,
+                id,
+                session_generation,
+                error,
+            } => {
+                if session_generation != self.session_generation {
+                    return;
+                }
                 if id.is_empty() {
-                    // This is a command failure, not a failed message send.
-                    if let Some(error) = error {
-                        self.emit(Event::Error(error));
+                    // No message row can be updated, but native pending sends
+                    // still need one sanitized terminal result.
+                    if error.is_some() {
+                        self.emit(Event::Error(sanitized_send_error().to_owned()));
                     }
+                    self.emit(Event::Sent {
+                        chat,
+                        success: false,
+                    });
                     return;
                 }
                 let status = match &error {
@@ -3076,11 +3410,23 @@ impl Worker {
                     .set_status(&chat, &id, status, crate::util::now());
                 self.emit_message(&chat, &id);
                 self.emit_chat(&chat);
+                self.emit(Event::Sent {
+                    chat: chat.clone(),
+                    success: error.is_none(),
+                });
                 if let Some(error) = error {
                     self.emit(Event::Error(format!("Message not sent: {error}")));
                 }
             }
-            Command::Downloaded { chat, id, result } => {
+            Command::Downloaded {
+                chat,
+                id,
+                session_generation,
+                result,
+            } => {
+                if session_generation != self.session_generation {
+                    return;
+                }
                 if let Ok(path) = &result {
                     let _ = self.archive.set_media_path(&chat, &id, path);
                 }
@@ -3094,26 +3440,51 @@ impl Worker {
                     self.emit_stickers();
                 }
             }
-            Command::AvatarFetched { id, full, path } => {
-                self.emit(Event::Avatar { id, full, path })
+            Command::AvatarFetched {
+                id,
+                full,
+                session_generation,
+                avatar_generation,
+                path,
+            } => {
+                if session_generation == self.session_generation
+                    && avatar_generation == self.avatar_generation_shared.load(Ordering::Acquire)
+                {
+                    self.emit(Event::Avatar { id, full, path });
+                }
             }
-            Command::AvatarFailed { id, full } => {
-                *self.pending_avatars.entry((id, full)).or_insert(0) += 1;
+            Command::AvatarFailed {
+                id,
+                full,
+                session_generation,
+                avatar_generation,
+            } => {
+                if session_generation == self.session_generation
+                    && avatar_generation == self.avatar_generation_shared.load(Ordering::Acquire)
+                {
+                    *self.pending_avatars.entry((id, full)).or_insert(0) += 1;
+                }
             }
             Command::GroupRecipients {
+                session_generation,
                 chat,
                 id,
                 recipients,
                 lids,
                 stored,
             } => {
-                for (lid, pn) in lids {
-                    self.learn_lid(&lid, &pn);
+                if session_generation != self.session_generation {
+                    let _ = stored.send(false);
+                } else {
+                    for (lid, pn) in lids {
+                        self.learn_lid(&lid, &pn);
+                    }
+                    let saved = self.save_group_recipients(&chat, &id, &recipients);
+                    let _ = stored.send(saved);
                 }
-                let saved = self.save_group_recipients(&chat, &id, &recipients);
-                let _ = stored.send(saved);
             }
             Command::GroupInfo {
+                session_generation,
                 chat,
                 name,
                 participants,
@@ -3121,6 +3492,9 @@ impl Worker {
                 ephemeral_expiration,
                 ephemeral_setting_timestamp,
             } => {
+                if session_generation != self.session_generation {
+                    return;
+                }
                 self.group_info_tries.remove(&chat);
                 let _ =
                     self.archive
@@ -3165,28 +3539,19 @@ impl Worker {
     ) {
         let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&chat)) else {
             self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
+            self.emit(Event::Sent {
+                chat,
+                success: false,
+            });
             return;
         };
-        let mut quoted_row = None;
-        let context = quoting.as_deref().and_then(|id| {
-            let raw = self.archive.raw(&chat, id).ok().flatten()?;
-            let quoted = wa::Message::decode_from_slice(&raw).ok()?;
-            let row = self.archive.message(&chat, id).ok().flatten()?;
-            let sender = Self::jid_of(&row.sender).unwrap_or_else(|| jid.clone());
-            let context = whatsapp_rust::wacore::proto_helpers::build_quote_context_with_info(
-                row.id.clone(),
-                &sender,
-                &jid,
-                &jid,
-                &quoted,
-            );
-            quoted_row = Some(row);
-            Some(context)
-        });
+        let (context, quoted_row) = self.quote_context(&chat, quoting.as_deref());
         let mut message = outgoing_text(text.clone(), context, &mentions);
         let expiration = self.apply_ephemeral(&chat, &mut message);
         let mentions = self.mentions_of(&mentions);
         let id = client.generate_message_id();
+        let session_generation = self.session_generation;
+        let session_generation_shared = self.session_generation_shared.clone();
         let row = Message {
             id: id.clone(),
             chat: chat.clone(),
@@ -3198,19 +3563,7 @@ impl Worker {
             status: Delivery::Pending,
             delivered_at: None,
             read_at: None,
-            quoted: quoted_row.map(|row| Quoted {
-                mentions: row.mentions.clone(),
-                id: row.id,
-                sender_name: if row.from_me {
-                    Some("You".to_owned())
-                } else {
-                    row.sender_name
-                        .clone()
-                        .or_else(|| self.name_for(&row.sender))
-                },
-                sender: row.sender,
-                summary: row.content.summary(),
-            }),
+            quoted: quoted_row,
             reactions: Vec::new(),
             edited: false,
             mentions,
@@ -3219,14 +3572,57 @@ impl Worker {
         };
         self.store_message(row, Some(message.encode_to_vec()), None);
         tokio::spawn(send_outgoing(
-            client,
-            self.commands.clone(),
+            OutgoingSession {
+                client,
+                commands: self.commands.clone(),
+                generation: session_generation,
+                generation_shared: session_generation_shared,
+            },
             chat,
             jid,
             id,
             message,
             expiration,
         ));
+    }
+
+    /// Builds protocol context and archive metadata for an available quoted message.
+    fn quote_context(
+        &self,
+        chat: &ChatId,
+        quoting: Option<&str>,
+    ) -> (Option<wa::ContextInfo>, Option<Quoted>) {
+        let Some((context, row)) = quoting.and_then(|id| {
+            let raw = self.archive.raw(chat, id).ok().flatten()?;
+            let quoted = wa::Message::decode_from_slice(&raw).ok()?;
+            let row = self.archive.message(chat, id).ok().flatten()?;
+            let jid = Self::jid_of(chat)?;
+            let sender = Self::jid_of(&row.sender).unwrap_or_else(|| jid.clone());
+            let context = whatsapp_rust::wacore::proto_helpers::build_quote_context_with_info(
+                row.id.clone(),
+                &sender,
+                &jid,
+                &jid,
+                &quoted,
+            );
+            Some((context, row))
+        }) else {
+            return (None, None);
+        };
+        let quoted = Quoted {
+            mentions: row.mentions.clone(),
+            id: row.id,
+            sender_name: if row.from_me {
+                Some("You".to_owned())
+            } else {
+                row.sender_name
+                    .clone()
+                    .or_else(|| self.name_for(&row.sender))
+            },
+            sender: row.sender,
+            summary: row.content.summary(),
+        };
+        (Some(context), Some(quoted))
     }
 
     fn forward_message(&mut self, from_chat: ChatId, message_id: String, to_chat: ChatId) {
@@ -3264,6 +3660,8 @@ impl Worker {
         let (message, expiration) =
             outgoing_forward(&original, self.ephemeral_expiration(&to_chat));
         let id = client.generate_message_id();
+        let session_generation = self.session_generation;
+        let session_generation_shared = self.session_generation_shared.clone();
         let mentions = self.mentions_of(&mentioned_of(&message));
         let thumbnail = thumbnail_of(&message).or_else(|| source.thumbnail.clone());
         let row = forwarded_row(
@@ -3277,8 +3675,12 @@ impl Worker {
         );
         self.store_message(row, Some(message.encode_to_vec()), None);
         tokio::spawn(send_outgoing(
-            client,
-            self.commands.clone(),
+            OutgoingSession {
+                client,
+                commands: self.commands.clone(),
+                generation: session_generation,
+                generation_shared: session_generation_shared,
+            },
             to_chat,
             jid,
             id,
@@ -3325,6 +3727,7 @@ impl Worker {
             }
             let client = client.clone();
             let commands = self.commands.clone();
+            let session_generation = self.session_generation;
             tokio::spawn(async move {
                 // This update is private to our devices, even with blue ticks
                 // disabled. Keep the original position when retrying offline
@@ -3338,6 +3741,7 @@ impl Worker {
                     log::debug!("chat read state not synced: {error}");
                 }
                 let _ = commands.send(Command::ReadSyncFinished {
+                    session_generation,
                     chat,
                     through,
                     success: result.is_ok(),
@@ -3365,8 +3769,9 @@ impl Worker {
                 .push(id);
         }
         let commands = self.commands.clone();
+        let session_generation = self.session_generation;
         tokio::spawn(async move {
-            if !receipts_allowed(&client, &jid, &commands).await {
+            if !receipts_allowed(&client, &jid, &commands, session_generation).await {
                 return;
             }
             for (sender, ids) in by_sender {
@@ -3402,6 +3807,12 @@ impl Worker {
     }
 
     fn load_chat(&mut self, chat: ChatId, before: Option<super::PageKey>) {
+        if self.archive_cleanup_failed {
+            self.emit(Event::Error(
+                "Local conversation cleanup must finish before chats can be opened.".to_owned(),
+            ));
+            return;
+        }
         match self.archive.messages(
             &chat,
             before.as_ref().map(|(time, id)| (*time, id.as_str())),
@@ -3443,6 +3854,9 @@ impl Worker {
     }
 
     fn download(&mut self, chat: ChatId, id: String) {
+        if self.archive_cleanup_failed {
+            return;
+        }
         let Some(client) = self.client.clone() else {
             self.emit(Event::Media {
                 chat,
@@ -3573,18 +3987,26 @@ impl Worker {
         };
         let dir = self.dirs.media_cache_dir();
         let commands = self.commands.clone();
+        let session_generation = self.session_generation;
+        let session_generation_shared = self.session_generation_shared.clone();
+        let session_cache_lock = self.session_cache_lock.clone();
         tokio::spawn(async move {
             let keep = |bytes: Vec<u8>| {
                 let dir = dir.clone();
                 let path = media_path(&dir, &chat, &id, &mime, file_name.as_deref());
+                let session_generation_shared = session_generation_shared.clone();
+                let session_cache_lock = session_cache_lock.clone();
                 async move {
-                    tokio::fs::create_dir_all(&dir)
-                        .await
-                        .map_err(|error| error.to_string())?;
-                    tokio::fs::write(&path, &bytes)
-                        .await
-                        .map_err(|error| error.to_string())?;
-                    Ok(path)
+                    write_session_cache_file(
+                        &dir,
+                        &path,
+                        &bytes,
+                        session_generation,
+                        &session_generation_shared,
+                        None,
+                        &session_cache_lock,
+                    )
+                    .await
                 }
             };
             let result = match client.download(&*downloadable).await {
@@ -3625,7 +4047,12 @@ impl Worker {
                     }
                 }
             };
-            let _ = commands.send(Command::Downloaded { chat, id, result });
+            let _ = commands.send(Command::Downloaded {
+                chat,
+                id,
+                session_generation,
+                result,
+            });
         });
     }
 
@@ -3642,6 +4069,9 @@ impl Worker {
             }
         };
         let dir = self.dirs.sticker_cache_dir();
+        let session_generation = self.session_generation;
+        let session_generation_shared = self.session_generation_shared.clone();
+        let session_cache_lock = self.session_cache_lock.clone();
         for sticker in phone.into_iter().filter(|sticker| sticker.path.is_none()) {
             if !self.sticker_fetches.insert(sticker.hash.clone()) {
                 continue;
@@ -3654,23 +4084,37 @@ impl Worker {
             let commands = self.commands.clone();
             let dir = dir.clone();
             let hash = sticker.hash;
+            let session_generation_shared = session_generation_shared.clone();
+            let session_cache_lock = session_cache_lock.clone();
             tokio::spawn(async move {
                 let result = async {
+                    if session_generation_shared.load(Ordering::Acquire) != session_generation {
+                        return Err(
+                            "The linked account changed during the sticker download".to_owned()
+                        );
+                    }
                     let bytes = client
                         .download(&PhoneSticker(meta))
                         .await
                         .map_err(|error| error.to_string())?;
-                    tokio::fs::create_dir_all(&dir)
-                        .await
-                        .map_err(|error| error.to_string())?;
                     let path = dir.join(format!("{hash}.webp"));
-                    tokio::fs::write(&path, &bytes)
-                        .await
-                        .map_err(|error| error.to_string())?;
-                    Ok(path)
+                    write_session_cache_file(
+                        &dir,
+                        &path,
+                        &bytes,
+                        session_generation,
+                        &session_generation_shared,
+                        None,
+                        &session_cache_lock,
+                    )
+                    .await
                 }
                 .await;
-                let _ = commands.send(Command::StickerFetched { hash, result });
+                let _ = commands.send(Command::StickerFetched {
+                    hash,
+                    session_generation,
+                    result,
+                });
             });
         }
         match self.archive.stickers_without_file(STICKER_FETCH_LIMIT) {
@@ -3770,6 +4214,7 @@ impl Worker {
                         name: entry.file_name().to_string_lossy().into_owned(),
                         dir,
                         stickers,
+                        local: true,
                     },
                 ))
             })
@@ -3800,23 +4245,6 @@ impl Worker {
             .collect();
         saved.sort_by_key(|(when, _)| std::cmp::Reverse(*when));
         saved.into_iter().map(|(_, path)| path).collect()
-    }
-
-    /// Saves a sticker under its content hash to deduplicate copies.
-    fn save_sticker(&self, path: &Path) -> Result<(), String> {
-        use sha2::{Digest, Sha256};
-        let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
-        let hash: String = Sha256::digest(&bytes)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
-        let dir = self.dirs.saved_sticker_dir();
-        std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
-        let target = dir.join(format!("{hash}.webp"));
-        if !target.exists() {
-            std::fs::write(&target, &bytes).map_err(|error| error.to_string())?;
-        }
-        Ok(())
     }
 
     fn avatar_file(&self, id: &str, full: bool) -> PathBuf {
@@ -3864,6 +4292,11 @@ impl Worker {
             return;
         };
         let commands = self.commands.clone();
+        let session_generation = self.session_generation;
+        let session_generation_shared = self.session_generation_shared.clone();
+        let avatar_generation = self.avatar_generation_shared.load(Ordering::Acquire);
+        let avatar_generation_shared = self.avatar_generation_shared.clone();
+        let session_cache_lock = self.session_cache_lock.clone();
         tokio::spawn(async move {
             let fetched = async {
                 let mut picture = None;
@@ -3899,24 +4332,45 @@ impl Worker {
                 })
                 .await
                 .map_err(|error| error.to_string())??;
-                if let Some(parent) = path.parent() {
-                    tokio::fs::create_dir_all(parent)
-                        .await
-                        .map_err(|error| error.to_string())?;
+                if session_generation_shared.load(Ordering::Acquire) != session_generation {
+                    return Err(
+                        "The linked account changed during profile-picture lookup".to_owned()
+                    );
                 }
-                tokio::fs::write(&path, &bytes)
-                    .await
-                    .map_err(|error| error.to_string())?;
-                Ok::<Option<PathBuf>, String>(Some(path.clone()))
+                let parent = path
+                    .parent()
+                    .ok_or_else(|| "Profile-picture cache path is invalid".to_owned())?;
+                let path = write_session_cache_file(
+                    parent,
+                    &path,
+                    &bytes,
+                    session_generation,
+                    &session_generation_shared,
+                    Some((avatar_generation, &avatar_generation_shared)),
+                    &session_cache_lock,
+                )
+                .await?;
+                Ok::<Option<PathBuf>, String>(Some(path))
             }
             .await;
             match fetched {
                 Ok(path) => {
-                    let _ = commands.send(Command::AvatarFetched { id, full, path });
+                    let _ = commands.send(Command::AvatarFetched {
+                        id,
+                        full,
+                        session_generation,
+                        avatar_generation,
+                        path,
+                    });
                 }
                 Err(error) => {
                     log::debug!("no picture for {id} yet: {error}");
-                    let _ = commands.send(Command::AvatarFailed { id, full });
+                    let _ = commands.send(Command::AvatarFailed {
+                        id,
+                        full,
+                        session_generation,
+                        avatar_generation,
+                    });
                 }
             }
         });
@@ -3949,20 +4403,10 @@ impl Worker {
         }
     }
 
-    /// Loads archived messages needed to scroll to a quote.
-    fn search_messages(&mut self, query: String) {
-        match self.archive.search_messages(&query, 50) {
-            Ok(mut messages) => {
-                for message in &mut messages {
-                    self.polish(message);
-                }
-                self.emit(Event::SearchHits { query, messages });
-            }
-            Err(error) => self.emit(Event::Error(format!("Could not search: {error}"))),
-        }
-    }
-
     fn load_until(&mut self, chat: ChatId, id: String, before: super::PageKey) {
+        if self.archive_cleanup_failed {
+            return;
+        }
         let Ok(Some(target)) = self.archive.message(&chat, &id) else {
             self.emit(Event::Messages {
                 chat: chat.clone(),
@@ -3997,27 +4441,38 @@ impl Worker {
     fn edit_text(&mut self, chat: ChatId, id: String, text: String, mentions: Vec<String>) {
         let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&chat)) else {
             self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
+            self.emit(Event::Edited {
+                chat,
+                id,
+                success: false,
+            });
             return;
         };
         let content = Content::text(text.clone());
         let mention_rows = self.mentions_of(&mentions);
-        if let Ok(true) = self
-            .archive
-            .set_edited_text(&chat, &id, &content, &mention_rows)
-        {
-            self.emit_message(&chat, &id);
-            self.emit_chat(&chat);
-        }
         let mut message = outgoing_text(text, None, &mentions);
         self.apply_ephemeral(&chat, &mut message);
         let commands = self.commands.clone();
+        let events = self.events.clone();
+        let waker = self.waker.clone();
+        let session_generation = self.session_generation;
+        let session_generation_shared = self.session_generation_shared.clone();
         tokio::spawn(async move {
-            if let Err(error) = client.edit_message(jid, id.clone(), message).await {
-                let _ = commands.send(Command::Sent {
-                    chat,
-                    id: String::new(),
-                    error: Some(format!("Could not send the edit: {error}")),
-                });
+            let result = client.edit_message(jid, id.clone(), message).await;
+            let success = result.is_ok();
+            let _ = commands.send(Command::Edited {
+                chat: chat.clone(),
+                id,
+                session_generation,
+                success,
+                content,
+                mentions: mention_rows,
+            });
+            if result.is_err()
+                && session_generation_shared.load(Ordering::Acquire) == session_generation
+            {
+                let _ = events.send(Event::Error("Could not edit the message".to_owned()));
+                waker.wake();
             }
         });
     }
@@ -4034,16 +4489,21 @@ impl Worker {
             self.emit_message(&chat, &id);
             self.emit_chat(&chat);
         }
-        let commands = self.commands.clone();
+        let session_generation = self.session_generation;
+        let session_generation_shared = self.session_generation_shared.clone();
+        let events = self.events.clone();
+        let waker = self.waker.clone();
         tokio::spawn(async move {
-            if let Err(error) = client.revoke_message(jid, id, RevokeType::Sender).await {
-                let _ = commands.send(Command::Sent {
-                    chat,
-                    id: String::new(),
-                    error: Some(format!(
-                        "Could not delete the message for everyone: {error}"
-                    )),
-                });
+            if client
+                .revoke_message(jid, id, RevokeType::Sender)
+                .await
+                .is_err()
+                && session_generation_shared.load(Ordering::Acquire) == session_generation
+            {
+                let _ = events.send(Event::Error(
+                    "Could not delete the message for everyone".to_owned(),
+                ));
+                waker.wake();
             }
         });
     }
@@ -4053,25 +4513,42 @@ impl Worker {
         chat: ChatId,
         paths: Vec<PathBuf>,
         caption: Option<String>,
+        quoting: Option<String>,
         mentions: Vec<String>,
     ) {
-        for (index, path) in paths.into_iter().enumerate() {
-            let Some(client) = self.client.clone() else {
-                self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
-                return;
-            };
-            let commands = self.commands.clone();
-            let chat = chat.clone();
-            let dir = self.dirs.media_cache_dir();
-            let me = self.me();
-            // Attach the caption to the first file.
-            let caption = if index == 0 { caption.clone() } else { None };
-            let mentions = if index == 0 {
-                mentions.clone()
-            } else {
-                Vec::new()
-            };
-            tokio::spawn(async move {
+        if paths.is_empty() {
+            return;
+        }
+        let batch = self.next_attachment_batch;
+        self.next_attachment_batch = self.next_attachment_batch.wrapping_add(1);
+        let total = paths.len();
+        let Some(client) = self.client.clone() else {
+            for (index, path) in paths.into_iter().enumerate() {
+                self.emit(Event::AttachmentCompleted {
+                    chat: chat.clone(),
+                    batch,
+                    index,
+                    total,
+                    path,
+                    success: false,
+                });
+            }
+            self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
+            return;
+        };
+        let commands = self.commands.clone();
+        let session_generation = self.session_generation;
+        let session_generation_shared = self.session_generation_shared.clone();
+        let session_cache_lock = self.session_cache_lock.clone();
+        let dir = self.dirs.media_cache_dir();
+        let me = self.me();
+        let (context, quoted) = self.quote_context(&chat, quoting.as_deref());
+        tokio::spawn(async move {
+            let mut caption = caption;
+            let mut context = context;
+            let mut quoted = quoted;
+            let mut mentions = mentions;
+            for (index, path) in paths.into_iter().enumerate() {
                 let outcome = async {
                     let bytes = tokio::fs::read(&path)
                         .await
@@ -4084,62 +4561,122 @@ impl Worker {
                         .map(|name| name.to_string_lossy().into_owned());
                     let prepared =
                         prepare_media(&client, bytes, &mime, file_name.as_deref(), false).await?;
-                    file_outbound(&client, &chat, &me, &dir, prepared, caption, mentions).await
+                    file_outbound(
+                        FileOutboundContext {
+                            client: &client,
+                            chat: &chat,
+                            me: &me,
+                            dir: &dir,
+                            session_generation,
+                            session_generation_shared: &session_generation_shared,
+                            session_cache_lock: &session_cache_lock,
+                        },
+                        FileOutboundRequest {
+                            prepared,
+                            caption: caption.clone(),
+                            mentions: mentions.clone(),
+                            context: context.clone(),
+                            quoted: quoted.clone(),
+                        },
+                    )
+                    .await
                 }
                 .await;
                 match outcome {
                     Ok((row, raw)) => {
-                        let _ = commands.send(Command::Outbound {
-                            chat,
-                            row: Box::new(row),
-                            raw,
+                        let (sent_tx, mut sent_rx) = tokio::sync::mpsc::unbounded_channel();
+                        let queued = commands
+                            .send(Command::OutboundBatch {
+                                chat: chat.clone(),
+                                session_generation,
+                                row: Box::new(row),
+                                raw,
+                                sent: sent_tx,
+                            })
+                            .is_ok();
+                        let success = queued && sent_rx.recv().await.unwrap_or(false);
+                        consume_attachment_reply(
+                            success,
+                            &mut caption,
+                            &mut context,
+                            &mut quoted,
+                            &mut mentions,
+                        );
+                        let _ = commands.send(Command::AttachmentCompleted {
+                            chat: chat.clone(),
+                            session_generation,
+                            batch,
+                            index,
+                            total,
+                            path,
+                            success,
                         });
                     }
-                    Err(error) => {
-                        let _ = commands.send(Command::Sent {
-                            chat,
-                            id: String::new(),
-                            error: Some(format!("Could not send the file: {error}")),
+                    Err(_) => {
+                        let _ = commands.send(Command::AttachmentCompleted {
+                            chat: chat.clone(),
+                            session_generation,
+                            batch,
+                            index,
+                            total,
+                            path,
+                            success: false,
                         });
                     }
                 }
-            });
-        }
+            }
+        });
     }
 
-    fn send_pasted_image(
-        &mut self,
-        chat: ChatId,
-        width: u32,
-        height: u32,
-        rgba: Vec<u8>,
-        caption: Option<String>,
-        mentions: Vec<String>,
-    ) {
+    fn send_pasted_image(&mut self, chat: ChatId, request: PastedImageRequest) {
         let Some(client) = self.client.clone() else {
             self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
             return;
         };
         let commands = self.commands.clone();
+        let session_generation = self.session_generation;
+        let session_generation_shared = self.session_generation_shared.clone();
+        let session_cache_lock = self.session_cache_lock.clone();
         let dir = self.dirs.media_cache_dir();
         let me = self.me();
+        let (context, quoted) = self.quote_context(&chat, request.quoting.as_deref());
         tokio::spawn(async move {
             let outcome = async {
                 let encoded = tokio::task::spawn_blocking(move || {
-                    let image = image::RgbaImage::from_raw(width, height, rgba)
-                        .ok_or_else(|| "Clipboard image data is invalid".to_owned())?;
+                    let image =
+                        image::RgbaImage::from_raw(request.width, request.height, request.rgba)
+                            .ok_or_else(|| "Clipboard image data is invalid".to_owned())?;
                     encode_jpeg(&image::DynamicImage::ImageRgba8(image), 88)
                 })
                 .await
                 .map_err(|error| error.to_string())??;
                 let prepared = prepare_media(&client, encoded, "image/jpeg", None, false).await?;
-                file_outbound(&client, &chat, &me, &dir, prepared, caption, mentions).await
+                file_outbound(
+                    FileOutboundContext {
+                        client: &client,
+                        chat: &chat,
+                        me: &me,
+                        dir: &dir,
+                        session_generation,
+                        session_generation_shared: &session_generation_shared,
+                        session_cache_lock: &session_cache_lock,
+                    },
+                    FileOutboundRequest {
+                        prepared,
+                        caption: request.caption,
+                        mentions: request.mentions,
+                        context,
+                        quoted,
+                    },
+                )
+                .await
             }
             .await;
             match outcome {
                 Ok((row, raw)) => {
                     let _ = commands.send(Command::Outbound {
                         chat,
+                        session_generation,
                         row: Box::new(row),
                         raw,
                     });
@@ -4148,6 +4685,7 @@ impl Worker {
                     let _ = commands.send(Command::Sent {
                         chat,
                         id: String::new(),
+                        session_generation,
                         error: Some(format!("Could not send the picture: {error}")),
                     });
                 }
@@ -4161,39 +4699,11 @@ impl Worker {
             self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
             return;
         };
-        let quote = quoting.as_deref().and_then(|id| {
-            let raw = self.archive.raw(&chat, id).ok().flatten()?;
-            let quoted = wa::Message::decode_from_slice(&raw).ok()?;
-            let row = self.archive.message(&chat, id).ok().flatten()?;
-            let jid = Self::jid_of(&chat)?;
-            let sender = Self::jid_of(&row.sender).unwrap_or_else(|| jid.clone());
-            let context = whatsapp_rust::wacore::proto_helpers::build_quote_context_with_info(
-                row.id.clone(),
-                &sender,
-                &jid,
-                &jid,
-                &quoted,
-            );
-            let shown = Quoted {
-                mentions: row.mentions.clone(),
-                id: row.id,
-                sender_name: if row.from_me {
-                    Some("You".to_owned())
-                } else {
-                    row.sender_name
-                        .clone()
-                        .or_else(|| self.name_for(&row.sender))
-                },
-                sender: row.sender,
-                summary: row.content.summary(),
-            };
-            Some((context, shown))
-        });
-        let (context, shown) = match quote {
-            Some((context, shown)) => (Some(Box::new(context)), Some(shown)),
-            None => (None, None),
-        };
+        let (context, shown) = self.quote_context(&chat, quoting.as_deref());
         let commands = self.commands.clone();
+        let session_generation = self.session_generation;
+        let session_generation_shared = self.session_generation_shared.clone();
+        let session_cache_lock = self.session_cache_lock.clone();
         let dir = self.dirs.media_cache_dir();
         let me = self.me();
         tokio::spawn(async move {
@@ -4209,15 +4719,34 @@ impl Worker {
                 })
                 .await
                 .map_err(|error| error.to_string())??;
-                let prepared = prepare_voice(&client, bytes, seconds, waveform, context).await?;
-                file_outbound(&client, &chat, &me, &dir, prepared, None, Vec::new()).await
+                let prepared =
+                    prepare_voice(&client, bytes, seconds, waveform, context.map(Box::new)).await?;
+                file_outbound(
+                    FileOutboundContext {
+                        client: &client,
+                        chat: &chat,
+                        me: &me,
+                        dir: &dir,
+                        session_generation,
+                        session_generation_shared: &session_generation_shared,
+                        session_cache_lock: &session_cache_lock,
+                    },
+                    FileOutboundRequest {
+                        prepared,
+                        caption: None,
+                        mentions: Vec::new(),
+                        context: None,
+                        quoted: shown,
+                    },
+                )
+                .await
             }
             .await;
             match outcome {
-                Ok((mut row, raw)) => {
-                    row.quoted = shown;
+                Ok((row, raw)) => {
                     let _ = commands.send(Command::Outbound {
                         chat,
+                        session_generation,
                         row: Box::new(row),
                         raw,
                     });
@@ -4226,6 +4755,7 @@ impl Worker {
                     let _ = commands.send(Command::Sent {
                         chat,
                         id: String::new(),
+                        session_generation,
                         error: Some(format!("Could not send the voice message: {error}")),
                     });
                 }
@@ -4244,8 +4774,9 @@ impl Worker {
             None
         };
         let commands = self.commands.clone();
+        let session_generation = self.session_generation;
         tokio::spawn(async move {
-            if !receipts_allowed(&client, &jid, &commands).await {
+            if !receipts_allowed(&client, &jid, &commands, session_generation).await {
                 return;
             }
             if let Err(error) = client
@@ -4263,6 +4794,9 @@ impl Worker {
             return;
         };
         let commands = self.commands.clone();
+        let session_generation = self.session_generation;
+        let session_generation_shared = self.session_generation_shared.clone();
+        let session_cache_lock = self.session_cache_lock.clone();
         let dir = self.dirs.media_cache_dir();
         let me = self.me();
         tokio::spawn(async move {
@@ -4271,13 +4805,32 @@ impl Worker {
                     .await
                     .map_err(|error| error.to_string())?;
                 let prepared = prepare_sticker(&client, bytes).await?;
-                file_outbound(&client, &chat, &me, &dir, prepared, None, Vec::new()).await
+                file_outbound(
+                    FileOutboundContext {
+                        client: &client,
+                        chat: &chat,
+                        me: &me,
+                        dir: &dir,
+                        session_generation,
+                        session_generation_shared: &session_generation_shared,
+                        session_cache_lock: &session_cache_lock,
+                    },
+                    FileOutboundRequest {
+                        prepared,
+                        caption: None,
+                        mentions: Vec::new(),
+                        context: None,
+                        quoted: None,
+                    },
+                )
+                .await
             }
             .await;
             match outcome {
                 Ok((row, raw)) => {
                     let _ = commands.send(Command::Outbound {
                         chat,
+                        session_generation,
                         row: Box::new(row),
                         raw,
                     });
@@ -4286,6 +4839,7 @@ impl Worker {
                     let _ = commands.send(Command::Sent {
                         chat,
                         id: String::new(),
+                        session_generation,
                         error: Some(format!("Could not send the sticker: {error}")),
                     });
                 }
@@ -4293,58 +4847,11 @@ impl Worker {
         });
     }
 
-    fn send_gif(&mut self, chat: ChatId, gif: Gif) {
-        let Some(client) = self.client.clone() else {
-            self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
-            return;
-        };
-        let commands = self.commands.clone();
-        let dir = self.dirs.media_cache_dir();
-        let me = self.me();
-        tokio::spawn(async move {
-            let outcome = async {
-                let url = gif.mp4.clone();
-                let bytes = tokio::task::spawn_blocking(move || {
-                    ureq::get(&url)
-                        .call()
-                        .and_then(|mut response| response.body_mut().read_to_vec())
-                        .map_err(|error| error.to_string())
-                })
-                .await
-                .map_err(|error| error.to_string())??;
-                let mut prepared = prepare_media(&client, bytes, "video/mp4", None, true).await?;
-                if let Content::Video { media, .. } = &mut prepared.content {
-                    media.width = Some(gif.width);
-                    media.height = Some(gif.height);
-                }
-                if let Some(video) = prepared.message.video_message.as_option_mut() {
-                    video.width = Some(gif.width);
-                    video.height = Some(gif.height);
-                }
-                file_outbound(&client, &chat, &me, &dir, prepared, None, Vec::new()).await
-            }
-            .await;
-            match outcome {
-                Ok((row, raw)) => {
-                    let _ = commands.send(Command::Outbound {
-                        chat,
-                        row: Box::new(row),
-                        raw,
-                    });
-                }
-                Err(error) => {
-                    let _ = commands.send(Command::Sent {
-                        chat,
-                        id: String::new(),
-                        error: Some(format!("Could not send the GIF: {error}")),
-                    });
-                }
-            }
-        });
-    }
-
     /// Archives and sends an uploaded attachment message.
-    fn outbound(&mut self, chat: ChatId, row: Message, raw: Vec<u8>) {
+    fn outbound(&mut self, chat: ChatId, session_generation: u64, row: Message, raw: Vec<u8>) {
+        if session_generation != self.session_generation || self.archive_cleanup_failed {
+            return;
+        }
         let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&chat)) else {
             self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
             return;
@@ -4357,15 +4864,65 @@ impl Worker {
         let raw = message.encode_to_vec();
         let id = row.id.clone();
         self.store_message(row, Some(raw), None);
+        let session_generation_shared = self.session_generation_shared.clone();
         tokio::spawn(send_outgoing(
-            client,
-            self.commands.clone(),
+            OutgoingSession {
+                client,
+                commands: self.commands.clone(),
+                generation: session_generation,
+                generation_shared: session_generation_shared,
+            },
             chat,
             jid,
             id,
             message,
             expiration,
         ));
+    }
+
+    fn outbound_batch(
+        &mut self,
+        chat: ChatId,
+        session_generation: u64,
+        row: Message,
+        raw: Vec<u8>,
+        sent: tokio::sync::mpsc::UnboundedSender<bool>,
+    ) {
+        if session_generation != self.session_generation || self.archive_cleanup_failed {
+            let _ = sent.send(false);
+            return;
+        }
+        let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&chat)) else {
+            let _ = sent.send(false);
+            return;
+        };
+        let Ok(mut message) = wa::Message::decode_from_slice(&raw) else {
+            let _ = sent.send(false);
+            return;
+        };
+        let expiration = self.apply_ephemeral(&chat, &mut message);
+        let raw = message.encode_to_vec();
+        let id = row.id.clone();
+        self.store_message(row, Some(raw), None);
+        let commands = self.commands.clone();
+        let session_generation_shared = self.session_generation_shared.clone();
+        tokio::spawn(async move {
+            let success = send_outgoing(
+                OutgoingSession {
+                    client,
+                    commands,
+                    generation: session_generation,
+                    generation_shared: session_generation_shared,
+                },
+                chat,
+                jid,
+                id,
+                message,
+                expiration,
+            )
+            .await;
+            let _ = sent.send(success);
+        });
     }
 
     fn react(&mut self, chat: ChatId, id: String, emoji: String) {
@@ -4417,16 +4974,36 @@ fn apply_ephemeral_expiration(message: &mut wa::Message, expiration: Option<u32>
         .then_some(expiration)
 }
 
-async fn send_outgoing(
+struct OutgoingSession {
     client: Arc<Client>,
     commands: mpsc::UnboundedSender<Command>,
+    generation: u64,
+    generation_shared: Arc<AtomicU64>,
+}
+
+async fn send_outgoing(
+    session: OutgoingSession,
     chat: ChatId,
     jid: Jid,
     id: String,
     message: wa::Message,
     ephemeral_expiration: Option<u32>,
-) {
+) -> bool {
+    let OutgoingSession {
+        client,
+        commands,
+        generation: session_generation,
+        generation_shared: session_generation_shared,
+    } = session;
+    let session_is_current =
+        || session_generation_shared.load(Ordering::Acquire) == session_generation;
+    if !session_is_current() {
+        return false;
+    }
     let result = async {
+        if !session_is_current() {
+            return Err("The linked account changed before the message was sent".to_owned());
+        }
         if jid.is_group() {
             // Uses whatsapp-rust's send cache; only a miss queries the server,
             // exactly as encryption would. No separate burst of metadata queries.
@@ -4453,6 +5030,7 @@ async fn send_outgoing(
             let (stored, mut saved) = mpsc::unbounded_channel();
             commands
                 .send(Command::GroupRecipients {
+                    session_generation,
                     chat: chat.clone(),
                     id: id.clone(),
                     recipients,
@@ -4464,22 +5042,61 @@ async fn send_outgoing(
                 return Err("Could not save the group message recipients".to_owned());
             }
         }
+        if !session_is_current() {
+            return Err("The linked account changed before the message was sent".to_owned());
+        }
         let mut options = SendOptions::default().with_message_id(id.clone());
         if let Some(expiration) = ephemeral_expiration {
             options = options.with_ephemeral_expiration(expiration);
         }
-        client
-            .send_message_with_options(jid, message, options)
-            .await
-            .map_err(|error| error.to_string())?;
+        let send = client.send_message_with_options(jid, message, options);
+        tokio::pin!(send);
+        loop {
+            tokio::select! {
+                result = &mut send => {
+                    result.map_err(|error| error.to_string())?;
+                    break;
+                }
+                _ = tokio::time::sleep(Duration::from_millis(50)) => {
+                    if !session_is_current() {
+                        return Err("The linked account changed before the message was sent".to_owned());
+                    }
+                }
+            }
+        }
         Ok(())
     }
     .await;
+    if !session_is_current() {
+        return false;
+    }
+    let success = result.is_ok();
     let _ = commands.send(Command::Sent {
         chat,
         id,
-        error: result.err(),
+        session_generation,
+        error: result.err().map(|_| sanitized_send_error().to_owned()),
     });
+    success
+}
+
+fn sanitized_send_error() -> &'static str {
+    "Could not send message"
+}
+
+fn consume_attachment_reply(
+    success: bool,
+    caption: &mut Option<String>,
+    context: &mut Option<wa::ContextInfo>,
+    quoted: &mut Option<Quoted>,
+    mentions: &mut Vec<String>,
+) {
+    if success {
+        *caption = None;
+        *context = None;
+        *quoted = None;
+        mentions.clear();
+    }
 }
 
 fn forwarded_row(
@@ -4915,6 +5532,33 @@ struct Prepared {
     file_name: Option<String>,
 }
 
+struct PastedImageRequest {
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
+    caption: Option<String>,
+    quoting: Option<String>,
+    mentions: Vec<String>,
+}
+
+struct FileOutboundContext<'a> {
+    client: &'a Client,
+    chat: &'a str,
+    me: &'a str,
+    dir: &'a Path,
+    session_generation: u64,
+    session_generation_shared: &'a AtomicU64,
+    session_cache_lock: &'a tokio::sync::Mutex<()>,
+}
+
+struct FileOutboundRequest {
+    prepared: Prepared,
+    caption: Option<String>,
+    mentions: Vec<String>,
+    context: Option<wa::ContextInfo>,
+    quoted: Option<Quoted>,
+}
+
 fn encode_jpeg(image: &image::DynamicImage, quality: u8) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::new();
     let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, quality);
@@ -5168,142 +5812,27 @@ async fn prepare_sticker(client: &Client, bytes: Vec<u8>) -> Result<Prepared, St
     })
 }
 
-fn percent_encode(text: &str) -> String {
-    let mut out = String::new();
-    for byte in text.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(byte as char)
-            }
-            _ => out.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    out
-}
-
-/// Searches GIPHY and downloads result stills. Empty queries list trending GIFs.
-fn search_gifs(query: &str, key: &str, dir: &Path) -> Result<Vec<Gif>, GifError> {
-    let plain = |message: String| GifError {
-        message,
-        bad_key: false,
-    };
-    if key.is_empty() {
-        return Err(GifError {
-            message: "GIF search needs a GIPHY API key.".to_owned(),
-            bad_key: true,
-        });
-    }
-    let url = if query.trim().is_empty() {
-        format!("https://api.giphy.com/v1/gifs/trending?api_key={key}&limit=24&rating=pg-13")
-    } else {
-        format!(
-            "https://api.giphy.com/v1/gifs/search?api_key={key}&q={}&limit=24&rating=pg-13",
-            percent_encode(query.trim())
-        )
-    };
-    let body = match ureq::get(&url).call() {
-        Ok(mut response) => response
-            .body_mut()
-            .read_to_string()
-            .map_err(|error| plain(format!("GIPHY request failed: {error}")))?,
-        // Treat 401 and 403 as API-key failures for the picker.
-        Err(ureq::Error::StatusCode(code @ (401 | 403))) => {
-            return Err(GifError {
-                message: format!("GIPHY rejected the API key (error {code})."),
-                bad_key: true,
-            });
-        }
-        Err(error) => return Err(plain(format!("GIPHY request failed: {error}"))),
-    };
-    let json: serde_json::Value = serde_json::from_str(&body)
-        .map_err(|error| plain(format!("Invalid GIPHY response: {error}")))?;
-    if let Some(message) = json["meta"]["msg"].as_str()
-        && let Some(status) = json["meta"]["status"]
-            .as_u64()
-            .filter(|status| *status >= 400)
-    {
-        return Err(GifError {
-            message: format!("GIPHY: {message}"),
-            bad_key: status == 401 || status == 403,
-        });
-    }
-    let data = json["data"]
-        .as_array()
-        .ok_or_else(|| plain("GIPHY response contained no results".to_owned()))?;
-    std::fs::create_dir_all(dir).map_err(|error| plain(error.to_string()))?;
-    let mut gifs: Vec<(Gif, Option<String>)> = data
-        .iter()
-        .filter_map(|item| {
-            let id = item["id"].as_str()?.to_owned();
-            let images = &item["images"];
-            let pick = |names: &[&str], field: &str| {
-                names
-                    .iter()
-                    .find_map(|name| images[*name][field].as_str().map(str::to_owned))
-            };
-            let mp4 = pick(&["fixed_width", "downsized_small", "original"], "mp4")?;
-            let still = pick(
-                &[
-                    "fixed_width_small_still",
-                    "fixed_width_still",
-                    "original_still",
-                ],
-                "url",
-            );
-            let number = |name: &str| {
-                images["fixed_width"][name]
-                    .as_str()
-                    .and_then(|value| value.parse::<u32>().ok())
-                    .unwrap_or(200)
-            };
-            Some((
-                Gif {
-                    id,
-                    still: None,
-                    mp4,
-                    width: number("width"),
-                    height: number("height"),
-                },
-                still,
-            ))
-        })
-        .collect();
-    std::thread::scope(|scope| {
-        for (gif, still) in &mut gifs {
-            let Some(url) = still.clone() else {
-                continue;
-            };
-            let path = dir.join(format!("{}.jpg", sanitize(&gif.id)));
-            if path.exists() {
-                gif.still = Some(path);
-                continue;
-            }
-            let slot = &mut gif.still;
-            scope.spawn(move || {
-                let fetched = ureq::get(&url)
-                    .call()
-                    .and_then(|mut response| response.body_mut().read_to_vec());
-                if let Ok(bytes) = fetched
-                    && std::fs::write(&path, bytes).is_ok()
-                {
-                    *slot = Some(path);
-                }
-            });
-        }
-    });
-    Ok(gifs.into_iter().map(|(gif, _)| gif).collect())
-}
-
 /// Copies a sent attachment to media storage and builds its archive row.
 async fn file_outbound(
-    client: &Client,
-    chat: &str,
-    me: &str,
-    dir: &Path,
-    mut prepared: Prepared,
-    caption: Option<String>,
-    mentions: Vec<String>,
+    context: FileOutboundContext<'_>,
+    request: FileOutboundRequest,
 ) -> Result<(Message, Vec<u8>), String> {
+    let FileOutboundContext {
+        client,
+        chat,
+        me,
+        dir,
+        session_generation,
+        session_generation_shared,
+        session_cache_lock,
+    } = context;
+    let FileOutboundRequest {
+        mut prepared,
+        caption,
+        mentions,
+        mut context,
+        quoted,
+    } = request;
     if let Some(caption) = caption.filter(|caption| !caption.trim().is_empty()) {
         match &mut prepared.content {
             Content::Image { caption: slot, .. }
@@ -5322,10 +5851,10 @@ async fn file_outbound(
         }
     }
     if !mentions.is_empty() {
-        prepared.message.set_context_info(wa::ContextInfo {
-            mentioned_jid: mentions.clone(),
-            ..Default::default()
-        });
+        context.get_or_insert_default().mentioned_jid = mentions.clone();
+    }
+    if let Some(context) = context {
+        prepared.message.set_context_info(context);
     }
     let id = client.generate_message_id();
     let path = media_path(
@@ -5335,12 +5864,19 @@ async fn file_outbound(
         &prepared.mime,
         prepared.file_name.as_deref(),
     );
-    tokio::fs::create_dir_all(dir)
-        .await
-        .map_err(|error| error.to_string())?;
-    tokio::fs::write(&path, &prepared.bytes)
-        .await
-        .map_err(|error| error.to_string())?;
+    if session_generation_shared.load(Ordering::Acquire) != session_generation {
+        return Err("The linked account changed while preparing the attachment".to_owned());
+    }
+    write_session_cache_file(
+        dir,
+        &path,
+        &prepared.bytes,
+        session_generation,
+        session_generation_shared,
+        None,
+        session_cache_lock,
+    )
+    .await?;
     let mut content = prepared.content;
     if let Some(media) = content.media_mut() {
         media.path = Some(path);
@@ -5356,7 +5892,7 @@ async fn file_outbound(
         status: Delivery::Pending,
         delivered_at: None,
         read_at: None,
-        quoted: None,
+        quoted,
         reactions: Vec::new(),
         edited: false,
         mentions: mentions
@@ -5741,7 +6277,92 @@ mod tests {
                 mentions: Vec::new(),
             })
             .await;
-        assert!(matches!(events.try_recv().unwrap(), Event::Error(_)));
+        let emitted: Vec<_> = events.try_iter().collect();
+        assert_eq!(
+            emitted
+                .iter()
+                .filter(|event| matches!(event, Event::Sent { chat, success: false } if chat == "fixture@newsletter"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            emitted
+                .iter()
+                .filter(|event| matches!(event, Event::Error(_)))
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_id_send_failure_completes_once_without_exposing_details() {
+        let (mut worker, events, _, _) = receipt_tests::worker();
+        worker
+            .handle_command(Command::Sent {
+                chat: "fixture@s.whatsapp.net".into(),
+                id: String::new(),
+                session_generation: 0,
+                error: Some("private body and credential".to_owned()),
+            })
+            .await;
+
+        let emitted: Vec<_> = events.try_iter().collect();
+        assert_eq!(
+            emitted
+                .iter()
+                .filter(|event| matches!(event, Event::Sent { chat, success: false } if chat == "fixture@s.whatsapp.net"))
+                .count(),
+            1
+        );
+        assert!(emitted.iter().any(|event| matches!(
+            event,
+            Event::Error(error) if error == "Could not send message"
+        )));
+        assert!(!emitted.iter().any(|event| matches!(
+            event,
+            Event::Error(error) if error.contains("private body") || error.contains("credential")
+        )));
+    }
+
+    #[test]
+    fn attachment_reply_moves_to_first_successful_send_in_requested_order() {
+        let mut caption = Some("private caption".to_owned());
+        let mut context = Some(wa::ContextInfo::default());
+        let mut quoted = Some(Quoted {
+            mentions: Vec::new(),
+            id: "quoted-id".to_owned(),
+            sender_name: None,
+            sender: "fixture@s.whatsapp.net".to_owned(),
+            summary: "quoted body".to_owned(),
+        });
+        let mut mentions = vec!["fixture@s.whatsapp.net".to_owned()];
+
+        // A failed first path retains reply metadata for the next path.
+        consume_attachment_reply(
+            false,
+            &mut caption,
+            &mut context,
+            &mut quoted,
+            &mut mentions,
+        );
+        assert_eq!(caption.as_deref(), Some("private caption"));
+        assert!(context.is_some() && quoted.is_some());
+        assert_eq!(mentions, ["fixture@s.whatsapp.net"]);
+
+        // First accepted send consumes it; later sends cannot inherit it.
+        consume_attachment_reply(true, &mut caption, &mut context, &mut quoted, &mut mentions);
+        assert!(caption.is_none() && context.is_none() && quoted.is_none());
+        assert!(mentions.is_empty());
+        consume_attachment_reply(true, &mut caption, &mut context, &mut quoted, &mut mentions);
+        assert!(caption.is_none() && context.is_none() && quoted.is_none());
+    }
+
+    #[test]
+    fn send_failure_text_is_generic_and_does_not_include_protocol_details() {
+        let exposed = sanitized_send_error();
+        assert_eq!(exposed, "Could not send message");
+        assert!(!exposed.contains("private body"));
+        assert!(!exposed.contains("credential"));
     }
 
     #[test]
@@ -6084,6 +6705,7 @@ mod receipt_tests {
         let (events, events_rx) = std::sync::mpsc::channel();
         let (commands, inbox) = mpsc::unbounded_channel();
         let (wa_sender, wa_events) = mpsc::unbounded_channel();
+        let (_test_wa_sender, test_wa_events) = mpsc::unbounded_channel();
         let root = std::env::temp_dir().join(format!("zaptide-worker-test-{}", std::process::id()));
         let worker = Worker {
             privacy_ready: true,
@@ -6093,11 +6715,12 @@ mod receipt_tests {
             dirs: AppDirs::under(&root),
             events,
             commands,
-            waker: Waker(Arc::new(std::sync::Mutex::new(None))),
+            waker: Arc::new(crate::backend::Waker),
             archive: Archive::in_memory().expect("archive"),
             client: None,
             handle: None,
             wa_sender,
+            wa_events,
             me_pn: Some(ME.to_owned()),
             me_lid: None,
             me_name: None,
@@ -6105,8 +6728,14 @@ mod receipt_tests {
             lid_to_pn: HashMap::new(),
             contacts: HashMap::new(),
             status: LinkStatus::Connected,
+            session_generation: 0,
+            session_generation_shared: Arc::new(AtomicU64::new(0)),
+            avatar_generation_shared: Arc::new(AtomicU64::new(0)),
+            session_cache_lock: Arc::new(tokio::sync::Mutex::new(())),
             pairing_phone: None,
             pair_code: None,
+            pair_request_id: 0,
+            archive_cleanup_failed: false,
             qr: None,
             syncing: false,
             sync_deadline: None,
@@ -6120,12 +6749,308 @@ mod receipt_tests {
             pending_avatars: HashMap::new(),
             sticker_fetches: HashSet::new(),
             sticker_downloads: HashSet::new(),
+            next_attachment_batch: 0,
+            update_cancel: None,
             read_sync: ReadSync::default(),
             poll_decrypting: 0,
             poll_history: Default::default(),
             poll_sending: HashSet::new(),
         };
-        (worker, events_rx, inbox, wa_events)
+        (worker, events_rx, inbox, test_wa_events)
+    }
+
+    #[test]
+    fn logout_cleanup_removes_session_sidecars_and_account_caches() {
+        let root = tempfile::tempdir().expect("temporary account root");
+        let dirs = AppDirs::under(root.path());
+        dirs.ensure().expect("app directories");
+        let session = dirs.session_db();
+        for suffix in ["", "-wal", "-shm", "-journal"] {
+            let mut path = session.clone().into_os_string();
+            path.push(suffix);
+            std::fs::write(path, b"synthetic session fixture").expect("session fixture");
+        }
+        for directory in [
+            dirs.avatar_cache_dir(),
+            dirs.media_cache_dir(),
+            dirs.sticker_cache_dir(),
+        ] {
+            std::fs::create_dir_all(&directory).expect("cache directory");
+            std::fs::write(directory.join("fixture"), b"synthetic cache fixture")
+                .expect("cache fixture");
+        }
+        let saved_sticker = dirs.saved_sticker_dir().join("user-saved.webp");
+        std::fs::create_dir_all(dirs.saved_sticker_dir()).expect("saved sticker directory");
+        std::fs::write(&saved_sticker, b"user-owned sticker").expect("saved sticker fixture");
+        let archive = Archive::in_memory().expect("archive");
+        archive
+            .ensure_chat("synthetic@s.whatsapp.net", "Synthetic")
+            .expect("synthetic chat");
+
+        clear_logged_out_data(&dirs, &archive).expect("logout cleanup");
+
+        assert!(archive.chats().expect("empty archive").is_empty());
+        assert!(!session.exists());
+        assert!(!dirs.avatar_cache_dir().exists());
+        assert!(!dirs.media_cache_dir().exists());
+        assert!(!dirs.sticker_cache_dir().exists());
+        assert!(saved_sticker.exists(), "user-saved stickers are user data");
+    }
+
+    #[test]
+    fn stale_attachment_outbound_cannot_use_new_session_or_archive_content() {
+        let (mut worker, events, _, _) = worker();
+        worker.session_generation = 2;
+        let row = crate::archive::tests::message("chat", "old-account-message", 1, true);
+        worker.outbound("chat".into(), 1, row, Vec::new());
+
+        assert!(
+            worker
+                .archive
+                .message("chat", "old-account-message")
+                .expect("archive query")
+                .is_none()
+        );
+        assert!(events.try_iter().next().is_none());
+
+        let (sent, mut result) = mpsc::unbounded_channel();
+        worker.outbound_batch(
+            "chat".into(),
+            1,
+            crate::archive::tests::message("chat", "old-account-batch", 2, true),
+            Vec::new(),
+            sent,
+        );
+        assert_eq!(result.try_recv(), Ok(false));
+        assert!(
+            worker
+                .archive
+                .message("chat", "old-account-batch")
+                .expect("archive query")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_contact_lookup_cannot_write_into_a_new_session() {
+        let (mut worker, events, _, _) = worker();
+        worker.session_generation = 4;
+
+        worker
+            .handle_command(Command::ContactChecked {
+                session_generation: 3,
+                phone: "15551234567".into(),
+                full_name: Some("Old account contact".into()),
+                first_name: Some("Old".into()),
+                to_phone: true,
+                registered: true,
+            })
+            .await;
+
+        assert!(
+            worker
+                .archive
+                .contact("15551234567@s.whatsapp.net")
+                .expect("archive query")
+                .is_none()
+        );
+        assert!(events.try_iter().next().is_none());
+    }
+
+    #[tokio::test]
+    async fn stale_contact_save_and_me_info_cannot_repopulate_new_session() {
+        let (mut worker, events, _, _) = worker();
+        worker.session_generation = 7;
+
+        worker
+            .handle_command(Command::ContactSaved {
+                session_generation: 6,
+                id: "15551234567@s.whatsapp.net".into(),
+                name: "Old account contact".into(),
+                error: None,
+            })
+            .await;
+        worker
+            .handle_command(Command::MeInfo {
+                session_generation: 6,
+                about: Some("Old account status".into()),
+            })
+            .await;
+
+        assert!(
+            worker
+                .archive
+                .contact("15551234567@s.whatsapp.net")
+                .expect("archive query")
+                .is_none()
+        );
+        assert!(
+            worker
+                .archive
+                .meta("me_about")
+                .expect("archive metadata")
+                .is_none()
+        );
+        assert!(events.try_iter().next().is_none());
+    }
+
+    #[tokio::test]
+    async fn stale_download_cannot_recreate_cleared_account_cache() {
+        let root = tempfile::tempdir().expect("temporary cache root");
+        let cache = root.path().join("media");
+        let path = cache.join("old-account-image.jpg");
+        let session_generation = AtomicU64::new(9);
+        let cache_lock = tokio::sync::Mutex::new(());
+
+        let result = write_session_cache_file(
+            &cache,
+            &path,
+            b"fixture",
+            8,
+            &session_generation,
+            None,
+            &cache_lock,
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert!(!path.exists());
+        assert!(!cache.exists());
+    }
+
+    #[tokio::test]
+    async fn invalidated_avatar_fetch_cannot_restore_old_profile_picture() {
+        let root = tempfile::tempdir().expect("temporary avatar cache");
+        let cache = root.path().join("avatars");
+        let path = cache.join("contact.jpg");
+        let session_generation = AtomicU64::new(5);
+        let avatar_generation = AtomicU64::new(8);
+        let cache_lock = tokio::sync::Mutex::new(());
+
+        let result = write_session_cache_file(
+            &cache,
+            &path,
+            b"old avatar",
+            5,
+            &session_generation,
+            Some((7, &avatar_generation)),
+            &cache_lock,
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert!(!path.exists());
+        assert!(!cache.exists());
+    }
+
+    #[test]
+    fn unavailable_attachment_batch_reports_every_staged_path_in_order() {
+        let (mut worker, events, _inbox, _wa) = worker();
+        let paths = vec![PathBuf::from("first.jpg"), PathBuf::from("second.jpg")];
+
+        worker.send_files(
+            PEER.into(),
+            paths.clone(),
+            Some("caption".into()),
+            None,
+            Vec::new(),
+        );
+
+        let completions: Vec<_> = events
+            .try_iter()
+            .filter_map(|event| match event {
+                Event::AttachmentCompleted {
+                    batch,
+                    index,
+                    total,
+                    path,
+                    success,
+                    ..
+                } => Some((batch, index, total, path, success)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            completions,
+            vec![
+                (0, 0, 2, PathBuf::from("first.jpg"), false),
+                (0, 1, 2, PathBuf::from("second.jpg"), false),
+            ]
+        );
+        assert_eq!(worker.next_attachment_batch, 1);
+    }
+
+    #[tokio::test]
+    async fn edit_completion_updates_the_archive_only_after_success() {
+        let (mut worker, events, _inbox, _wa) = worker();
+        worker.archive.ensure_chat(PEER, "R").expect("chat");
+        worker
+            .archive
+            .insert_message(&own_message("edit", 100), None)
+            .expect("message");
+
+        worker
+            .handle_command(Command::Edited {
+                chat: PEER.into(),
+                id: "edit".into(),
+                session_generation: 0,
+                success: false,
+                content: Content::text("new"),
+                mentions: Vec::new(),
+            })
+            .await;
+        let message = worker
+            .archive
+            .message(PEER, "edit")
+            .expect("read")
+            .expect("message");
+        assert_eq!(message.content, Content::text("hi"));
+        assert!(!message.edited);
+        assert!(matches!(
+            events.try_recv(),
+            Ok(Event::Edited { success: false, .. })
+        ));
+
+        worker
+            .handle_command(Command::Edited {
+                chat: PEER.into(),
+                id: "edit".into(),
+                session_generation: 0,
+                success: true,
+                content: Content::text("new"),
+                mentions: Vec::new(),
+            })
+            .await;
+        let message = worker
+            .archive
+            .message(PEER, "edit")
+            .expect("read")
+            .expect("message");
+        assert_eq!(message.content, Content::text("new"));
+        assert!(message.edited);
+        assert!(
+            events
+                .try_iter()
+                .any(|event| matches!(event, Event::Edited { success: true, .. }))
+        );
+    }
+
+    #[test]
+    fn quoted_attachment_context_reuses_text_quote_metadata() {
+        let (mut worker, _events, _inbox, _wa) = worker();
+        worker.store_message(
+            own_message("quoted", 1),
+            Some(wa::Message::text("quoted text").encode_to_vec()),
+            None,
+        );
+
+        let (context, quoted) = worker.quote_context(&PEER.to_owned(), Some("quoted"));
+
+        assert_eq!(
+            context.and_then(|context| context.stanza_id),
+            Some("quoted".to_owned())
+        );
+        assert_eq!(quoted.map(|quoted| quoted.id), Some("quoted".to_owned()));
     }
 
     fn own_message(id: &str, timestamp: i64) -> Message {
@@ -6483,55 +7408,6 @@ mod receipt_tests {
         assert!(!stored.reactions[0].from_me);
     }
 
-    #[test]
-    fn protocol_timer_badge_follows_enable_disable_and_ignores_stale_updates() {
-        let (mut worker, events, _inbox, _wa) = worker();
-        for (expiration, setting_time, envelope_time, expected) in [
-            (86_400, None, 200, Some(86_400)),
-            (0, None, 300, None),
-            (604_800, Some(250), 400, None),
-        ] {
-            let raw = wa::Message {
-                protocol_message: MessageField::some(wa::message::ProtocolMessage {
-                    r#type: Some(wa::message::protocol_message::Type::EPHEMERAL_SETTING),
-                    ephemeral_expiration: Some(expiration),
-                    ephemeral_setting_timestamp: setting_time,
-                    ..Default::default()
-                }),
-                ..Default::default()
-            };
-            let info = MessageInfo {
-                source: MessageSource {
-                    chat: PEER.parse().unwrap(),
-                    sender: PEER.parse().unwrap(),
-                    ..Default::default()
-                },
-                timestamp: whatsapp_rust::wacore::time::from_secs(envelope_time).unwrap(),
-                ..Default::default()
-            };
-            worker.ingest(&Arc::new(raw), &info);
-            assert_eq!(
-                worker
-                    .archive
-                    .chat(PEER)
-                    .unwrap()
-                    .unwrap()
-                    .ephemeral_expiration,
-                expected
-            );
-            assert_eq!(worker.ephemeral_expiration(PEER), expected);
-        }
-        let badges: Vec<_> = events
-            .try_iter()
-            .filter_map(|event| match event {
-                Event::ChatUpdated(chat) if chat.id == PEER => Some(chat.ephemeral_expiration),
-                _ => None,
-            })
-            .collect();
-        assert!(badges.contains(&Some(86_400)));
-        assert_eq!(badges.last(), Some(&None));
-    }
-
     #[tokio::test]
     async fn group_timer_updates_work_before_history_and_keep_disable_versions() {
         let (mut worker, _events, _inbox, _wa) = worker();
@@ -6588,7 +7464,6 @@ mod receipt_tests {
                 .await;
         }
         assert_eq!(worker.ephemeral_expiration(PEER), Some(604_800));
-        assert_eq!(worker.default_ephemeral_expiration(), Some(0));
         assert!(worker.archive.chat(ME).unwrap().is_none());
     }
 
@@ -6930,6 +7805,7 @@ mod receipt_tests {
         assert!(worker.read_sync.start(PEER, 100, now));
         worker
             .handle_command(Command::ReadSyncFinished {
+                session_generation: worker.session_generation,
                 chat: PEER.into(),
                 through: 100,
                 success: false,
@@ -6951,6 +7827,7 @@ mod receipt_tests {
         );
         worker
             .handle_command(Command::ReadSyncFinished {
+                session_generation: worker.session_generation,
                 chat: PEER.into(),
                 through: 100,
                 success: true,
@@ -6963,6 +7840,7 @@ mod receipt_tests {
         assert!(worker.read_sync.start(PEER, 200, Instant::now()));
         worker
             .handle_command(Command::ReadSyncFinished {
+                session_generation: worker.session_generation,
                 chat: PEER.into(),
                 through: 200,
                 success: true,
@@ -6970,6 +7848,98 @@ mod receipt_tests {
             .await;
         assert!(worker.archive.pending_reads().unwrap().is_empty());
         assert!(worker.read_sync.ready(Instant::now()));
+    }
+
+    #[tokio::test]
+    async fn stale_read_sync_result_cannot_acknowledge_current_archive_position() {
+        let (mut worker, _events, _inbox, _wa) = worker();
+        worker.store_message(incoming("read-sync", 100), None, None);
+        worker.mark_read(PEER.into(), false);
+        assert!(worker.read_sync.start(PEER, 100, Instant::now()));
+        worker.session_generation = 1;
+
+        worker
+            .handle_command(Command::ReadSyncFinished {
+                session_generation: 0,
+                chat: PEER.into(),
+                through: 100,
+                success: true,
+            })
+            .await;
+
+        assert_eq!(
+            worker.archive.pending_reads().unwrap(),
+            vec![(PEER.into(), 100)]
+        );
+        assert!(!worker.read_sync.ready(Instant::now()));
+    }
+
+    #[tokio::test]
+    async fn stale_contact_results_cannot_write_or_emit_for_new_session() {
+        let (mut worker, events, _inbox, _wa) = worker();
+        worker.session_generation = 1;
+
+        worker
+            .handle_command(Command::ContactChecked {
+                session_generation: 0,
+                phone: "15550002222".into(),
+                full_name: Some("Synthetic Contact".into()),
+                first_name: None,
+                to_phone: false,
+                registered: true,
+            })
+            .await;
+        worker
+            .handle_command(Command::ContactSaved {
+                session_generation: 0,
+                id: "15550002222@s.whatsapp.net".into(),
+                name: "Synthetic Contact".into(),
+                error: None,
+            })
+            .await;
+
+        assert!(
+            worker
+                .archive
+                .contact("15550002222@s.whatsapp.net")
+                .unwrap()
+                .is_none()
+        );
+        assert!(events.try_iter().next().is_none());
+    }
+
+    #[tokio::test]
+    async fn stale_group_results_cannot_mutate_archive_or_retry_state() {
+        let (mut worker, _events, _inbox, _wa) = worker();
+        let group = "123-456@g.us";
+        worker.archive.ensure_chat(group, "Original group").unwrap();
+        worker.group_info_requested.insert(group.into());
+        worker.session_generation = 1;
+
+        worker
+            .handle_command(Command::GroupInfo {
+                session_generation: 0,
+                chat: group.into(),
+                name: Some("Stale group name".into()),
+                participants: vec![ME.into()],
+                read_only: true,
+                ephemeral_expiration: Some(3600),
+                ephemeral_setting_timestamp: Some(10),
+            })
+            .await;
+        worker
+            .handle_command(Command::GroupInfoFailed {
+                session_generation: 0,
+                chat: group.into(),
+                permanent: true,
+            })
+            .await;
+
+        assert_eq!(
+            worker.archive.chat(group).unwrap().unwrap().name,
+            "Original group"
+        );
+        assert!(worker.group_info_requested.contains(group));
     }
 
     #[test]

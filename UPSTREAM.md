@@ -41,3 +41,41 @@ Before importing changes:
 
 Record every sync in the merge or commit message with the imported upstream range and any skipped
 commits.
+
+## Importing ZapFast Upstream Fixes
+
+ZapTide forks ZapFast at commit 0d8cc506. Upstream fixes to the whatsapp-rust
+protocol library, encrypted archive, backend worker, and domain models can be
+imported without restoring egui UI code.
+
+### Process
+
+1. Cherry-pick the ZapFast commit(s) that fix protocol/archive/backend issues
+2. Resolve conflicts in `src/backend/worker.rs`, `src/archive.rs`, `src/model.rs`
+3. DO NOT import changes to `src/ui/`, `src/app.rs`, `src/main.rs`, or `src/theme.rs`
+   (these are egui-specific and have been replaced by native GTK4/Relm4)
+4. Run `scripts/check-native-ui-deps.sh` to verify no egui dependencies were reintroduced
+5. Run full CI suite
+6. If CI passes, merge; if not, resolve without adding egui back
+
+### Files that should NEVER be imported from ZapFast upstream
+
+- `src/ui/*` (replaced by `src/application.rs`, `src/native_*.rs`)
+- `src/app.rs` (egui App struct, replaced by Relm4 NativeApplication)
+- `src/main.rs` (eframe::run_native, replaced by RelmApp)
+- `src/theme.rs` (egui colors, replaced by `src/native_theme.rs`)
+- `src/demo.rs` (egui layout tests, replaced by native tests)
+- `src/macos.rs` (egui chrome, native uses libadwaita)
+- `Cargo.toml` egui/eframe dependencies (forbidden by CI check)
+
+### Files that CAN be imported from ZapFast upstream
+
+- `src/backend.rs` (protocol bridge)
+- `src/backend/worker.rs` (protocol worker)
+- `src/archive.rs` (encrypted archive)
+- `src/model.rs` (domain models)
+- `src/voice.rs` (audio codec)
+- `src/audio.rs` (playback/recording)
+- `src/markup.rs` (text formatting)
+- `src/emoji.rs` (emoji rendering)
+- `src/updates.rs` (release management)

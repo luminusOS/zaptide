@@ -1,13 +1,16 @@
+# Feature flags:
+# - demo: Sample data, layout tests, and screenshots. Not used in release builds.
+
 [package]
 name = "zaptide"
 version = "0.14.0"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT"
-description = "A Linux-first native WhatsApp client built with Rust and egui"
+description = "A Linux-first native WhatsApp client built with Rust, GTK4, libadwaita, and Relm4"
 homepage = "https://github.com/luminusOS/zaptide"
 repository = "https://github.com/luminusOS/zaptide"
-keywords = ["whatsapp", "chat", "egui", "messaging"]
+keywords = ["whatsapp", "chat", "gtk", "messaging"]
 categories = ["gui"]
 
 [lib]
@@ -24,29 +27,17 @@ anyhow = "1"
 sha2 = "0.11"
 # Already in the tree through rustls; used for the locked-chat code verifier.
 ring = "0.17"
-# Decrypts Signal sticker packs. All four crates are already included through
-# wacore at these versions.
-aes = "0.9"
-cbc = { version = "0.2", features = ["alloc", "block-padding"] }
-hkdf = "0.13"
-hmac = "0.13"
-# Reads .wastickers zip archives.
-zip = { version = "5", default-features = false, features = ["deflate"] }
-clap = { version = "4.5", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"
 env_logger = { version = "0.11", default-features = false, features = ["auto-color", "humantime"] }
 directories = "6"
-# UI framework. glow avoids the larger wgpu dependency.
-eframe = { version = "0.36", default-features = false, features = ["accesskit", "glow", "default_fonts", "links", "wayland", "x11", "persistence"] }
-egui = "0.36"
-egui_extras = { version = "0.36", features = ["file", "image", "svg", "webp", "gif"] }
-# Finds system fonts for scripts not covered by Inter. Keep skrifa aligned with
-# epaint to avoid compiling two versions. memmap2 limits font scans to the
-# required pages.
-skrifa = "0.44"
-memmap2 = "0.9"
+# Native GTK4/libadwaita/Relm4 stack.
+gtk4 = { version = "0.11", features = ["v4_14"] }
+libadwaita = { version = "0.9", features = ["v1_5"] }
+relm4 = { version = "0.11", default-features = false, features = ["macros", "libadwaita", "gnome_46"] }
+# Gettext bindings for i18n. Uses system gettext library on Linux.
+gettext-rs = { version = "0.7", features = ["gettext-system"] }
 # Decodes JPEG, PNG, WebP, and GIF images.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
 # WhatsApp Web protocol: pairing, encryption, history sync, and media. Version
@@ -72,61 +63,22 @@ qrcode = { version = "0.14", default-features = false }
 # and TLS stack.
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 jiff = "0.2"
-# Treats joined emoji as one grapheme. Already included through egui.
-unicode-segmentation = "1"
-# Unicode bidi properties; already included through URL/IDNA handling.
-icu_properties = "2.3"
-# Canonical decomposition for accent-insensitive chat/contact search.
-icu_normalizer = { version = "2.3", default-features = false, features = ["compiled_data"] }
-# Opens downloaded attachments in their default desktop apps.
-open = "5"
-# File picker, clipboard images, and MIME detection for attachments. Clipboard
-# text support is already included through egui-winit, and MIME detection
-# through egui_extras.
-rfd = { version = "0.17", default-features = false, features = ["xdg-portal", "wayland"] }
-arboard = { version = "3", default-features = false, features = ["image-data", "wayland-data-control"] }
+# MIME detection for attachments.
 mime_guess2 = "2"
-# Emoji names, groups, and shortcodes for picker search.
-emojis = "0.9"
 
-# Rasterizes the SVG logo for windows, the tray, and notifications. Already
-# included through egui_extras.
-resvg = { version = "0.45", default-features = false }
-
-# Desktop notifications through D-Bus on Linux and system frameworks elsewhere.
-notify-rust = { version = "4", default-features = false, features = ["z"] }
-openh264 = "0.9"
-mp4 = "0.14"
 rodio = { version = "0.22", default-features = false, features = ["playback", "recording", "mp3", "mp4", "wav", "vorbis"] }
 opus = "0.4"
 ogg = "0.9"
-# Converts animated Signal APNG stickers to the animated WebP used by WhatsApp.
-webp-animation = "0.10"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 notify = "8.2"
 zbus-secret-service-keyring-store = { version = "1.0.1", features = ["rt-tokio-crypto-rust"] }
-# Linux status-notifier tray item over D-Bus.
-ksni = { version = "0.3", features = ["blocking"] }
-
-[target.'cfg(not(target_os = "linux"))'.dependencies]
-# Windows and macOS tray item.
-tray-icon = { version = "0.24", default-features = false }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 apple-native-keyring-store = { version = "1.0.2", features = ["keychain"] }
-# Pumps AppKit without a window. The status item and Dock reopen callback must
-# stay on the main thread.
-objc2 = "0.6"
-raw-window-handle = "0.6"
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSButton", "NSControl", "NSEvent", "NSMenu", "NSMenuItem", "NSResponder", "NSRunningApplication", "NSView", "NSWindow"] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSDate", "NSGeometry", "NSObjCRuntime", "NSRunLoop", "NSString"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-native-keyring-store = { version = "1.1", default-features = false }
-winrt-notification = { package = "tauri-winrt-notification", version = "0.7.3" }
-# Windows tray-thread message loop.
-windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_System_Registry", "Win32_UI_WindowsAndMessaging"] }
 
 # The icon and version information Windows shows for the executable.
 [target.'cfg(windows)'.build-dependencies]
@@ -134,7 +86,7 @@ winresource = "0.1"
 
 [dev-dependencies]
 tempfile = "3"
-# Creates small APNGs in sticker-import tests. Already included through image.
+# Encodes oversized clipboard images in portal tests. Already included through image.
 png = "0.18"
 
 [features]

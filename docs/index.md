@@ -34,14 +34,14 @@ features:
     title: Attachments
     details: Photos, GIFs, stickers, documents, polls, locations, and link previews appear in the chat. Add captions before sending files.
   - icon: 🔔
-    title: Background mode
-    details: Closing the window keeps ZapTide linked in the tray. Notifications show the chat picture, and muted chats stay quiet.
+    title: Notifications
+    details: Notifications show the chat picture, and muted chats stay quiet.
   - icon: ⌨️
     title: Keyboard shortcuts
     details: Search, switch chats, reply, and record with shortcuts. Select and copy text, including across messages.
   - icon: 🔓
     title: Open source
-    details: MIT-licensed Rust built with egui and whatsapp-rust. The linking process is documented.
+    details: MIT-licensed Rust built with GTK4, libadwaita, and whatsapp-rust. The linking process is documented.
     link: https://github.com/luminusOS/zaptide
     link_text: Read the source
 ---

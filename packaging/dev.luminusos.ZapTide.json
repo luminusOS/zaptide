@@ -1,0 +1,53 @@
+{
+    "app-id": "dev.luminusos.ZapTide",
+    "runtime": "org.gnome.Platform",
+    "runtime-version": "46",
+    "sdk": "org.gnome.Sdk",
+    "sdk-extensions": [
+        "org.freedesktop.Sdk.Extension.rust-stable"
+    ],
+    "command": "zaptide",
+    "finish-args": [
+        "--share=network",
+        "--share=ipc",
+        "--socket=fallback-x11",
+        "--socket=wayland",
+        "--socket=pulseaudio",
+        "--device=dri",
+        "--talk-name=org.freedesktop.secrets",
+        "--filesystem=xdg-config/zaptide",
+        "--filesystem=xdg-cache/zaptide",
+        "--persist=.local/state"
+    ],
+    "build-options": {
+        "append-path": "/usr/lib/sdk/rust-stable/bin",
+        "env": {
+            "CARGO_HOME": "/run/build/zaptide/cargo"
+        }
+    },
+    "modules": [
+        {
+            "name": "zaptide",
+            "buildsystem": "simple",
+            "build-commands": [
+                "cargo --offline fetch --manifest-path Cargo.toml --verbose",
+                "cargo --offline build --release --locked",
+                "install -Dm755 target/release/zaptide /app/bin/zaptide",
+                "install -Dm644 data/dev.luminusos.ZapTide.desktop.in /app/share/applications/dev.luminusos.ZapTide.desktop",
+                "sed -i 's/\\.desktop\\.in$/.desktop/' /app/share/applications/dev.luminusos.ZapTide.desktop",
+                "install -Dm644 packaging/icons/zaptide.svg /app/share/icons/hicolor/scalable/apps/dev.luminusos.ZapTide.svg",
+                "install -Dm644 data/dev.luminusos.ZapTide.metainfo.xml.in /app/share/metainfo/dev.luminusos.ZapTide.metainfo.xml",
+                "install -Dm644 data/dev.luminusos.ZapTide.gschema.xml /app/share/glib-2.0/schemas/dev.luminusos.ZapTide.gschema.xml",
+                "glib-compile-schemas /app/share/glib-2.0/schemas/",
+                "install -Dm644 LICENSE /app/share/licenses/zaptide/LICENSE"
+            ],
+            "sources": [
+                {
+                    "type": "dir",
+                    "path": ".."
+                },
+                "cargo-sources.json"
+            ]
+        }
+    ]
+}

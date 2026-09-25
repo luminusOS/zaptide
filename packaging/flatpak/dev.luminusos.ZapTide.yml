@@ -24,11 +24,10 @@ finish-args:
   - --device=dri
   # Sound: PulseAudio, which PipeWire also answers.
   - --socket=pulseaudio
-  # WhatsApp, attachment downloads and the local single-instance socket.
+  # WhatsApp and attachment downloads.
   - --share=network
-  # Archive key and status notifier tray.
+  # Archive key.
   - --talk-name=org.freedesktop.secrets
-  - --talk-name=org.kde.StatusNotifierWatcher
   # Older Flatpak versions leave XDG_STATE_HOME unset. Keep the fallback
   # state directory (session, history, logs, and credential markers) durable.
   - --persist=.local/state

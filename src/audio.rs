@@ -3,20 +3,46 @@
 //! Input and output devices are opened on demand and released when idle.
 
 use std::collections::HashMap;
+use std::io::{Read, Seek};
 use std::num::NonZero;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use rodio::Source;
 use rodio::buffer::SamplesBuffer;
 
-use crate::backend::Waker;
 use crate::voice;
 
 /// Maximum recording length. The phone uses a shorter limit.
 const LONGEST_RECORDING: Duration = Duration::from_secs(15 * 60);
+const MAX_DECODE_JOBS: usize = 2;
+const MAX_AUDIO_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_AUDIO_SAMPLES: usize = voice::RATE as usize * LONGEST_RECORDING.as_secs() as usize;
+static ACTIVE_DECODE_JOBS: AtomicUsize = AtomicUsize::new(0);
+
+struct DecodePermit;
+
+impl DecodePermit {
+    fn acquire() -> Option<Self> {
+        try_acquire_decode_job(&ACTIVE_DECODE_JOBS, MAX_DECODE_JOBS).then_some(Self)
+    }
+}
+
+fn try_acquire_decode_job(active: &AtomicUsize, limit: usize) -> bool {
+    active
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+            (count < limit).then_some(count + 1)
+        })
+        .is_ok()
+}
+
+impl Drop for DecodePermit {
+    fn drop(&mut self) {
+        ACTIVE_DECODE_JOBS.fetch_sub(1, Ordering::AcqRel);
+    }
+}
 
 fn mono() -> NonZero<u16> {
     NonZero::<u16>::MIN
@@ -66,7 +92,6 @@ type Decoded = Arc<Mutex<Option<Result<Vec<f32>, String>>>>;
 
 /// Plays one clip at a time through the default output device.
 pub struct Player {
-    waker: Waker,
     output: Option<(rodio::MixerDeviceSink, rodio::Player)>,
     loaded: Option<Loaded>,
     decoding: Option<Decoding>,
@@ -115,12 +140,12 @@ struct Decoding {
     /// Requested start position after decoding, from 0 to 1.
     start: f32,
     slot: Decoded,
+    cancelled: Arc<AtomicBool>,
 }
 
-impl Player {
-    pub fn new(waker: Waker) -> Self {
+impl Default for Player {
+    fn default() -> Self {
         Self {
-            waker,
             output: None,
             loaded: None,
             decoding: None,
@@ -130,7 +155,9 @@ impl Player {
             bars: HashMap::new(),
         }
     }
+}
 
+impl Player {
     /// Current playback speed multiplier.
     pub fn speed(&self) -> f32 {
         self.speed
@@ -150,14 +177,6 @@ impl Player {
         };
         self.apply_speed();
         self.ensure_stretch();
-    }
-
-    /// Whether `message` is still playing at an earlier speed while the
-    /// compression for the chosen one builds.
-    pub fn preparing_speed(&self, message: &str) -> bool {
-        self.loaded.as_ref().is_some_and(|loaded| {
-            loaded.message == message && !loaded.done && loaded.factor != self.speed
-        })
     }
 
     /// Cycles 1x, 1.5x, and 2x, wrapping back to 1x.
@@ -237,7 +256,6 @@ impl Player {
             return;
         };
         let samples = Arc::clone(&loaded.samples);
-        let waker = self.waker.clone();
         let slot: StretchedSlot = Default::default();
         let cancelled = Arc::new(AtomicBool::new(false));
         let thread_slot = Arc::clone(&slot);
@@ -251,7 +269,6 @@ impl Player {
                     return;
                 };
                 *thread_slot.lock().unwrap_or_else(|p| p.into_inner()) = Some(Arc::new(compressed));
-                waker.wake();
             });
         if spawned.is_ok() {
             self.stretching = Some(Stretching {
@@ -295,6 +312,9 @@ impl Player {
     pub fn stop(&mut self) {
         self.output = None;
         self.loaded = None;
+        if let Some(decoding) = &self.decoding {
+            decoding.cancelled.store(true, Ordering::Relaxed);
+        }
         self.decoding = None;
         self.stretches.clear();
         self.stretching = None;
@@ -353,7 +373,7 @@ impl Player {
         self.bars.get(message).map(Vec::as_slice)
     }
 
-    /// Handles completed decodes and finished playback once per frame.
+    /// Handles completed decodes and finished playback; call periodically.
     pub fn poll(&mut self) -> Result<(), String> {
         let decoded = self.decoding.as_ref().and_then(|decoding| {
             decoding
@@ -395,13 +415,11 @@ impl Player {
             // The speed may have moved on while this compression built.
             self.ensure_stretch();
         }
-        let ended = match (&mut self.loaded, &self.output) {
-            (Some(loaded), Some((_, sink))) if !loaded.done && !loaded.paused && sink.empty() => {
-                loaded.done = true;
-                true
-            }
-            _ => false,
-        };
+        let ended = self
+            .loaded
+            .as_mut()
+            .zip(self.output.as_ref())
+            .is_some_and(|(loaded, (_, sink))| playback_ended(loaded, sink.empty()));
         if ended {
             // Release the device after playback ends.
             self.output = None;
@@ -411,16 +429,19 @@ impl Player {
 
     fn load(&mut self, message: &str, path: &Path, start: f32) -> Result<(), String> {
         self.stop();
+        let permit = DecodePermit::acquire()
+            .ok_or_else(|| "Too many audio clips are decoding".to_owned())?;
         let slot: Decoded = Default::default();
+        let cancelled = Arc::new(AtomicBool::new(false));
         let path = path.to_owned();
-        let waker = self.waker.clone();
         let thread_slot = Arc::clone(&slot);
+        let thread_cancelled = Arc::clone(&cancelled);
         let spawned = std::thread::Builder::new()
             .name("voice-decode".to_owned())
             .spawn(move || {
-                let result = decode_file(&path);
-                *thread_slot.lock().unwrap_or_else(|p| p.into_inner()) = Some(result);
-                waker.wake();
+                let _permit = permit;
+                let result = decode_file_with(&path, &thread_cancelled);
+                if publish_decode(&thread_slot, &thread_cancelled, result) {}
             });
         if let Err(error) = spawned {
             return Err(format!("Could not decode audio: {error}"));
@@ -429,6 +450,7 @@ impl Player {
             message: message.to_owned(),
             start,
             slot,
+            cancelled,
         });
         Ok(())
     }
@@ -444,8 +466,10 @@ impl Player {
         let total = clip_length(loaded.samples.len());
         let offset = ((fraction.clamp(0.0, 1.0) * buffer.len() as f32) as usize).min(buffer.len());
         if self.output.is_none() {
-            let device = rodio::DeviceSinkBuilder::open_default_sink()
-                .map_err(|error| format!("No sound output: {error}"))?;
+            let device = open_device(
+                "No sound output",
+                rodio::DeviceSinkBuilder::open_default_sink,
+            )?;
             let sink = rodio::Player::connect_new(device.mixer());
             self.output = Some((device, sink));
         }
@@ -467,19 +491,88 @@ impl Player {
     }
 }
 
+impl Drop for Player {
+    fn drop(&mut self) {
+        if let Some(decoding) = &self.decoding {
+            decoding.cancelled.store(true, Ordering::Relaxed);
+        }
+    }
+}
+
 fn clip_length(samples: usize) -> Duration {
     Duration::from_secs_f64(samples as f64 / f64::from(voice::RATE))
 }
 
-/// Decodes a file to mono 48 kHz samples. OGG/Opus uses `voice`; other
+fn open_device<T, E: std::fmt::Display>(
+    description: &str,
+    open: impl FnOnce() -> Result<T, E>,
+) -> Result<T, String> {
+    open().map_err(|error| format!("{description}: {error}"))
+}
+
+fn publish_decode(
+    slot: &Decoded,
+    cancelled: &AtomicBool,
+    result: Result<Vec<f32>, String>,
+) -> bool {
+    if cancelled.load(Ordering::Relaxed) {
+        return false;
+    }
+    *slot.lock().unwrap_or_else(|p| p.into_inner()) = Some(result);
+    true
+}
+
+fn playback_ended(loaded: &mut Loaded, sink_empty: bool) -> bool {
+    if loaded.done || loaded.paused || !sink_empty {
+        return false;
+    }
+    loaded.done = true;
+    true
+}
+
+/// Decodes a file to mono 48 kHz samples. OGG/Opus uses the voice codec; other
 /// supported formats use rodio.
+#[cfg(test)]
 fn decode_file(path: &Path) -> Result<Vec<f32>, String> {
-    let bytes =
-        std::fs::read(path).map_err(|error| format!("Could not read the audio: {error}"))?;
-    if bytes.starts_with(b"OggS")
-        && let Ok(samples) = voice::decode(&bytes)
-    {
-        return Ok(samples);
+    decode_file_with(path, &AtomicBool::new(false))
+}
+
+fn decode_file_with(path: &Path, cancelled: &AtomicBool) -> Result<Vec<f32>, String> {
+    if is_cancelled(cancelled) {
+        return Err("Audio decoding cancelled".to_owned());
+    }
+    let mut file =
+        std::fs::File::open(path).map_err(|error| format!("Could not read the audio: {error}"))?;
+    let size = file
+        .metadata()
+        .map_err(|error| format!("Could not read the audio: {error}"))?
+        .len();
+    if size > MAX_AUDIO_BYTES {
+        return Err(audio_limit_error());
+    }
+    let mut signature = [0; 4];
+    let read = file
+        .read(&mut signature)
+        .map_err(|error| format!("Could not read the audio: {error}"))?;
+    if read == signature.len() && &signature == b"OggS" {
+        file.seek(std::io::SeekFrom::Start(0))
+            .map_err(|error| format!("Could not read the audio: {error}"))?;
+        let bytes = read_audio(file, size, cancelled)?;
+        if is_cancelled(cancelled) {
+            return Err("Audio decoding cancelled".to_owned());
+        }
+        if let Ok(samples) = decode_opus(&bytes, cancelled) {
+            if is_cancelled(cancelled) {
+                return Err("Audio decoding cancelled".to_owned());
+            }
+            if samples.len() > MAX_AUDIO_SAMPLES {
+                return Err(audio_limit_error());
+            }
+            return Ok(samples);
+        }
+    }
+    if is_cancelled(cancelled) {
+        return Err("Audio decoding cancelled".to_owned());
     }
     let file =
         std::fs::File::open(path).map_err(|error| format!("Could not read the audio: {error}"))?;
@@ -487,8 +580,188 @@ fn decode_file(path: &Path) -> Result<Vec<f32>, String> {
         .map_err(|error| format!("Could not decode the audio: {error}"))?;
     let channels = decoder.channels().get();
     let rate = decoder.sample_rate().get();
-    let interleaved: Vec<f32> = decoder.collect();
-    Ok(voice::mono_at_rate(&interleaved, channels, rate))
+    collect_samples(decoder, channels, rate, cancelled)
+}
+
+fn is_cancelled(cancelled: &AtomicBool) -> bool {
+    cancelled.load(Ordering::Acquire)
+}
+
+fn audio_limit_error() -> String {
+    "The audio exceeds the supported size or duration".to_owned()
+}
+
+fn read_audio(
+    mut reader: impl std::io::Read,
+    size: u64,
+    cancelled: &AtomicBool,
+) -> Result<Vec<u8>, String> {
+    if size > MAX_AUDIO_BYTES {
+        return Err(audio_limit_error());
+    }
+    let mut bytes = Vec::with_capacity(size as usize);
+    let mut chunk = [0u8; 16 * 1024];
+    loop {
+        if is_cancelled(cancelled) {
+            return Err("Audio decoding cancelled".to_owned());
+        }
+        let count = reader
+            .read(&mut chunk)
+            .map_err(|error| format!("Could not read the audio: {error}"))?;
+        if count == 0 {
+            break;
+        }
+        if bytes.len().saturating_add(count) > MAX_AUDIO_BYTES as usize {
+            return Err(audio_limit_error());
+        }
+        bytes.extend_from_slice(&chunk[..count]);
+    }
+    Ok(bytes)
+}
+
+fn decode_opus(bytes: &[u8], cancelled: &AtomicBool) -> Result<Vec<f32>, String> {
+    let mut reader = ogg::PacketReader::new(std::io::Cursor::new(bytes));
+    let mut decoder = None;
+    let mut channels = 0usize;
+    let mut skip = 0usize;
+    let mut tagged = false;
+    let mut out = Vec::new();
+    let mut scratch = vec![0.0f32; 11_520];
+    loop {
+        if is_cancelled(cancelled) {
+            return Err("Audio decoding cancelled".to_owned());
+        }
+        let packet = match reader.read_packet() {
+            Ok(Some(packet)) => packet,
+            Ok(None) => break,
+            Err(error) => return Err(format!("Could not decode the audio: {error}")),
+        };
+        if decoder.is_none() {
+            let head = packet
+                .data
+                .strip_prefix(b"OpusHead")
+                .ok_or_else(|| "Could not decode the audio: not an Opus stream".to_owned())?;
+            if head.len() < 11 {
+                return Err("Could not decode the audio: truncated Opus header".to_owned());
+            }
+            channels = usize::from(head[1]);
+            let layout = match channels {
+                1 => opus::Channels::Mono,
+                2 => opus::Channels::Stereo,
+                other => return Err(format!("Could not decode the audio: {other} channels")),
+            };
+            skip = usize::from(u16::from_le_bytes([head[2], head[3]]));
+            decoder = Some(
+                opus::Decoder::new(voice::RATE, layout)
+                    .map_err(|error| format!("Could not decode the audio: {error}"))?,
+            );
+            continue;
+        }
+        if !tagged {
+            tagged = true;
+            continue;
+        }
+        let opus_decoder = decoder.as_mut().expect("Opus header initialized decoder");
+        let frames = opus_decoder
+            .decode_float(&packet.data, &mut scratch, false)
+            .map_err(|error| format!("Could not decode the audio: bad Opus packet: {error}"))?;
+        let decoded = &scratch[..frames * channels];
+        let mono = if channels == 2 {
+            decoded
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|[left, right]| (left + right) * 0.5)
+                .collect::<Vec<_>>()
+        } else {
+            decoded.to_vec()
+        };
+        let skipped = skip.min(mono.len());
+        skip -= skipped;
+        if out.len().saturating_add(mono.len() - skipped) > MAX_AUDIO_SAMPLES {
+            return Err(audio_limit_error());
+        }
+        out.extend_from_slice(&mono[skipped..]);
+    }
+    if decoder.is_none() {
+        return Err("Could not decode the audio: not an OGG stream".to_owned());
+    }
+    Ok(out)
+}
+
+fn collect_samples<I: Iterator<Item = f32>>(
+    decoder: I,
+    channels: u16,
+    sample_rate: u32,
+    cancelled: &AtomicBool,
+) -> Result<Vec<f32>, String> {
+    collect_samples_limited(decoder, channels, sample_rate, cancelled, MAX_AUDIO_SAMPLES)
+}
+
+fn collect_samples_limited<I: Iterator<Item = f32>>(
+    mut decoder: I,
+    channels: u16,
+    sample_rate: u32,
+    cancelled: &AtomicBool,
+    max_samples: usize,
+) -> Result<Vec<f32>, String> {
+    let input_channels = usize::from(channels.max(1));
+    let max_input = (u64::from(sample_rate.max(1))
+        .saturating_mul(LONGEST_RECORDING.as_secs())
+        .saturating_mul(input_channels as u64))
+    .min(max_samples as u64) as usize;
+    let mut interleaved = Vec::with_capacity(max_input.min(8_192));
+    loop {
+        if is_cancelled(cancelled) {
+            return Err("Audio decoding cancelled".to_owned());
+        }
+        let Some(sample) = decoder.next() else {
+            break;
+        };
+        if interleaved.len() == max_input {
+            return Err(audio_limit_error());
+        }
+        interleaved.push(sample);
+    }
+    mono_at_rate_cancellable(&interleaved, channels, sample_rate, cancelled, max_samples)
+}
+
+fn mono_at_rate_cancellable(
+    interleaved: &[f32],
+    channels: u16,
+    sample_rate: u32,
+    cancelled: &AtomicBool,
+    max_samples: usize,
+) -> Result<Vec<f32>, String> {
+    let channels = usize::from(channels.max(1));
+    let mut mono = Vec::with_capacity((interleaved.len() / channels).min(8_192));
+    for (index, frame) in interleaved.chunks_exact(channels).enumerate() {
+        if index % 4_096 == 0 && is_cancelled(cancelled) {
+            return Err("Audio decoding cancelled".to_owned());
+        }
+        mono.push(frame.iter().sum::<f32>() / channels as f32);
+    }
+    if sample_rate == voice::RATE || sample_rate == 0 || mono.is_empty() {
+        return Ok(mono);
+    }
+    let ratio = f64::from(sample_rate) / f64::from(voice::RATE);
+    let count = (mono.len() as f64 / ratio).floor() as usize;
+    if count > max_samples {
+        return Err(audio_limit_error());
+    }
+    let mut output = Vec::with_capacity(count.min(8_192));
+    for index in 0..count {
+        if index % 4_096 == 0 && is_cancelled(cancelled) {
+            return Err("Audio decoding cancelled".to_owned());
+        }
+        let position = index as f64 * ratio;
+        let left = position.floor() as usize;
+        let fraction = (position - left as f64) as f32;
+        let a = mono[left.min(mono.len() - 1)];
+        let b = mono.get(left + 1).copied().unwrap_or(a);
+        output.push(a + (b - a) * fraction);
+    }
+    Ok(output)
 }
 
 type Outcome = Arc<Mutex<Option<Result<Vec<f32>, String>>>>;
@@ -504,7 +777,7 @@ pub struct Recorder {
 }
 
 impl Recorder {
-    pub fn start(waker: Waker) -> Self {
+    pub fn start() -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let levels: Arc<Mutex<Vec<f32>>> = Default::default();
         let outcome: Outcome = Default::default();
@@ -515,9 +788,8 @@ impl Recorder {
             std::thread::Builder::new()
                 .name("voice-record".to_owned())
                 .spawn(move || {
-                    let result = record(&stop, &levels, &waker);
+                    let result = record(&stop, &levels);
                     *outcome.lock().unwrap_or_else(|p| p.into_inner()) = Some(result);
-                    waker.wake();
                 })
         };
         let thread = match spawned {
@@ -595,16 +867,27 @@ impl Drop for Recorder {
     }
 }
 
-fn record(stop: &AtomicBool, levels: &Mutex<Vec<f32>>, waker: &Waker) -> Result<Vec<f32>, String> {
-    let mut microphone = rodio::microphone::MicrophoneBuilder::new()
-        .default_device()
-        .map_err(|error| format!("No microphone available: {error}"))?
-        .default_config()
-        .map_err(|error| format!("The microphone has no supported format: {error}"))?
-        .open_stream()
-        .map_err(|error| format!("Could not open the microphone: {error}"))?;
-    let channels = microphone.channels().get();
-    let rate = microphone.sample_rate().get();
+fn record(stop: &AtomicBool, levels: &Mutex<Vec<f32>>) -> Result<Vec<f32>, String> {
+    record_with(stop, levels, || {
+        let microphone = rodio::microphone::MicrophoneBuilder::new()
+            .default_device()
+            .map_err(|error| format!("No microphone available: {error}"))?
+            .default_config()
+            .map_err(|error| format!("The microphone has no supported format: {error}"))?
+            .open_stream()
+            .map_err(|error| format!("Could not open the microphone: {error}"))?;
+        let channels = microphone.channels().get();
+        let rate = microphone.sample_rate().get();
+        Ok((microphone, channels, rate))
+    })
+}
+
+fn record_with<I: Iterator<Item = f32>>(
+    stop: &AtomicBool,
+    levels: &Mutex<Vec<f32>>,
+    open: impl FnOnce() -> Result<(I, u16, u32), String>,
+) -> Result<Vec<f32>, String> {
+    let (mut microphone, channels, rate) = open()?;
     let chunk = (rate as usize * usize::from(channels) / 20).max(1);
     let started = Instant::now();
     let mut heard = Vec::new();
@@ -620,7 +903,6 @@ fn record(stop: &AtomicBool, levels: &Mutex<Vec<f32>>, waker: &Waker) -> Result<
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .push(loudness);
-        waker.wake();
         if taken.len() < chunk {
             // The device disappeared before recording stopped.
             break;
@@ -641,6 +923,8 @@ pub fn recording_path(dir: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io;
+    use std::sync::Barrier;
 
     #[test]
     fn speed_labels_match_the_button() {
@@ -651,7 +935,7 @@ mod tests {
 
     #[test]
     fn cycling_wraps_through_every_speed() {
-        let mut player = Player::new(Waker::default());
+        let mut player = Player::default();
         assert_eq!(player.speed(), SPEEDS[0]);
         assert_eq!(player.cycle_speed(), 1.5);
         assert_eq!(player.cycle_speed(), 2.0);
@@ -695,31 +979,8 @@ mod tests {
     }
 
     #[test]
-    fn a_speed_is_preparing_until_the_clip_plays_at_it() {
-        let samples = Arc::new(vec![0.0; 12]);
-        let mut player = Player::new(Waker::default());
-        player.loaded = Some(Loaded {
-            message: "clip".to_owned(),
-            buffer: Arc::clone(&samples),
-            samples,
-            factor: 1.0,
-            base: Duration::ZERO,
-            paused: true,
-            done: false,
-        });
-        assert!(!player.preparing_speed("clip"));
-        player.speed = 2.0;
-        assert!(player.preparing_speed("clip"));
-        assert!(!player.preparing_speed("another clip"));
-        if let Some(loaded) = player.loaded.as_mut() {
-            loaded.factor = 2.0;
-        }
-        assert!(!player.preparing_speed("clip"));
-    }
-
-    #[test]
     fn unusable_speeds_are_kept_in_range() {
-        let mut player = Player::new(Waker::default());
+        let mut player = Player::default();
         player.set_speed(f32::NAN);
         assert_eq!(player.speed(), 1.0);
         player.set_speed(f32::INFINITY);
@@ -732,7 +993,7 @@ mod tests {
 
     #[test]
     fn going_back_to_one_x_cancels_the_outstanding_compression() {
-        let mut player = Player::new(Waker::default());
+        let mut player = Player::default();
         let cancelled = Arc::new(AtomicBool::new(false));
         player.set_speed(2.0);
         player.stretching = Some(Stretching {
@@ -743,6 +1004,216 @@ mod tests {
         player.set_speed(1.0);
         assert!(player.stretching.is_none());
         assert!(cancelled.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn missing_or_revoked_output_is_a_recoverable_error() {
+        let missing = open_device("No sound output", || Err::<(), _>("device missing"));
+        assert_eq!(missing.unwrap_err(), "No sound output: device missing");
+        let revoked = open_device("No sound output", || Err::<(), _>("permission revoked"));
+        assert_eq!(revoked.unwrap_err(), "No sound output: permission revoked");
+    }
+
+    #[test]
+    fn microphone_open_failure_is_returned_without_audio_hardware() {
+        let levels = Mutex::new(Vec::new());
+        let error = record_with(&AtomicBool::new(false), &levels, || {
+            Err::<(std::iter::Empty<f32>, u16, u32), _>("permission denied".to_owned())
+        })
+        .unwrap_err();
+        assert_eq!(error, "permission denied");
+        assert!(levels.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn recorder_handles_unplug_and_cancellation_with_synthetic_samples() {
+        let levels = Mutex::new(Vec::new());
+        let samples = std::iter::repeat_n(0.25, 17);
+        let recorded = record_with(&AtomicBool::new(false), &levels, || Ok((samples, 1, 1_000)))
+            .expect("partial samples before unplug are usable");
+        assert!(!recorded.is_empty());
+        assert_eq!(levels.lock().unwrap().len(), 1);
+
+        let stopped = AtomicBool::new(true);
+        let error = record_with(&stopped, &Mutex::new(Vec::new()), || {
+            Ok((std::iter::repeat_n(0.25, 100), 1, 1_000))
+        })
+        .unwrap_err();
+        assert_eq!(error, "The microphone did not record any audio");
+    }
+
+    #[test]
+    fn late_decode_completion_after_stop_is_discarded() {
+        let slot: Decoded = Default::default();
+        let mut player = Player::default();
+        player.decoding = Some(Decoding {
+            message: "old-message".to_owned(),
+            start: 0.0,
+            slot: Arc::clone(&slot),
+            cancelled: Arc::new(AtomicBool::new(false)),
+        });
+        let cancelled = Arc::clone(&player.decoding.as_ref().unwrap().cancelled);
+        player.stop();
+
+        assert!(!publish_decode(&slot, &cancelled, Ok(vec![0.5])));
+        assert!(slot.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn audio_read_checks_cancellation_between_chunks() {
+        struct CancellingReader {
+            cancelled: Arc<AtomicBool>,
+            reads: usize,
+        }
+
+        impl std::io::Read for CancellingReader {
+            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+                if self.reads == 1 {
+                    self.cancelled.store(true, Ordering::Release);
+                }
+                self.reads += 1;
+                buffer[0] = 1;
+                Ok(1)
+            }
+        }
+
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let err = read_audio(
+            CancellingReader {
+                cancelled: Arc::clone(&cancelled),
+                reads: 0,
+            },
+            2,
+            &cancelled,
+        )
+        .unwrap_err();
+        assert_eq!(err, "Audio decoding cancelled");
+    }
+
+    #[test]
+    fn decoded_sample_limit_rejects_excess_output() {
+        let err = collect_samples_limited(
+            std::iter::repeat_n(0.1, 5),
+            1,
+            voice::RATE,
+            &AtomicBool::new(false),
+            4,
+        )
+        .unwrap_err();
+        assert_eq!(err, audio_limit_error());
+    }
+
+    #[test]
+    fn sample_decode_stops_when_cancelled() {
+        struct CancellingSamples {
+            cancelled: Arc<AtomicBool>,
+            count: usize,
+        }
+
+        impl Iterator for CancellingSamples {
+            type Item = f32;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                self.count += 1;
+                if self.count == 2 {
+                    self.cancelled.store(true, Ordering::Release);
+                }
+                Some(0.1)
+            }
+        }
+
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let err = collect_samples_limited(
+            CancellingSamples {
+                cancelled: Arc::clone(&cancelled),
+                count: 0,
+            },
+            1,
+            voice::RATE,
+            &cancelled,
+            10,
+        )
+        .unwrap_err();
+        assert_eq!(err, "Audio decoding cancelled");
+    }
+
+    #[test]
+    fn decode_job_reservation_never_exceeds_limit() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let barrier = Arc::new(Barrier::new(8));
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                let active = Arc::clone(&active);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    if !try_acquire_decode_job(&active, MAX_DECODE_JOBS) {
+                        return false;
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                    active.fetch_sub(1, Ordering::AcqRel);
+                    true
+                })
+            })
+            .collect();
+        let acquired = threads
+            .into_iter()
+            .map(|thread| thread.join().expect("worker completes"))
+            .filter(|acquired| *acquired)
+            .count();
+        assert!(acquired <= MAX_DECODE_JOBS);
+        assert_eq!(active.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn oversized_audio_input_is_rejected_before_allocation() {
+        let err =
+            read_audio(io::empty(), MAX_AUDIO_BYTES + 1, &AtomicBool::new(false)).unwrap_err();
+        assert_eq!(err, audio_limit_error());
+    }
+
+    #[test]
+    fn an_unplugged_playback_sink_marks_clip_complete() {
+        let samples = Arc::new(vec![0.25; 480]);
+        let mut loaded = Loaded {
+            message: "clip".to_owned(),
+            buffer: Arc::clone(&samples),
+            samples,
+            factor: 1.0,
+            base: Duration::ZERO,
+            paused: false,
+            done: false,
+        };
+        // A synthetic sink reports empty when its device disappears mid-clip.
+        assert!(playback_ended(&mut loaded, true));
+        assert!(loaded.done);
+        assert_eq!(loaded.message, "clip");
+        assert!(!playback_ended(&mut loaded, true));
+    }
+
+    #[test]
+    fn unsupported_or_corrupt_audio_returns_codec_error() {
+        let path = std::env::temp_dir().join(format!(
+            "zaptide-audio-invalid-{}-{}.bin",
+            std::process::id(),
+            Instant::now().elapsed().as_nanos()
+        ));
+        std::fs::write(&path, b"not an audio stream").expect("write synthetic fixture");
+        let error = decode_file(&path).unwrap_err();
+        let _ = std::fs::remove_file(path);
+        assert!(error.starts_with("Could not decode the audio:"), "{error}");
+    }
+
+    #[test]
+    fn opus_decode_preserves_voice_clip_samples() {
+        let tone: Vec<f32> = (0..voice::RATE / 10)
+            .map(|i| (i as f32 * 330.0 * std::f32::consts::TAU / voice::RATE as f32).sin() * 0.3)
+            .collect();
+        let bytes = voice::encode(&tone).expect("encodes synthetic tone");
+        let decoded = decode_opus(&bytes, &AtomicBool::new(false)).expect("decodes tone");
+        assert!(!decoded.is_empty());
+        assert!(decoded.len() <= MAX_AUDIO_SAMPLES);
+        assert!(decoded.iter().any(|sample| sample.abs() > 0.01));
     }
 
     /// Plays a one-second test tone:
@@ -756,7 +1227,7 @@ mod tests {
             .map(|i| (i as f32 * 330.0 * std::f32::consts::TAU / voice::RATE as f32).sin() * 0.3)
             .collect();
         std::fs::write(&path, voice::encode(&tone).expect("encodes")).expect("written");
-        let mut player = Player::new(Waker::default());
+        let mut player = Player::default();
         player.toggle("clip", &path).expect("starts decoding");
         assert_eq!(player.status("clip").state, State::Loading);
         let started = Instant::now();
@@ -791,7 +1262,7 @@ mod tests {
             .map(|i| (i as f32 * 330.0 * std::f32::consts::TAU / voice::RATE as f32).sin() * 0.3)
             .collect();
         std::fs::write(&path, voice::encode(&tone).expect("encodes")).expect("written");
-        let mut player = Player::new(Waker::default());
+        let mut player = Player::default();
         player.set_speed(2.0);
         player.toggle("clip", &path).expect("starts decoding");
         let started = Instant::now();
@@ -826,7 +1297,7 @@ mod tests {
     #[test]
     #[ignore = "needs a microphone"]
     fn records_a_second_on_this_machine() {
-        let recorder = Recorder::start(Waker::default());
+        let recorder = Recorder::start();
         std::thread::sleep(Duration::from_millis(1_000));
         assert!(recorder.failure().is_none(), "{:?}", recorder.failure());
         let levels = recorder.levels();

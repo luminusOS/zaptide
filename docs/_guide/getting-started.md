@@ -17,17 +17,17 @@ cargo install --path .
 zaptide
 ```
 
-On Linux, the build needs egui's development libraries, ALSA, and CMake.
+On Linux, the build needs the GTK4 and libadwaita development libraries, ALSA, and CMake.
 libopus and the H.264 decoder build from source. On Arch Linux:
 
 ```sh
-sudo pacman -S --needed alsa-lib libxkbcommon wayland cmake
+sudo pacman -S --needed gtk4 libadwaita alsa-lib cmake
 ```
 
 On Debian or Ubuntu:
 
 ```sh
-sudo apt install build-essential cmake libasound2-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev
+sudo apt install build-essential cmake libasound2-dev libgtk-4-dev libadwaita-1-dev
 ```
 
 A desktop entry ships in `packaging/applications/dev.luminusos.ZapTide.desktop`.

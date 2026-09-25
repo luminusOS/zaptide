@@ -1,35 +1,35 @@
-//! ZapTide internals exposed for diagnostics and tests.
+//! ZapTide library root.
 
-pub mod animation;
-pub mod app;
+pub mod application;
 pub mod archive;
 pub mod audio;
 pub mod backend;
-pub mod bidi;
-#[cfg(any(test, feature = "demo"))]
-pub mod demo;
-pub mod diagnostics;
-pub mod emoji;
-#[cfg(target_os = "macos")]
-pub mod macos;
-pub mod markup;
+pub mod color;
+pub mod event_drain;
+pub mod glib_notifier;
+pub mod message_window;
 pub mod model;
-pub mod notify;
+pub mod native_actions;
+pub mod native_attachments;
+pub mod native_chat_list;
+pub mod native_composer;
+pub mod native_media;
+pub mod native_media_widgets;
+pub mod native_notifications;
+pub mod native_portals;
+pub mod native_preferences;
+pub mod native_settings_migration;
+pub mod native_theme;
+pub mod native_transcript;
+pub mod native_voice;
+pub mod notifier;
 pub mod paths;
-pub mod qr;
 pub mod safety;
+pub mod services;
 pub mod settings;
-pub mod single_instance;
-pub mod system_fonts;
+pub mod sticker_meta;
 pub mod theme;
 pub mod timestretch;
-pub mod transcript;
-#[cfg(target_os = "linux")]
-pub mod tray;
-#[cfg(not(target_os = "linux"))]
-#[path = "tray_native.rs"]
-pub mod tray;
-pub mod ui;
 pub mod updates;
 pub mod util;
 pub mod voice;

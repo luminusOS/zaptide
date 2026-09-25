@@ -7,7 +7,7 @@ nav_order: 0
 ## Why ZapTide
 
 WhatsApp has no official Linux app. ZapTide is a native WhatsApp client
-written in Rust with [egui](https://github.com/emilk/egui). It connects through
+written in Rust with GTK4 and libadwaita. It connects through
 [whatsapp-rust](https://github.com/oxidezap/whatsapp-rust). ZapTide is a
 single binary with no browser engine and uses a layout similar to WhatsApp Web.
 In ZapFast's upstream Linux test, the inherited baseline opened in under a second and used about 150 MB of idle

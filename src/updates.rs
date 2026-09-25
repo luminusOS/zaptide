@@ -9,7 +9,7 @@ pub mod install;
 #[cfg(target_os = "macos")]
 mod macos;
 mod transfer;
-pub use transfer::{Source, download};
+pub use transfer::{Source, download_cancellable};
 
 #[derive(Default)]
 pub enum DownloadState {

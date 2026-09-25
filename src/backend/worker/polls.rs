@@ -78,12 +78,6 @@ fn creation_archive(content: &Content, secret: &[u8]) -> wa::Message {
 }
 
 impl Worker {
-    pub(super) fn refresh_poll(&mut self, chat: ChatId, id: String) {
-        self.poll_history.request(&chat, &id, Instant::now());
-        self.emit_message(&chat, &id);
-        self.pump_poll_history();
-    }
-
     pub(super) fn pump_poll_history(&mut self) {
         let now = Instant::now();
         if let Some((chat, id)) = self.poll_history.expire(now) {
@@ -118,6 +112,7 @@ impl Worker {
             !anchor.is_empty()
         );
         let commands = self.commands.clone();
+        let session_generation = self.session_generation;
         tokio::spawn(async move {
             if client
                 .fetch_message_history(
@@ -135,6 +130,7 @@ impl Worker {
             {
                 log::info!("poll recovery: phone history request failed");
                 let _ = commands.send(Command::PollHistoryFailed {
+                    session_generation,
                     chat,
                     message: id,
                     requested: now,
@@ -342,6 +338,7 @@ impl Worker {
         };
         let draft = draft.unwrap();
         let commands = self.commands.clone();
+        let session_generation = self.session_generation;
         tokio::spawn(async move {
             let result = async {
                 let recipients = if jid.is_group() {
@@ -381,6 +378,7 @@ impl Worker {
             .await
             .map_err(str::to_owned);
             let _ = commands.send(Command::PollCreated {
+                session_generation,
                 chat,
                 draft,
                 result,
@@ -500,6 +498,7 @@ impl Worker {
         };
         self.poll_sending.insert(request);
         let commands = self.commands.clone();
+        let session_generation = self.session_generation;
         tokio::spawn(async move {
             let at = jiff::Timestamp::now().as_millisecond();
             let result = client
@@ -509,6 +508,7 @@ impl Worker {
                 .map(|sent| sent.message_id)
                 .map_err(|_| "Could not send your vote. Please try again.".into());
             let _ = commands.send(Command::PollVoted {
+                session_generation,
                 chat,
                 message: id,
                 choices,
@@ -645,6 +645,7 @@ impl Worker {
             };
             let client = client.clone();
             let commands = self.commands.clone();
+            let session_generation = self.session_generation;
             self.poll_decrypting += 1;
             tokio::spawn(async move {
                 let choices = if let Some(value) = update.vote.as_option() {
@@ -669,7 +670,11 @@ impl Worker {
                 } else {
                     None
                 };
-                let _ = commands.send(Command::PollDecoded { vote, choices });
+                let _ = commands.send(Command::PollDecoded {
+                    session_generation,
+                    vote,
+                    choices,
+                });
             });
         }
     }
@@ -706,178 +711,103 @@ mod tests {
         }
     }
 
-    #[test]
-    fn empty_or_unusable_phone_snapshots_do_not_stop_automatic_recovery() {
+    #[tokio::test]
+    async fn stale_poll_results_cannot_save_or_decode_votes() {
         let (mut worker, _events, _commands, _wa) = super::super::receipt_tests::worker();
-        let chat = "123@g.us";
-        let mut row = crate::archive::tests::message(chat, "poll", 1_789_551_600, false);
-        row.sender = "100@s.whatsapp.net".into();
+        let mut row = crate::archive::tests::message("chat", "poll", 1, false);
         row.content = content();
-        let raw = creation_archive(&row.content, &[7; 32]);
-        worker.store_message(row.clone(), Some(raw.encode_to_vec()), None);
-        worker.refresh_poll(chat.into(), row.id.clone());
-        let now = Instant::now();
-        assert!(worker.poll_history.next(now).is_some());
+        worker.archive.insert_message(&row, None).unwrap();
+        let existing = PollVote {
+            chat: "chat".into(),
+            poll: "poll".into(),
+            voter: "voter".into(),
+            sender: "voter".into(),
+            update_id: "current".into(),
+            at: 20,
+            from_me: false,
+            choices: Some(vec![0]),
+            encrypted: None,
+        };
+        worker.archive.save_poll_vote(&existing).unwrap();
+        let pending = PollVote {
+            voter: "other-voter".into(),
+            update_id: "encrypted".into(),
+            at: 30,
+            choices: None,
+            encrypted: Some(vec![1]),
+            ..existing.clone()
+        };
+        worker.archive.save_poll_vote(&pending).unwrap();
+        worker.poll_sending.insert(("chat".into(), "poll".into()));
+        worker.session_generation = 1;
+        worker.poll_decrypting = 1;
 
-        for updates in [
-            Vec::new(),
-            vec![wa::PollUpdate {
-                poll_update_message_key: MessageField::some(wa::MessageKey {
-                    id: Some("unmatched-vote".into()),
-                    participant: Some("200@s.whatsapp.net".into()),
-                    ..Default::default()
-                }),
-                vote: MessageField::some(wa::message::PollVoteMessage {
-                    selected_options: vec![vec![0; 32]],
-                }),
-                ..Default::default()
-            }],
-        ] {
-            worker.apply_history(
-                ParsedHistory {
-                    chats: vec![parse_conversation(wa::Conversation {
-                        id: chat.into(),
-                        messages: vec![wa::HistorySyncMsg {
-                            message: MessageField::some(wa::WebMessageInfo {
-                                key: MessageField::some(wa::MessageKey {
-                                    id: Some(row.id.clone()),
-                                    remote_jid: Some(chat.into()),
-                                    participant: Some(row.sender.clone()),
-                                    from_me: Some(false),
-                                }),
-                                message: MessageField::some(raw.clone()),
-                                message_timestamp: Some(row.timestamp as u64),
-                                poll_updates: updates,
-                                ..Default::default()
-                            }),
-                            ..Default::default()
-                        }],
-                        ..Default::default()
-                    })],
-                    push_names: Vec::new(),
-                    lids: Vec::new(),
-                    stickers: Vec::new(),
-                },
-                false,
-            );
-            worker.polish_poll(&mut row);
-            let Content::Poll { state, .. } = &row.content else {
-                panic!("poll")
-            };
-            assert!(!state.history_complete);
-            assert!(state.refreshing);
-        }
+        worker
+            .handle_command(Command::PollVoted {
+                session_generation: 0,
+                chat: "chat".into(),
+                message: "poll".into(),
+                choices: vec![1],
+                at: 40,
+                result: Ok("stale-vote".into()),
+            })
+            .await;
+        worker
+            .handle_command(Command::PollDecoded {
+                session_generation: 0,
+                vote: pending,
+                choices: Some(vec![1]),
+            })
+            .await;
+
+        let votes = worker.archive.poll_votes("chat", "poll").unwrap();
+        assert_eq!(votes.len(), 2);
+        assert_eq!(votes[0].choices, Some(vec![0]));
+        assert!(votes[1].choices.is_none());
         assert!(
             worker
-                .poll_history
-                .expire(now + Duration::from_secs(30))
-                .is_some()
+                .poll_sending
+                .contains(&("chat".into(), "poll".into()))
         );
+        assert_eq!(worker.poll_decrypting, 1);
+    }
+
+    #[tokio::test]
+    async fn stale_poll_creation_result_cannot_archive_into_relinked_session() {
+        let (mut worker, _events, _commands, _wa) = super::super::receipt_tests::worker();
+        worker.session_generation = 1;
+        worker
+            .handle_command(Command::PollCreated {
+                session_generation: 0,
+                chat: "chat".into(),
+                draft: PollDraft {
+                    question: "Stale poll?".into(),
+                    options: vec!["A".into(), "B".into()],
+                    multiple: true,
+                },
+                result: Ok(crate::backend::CreatedPoll {
+                    id: "stale-poll".into(),
+                    secret: vec![7; 32],
+                    creator: "15550001111@s.whatsapp.net".into(),
+                    recipients: Vec::new(),
+                }),
+            })
+            .await;
+
         assert!(
             worker
-                .poll_history
-                .next(now + Duration::from_secs(59))
+                .archive
+                .message("chat", "stale-poll")
+                .unwrap()
                 .is_none()
         );
         assert!(
             worker
-                .poll_history
-                .next(now + Duration::from_secs(60))
-                .is_some()
+                .archive
+                .poll_key("chat", "stale-poll")
+                .unwrap()
+                .is_none()
         );
-    }
-
-    #[test]
-    fn old_polls_recover_all_eleven_phone_votes_without_overwriting_a_newer_own_vote() {
-        let (mut worker, _events, _commands, _wa) = super::super::receipt_tests::worker();
-        let chat = "123@g.us";
-        let mut row = crate::archive::tests::message(chat, "poll", 100, false);
-        row.sender = "100@s.whatsapp.net".into();
-        row.content = content();
-        let raw = creation_archive(&row.content, &[7; 32]);
-        worker.store_message(row.clone(), Some(raw.encode_to_vec()), None);
-        worker
-            .archive
-            .save_poll_vote(&PollVote {
-                chat: chat.into(),
-                poll: "poll".into(),
-                voter: worker.me(),
-                sender: worker.me(),
-                update_id: "own-new".into(),
-                at: 2000,
-                from_me: true,
-                choices: Some(vec![1]),
-                encrypted: None,
-            })
-            .unwrap();
-        worker.polish_poll(&mut row);
-        let Content::Poll { state, .. } = &row.content else {
-            panic!("poll")
-        };
-        assert_eq!(state.counts, vec![0, 1]);
-        assert!(!state.history_complete);
-        assert!(state.refresh_needed);
-        worker.refresh_poll(chat.into(), "poll".into());
-        let updates = (0..11)
-            .map(|index| wa::PollUpdate {
-                poll_update_message_key: MessageField::some(wa::MessageKey {
-                    id: Some(format!("history-{index}")),
-                    from_me: Some(index == 10),
-                    participant: Some(format!("{}@s.whatsapp.net", 200 + index)),
-                    ..Default::default()
-                }),
-                vote: MessageField::some(wa::message::PollVoteMessage {
-                    selected_options: vec![
-                        whatsapp_rust::wacore::poll::compute_option_hash(if index < 8 {
-                            "Pizza"
-                        } else {
-                            "Pasta"
-                        })
-                        .to_vec(),
-                    ],
-                }),
-                sender_timestamp_ms: Some(1500),
-                ..Default::default()
-            })
-            .collect();
-        let parsed = parse_conversation(wa::Conversation {
-            id: chat.into(),
-            messages: vec![wa::HistorySyncMsg {
-                message: MessageField::some(wa::WebMessageInfo {
-                    key: MessageField::some(wa::MessageKey {
-                        id: Some("poll".into()),
-                        remote_jid: Some(chat.into()),
-                        participant: Some(row.sender.clone()),
-                        from_me: Some(false),
-                    }),
-                    message: MessageField::some(raw),
-                    message_timestamp: Some(100),
-                    poll_updates: updates,
-                    ..Default::default()
-                }),
-                msg_order_id: None,
-            }],
-            ..Default::default()
-        });
-        worker.apply_history(
-            ParsedHistory {
-                chats: vec![parsed],
-                push_names: Vec::new(),
-                lids: Vec::new(),
-                stickers: Vec::new(),
-            },
-            false,
-        );
-        worker.polish_poll(&mut row);
-        let Content::Poll { state, .. } = row.content else {
-            panic!("poll")
-        };
-        assert_eq!(state.counts, vec![8, 3]);
-        assert_eq!(state.voters, 11);
-        assert_eq!(state.selected, vec![1]);
-        assert!(state.history_complete);
-        assert!(!state.refreshing);
-        assert!(!state.refresh_needed);
     }
 
     #[test]

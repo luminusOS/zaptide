@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>dev.luminusos.ZapTide</id>
+  <name>ZapTide</name>
+  <summary>A Linux-first native WhatsApp client</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <description>
+    <p>
+      ZapTide is a native WhatsApp client built with Rust, GTK4, libadwaita,
+      and Relm4. It links to your phone through the WhatsApp Web protocol and
+      stores your archive locally with end-to-end encryption at rest.
+    </p>
+  </description>
+  <url type="homepage">https://github.com/luminusOS/zaptide</url>
+  <url type="bugtracker">https://github.com/luminusOS/zaptide/issues</url>
+  <content_rating type="oars-1.1">
+    <content_attribute id="social-chat">intense</content_attribute>
+    <content_attribute id="social-info">moderate</content_attribute>
+  </content_rating>
+  <kudos>
+    <kudo>ModernToolkit</kudo>
+    <kudo>HighContrast</kudo>
+    <kudo>HiDpiIcon</kudo>
+  </kudos>
+  <launchable type="desktop-id">dev.luminusos.ZapTide.desktop</launchable>
+  <developer id="dev.luminusos">
+    <name>LuminusOS</name>
+  </developer>
+  <provides>
+    <binary>zaptide</binary>
+  </provides>
+  <requires>
+    <internet>always</internet>
+  </requires>
+  <recommends>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </recommends>
+  <releases>
+    <release version="0.14.0" date="2026-09-24" />
+  </releases>
+</component>

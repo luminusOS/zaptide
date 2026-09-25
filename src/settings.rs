@@ -12,19 +12,6 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn unhex(value: &str) -> Option<Vec<u8>> {
-    value
-        .len()
-        .is_multiple_of(2)
-        .then(|| {
-            (0..value.len())
-                .step_by(2)
-                .map(|at| u8::from_str_radix(&value[at..at + 2], 16).ok())
-                .collect()
-        })
-        .flatten()
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ThemeChoice {
@@ -32,18 +19,6 @@ pub enum ThemeChoice {
     Dark,
     Light,
     System,
-}
-
-impl ThemeChoice {
-    pub const ALL: [ThemeChoice; 3] = [Self::System, Self::Light, Self::Dark];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Dark => "Dark",
-            Self::Light => "Light",
-            Self::System => "Follow system",
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -64,7 +39,7 @@ pub struct Settings {
         skip_serializing_if = "Option::is_none"
     )]
     pub system_theme_cache: Option<crate::theme::custom::CustomTheme>,
-    /// egui zoom factor.
+    /// Interface zoom factor.
     pub zoom: f32,
     pub sidebar_width: f32,
     /// Whether Enter sends and Shift+Enter adds a line. Off swaps them.
@@ -83,9 +58,7 @@ pub struct Settings {
     pub show_shortcut_hints: bool,
     /// Recently used emoji, newest first.
     pub recent_emoji: Vec<String>,
-    /// User GIPHY API key. Empty uses the optional built-in key.
-    pub giphy_key: String,
-    /// Keep the app linked in the tray when the window closes.
+    /// Keep ZapTide running after its window closes.
     pub keep_running_in_background: bool,
     /// Desktop notifications while away from the chat.
     pub notifications: bool,
@@ -125,7 +98,6 @@ impl Default for Settings {
             last_chat: None,
             show_shortcut_hints: true,
             recent_emoji: Vec::new(),
-            giphy_key: String::new(),
             keep_running_in_background: true,
             notifications: true,
             check_for_updates: true,
@@ -140,12 +112,6 @@ impl Default for Settings {
     }
 }
 
-/// Optional build-time GIPHY key from `ZAPTIDE_GIPHY_KEY`.
-pub const BUILT_IN_GIPHY_KEY: Option<&str> = match option_env!("ZAPTIDE_GIPHY_KEY") {
-    Some(key) if !key.is_empty() => Some(key),
-    _ => None,
-};
-
 impl Settings {
     pub(crate) fn cached_palette(&self) -> Option<crate::theme::Palette> {
         let theme = if self.custom_theme.is_some() {
@@ -156,18 +122,6 @@ impl Settings {
             None
         };
         theme.map(|theme| theme.palette)
-    }
-
-    /// Returns the user key, built-in key, or `None`.
-    pub fn effective_giphy_key(&self) -> Option<String> {
-        let own = self.giphy_key.trim();
-        if !own.is_empty() {
-            return Some(own.to_owned());
-        }
-        BUILT_IN_GIPHY_KEY
-            .map(str::trim)
-            .filter(|key| !key.is_empty())
-            .map(str::to_owned)
     }
 
     pub fn load(path: &Path) -> Self {
@@ -212,28 +166,6 @@ impl Settings {
             .map(str::trim)
             .filter(|code| !code.is_empty())
             .map(Self::chat_lock_verifier);
-    }
-
-    /// Checking is deliberately slow, so callers memoize the answer.
-    pub fn verifies_chat_lock_code(&self, code: &str) -> bool {
-        let Some((salt, expected)) = self
-            .chat_lock_code_hash
-            .as_deref()
-            .and_then(|stored| stored.split_once('$'))
-        else {
-            return false;
-        };
-        let (Some(salt), Some(expected)) = (unhex(salt), unhex(expected)) else {
-            return false;
-        };
-        ring::pbkdf2::verify(
-            ring::pbkdf2::PBKDF2_HMAC_SHA256,
-            CHAT_LOCK_ROUNDS,
-            &salt,
-            code.trim().as_bytes(),
-            &expected,
-        )
-        .is_ok()
     }
 
     /// `salt$hash`, both hex. Codes are short enough to be guessed offline,
@@ -289,58 +221,5 @@ mod tests {
         settings.save(&path).expect("saves");
         assert_eq!(Settings::load(&path), settings);
         let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn the_locked_chat_verifier_is_salted_and_rejects_other_codes() {
-        let mut settings = Settings::default();
-        settings.set_chat_lock_code(Some(" 1234 "));
-        assert!(settings.verifies_chat_lock_code("1234"));
-        assert!(!settings.verifies_chat_lock_code("1235"));
-        assert!(!settings.verifies_chat_lock_code(""));
-        let first = settings.chat_lock_code_hash.clone();
-        settings.set_chat_lock_code(Some("1234"));
-        // A fresh salt every time, so the same code never stores the same value.
-        assert_ne!(first, settings.chat_lock_code_hash);
-        assert!(settings.verifies_chat_lock_code("1234"));
-        settings.set_chat_lock_code(None);
-        assert!(!settings.verifies_chat_lock_code("1234"));
-    }
-
-    #[test]
-    fn legacy_locked_chat_code_is_rewritten_as_a_verifier() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("settings.json");
-        std::fs::write(&path, r#"{"chat_lock_code":"1234"}"#).unwrap();
-        let settings = Settings::load(&path);
-        assert!(settings.verifies_chat_lock_code("1234"));
-        assert!(!std::fs::read_to_string(path).unwrap().contains("1234"));
-    }
-}
-
-#[cfg(test)]
-mod giphy_tests {
-    use super::*;
-
-    #[test]
-    fn the_users_key_wins_and_is_trimmed() {
-        let settings = Settings {
-            giphy_key: "  abc  ".into(),
-            ..Settings::default()
-        };
-        assert_eq!(settings.effective_giphy_key().as_deref(), Some("abc"));
-    }
-
-    #[test]
-    fn without_a_key_of_their_own_the_built_in_one_is_used() {
-        let settings = Settings {
-            giphy_key: "   ".into(),
-            ..Settings::default()
-        };
-        let expected = BUILT_IN_GIPHY_KEY
-            .map(str::trim)
-            .filter(|key| !key.is_empty())
-            .map(str::to_owned);
-        assert_eq!(settings.effective_giphy_key(), expected);
     }
 }

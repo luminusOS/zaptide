@@ -1,15 +1,14 @@
 # ZapTide
 
 **WhatsApp, native and fast.** ZapTide is a Linux-first WhatsApp client written in Rust
-with [egui](https://github.com/emilk/egui). It uses
+with GTK4, libadwaita, and [Relm4](https://relm4.org). It uses
 [whatsapp-rust](https://github.com/oxidezap/whatsapp-rust) for the WhatsApp Web
 protocol. It links to your phone as a companion device and has no browser engine. ZapTide is a
-[ZapFast](https://github.com/crmne/zapfast) fork migrating to a native GTK4/libadwaita shell. The
-current transition baseline still uses the inherited eframe shell. In ZapFast's Linux test, it opened in
+[ZapFast](https://github.com/crmne/zapfast) fork with a native GTK4/libadwaita interface. In ZapFast's Linux test, it opened in
 under a second and used about 150 MB of idle RAM, compared with 1.13 GB for
 WhatsApp Web and its Chromium processes. [See the upstream measurements](https://zapfast.rocks/benchmarks/).
 
-ZapTide retains ZapFast's native egui interface and direct WhatsApp protocol implementation.
+ZapTide retains ZapFast's direct WhatsApp protocol implementation.
 
 ![ZapTide showing a chat with a photo, a document, a voice message, a quoted reply, and a link](docs/screenshot.png)
 
@@ -127,9 +126,6 @@ Development happens at **[github.com/luminusOS/zaptide](https://github.com/lumin
   when validation fails. Private read-state updates run one at a time. Failures
   pause the whole queue with backoff from 30 seconds to 15 minutes; pending reads
   remain saved and resume automatically. New messages can still arrive.
-- **Runs in the background.** Closing the window keeps ZapTide linked in the
-  system tray. Reopen it from the tray or by launching it again. Quit from the
-  tray or with `Ctrl+Q`, or disable this behavior in Settings.
 - **Desktop notifications.** Get notifications with the chat picture when you
   are away from the open chat. Muted chats do not notify you, and archived
   chats stay quiet until you unarchive them. Windows notifications
@@ -356,6 +352,20 @@ cargo run --features demo -- --demo-tour      # Space starts/replays a 41-second
 cargo test --all-features                      # includes a headless layout of every screen
 cargo clippy --all-targets --all-features -- -D warnings
 ```
+
+The Task 4 native-shell synthetic harness requires `native-shell,demo` and the
+explicit `ZAPTIDE_NATIVE_SYNTHETIC=1` opt-in. It uses a detached command recorder and
+synthetic Link, Chats, and Messages events; no account, session, user archive,
+or network connection is opened. Audit lines contain only command variant names
+and counts. Run its Xvfb smoke test with:
+
+```sh
+scripts/native-synthetic-e2e.sh
+```
+
+The script drives the synthetic chat through AT-SPI with `pyatspi` when installed,
+or `xdotool` otherwise. Requires GTK development dependencies, Xvfb, D-Bus, and
+either `pyatspi` or `xdotool`.
 
 To include a default GIPHY key for GIF search, set it at build time. A key in
 Settings overrides it:

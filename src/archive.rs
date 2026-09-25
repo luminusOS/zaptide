@@ -737,62 +737,6 @@ impl Archive {
         Ok(messages)
     }
 
-    /// Searches visible message text, filenames, polls, contacts, and places.
-    /// ASCII matching is case-insensitive; other text follows SQLite behavior.
-    pub fn search_messages(&self, needle: &str, limit: usize) -> Result<Vec<Message>> {
-        let pattern = format!(
-            "%{}%",
-            needle
-                .to_lowercase()
-                .replace('\\', "\\\\")
-                .replace('%', "\\%")
-                .replace('_', "\\_")
-        );
-        let mut statement = self.connection.prepare(
-            "SELECT chat, id, sender, sender_name, from_me, timestamp, content, status, quoted, reactions, edited, thumbnail, mentions, forwarded, delivered_at, read_at
-             FROM messages
-             WHERE json_valid(content) AND lower(
-                     coalesce(json_extract(content, '$.text'), '') || char(10) ||
-                     coalesce(json_extract(content, '$.caption'), '') || char(10) ||
-                     coalesce(json_extract(content, '$.file_name'), '') || char(10) ||
-                     coalesce(json_extract(content, '$.question'), '') || char(10) ||
-                     coalesce(json_extract(content, '$.display_name'), '') || char(10) ||
-                     coalesce(json_extract(content, '$.name'), '')
-                 ) LIKE ?1 ESCAPE '\\'
-             ORDER BY timestamp DESC, rowid DESC
-             LIMIT ?2",
-        )?;
-        let rows = statement.query_map(params![pattern, limit as i64], |row| {
-            let chat: String = row.get(0)?;
-            let content: String = row.get(6)?;
-            let quoted: Option<String> = row.get(8)?;
-            let reactions: String = row.get(9)?;
-            let mentions: String = row.get(12)?;
-            Ok(Message {
-                id: row.get(1)?,
-                chat,
-                sender: row.get(2)?,
-                sender_name: row.get(3)?,
-                from_me: row.get(4)?,
-                timestamp: row.get(5)?,
-                content: serde_json::from_str(&content).unwrap_or(Content::Unsupported {
-                    what: "unreadable".into(),
-                }),
-                status: status_from_rank(row.get(7)?),
-                delivered_at: row.get(14)?,
-                read_at: row.get(15)?,
-                quoted: quoted.and_then(|quoted| serde_json::from_str(&quoted).ok()),
-                reactions: serde_json::from_str(&reactions).unwrap_or_default(),
-                edited: row.get(10)?,
-                mentions: serde_json::from_str(&mentions).unwrap_or_default(),
-                forwarded: row.get(13)?,
-                thumbnail: row.get(11)?,
-            })
-        })?;
-        let messages: Vec<Message> = rows.collect::<Result<_>>()?;
-        Ok(messages)
-    }
-
     /// Returns messages from `from` through `before`, ascending and limited.
     pub fn messages_range(
         &self,
@@ -1214,21 +1158,6 @@ impl Archive {
             .optional()
     }
 
-    /// Older archives discarded pin times and could lose mute sync. Request
-    /// one library-managed snapshot for an existing archive. Fresh links
-    /// already receive snapshots; reconnecting must not add another request.
-    pub fn take_preferences_refresh(&self) -> Result<bool> {
-        const KEY: &str = "chat_preferences_refresh_v1";
-        if self.meta(KEY)?.is_some() {
-            return Ok(false);
-        }
-        let existing: bool =
-            self.connection
-                .query_row("SELECT EXISTS(SELECT 1 FROM chats)", [], |row| row.get(0))?;
-        self.set_meta(KEY, "requested")?;
-        Ok(existing)
-    }
-
     pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {
         self.connection.execute(
             "INSERT INTO meta (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -1273,61 +1202,6 @@ pub(crate) mod tests {
             forwarded: false,
             thumbnail: None,
         }
-    }
-
-    #[test]
-    fn search_finds_text_captions_and_file_names() {
-        let archive = Archive::in_memory().expect("opens");
-        archive
-            .ensure_chat("1@s.whatsapp.net", "Ada")
-            .expect("chat");
-        let media = || crate::model::Media {
-            mime: "application/pdf".into(),
-            size: 1,
-            width: None,
-            height: None,
-            path: None,
-            state: crate::model::MediaState::Idle,
-        };
-        let mut plain = message("1@s.whatsapp.net", "m1", 10, false);
-        plain.content = Content::text("The Difference Engine assembles");
-        let mut caption = message("1@s.whatsapp.net", "m2", 20, true);
-        caption.content = Content::Document {
-            media: media(),
-            file_name: "Notes on the Engine.pdf".into(),
-            caption: Some("progress at 100% now".into()),
-            pages: None,
-        };
-        let mut other = message("1@s.whatsapp.net", "m3", 30, false);
-        other.content = Content::text("Nothing of note");
-        for row in [&plain, &caption, &other] {
-            archive.insert_message(row, None).expect("insert");
-        }
-        // Match body and filename case-insensitively, newest first.
-        let hits = archive.search_messages("ENGINE", 10).expect("search");
-        let ids: Vec<&str> = hits.iter().map(|hit| hit.id.as_str()).collect();
-        assert_eq!(ids, vec!["m2", "m1"]);
-        // Escape LIKE wildcards from the search query.
-        let hits = archive.search_messages("100%", 10).expect("search");
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].id, "m2");
-        assert!(
-            archive
-                .search_messages("100&", 10)
-                .expect("search")
-                .is_empty(),
-            "the percent sign was matched literally"
-        );
-        assert!(
-            archive
-                .search_messages("zebra", 10)
-                .expect("search")
-                .is_empty()
-        );
-        // Apply the result limit.
-        let hits = archive.search_messages("e", 1).expect("search");
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].id, "m3", "newest first");
     }
 
     #[test]
@@ -1422,27 +1296,6 @@ pub(crate) mod tests {
             archive.chat(chat).expect("chat").expect("exists").name,
             "Rust Berlin"
         );
-    }
-
-    #[test]
-    fn existing_archives_request_preference_recovery_once_across_restarts() {
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("fixture.db");
-        let key = [31; 32];
-        {
-            let archive = Archive::open_with_key(&path, &key).unwrap();
-            archive.ensure_chat("1@s.whatsapp.net", "Fixture").unwrap();
-            assert!(archive.take_preferences_refresh().unwrap());
-            assert!(!archive.take_preferences_refresh().unwrap());
-        }
-        let archive = Archive::open_with_key(&path, &key).unwrap();
-        assert!(!archive.take_preferences_refresh().unwrap());
-        let fresh = Archive::in_memory().unwrap();
-        assert!(!fresh.take_preferences_refresh().unwrap());
-        fresh
-            .ensure_chat("1@s.whatsapp.net", "Initial history")
-            .unwrap();
-        assert!(!fresh.take_preferences_refresh().unwrap());
     }
 
     #[test]
