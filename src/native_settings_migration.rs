@@ -59,7 +59,7 @@ enum KeyKind {
 
 /// Allowlist: every key of the GSettings schema, mapped to its JSON field.
 /// Keys outside this table (secrets, caches, window state) are never read.
-const ALLOWLIST: [(&str, &str, KeyKind); 16] = [
+const ALLOWLIST: [(&str, &str, KeyKind); 14] = [
     ("theme", "theme-choice", KeyKind::ThemeChoice),
     ("zoom", "zoom", KeyKind::Number),
     ("sidebar_width", "sidebar-width", KeyKind::Number),
@@ -78,12 +78,6 @@ const ALLOWLIST: [(&str, &str, KeyKind); 16] = [
     (
         "keep_running_in_background",
         "keep-running-in-background",
-        KeyKind::Flag,
-    ),
-    ("check_for_updates", "check-for-updates", KeyKind::Flag),
-    (
-        "download_updates_automatically",
-        "download-updates-automatically",
         KeyKind::Flag,
     ),
     ("names_from_contacts", "names-from-contacts", KeyKind::Flag),
@@ -298,8 +292,6 @@ mod tests {
             "show_shortcut_hints": false,
             "notifications": false,
             "keep_running_in_background": false,
-            "check_for_updates": false,
-            "download_updates_automatically": true,
             "names_from_contacts": false,
             "save_contacts_to_phone": false,
             "giphy_key": "secret-key",
@@ -311,7 +303,7 @@ mod tests {
 
         assert_eq!(
             migrate_into(&settings, &dirs),
-            MigrationOutcome::Migrated { keys: 16 }
+            MigrationOutcome::Migrated { keys: 14 }
         );
         assert_eq!(settings.string("theme-choice"), "light");
         assert_eq!(settings.double("zoom"), 1.25);
@@ -325,15 +317,12 @@ mod tests {
             "show-shortcut-hints",
             "notifications",
             "keep-running-in-background",
-            "check-for-updates",
             "names-from-contacts",
             "save-contacts-to-phone",
         ] {
             assert!(!settings.boolean(key), "{key} mirrors the JSON value");
         }
-        for key in ["show-sender-pictures", "download-updates-automatically"] {
-            assert!(settings.boolean(key), "{key} mirrors the JSON value");
-        }
+        assert!(settings.boolean("show-sender-pictures"));
         // Rollback input: the JSON file is byte-identical after migration.
         assert_eq!(std::fs::read(dirs.settings_file()).unwrap(), before);
         assert!(marker_path(&dirs).exists());

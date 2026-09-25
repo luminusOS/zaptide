@@ -73,18 +73,6 @@
       <description>Show desktop notifications for new messages when away from the chat.</description>
     </key>
 
-    <key name="check-for-updates" type="b">
-      <default>true</default>
-      <summary>Check for updates</summary>
-      <description>Ask GitHub once a day whether a newer release exists.</description>
-    </key>
-
-    <key name="download-updates-automatically" type="b">
-      <default>false</default>
-      <summary>Download updates automatically</summary>
-      <description>Download verified updates in the background. Restarting remains explicit.</description>
-    </key>
-
     <key name="names-from-contacts" type="b">
       <default>true</default>
       <summary>Prefer contact names</summary>

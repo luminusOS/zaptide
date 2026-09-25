@@ -30,6 +30,5 @@ pub mod settings;
 pub mod sticker_meta;
 pub mod theme;
 pub mod timestretch;
-pub mod updates;
 pub mod util;
 pub mod voice;

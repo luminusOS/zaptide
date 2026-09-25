@@ -6,9 +6,9 @@ pub fn preview_url(value: &str) -> Option<String> {
         return None;
     }
     let value = value.trim();
-    let url = match reqwest::Url::parse(value) {
+    let url = match url::Url::parse(value) {
         Ok(url) => url,
-        Err(_) => reqwest::Url::parse(&format!("https://{value}")).ok()?,
+        Err(_) => url::Url::parse(&format!("https://{value}")).ok()?,
     };
     (matches!(url.scheme(), "http" | "https") && url.host_str().is_some()).then(|| url.to_string())
 }

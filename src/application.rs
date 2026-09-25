@@ -84,14 +84,6 @@ enum NativeEvent {
         id: String,
         name: Option<String>,
     },
-    UpdateCheckFinished(Result<Option<crate::updates::Release>, String>),
-    UpdateSupport(Result<crate::updates::install::Installation, String>),
-    UpdateProgress {
-        received: u64,
-        total: u64,
-    },
-    UpdateDownloaded(Result<Box<crate::updates::install::Prepared>, String>),
-    UpdateInstalling(Result<(), String>),
     Info(String),
     Error(String),
     Typing {
@@ -539,14 +531,6 @@ pub struct NativeApplication {
     played_voice: std::collections::HashSet<(String, String)>,
     link: LinkStatus,
     theme_catalog: crate::theme::custom::Catalog,
-    update_release: Option<crate::updates::Release>,
-    update_support: Option<Result<crate::updates::install::Installation, String>>,
-    update_state: crate::updates::DownloadState,
-    last_update_check: Option<std::time::Instant>,
-    suppress_update_dialog: bool,
-    update_check_in_flight: bool,
-    manual_update_check_pending: bool,
-    update_support_in_flight: bool,
     page_title: String,
     status: String,
     settings: crate::settings::Settings,
@@ -652,17 +636,11 @@ pub enum Input {
     ShowAbout,
     ShowShortcuts,
     ConfirmDelete(bool),
-    CheckUpdates,
-    ScheduledUpdateCheck,
-    DownloadUpdate,
-    CancelUpdate,
-    InstallUpdate,
     UnlinkConfirmed,
     ShowChatInfo,
     PairWithPhone(String),
     TogglePhoneLinking,
     FlushChats,
-    UpdateBannerAction,
     NewContact {
         phone: String,
         name: Option<String>,
@@ -831,15 +809,6 @@ impl SimpleComponent for NativeApplication {
                                     set_primary: true,
                                     set_menu_model: Some(&primary_menu),
                                 },
-                            },
-                            add_top_bar = &adw::Banner {
-                                #[watch]
-                                set_revealed: model.update_release.is_some() || !matches!(model.update_state, crate::updates::DownloadState::Idle),
-                                #[watch]
-                                set_title: &model.update_summary(),
-                                #[watch]
-                                set_button_label: model.update_button_label(),
-                                connect_button_clicked => Input::UpdateBannerAction,
                             },
 
                             #[wrap(Some)]
@@ -1704,14 +1673,6 @@ impl SimpleComponent for NativeApplication {
             played_voice: std::collections::HashSet::new(),
             link: LinkStatus::Starting,
             theme_catalog,
-            update_release: None,
-            update_support: None,
-            update_state: crate::updates::DownloadState::Idle,
-            last_update_check: None,
-            suppress_update_dialog: false,
-            update_check_in_flight: false,
-            manual_update_check_pending: false,
-            update_support_in_flight: false,
             page_title,
             status,
             settings,
@@ -1744,7 +1705,6 @@ impl SimpleComponent for NativeApplication {
         let primary_menu = gtk::gio::Menu::new();
         let section = gtk::gio::Menu::new();
         section.append(Some("_New Chat"), Some("win.new-contact"));
-        section.append(Some("_Check for Updates"), Some("win.check-updates"));
         section.append(Some("_Unlink This Computer"), Some("win.unlink"));
         primary_menu.append_section(None, &section);
         let section = gtk::gio::Menu::new();
@@ -1845,12 +1805,6 @@ impl SimpleComponent for NativeApplication {
     fn update(&mut self, input: Self::Input, sender: ComponentSender<Self>) {
         match input {
             Input::WindowMapped => {
-                sender.input(Input::ScheduledUpdateCheck);
-                let update_sender = sender.clone();
-                gtk::glib::timeout_add_local(crate::updates::CHECK_INTERVAL, move || {
-                    update_sender.input(Input::ScheduledUpdateCheck);
-                    gtk::glib::ControlFlow::Continue
-                });
                 gtk::glib::idle_add_local_once(move || sender.input(Input::StartBackend));
             }
             Input::ToggleSidebar => self.sidebar_visible = !self.sidebar_visible,
@@ -2017,21 +1971,6 @@ impl SimpleComponent for NativeApplication {
                         }
                         Event::ContactReady { id, name } => {
                             events.push(NativeEvent::ContactReady { id, name })
-                        }
-                        Event::UpdateCheckFinished(result) => {
-                            events.push(NativeEvent::UpdateCheckFinished(result))
-                        }
-                        Event::UpdateSupport(result) => {
-                            events.push(NativeEvent::UpdateSupport(result))
-                        }
-                        Event::UpdateProgress { received, total } => {
-                            events.push(NativeEvent::UpdateProgress { received, total })
-                        }
-                        Event::UpdateDownloaded(result) => {
-                            events.push(NativeEvent::UpdateDownloaded(result))
-                        }
-                        Event::UpdateInstalling(result) => {
-                            events.push(NativeEvent::UpdateInstalling(result))
                         }
                         Event::Info(message) => events.push(NativeEvent::Info(message)),
                         Event::MessageDeleted { chat, id } => {
@@ -2320,152 +2259,6 @@ impl SimpleComponent for NativeApplication {
                             self.status = "Contact is on WhatsApp".into();
                             sender.input(Input::OpenChatId(id));
                         }
-                        NativeEvent::UpdateCheckFinished(result) => {
-                            self.update_check_in_flight = false;
-                            if std::mem::take(&mut self.manual_update_check_pending) {
-                                sender.input(Input::CheckUpdates);
-                            }
-                            match result {
-                                Ok(Some(release)) => {
-                                    self.status =
-                                        format!("ZapTide {} is available", release.version);
-                                    self.update_release = Some(release.clone());
-                                    if self.update_support.is_none()
-                                        && !self.update_support_in_flight
-                                    {
-                                        self.update_support_in_flight = true;
-                                        if let Some(backend) = &self.backend {
-                                            backend.send(crate::backend::Command::InspectUpdate);
-                                        }
-                                    }
-                                    if let Some(support) = &self.update_support {
-                                        if support.is_ok()
-                                            && self.settings.download_updates_automatically
-                                        {
-                                            sender.input(Input::DownloadUpdate);
-                                        } else if support.is_ok() && !self.suppress_update_dialog {
-                                            show_update_dialog(
-                                                &self.window,
-                                                &sender,
-                                                "Update available",
-                                                &format!(
-                                                    "ZapTide {} is ready to download.",
-                                                    release.version
-                                                ),
-                                                true,
-                                            );
-                                        } else if !self.suppress_update_dialog {
-                                            show_update_dialog(
-                                                &self.window,
-                                                &sender,
-                                                "Updates unavailable",
-                                                "This installation cannot use the built-in updater.",
-                                                false,
-                                            );
-                                        }
-                                    }
-                                }
-                                Ok(None) => {
-                                    self.status = "ZapTide is up to date".into();
-                                    if !self.suppress_update_dialog {
-                                        show_update_dialog(
-                                            &self.window,
-                                            &sender,
-                                            "You're up to date",
-                                            "ZapTide is already running the latest release.",
-                                            false,
-                                        );
-                                    }
-                                }
-                                Err(_) => {
-                                    self.status = "Could not check for updates".into();
-                                    if !self.suppress_update_dialog {
-                                        show_update_dialog(
-                                            &self.window,
-                                            &sender,
-                                            "Update check failed",
-                                            "Check your connection and try again.",
-                                            false,
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                        NativeEvent::UpdateProgress { received, total } => {
-                            self.update_state =
-                                crate::updates::DownloadState::Downloading { received, total };
-                            self.status = received
-                                .saturating_mul(100)
-                                .checked_div(total)
-                                .map(|percent| format!("Downloading update: {percent}%"))
-                                .unwrap_or_else(|| "Downloading update".into());
-                        }
-                        NativeEvent::UpdateSupport(result) => {
-                            self.update_support_in_flight = false;
-                            match &result {
-                                Ok(_) => {
-                                    self.status = "Update installation is supported".into();
-                                    if let Some(release) = &self.update_release {
-                                        if self.settings.download_updates_automatically {
-                                            sender.input(Input::DownloadUpdate);
-                                        } else if !self.suppress_update_dialog {
-                                            show_update_dialog(
-                                                &self.window,
-                                                &sender,
-                                                "Update available",
-                                                &format!(
-                                                    "ZapTide {} is ready to download.",
-                                                    release.version
-                                                ),
-                                                true,
-                                            );
-                                        }
-                                    }
-                                }
-                                Err(_) => {
-                                    self.status =
-                                        "Updates are not supported on this installation".into();
-                                    if self.update_release.is_some() && !self.suppress_update_dialog
-                                    {
-                                        show_update_dialog(
-                                            &self.window,
-                                            &sender,
-                                            "Updates unavailable",
-                                            "This installation cannot use the built-in updater.",
-                                            false,
-                                        );
-                                    }
-                                }
-                            }
-                            self.update_support = Some(result);
-                        }
-                        NativeEvent::UpdateDownloaded(result) => {
-                            self.update_state = match result {
-                                Ok(prepared) => {
-                                    self.status = "Update downloaded and verified".into();
-                                    crate::updates::DownloadState::Ready(prepared)
-                                }
-                                Err(error) if error.contains("Update download cancelled") => {
-                                    self.status = "Update download cancelled".into();
-                                    crate::updates::DownloadState::Idle
-                                }
-                                Err(error) => {
-                                    self.status = format!("Update download failed: {error}");
-                                    crate::updates::DownloadState::Failed(error)
-                                }
-                            };
-                        }
-                        NativeEvent::UpdateInstalling(result) => match result {
-                            Ok(()) => {
-                                self.update_state = crate::updates::DownloadState::Installing;
-                                self.status = "Installing update".into();
-                                sender.input(Input::Quit);
-                            }
-                            Err(error) => {
-                                self.status = format!("Update installation failed: {error}");
-                                self.update_state = crate::updates::DownloadState::Failed(error);
-                            }
-                        },
                         NativeEvent::Info(message) => {
                             self.status = message.clone();
                             self.toast(&message);
@@ -2747,11 +2540,6 @@ impl SimpleComponent for NativeApplication {
                 self.chats_flush_scheduled = false;
                 self.flush_chats();
             }
-            Input::UpdateBannerAction => sender.input(match self.update_state {
-                crate::updates::DownloadState::Ready(_) => Input::InstallUpdate,
-                crate::updates::DownloadState::Downloading { .. } => Input::CancelUpdate,
-                _ => Input::DownloadUpdate,
-            }),
             Input::PairWithPhone(phone) => {
                 let Some(digits) = normalized_phone(&phone) else {
                     self.status = "Enter valid phone number with country code".into();
@@ -2782,95 +2570,6 @@ impl SimpleComponent for NativeApplication {
                     self.status = "Checking contact on WhatsApp".into();
                 } else {
                     self.status = "Backend unavailable".into();
-                }
-            }
-            Input::CheckUpdates => {
-                if self.update_check_in_flight {
-                    if self.suppress_update_dialog {
-                        self.manual_update_check_pending = true;
-                        self.status = "Finishing scheduled update check".into();
-                    }
-                    return;
-                }
-                if let Some(backend) = &self.backend {
-                    self.suppress_update_dialog = false;
-                    self.update_check_in_flight = true;
-                    self.last_update_check = Some(std::time::Instant::now());
-                    self.update_release = None;
-                    backend.send(crate::backend::Command::CheckForUpdates);
-                    self.status = "Checking for updates".into();
-                } else {
-                    self.status = "Backend unavailable".into();
-                }
-            }
-            Input::ScheduledUpdateCheck => {
-                if !self.settings.check_for_updates
-                    || self.update_check_in_flight
-                    || self
-                        .last_update_check
-                        .is_some_and(|last| last.elapsed() < crate::updates::CHECK_INTERVAL)
-                {
-                    return;
-                }
-                if let Some(backend) = &self.backend {
-                    self.suppress_update_dialog = true;
-                    self.update_check_in_flight = true;
-                    self.last_update_check = Some(std::time::Instant::now());
-                    self.update_release = None;
-                    backend.send(crate::backend::Command::CheckForUpdates);
-                    self.status = "Checking for updates".into();
-                }
-            }
-            Input::DownloadUpdate => {
-                let Some(release) = self.update_release.clone() else {
-                    self.status = "Check for updates first".into();
-                    return;
-                };
-                if let Some(Err(error)) = &self.update_support {
-                    self.status = format!("Updates are not supported: {error}");
-                    return;
-                }
-                if self.update_support.is_none() {
-                    self.status = "Check update support first".into();
-                    return;
-                }
-                if let Some(backend) = &self.backend {
-                    backend.send(crate::backend::Command::DownloadUpdate {
-                        release,
-                        source: crate::updates::Source::default(),
-                    });
-                    self.update_state = crate::updates::DownloadState::Downloading {
-                        received: 0,
-                        total: 0,
-                    };
-                    self.status = "Downloading and verifying update".into();
-                } else {
-                    self.status = "Backend unavailable".into();
-                }
-            }
-            Input::CancelUpdate => {
-                if let Some(backend) = &self.backend {
-                    backend.send(crate::backend::Command::CancelUpdate);
-                    self.status = "Cancelling update download".into();
-                }
-            }
-            Input::InstallUpdate => {
-                let state = std::mem::take(&mut self.update_state);
-                if let crate::updates::DownloadState::Ready(prepared) = state {
-                    if let Some(backend) = &self.backend {
-                        backend.send(crate::backend::Command::InstallUpdate {
-                            prepared,
-                            arguments: std::env::args().skip(1).collect(),
-                        });
-                        self.update_state = crate::updates::DownloadState::Installing;
-                        self.status = "Installing update".into();
-                    } else {
-                        self.update_state = crate::updates::DownloadState::Ready(prepared);
-                        self.status = "Backend unavailable".into();
-                    }
-                } else {
-                    self.update_state = state;
-                    self.status = "Download update before installing".into();
                 }
             }
             Input::ClearMessageSelection => self
@@ -3953,16 +3652,6 @@ impl NativeApplication {
         }
     }
 
-    fn update_button_label(&self) -> Option<&'static str> {
-        match self.update_state {
-            crate::updates::DownloadState::Ready(_) => Some("Install"),
-            crate::updates::DownloadState::Downloading { .. } => Some("Cancel"),
-            crate::updates::DownloadState::Installing => None,
-            _ if self.update_release.is_some() => Some("Download"),
-            _ => None,
-        }
-    }
-
     fn focus_composer(&self) {
         if let Some(composer) = &self.composer_view {
             composer.grab_focus();
@@ -4092,33 +3781,6 @@ impl NativeApplication {
 
     fn selected_chat(&self) -> Option<&crate::model::Chat> {
         self.chat_projection.selected_chat()
-    }
-
-    fn update_summary(&self) -> String {
-        match &self.update_state {
-            crate::updates::DownloadState::Idle => self
-                .update_release
-                .as_ref()
-                .map(|release| format!("Version {} is available", release.version))
-                .unwrap_or_default(),
-            crate::updates::DownloadState::Downloading { received, total } => {
-                if *total == 0 {
-                    format!("Downloading update: {} bytes received", received)
-                } else {
-                    format!(
-                        "Downloading update: {}%",
-                        received.saturating_mul(100) / total
-                    )
-                }
-            }
-            crate::updates::DownloadState::Ready(prepared) => {
-                format!("Version {} is ready to install", prepared.version)
-            }
-            crate::updates::DownloadState::Installing => "Installing update".into(),
-            crate::updates::DownloadState::Failed(error) => {
-                format!("Update failed: {error}")
-            }
-        }
     }
 
     fn selected_message_id(&self) -> Option<String> {
@@ -5639,7 +5301,6 @@ fn install_window_actions(
     add("preferences", input(|| Input::ShowPreferences));
     add("shortcuts", input(|| Input::ShowShortcuts));
     add("about", input(|| Input::ShowAbout));
-    add("check-updates", input(|| Input::CheckUpdates));
     add("quit", input(|| Input::Quit));
     let (parent, dialog_sender) = (window.clone(), sender.clone());
     add(
@@ -6024,35 +5685,6 @@ fn show_unlink_confirmation(
     dialog.connect_response(None, move |_, response| {
         if response == "unlink" {
             sender.input(Input::UnlinkConfirmed);
-        }
-    });
-    dialog.present(Some(parent));
-}
-
-fn show_update_dialog(
-    parent: &adw::ApplicationWindow,
-    sender: &ComponentSender<NativeApplication>,
-    heading: &str,
-    body: &str,
-    can_download: bool,
-) {
-    let dialog = adw::AlertDialog::builder()
-        .heading(heading)
-        .body(body)
-        .build();
-    dialog.add_response("close", "Close");
-    if can_download {
-        dialog.add_response("download", "Download update");
-        dialog.set_response_appearance("download", adw::ResponseAppearance::Suggested);
-        dialog.set_default_response(Some("download"));
-    } else {
-        dialog.set_default_response(Some("close"));
-    }
-    dialog.set_close_response("close");
-    let sender = sender.clone();
-    dialog.connect_response(None, move |_, response| {
-        if response == "download" {
-            sender.input(Input::DownloadUpdate);
         }
     });
     dialog.present(Some(parent));

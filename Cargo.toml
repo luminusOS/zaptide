@@ -56,12 +56,12 @@ keyring-core = "1"
 getrandom = "0.4"
 zeroize = "1"
 rand = "0.10"
-# Streaming release downloads, with restricted redirect hosts.
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 qrcode = { version = "0.14", default-features = false }
 # Downloads profile pictures. The protocol library already includes this crate
 # and TLS stack.
 ureq = { version = "3", default-features = false, features = ["rustls"] }
+# Parses link-preview URLs.
+url = "2"
 jiff = "0.2"
 # MIME detection for attachments.
 mime_guess2 = "2"

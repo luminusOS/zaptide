@@ -47,12 +47,9 @@ Changes on the Settings page are saved to `settings.json` immediately:
 - **Names from your address book**: use contact names everywhere. When off,
   prefer public profile names.
 - **Send read receipts**: the blue ticks others see.
-- **Keep running in the background**: keep ZapTide in the tray when the
-  window closes.
+- **Keep running in the background**: keep ZapTide running after its window
+  closes.
 - **Notifications**: use desktop notifications with the chat picture.
-- **Check for updates**: ask GitHub once a day whether a newer release exists.
-- **GIPHY API key**: required for GIF search unless the build includes one.
-  Set `ZAPTIDE_GIPHY_KEY` at compile time to include a default key.
 
 ## The log
 

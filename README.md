@@ -136,8 +136,6 @@ Development happens at **[github.com/luminusOS/zaptide](https://github.com/lumin
   device dismisses its outstanding notifications. On macOS, notifications use
   the installed ZapTide application's identity without an application chooser;
   unregistered development builds skip notifications if that identity is unavailable.
-- **Update notices.** ZapTide checks GitHub once a day and shows a download
-  link when a newer release is available. You can turn this off in Settings.
 - **Themes.** Light, dark, follow the system, or a local JSON palette. Native
   Linux packages can follow Omarchy colors without restarting the app. Zoom with
   Ctrl+plus and Ctrl+minus.
@@ -328,19 +326,8 @@ light/dark preference and does not read host theme files or install desktop hook
 
 ### Updating ZapTide
 
-ZapTide checks GitHub once a day when **Check for updates** is enabled.
-Click **Update** in the banner to download and verify a newer release, then
-**Restart to update** when convenient. **Download updates automatically** is
-optional and off by default; it downloads in the background and still waits for
-you to restart. Downloads contact GitHub's API and release-asset hosts and are
-checked against the release's SHA-256 checksums. The updater keeps a backup and
-restores it if the updated app cannot start.
-
-The in-app updater supports marked portable downloads, the Windows installer,
-and the macOS app in Applications. Keep `zaptide-portable.txt` beside a portable
-executable. AUR, DEB, RPM, Flatpak, Cargo and Homebrew installations use their
-package manager. Older portable downloads without the marker need one manual
-upgrade. No account or additional service is needed.
+ZapTide updates through the package manager or Flatpak remote it was installed
+from. It does not download or install releases itself.
 
 ## Developing
 

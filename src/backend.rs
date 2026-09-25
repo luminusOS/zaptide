@@ -488,18 +488,6 @@ pub enum Command {
         session_generation: u64,
         disabled: bool,
     },
-    /// Ask GitHub whether a newer release exists.
-    CheckForUpdates,
-    InspectUpdate,
-    DownloadUpdate {
-        release: crate::updates::Release,
-        source: crate::updates::Source,
-    },
-    CancelUpdate,
-    InstallUpdate {
-        prepared: Box<crate::updates::install::Prepared>,
-        arguments: Vec<String>,
-    },
 }
 
 #[derive(Debug)]
@@ -600,15 +588,6 @@ pub enum Event {
     },
     /// Informational toast message.
     Info(String),
-    /// Completion of a native update check, including current/error states.
-    UpdateCheckFinished(Result<Option<crate::updates::Release>, String>),
-    UpdateSupport(Result<crate::updates::install::Installation, String>),
-    UpdateProgress {
-        received: u64,
-        total: u64,
-    },
-    UpdateDownloaded(Result<Box<crate::updates::install::Prepared>, String>),
-    UpdateInstalling(Result<(), String>),
     Error(String),
 }
 

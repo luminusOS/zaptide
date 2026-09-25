@@ -63,10 +63,8 @@ protocol. These notes are for coding agents and new contributors.
 - Chat ids are canonical strings: a chat behind a privacy id (`@lid`) is
   filed under its phone number once the mapping is known. Use
   `Worker::canonical` for anything that arrives as a `Jid`.
-- `src/updates/` downloads verified GitHub releases and hands installation to a
-  helper after an explicit restart action. Keep package-manager detection, asset
-  checksums, startup acknowledgement and rollback intact. Portable releases carry
-  `packaging/zaptide-portable.txt`; the Windows installer has its own marker.
+- Updates belong to the package manager or Flatpak remote; the app has no
+  self-updater.
 - `src/theme/custom.rs` scans local JSON palettes off the UI thread, caching the
   last usable choice in settings, with shared Spotifast palettes embedded as
   defaults. On Linux filesystem notifications reload the catalog and the active

@@ -25,8 +25,6 @@ pub enum SettingsField {
     ChatLockCodeHash,
     Notifications,
     KeepRunningInBackground,
-    CheckForUpdates,
-    DownloadUpdatesAutomatically,
     VoiceSpeed,
 }
 
@@ -80,8 +78,6 @@ pub struct StoragePreferences {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BackgroundPreferences {
     pub keep_running: bool,
-    pub check_for_updates: bool,
-    pub download_updates_automatically: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -118,8 +114,6 @@ impl From<&Settings> for NativePreferences {
             },
             background: BackgroundPreferences {
                 keep_running: settings.keep_running_in_background,
-                check_for_updates: settings.check_for_updates,
-                download_updates_automatically: settings.download_updates_automatically,
             },
             protocol: ProtocolPreferences {
                 send_typing: settings.send_typing,
@@ -148,8 +142,6 @@ pub enum PreferenceChange {
     SetChatLockCode(Option<String>),
     SetNotifications(bool),
     SetKeepRunningInBackground(bool),
-    SetCheckForUpdates(bool),
-    SetDownloadUpdatesAutomatically(bool),
     SetVoiceSpeed(f32),
 }
 
@@ -210,14 +202,6 @@ impl std::fmt::Debug for PreferenceChange {
                 .debug_tuple("SetKeepRunningInBackground")
                 .field(value)
                 .finish(),
-            Change::SetCheckForUpdates(value) => formatter
-                .debug_tuple("SetCheckForUpdates")
-                .field(value)
-                .finish(),
-            Change::SetDownloadUpdatesAutomatically(value) => formatter
-                .debug_tuple("SetDownloadUpdatesAutomatically")
-                .field(value)
-                .finish(),
             Change::SetVoiceSpeed(value) => {
                 formatter.debug_tuple("SetVoiceSpeed").field(value).finish()
             }
@@ -244,8 +228,6 @@ impl PreferenceChange {
             Self::SetChatLockCode(_) => SettingsField::ChatLockCodeHash,
             Self::SetNotifications(_) => SettingsField::Notifications,
             Self::SetKeepRunningInBackground(_) => SettingsField::KeepRunningInBackground,
-            Self::SetCheckForUpdates(_) => SettingsField::CheckForUpdates,
-            Self::SetDownloadUpdatesAutomatically(_) => SettingsField::DownloadUpdatesAutomatically,
             Self::SetVoiceSpeed(_) => SettingsField::VoiceSpeed,
         }
     }
@@ -554,24 +536,6 @@ impl NativePreferencesDialog {
             errors.clone(),
             PreferenceChange::SetKeepRunningInBackground,
         );
-        add_switch(
-            &background_group,
-            "Check for updates daily",
-            "Check daily for a newer release",
-            preferences.background.check_for_updates,
-            changes.clone(),
-            errors.clone(),
-            PreferenceChange::SetCheckForUpdates,
-        );
-        add_switch(
-            &background_group,
-            "Download updates automatically",
-            "Download verified updates in the background",
-            preferences.background.download_updates_automatically,
-            changes.clone(),
-            errors.clone(),
-            PreferenceChange::SetDownloadUpdatesAutomatically,
-        );
 
         let protocol_page = libadwaita::PreferencesPage::new();
         protocol_page.set_title("Messaging");
@@ -861,10 +825,6 @@ impl PreferenceChange {
             Self::SetChatLockCode(value) => settings.set_chat_lock_code(value.as_deref()),
             Self::SetNotifications(value) => settings.notifications = value,
             Self::SetKeepRunningInBackground(value) => settings.keep_running_in_background = value,
-            Self::SetCheckForUpdates(value) => settings.check_for_updates = value,
-            Self::SetDownloadUpdatesAutomatically(value) => {
-                settings.download_updates_automatically = value
-            }
             Self::SetVoiceSpeed(value) => {
                 if ![1.0, 1.5, 2.0].contains(&value) {
                     return Err(ValidationError::UnsupportedVoiceSpeed);

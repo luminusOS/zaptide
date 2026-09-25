@@ -62,7 +62,7 @@ jobs:
           else
             cp "target/${{ matrix.target }}/release/zaptide" "dist/$name/"
           fi
-          cp README.md LICENSE packaging/zaptide-portable.txt "dist/$name/"
+          cp README.md LICENSE "dist/$name/"
           if [ "${{ runner.os }}" = "Linux" ]; then
             # Desktop integration for package builds and hand-installs.
             cp --parents packaging/applications/dev.luminusos.ZapTide.desktop packaging/icons/zaptide.svg contrib/omarchy/zaptide.json.tpl contrib/omarchy/zaptide-theme "dist/$name/"

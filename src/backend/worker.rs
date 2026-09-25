@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
@@ -358,7 +358,6 @@ pub async fn run(
         sticker_fetches: HashSet::new(),
         sticker_downloads: HashSet::new(),
         next_attachment_batch: 0,
-        update_cancel: None,
         read_sync: ReadSync::default(),
         poll_decrypting: 0,
         poll_history: Default::default(),
@@ -479,7 +478,6 @@ struct Worker {
     sticker_downloads: HashSet<(ChatId, String)>,
     /// Correlates selected-file completion events without exposing error details.
     next_attachment_batch: u64,
-    update_cancel: Option<Arc<AtomicBool>>,
 }
 
 /// Decoded history chunk waiting to be canonicalized and archived.
@@ -3107,73 +3105,6 @@ impl Worker {
                     self.emit(Event::ReceiptsPrivacy { disabled });
                 }
             }
-            Command::InspectUpdate => {
-                let events = self.events.clone();
-                let waker = self.waker.clone();
-                tokio::task::spawn_blocking(move || {
-                    let result =
-                        crate::updates::install::detect().map_err(|error| format!("{error:#}"));
-                    let _ = events.send(Event::UpdateSupport(result));
-                    waker.wake();
-                });
-            }
-            Command::DownloadUpdate { release, source } => {
-                if let Some(cancel) = self.update_cancel.take() {
-                    cancel.store(true, Ordering::Release);
-                }
-                let cancel = Arc::new(AtomicBool::new(false));
-                self.update_cancel = Some(cancel.clone());
-                let events = self.events.clone();
-                let waker = self.waker.clone();
-                tokio::task::spawn_blocking(move || {
-                    let result = crate::updates::download_cancellable(
-                        &release,
-                        &source,
-                        || cancel.load(Ordering::Acquire),
-                        |received, total| {
-                            let _ = events.send(Event::UpdateProgress { received, total });
-                            waker.wake();
-                        },
-                    )
-                    .map(Box::new)
-                    .map_err(|error| format!("{error:#}"));
-                    let _ = events.send(Event::UpdateDownloaded(result));
-                    waker.wake();
-                });
-            }
-            Command::CancelUpdate => {
-                if let Some(cancel) = &self.update_cancel {
-                    cancel.store(true, Ordering::Release);
-                }
-            }
-            Command::InstallUpdate {
-                prepared,
-                arguments,
-            } => {
-                let events = self.events.clone();
-                let waker = self.waker.clone();
-                tokio::task::spawn_blocking(move || {
-                    let result = crate::updates::install::handoff(&prepared, arguments)
-                        .map_err(|error| format!("{error:#}"));
-                    let _ = events.send(Event::UpdateInstalling(result));
-                    waker.wake();
-                });
-            }
-            Command::CheckForUpdates => {
-                let events = self.events.clone();
-                let waker = self.waker.clone();
-                tokio::task::spawn_blocking(move || {
-                    let result = crate::updates::newer_release().map_err(|error| {
-                        log::debug!("could not check for a newer release: {error:#}");
-                        "Could not check for updates. Try again later.".to_owned()
-                    });
-                    if matches!(result, Ok(None)) {
-                        log::debug!("this is the newest release");
-                    }
-                    let _ = events.send(Event::UpdateCheckFinished(result));
-                    waker.wake();
-                });
-            }
             Command::RecentStickers => {
                 self.fetch_missing_stickers();
                 self.emit_stickers();
@@ -3332,11 +3263,7 @@ impl Worker {
                     self.start_bot().await;
                 }
             }
-            Command::Shutdown => {
-                if let Some(cancel) = &self.update_cancel {
-                    cancel.store(true, Ordering::Release);
-                }
-            }
+            Command::Shutdown => {}
             Command::OlderFailed {
                 session_generation,
                 chat,
@@ -6750,7 +6677,6 @@ mod receipt_tests {
             sticker_fetches: HashSet::new(),
             sticker_downloads: HashSet::new(),
             next_attachment_batch: 0,
-            update_cancel: None,
             read_sync: ReadSync::default(),
             poll_decrypting: 0,
             poll_history: Default::default(),
