@@ -875,7 +875,21 @@ impl SimpleComponent for NativeApplication {
                                     },
                                     #[name = "archived_section"]
                                     append = &gtk::ToggleButton {
-                                        set_icon_name: "package-x-generic-symbolic",
+                                        #[wrap(Some)]
+                                        set_child = &gtk::Box {
+                                            set_spacing: 6,
+                                            set_halign: gtk::Align::Center,
+                                            append = &gtk::Image {
+                                                set_icon_name: Some("package-x-generic-symbolic"),
+                                            },
+                                            append = &gtk::Label {
+                                                add_css_class: "zaptide-unread-pill",
+                                                #[watch]
+                                                set_visible: model.archived_unread_count() > 0,
+                                                #[watch]
+                                                set_label: &model.archived_unread_count().to_string(),
+                                            },
+                                        },
                                         set_tooltip_text: Some("Archived"),
                                         update_property: &[gtk::accessible::Property::Label("Archived")],
                                         set_hexpand: true,
@@ -3567,6 +3581,14 @@ impl NativeApplication {
         if let Some(section) = section {
             section.set_active(true);
         }
+    }
+
+    /// Archived chats with unread messages, as counted on the phone.
+    fn archived_unread_count(&self) -> usize {
+        self.chat_snapshots
+            .iter()
+            .filter(|chat| chat.archived && !chat.locked && chat.unread > 0)
+            .count()
     }
 
     fn showing_archived(&self) -> bool {
