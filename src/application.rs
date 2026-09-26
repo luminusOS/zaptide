@@ -31,6 +31,9 @@ struct ChatRow {
     quiet: bool,
     /// Delivery of our own last message; `None` for incoming.
     delivery: crate::model::Delivery,
+    /// The chat open beside the list. Selection follows the pointer in a
+    /// single-click list, so the open chat needs a mark of its own.
+    open: bool,
 }
 
 thread_local! {
@@ -180,13 +183,12 @@ impl RelmListItem for ChatRow {
     type Widgets = ChatRowWidgets;
 
     fn setup(_item: &gtk::ListItem) -> (Self::Root, Self::Widgets) {
+        // The row's padding lives on this box (see the zaptide-chat-item
+        // style), so its open-chat background covers the whole row.
         let root = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(10)
-            .margin_top(8)
-            .margin_bottom(8)
-            .margin_start(6)
-            .margin_end(6)
+            .css_classes(["zaptide-chat-item"])
             .build();
         let avatar = adw::Avatar::new(40, None, true);
         let name = gtk::Label::builder()
@@ -260,7 +262,13 @@ impl RelmListItem for ChatRow {
         )
     }
 
-    fn bind(&mut self, widgets: &mut Self::Widgets, _root: &mut Self::Root) {
+    fn bind(&mut self, widgets: &mut Self::Widgets, root: &mut Self::Root) {
+        // Not on the list's row: restyling it while binding rebinds rows.
+        if self.open {
+            root.add_css_class("zaptide-chat-open");
+        } else {
+            root.remove_css_class("zaptide-chat-open");
+        }
         widgets.name.set_label(&self.name);
         widgets.preview.set_label(&self.preview);
         let (glyph, icon, read) = delivery_mark(self.delivery);
@@ -1224,6 +1232,7 @@ impl SimpleComponent for NativeApplication {
                                     #[local_ref]
                                     chat_view -> gtk::ListView {
                                         add_css_class: "navigation-sidebar",
+                                        add_css_class: "zaptide-chat-list",
                                         set_single_click_activate: true,
                                         connect_activate[sender] => move |_, position| sender.input(Input::SelectChat(position)),
                                     },
@@ -2599,6 +2608,7 @@ impl SimpleComponent for NativeApplication {
                 }
                 self.chat_projection.select(chat.clone());
                 self.active_chat = Some(chat.clone());
+                self.sync_chat_projection();
                 self.reply_to = None;
                 self.editing = None;
                 self.pending_edit = None;
@@ -3518,7 +3528,7 @@ fn paper_plane_icon() -> gtk::DrawingArea {
     icon
 }
 
-fn chat_row(chat: crate::model::Chat, avatar: Option<std::path::PathBuf>) -> ChatRow {
+fn chat_row(chat: crate::model::Chat, avatar: Option<std::path::PathBuf>, open: bool) -> ChatRow {
     let unread = (chat.unread != 0).then(|| chat.unread.to_string());
     let muted = chat.muted(crate::util::now());
     let delivery = chat
@@ -3542,6 +3552,7 @@ fn chat_row(chat: crate::model::Chat, avatar: Option<std::path::PathBuf>) -> Cha
         muted,
         quiet: muted || chat.archived,
         delivery,
+        open,
     }
 }
 
@@ -3572,6 +3583,9 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
     css.push_str(
         ".zaptide-transcript, .zaptide-transcript textview, .zaptide-transcript text { background: none; }\n\
          .zaptide-message-row { padding: 2px 6px; }\n\
+         .zaptide-chat-list > row { padding: 0; }\n\
+         .zaptide-chat-item { padding: 8px 14px; border-radius: inherit; }\n\
+         .zaptide-chat-item.zaptide-chat-open { background-color: alpha(currentColor, 0.22); }\n\
          .zaptide-bubble { padding: 8px 11px; border-radius: 13px; }\n\
          .zaptide-bubble.incoming { background-color: @zaptide_bubble_in; color: @zaptide_bubble_in_text; }\n\
          .zaptide-bubble.outgoing { background-color: @zaptide_bubble_out; color: @zaptide_bubble_out_text; }\n\
@@ -5027,7 +5041,12 @@ impl NativeApplication {
         let mut rows = Vec::new();
         for chat in self.chat_projection.visible() {
             self.chat_ids.push(chat.id.clone());
-            rows.push(chat_row(chat.clone(), self.avatars.get(&chat.id).cloned()));
+            let open = self.active_chat.as_deref() == Some(chat.id.as_str());
+            rows.push(chat_row(
+                chat.clone(),
+                self.avatars.get(&chat.id).cloned(),
+                open,
+            ));
         }
         // Replace only the changed middle so scrolling and a click in progress
         // survive the frequent small reorders of history sync.
