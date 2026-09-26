@@ -2736,7 +2736,7 @@ impl SimpleComponent for NativeApplication {
                     self.status = "Backend unavailable".into();
                 }
             }
-            Input::ShowMessageMenu { id, x, y } => self.show_message_menu(id, x, y),
+            Input::ShowMessageMenu { id, x, y } => self.show_message_menu(id, x, y, &sender),
             Input::SelectMessage(position) => {
                 if self.active_chat.is_none() {
                     return;
@@ -3445,6 +3445,8 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
          .zaptide-delivery.read { opacity: 1; color: #53bdeb; }\n\
          .zaptide-delivery-failed { color: @error_color; }\n\
          .zaptide-sticker { border-radius: 12px; padding: 4px; }\n\
+         .zaptide-reaction { font-size: 1.4em; min-width: 40px; min-height: 40px; padding: 0; }\n\
+         .zaptide-reaction.chosen { background-color: alpha(@accent_bg_color, 0.25); }\n\
          .zaptide-sticker-tab { border-radius: 8px; min-width: 36px; min-height: 36px; padding: 2px; }\n\
          .zaptide-sticker-tab:checked { background-color: alpha(currentColor, 0.12); }\n\
          .zaptide-sticker-picker > contents { padding: 0; }\n\
@@ -4049,7 +4051,13 @@ impl NativeApplication {
         self.chat_projection.selected_chat()
     }
 
-    fn show_message_menu(&mut self, id: String, x: f32, y: f32) {
+    fn show_message_menu(
+        &mut self,
+        id: String,
+        x: f32,
+        y: f32,
+        sender: &ComponentSender<NativeApplication>,
+    ) {
         if !self.message_ids.contains(&id) {
             return;
         }
@@ -4064,15 +4072,21 @@ impl NativeApplication {
             return;
         };
         self.message_target = Some(id);
+        let rect = gtk::gdk::Rectangle::new(point.x() as i32, point.y() as i32, 1, 1);
         self.message_menu
             .set_menu_model(Some(&self.message_menu_model()));
-        self.message_menu
-            .set_pointing_to(Some(&gtk::gdk::Rectangle::new(
-                point.x() as i32,
-                point.y() as i32,
-                1,
-                1,
-            )));
+        let current = self.selected_message().and_then(|message| {
+            message
+                .reactions
+                .iter()
+                .find(|reaction| reaction.from_me)
+                .map(|reaction| reaction.emoji.clone())
+        });
+        self.message_menu.add_child(
+            &reaction_bar(&self.message_menu, &parent, rect, current, sender),
+            "reactions",
+        );
+        self.message_menu.set_pointing_to(Some(&rect));
         self.message_menu.popup();
     }
 
@@ -4112,12 +4126,15 @@ impl NativeApplication {
         if message.quoted.is_some() {
             open.append(Some("Go to Quoted Message"), Some("message.quoted"));
         }
+        let reactions = gtk::gio::Menu::new();
+        let item = gtk::gio::MenuItem::new(None, None);
+        item.set_attribute_value("custom", Some(&"reactions".to_variant()));
+        reactions.append_item(&item);
         let respond = gtk::gio::Menu::new();
         respond.append(Some("Reply"), Some("message.reply"));
         if self.editable_messages.contains_key(&message.id) {
             respond.append(Some("Edit"), Some("message.edit"));
         }
-        respond.append(Some("React 👍"), Some("message.react"));
         respond.append(Some("Forward…"), Some("message.forward"));
         let vote = gtk::gio::Menu::new();
         if self.selected_poll_can_vote() {
@@ -4140,7 +4157,7 @@ impl NativeApplication {
         if message.from_me {
             delete.append(Some("Delete for Everyone"), Some("message.delete-everyone"));
         }
-        for section in [open, respond, vote, delete] {
+        for section in [reactions, open, respond, vote, delete] {
             if section.n_items() > 0 {
                 menu.append_section(None, &section);
             }
@@ -5662,14 +5679,13 @@ fn install_message_actions(
 ) {
     let group = gtk::gio::SimpleActionGroup::new();
     type MessageAction = (&'static str, fn() -> Input);
-    let actions: [MessageAction; 10] = [
+    let actions: [MessageAction; 9] = [
         ("attachment", || Input::ActivateSelectedAttachment),
         ("save", || Input::SaveSelectedAttachment),
         ("open-link", || Input::OpenSelectedUri),
         ("quoted", || Input::OpenQuoted),
         ("reply", || Input::ReplySelected),
         ("edit", || Input::EditSelected),
-        ("react", || Input::ReactSelected("👍".into())),
         ("forward", || Input::ShowForward),
         ("delete", || Input::DeleteSelected(false)),
         ("delete-everyone", || Input::DeleteSelected(true)),
@@ -6027,6 +6043,66 @@ fn load_sticker_preview(button: &gtk::Button, path: &std::path::Path, size: i32)
 }
 
 /// Sticker pages over a bottom row of page buttons, like the phone's picker.
+/// WhatsApp-style quick reactions above the message menu. Picking the
+/// reaction already sent removes it; "+" opens the full emoji chooser.
+fn reaction_bar(
+    menu: &gtk::PopoverMenu,
+    parent: &gtk::Widget,
+    rect: gtk::gdk::Rectangle,
+    current: Option<String>,
+    sender: &ComponentSender<NativeApplication>,
+) -> gtk::Box {
+    let bar = gtk::Box::builder()
+        .spacing(2)
+        .css_classes(["zaptide-reactions"])
+        .build();
+    for emoji in ["👍", "❤️", "😂", "😮", "😢", "🙏"] {
+        let chosen = current.as_deref() == Some(emoji);
+        let button = gtk::Button::builder()
+            .label(emoji)
+            .tooltip_text(if chosen { "Remove reaction" } else { emoji })
+            .css_classes(["flat", "circular", "zaptide-reaction"])
+            .build();
+        if chosen {
+            button.add_css_class("chosen");
+        }
+        let (menu, sender) = (menu.clone(), sender.clone());
+        let emoji = if chosen {
+            String::new()
+        } else {
+            emoji.to_owned()
+        };
+        button.connect_clicked(move |_| {
+            menu.popdown();
+            sender.input(Input::ReactSelected(emoji.clone()));
+        });
+        bar.append(&button);
+    }
+    let more = gtk::Button::builder()
+        .icon_name("list-add-symbolic")
+        .tooltip_text("More Reactions")
+        .css_classes(["flat", "circular", "zaptide-reaction"])
+        .build();
+    let (menu, parent, sender) = (menu.clone(), parent.clone(), sender.clone());
+    more.connect_clicked(move |_| {
+        menu.popdown();
+        let chooser = gtk::EmojiChooser::new();
+        chooser.set_parent(&parent);
+        chooser.set_pointing_to(Some(&rect));
+        let sender = sender.clone();
+        chooser.connect_emoji_picked(move |_, emoji| {
+            sender.input(Input::ReactSelected(emoji.to_owned()));
+        });
+        chooser.connect_closed(|chooser| {
+            let chooser = chooser.clone();
+            gtk::glib::idle_add_local_once(move || chooser.unparent());
+        });
+        chooser.popup();
+    });
+    bar.append(&more);
+    bar
+}
+
 fn sticker_picker_content(
     packs: &[crate::model::StickerPack],
     favorites: &[std::path::PathBuf],
