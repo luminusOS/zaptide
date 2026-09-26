@@ -709,6 +709,8 @@ pub struct NativeApplication {
     composer_buffer: gtk::TextBuffer,
     composer_view: Option<gtk::TextView>,
     sticker_button: Option<gtk::Button>,
+    /// The open sticker picker and its page stack, refreshed as lists arrive.
+    sticker_picker: Option<(gtk::Popover, gtk::Stack)>,
     pending_composer_request: Option<crate::native_composer::ComposerRequest>,
     pending_attachments: std::collections::HashMap<String, Vec<std::path::PathBuf>>,
     pending_clipboard_images: std::collections::HashMap<String, ClipboardPixels>,
@@ -1780,6 +1782,7 @@ impl SimpleComponent for NativeApplication {
             composer_buffer,
             composer_view: None,
             sticker_button: None,
+            sticker_picker: None,
             pending_composer_request: None,
             pending_attachments: std::collections::HashMap::new(),
             pending_clipboard_images: std::collections::HashMap::new(),
@@ -2255,9 +2258,19 @@ impl SimpleComponent for NativeApplication {
                             packs,
                             recent,
                         } => {
+                            let changed = saved != self.favorite_stickers
+                                || packs != self.sticker_packs
+                                || recent != self.recent_stickers;
+                            let packs_changed = packs != self.sticker_packs;
                             self.favorite_stickers = saved;
                             self.sticker_packs = packs;
                             self.recent_stickers = recent;
+                            if changed {
+                                self.refresh_sticker_picker(&sender);
+                            }
+                            if !packs_changed {
+                                continue;
+                            }
                             self.sticker_emojis.clear();
                             for pack in &self.sticker_packs {
                                 for sticker in &pack.stickers {
@@ -2882,13 +2895,26 @@ impl SimpleComponent for NativeApplication {
                 let Some(anchor) = &self.sticker_button else {
                     return;
                 };
-                show_sticker_picker(
-                    anchor,
+                // Anchored to the button, the popover flips above it near screen edges.
+                let popover = gtk::Popover::builder()
+                    .position(gtk::PositionType::Top)
+                    .css_classes(["zaptide-sticker-picker"])
+                    .build();
+                popover.connect_closed(|popover| {
+                    let popover = popover.clone();
+                    gtk::glib::idle_add_local_once(move || popover.unparent());
+                });
+                let (content, stack) = sticker_picker_content(
                     &self.sticker_packs,
                     &self.favorite_stickers,
                     &self.recent_stickers,
+                    None,
                     &sender,
                 );
+                popover.set_child(Some(&content));
+                popover.set_parent(anchor);
+                popover.popup();
+                self.sticker_picker = Some((popover, stack));
             }
             Input::SendSticker(path) => {
                 if let (Some(chat), Some(backend)) = (&self.active_chat, &self.backend) {
@@ -3415,6 +3441,10 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
          .zaptide-delivery { opacity: 0.6; }\n\
          .zaptide-delivery.read { opacity: 1; color: #53bdeb; }\n\
          .zaptide-delivery-failed { color: @error_color; }\n\
+         .zaptide-sticker { border-radius: 12px; padding: 4px; }\n\
+         .zaptide-sticker-tab { border-radius: 8px; min-width: 36px; min-height: 36px; padding: 2px; }\n\
+         .zaptide-sticker-tab:checked { background-color: alpha(currentColor, 0.12); }\n\
+         .zaptide-sticker-picker > contents { padding: 0; }\n\
          .zaptide-unread-pill.muted { color: @window_fg_color; background-color: alpha(currentColor, 0.18); }\n\
          .zaptide-composer { border-radius: 18px; background-color: color-mix(in srgb, currentColor 8%, transparent); }\n\
          .zaptide-composer textview, .zaptide-composer text { background: none; }\n\
@@ -4785,6 +4815,55 @@ impl NativeApplication {
         }
     }
 
+    /// Rebuilds the open picker from the latest lists, staying on its page.
+    fn refresh_sticker_picker(&mut self, sender: &ComponentSender<NativeApplication>) {
+        let Some((popover, stack)) = &self.sticker_picker else {
+            return;
+        };
+        if !popover.is_visible() {
+            self.sticker_picker = None;
+            return;
+        }
+        let page = stack.visible_child_name();
+        let scroll = |stack: &gtk::Stack| {
+            stack
+                .visible_child()
+                .and_downcast::<gtk::ScrolledWindow>()
+                .map(|scroller| scroller.vadjustment())
+        };
+        let offset = scroll(stack).map(|adjustment| adjustment.value());
+        let had_focus = popover.focus_child().is_some();
+        let (content, new_stack) = sticker_picker_content(
+            &self.sticker_packs,
+            &self.favorite_stickers,
+            &self.recent_stickers,
+            page.as_deref(),
+            sender,
+        );
+        popover.set_child(Some(&content));
+        if had_focus {
+            content.child_focus(gtk::DirectionType::TabForward);
+        }
+        // The rebuilt grid has no height yet; restore the scroll once it is
+        // tall enough to hold the old position.
+        if let (Some(offset), Some(adjustment)) = (offset, scroll(&new_stack))
+            && offset > 0.0
+        {
+            let handler = std::rc::Rc::new(std::cell::Cell::new(None));
+            let slot = handler.clone();
+            let id = adjustment.connect_upper_notify(move |adjustment| {
+                if adjustment.upper() - adjustment.page_size() >= offset {
+                    adjustment.set_value(offset);
+                    if let Some(id) = slot.take() {
+                        adjustment.disconnect(id);
+                    }
+                }
+            });
+            handler.set(Some(id));
+        }
+        self.sticker_picker = Some((popover.clone(), new_stack));
+    }
+
     /// Stickers are small and meaningless as placeholders, so loaded history
     /// fetches them the way live messages are fetched.
     fn download_missing_stickers(&mut self) {
@@ -5872,115 +5951,210 @@ fn forwardable_chat(chat: &crate::model::Chat) -> bool {
     chat.kind != crate::model::ChatKind::Broadcast && chat.can_send()
 }
 
-fn show_sticker_picker(
-    parent: &gtk::Button,
+thread_local! {
+    /// Small sticker previews by file, so picker rebuilds draw instantly.
+    static STICKER_TEXTURES: std::cell::RefCell<
+        std::collections::HashMap<std::path::PathBuf, gtk::gdk::Texture>,
+    > = std::cell::RefCell::default();
+}
+
+/// Loads a sticker preview into `button` off the main thread, once mapped.
+fn load_sticker_preview(button: &gtk::Button, path: &std::path::Path, size: i32) {
+    let show = move |button: &gtk::Button, texture: Option<&gtk::gdk::Texture>| {
+        let image = match texture {
+            Some(texture) => gtk::Image::from_paintable(Some(texture)),
+            None => gtk::Image::from_icon_name("image-missing-symbolic"),
+        };
+        image.set_pixel_size(size);
+        button.set_child(Some(&image));
+    };
+    if let Some(texture) = STICKER_TEXTURES.with_borrow(|cache| cache.get(path).cloned()) {
+        show(button, Some(&texture));
+        return;
+    }
+    button.set_child(Some(&gtk::Spinner::builder().spinning(true).build()));
+    let path = path.to_path_buf();
+    let started = std::cell::Cell::new(false);
+    button.connect_map(move |button| {
+        if started.replace(true) {
+            return;
+        }
+        let path = path.clone();
+        let button = button.downgrade();
+        gtk::glib::spawn_future_local(async move {
+            let source = path.clone();
+            // Decoded to a small RGBA preview; full-size WebP textures made the
+            // picker slow and heavy.
+            let decoded = gtk::gio::spawn_blocking(move || {
+                let bytes = std::fs::read(&source).ok()?;
+                let image = image::load_from_memory(&bytes)
+                    .ok()?
+                    .thumbnail(144, 144)
+                    .to_rgba8();
+                Some((image.width(), image.height(), image.into_raw()))
+            })
+            .await
+            .ok()
+            .flatten();
+            let texture = decoded.map(|(width, height, rgba)| {
+                gtk::gdk::MemoryTexture::new(
+                    width as i32,
+                    height as i32,
+                    gtk::gdk::MemoryFormat::R8g8b8a8,
+                    &gtk::glib::Bytes::from_owned(rgba),
+                    width as usize * 4,
+                )
+                .upcast::<gtk::gdk::Texture>()
+            });
+            if let Some(texture) = &texture {
+                STICKER_TEXTURES.with_borrow_mut(|cache| {
+                    // ponytail: wholesale reset at ~40 MB of previews; an LRU if
+                    // large libraries make reopening noticeably slower.
+                    if cache.len() >= 500 {
+                        cache.clear();
+                    }
+                    cache.insert(path, texture.clone());
+                });
+            }
+            if let Some(button) = button.upgrade() {
+                show(&button, texture.as_ref());
+            }
+        });
+    });
+}
+
+/// Sticker pages over a bottom row of page buttons, like the phone's picker.
+fn sticker_picker_content(
     packs: &[crate::model::StickerPack],
     favorites: &[std::path::PathBuf],
     recent: &[std::path::PathBuf],
+    page: Option<&str>,
     sender: &ComponentSender<NativeApplication>,
-) {
-    // Anchored to the button, the popover flips above it near screen edges.
-    let popover = gtk::Popover::builder()
-        .width_request(400)
-        .height_request(500)
-        .position(gtk::PositionType::Top)
+) -> (gtk::Box, gtk::Stack) {
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    content.set_size_request(380, 440);
+    let stack = gtk::Stack::builder()
+        .vexpand(true)
+        .transition_type(gtk::StackTransitionType::Crossfade)
         .build();
-    popover.connect_closed(|popover| {
-        let popover = popover.clone();
-        gtk::glib::idle_add_local_once(move || popover.unparent());
-    });
+    let tabs = gtk::Box::builder()
+        .spacing(4)
+        .margin_start(6)
+        .margin_end(6)
+        .margin_top(6)
+        .margin_bottom(6)
+        .build();
+    let mut first_tab: Option<gtk::ToggleButton> = None;
 
-    let notebook = gtk::Notebook::builder().scrollable(true).build();
-
-    let build_grid = |paths: &[std::path::PathBuf]| -> gtk::Widget {
-        let grid = gtk::FlowBox::builder()
-            .selection_mode(gtk::SelectionMode::None)
-            .column_spacing(6)
-            .row_spacing(6)
-            .build();
-
-        for path in paths {
-            let button = gtk::Button::builder()
-                .width_request(80)
-                .height_request(80)
+    let mut add_page =
+        |name: String, title: &str, icon: Option<&str>, paths: &[std::path::PathBuf]| {
+            let grid = gtk::FlowBox::builder()
+                .selection_mode(gtk::SelectionMode::None)
+                .homogeneous(true)
+                .min_children_per_line(4)
+                .max_children_per_line(4)
+                .column_spacing(4)
+                .row_spacing(4)
+                .margin_start(8)
+                .margin_end(8)
+                .margin_top(8)
+                .margin_bottom(8)
+                .valign(gtk::Align::Start)
                 .build();
-            button.add_css_class("flat");
+            for path in paths {
+                let button = gtk::Button::builder()
+                    .css_classes(["flat", "zaptide-sticker"])
+                    .tooltip_text("Send sticker")
+                    .build();
+                button.update_property(&[gtk::accessible::Property::Label("Sticker")]);
+                load_sticker_preview(&button, path, 72);
+                let path = path.clone();
+                let sender = sender.clone();
+                button.connect_clicked(move |_| sender.input(Input::SendSticker(path.clone())));
+                grid.append(&button);
+            }
+            let scroller = gtk::ScrolledWindow::builder()
+                .hscrollbar_policy(gtk::PolicyType::Never)
+                .child(&grid)
+                .build();
+            stack.add_titled(&scroller, Some(&name), title);
 
-            button.set_child(Some(&gtk::Spinner::builder().spinning(true).build()));
-            button.update_property(&[gtk::accessible::Property::Label("Sticker")]);
-            // Each sticker decodes off the main thread once its page is shown.
-            let path_to_load = path.clone();
-            button.connect_map(move |button| {
-                if !button
-                    .child()
-                    .is_some_and(|child| child.is::<gtk::Spinner>())
-                {
-                    return;
+            let tab = gtk::ToggleButton::builder()
+                .css_classes(["flat", "zaptide-sticker-tab"])
+                .tooltip_text(title)
+                .build();
+            tab.update_property(&[gtk::accessible::Property::Label(title)]);
+            match (icon, paths.first()) {
+                (Some(icon), _) => tab.set_icon_name(icon),
+                (None, Some(cover)) => load_sticker_preview(tab.upcast_ref(), cover, 28),
+                (None, None) => tab.set_label(title),
+            }
+            match &first_tab {
+                Some(first) => tab.set_group(Some(first)),
+                None => {
+                    tab.set_active(true);
+                    first_tab = Some(tab.clone());
                 }
-                let path = path_to_load.clone();
-                let button = button.downgrade();
-                gtk::glib::spawn_future_local(async move {
-                    let texture = gtk::gio::spawn_blocking(move || {
-                        gtk::gdk::Texture::from_filename(path).ok()
-                    })
-                    .await
-                    .ok()
-                    .flatten();
-                    let Some(button) = button.upgrade() else {
-                        return;
-                    };
-                    match texture {
-                        Some(texture) => button.set_child(Some(
-                            &gtk::Image::builder()
-                                .paintable(&texture)
-                                .pixel_size(72)
-                                .build(),
-                        )),
-                        None => button
-                            .set_child(Some(&gtk::Image::from_icon_name("image-missing-symbolic"))),
+            }
+            {
+                let stack = stack.clone();
+                let name = name.clone();
+                tab.connect_toggled(move |tab| {
+                    if tab.is_active() {
+                        stack.set_visible_child_name(&name);
                     }
                 });
-            });
-
-            let path_clone = path.clone();
-            let sender_clone = sender.clone();
-            button.connect_clicked(move |_| {
-                sender_clone.input(Input::SendSticker(path_clone.clone()));
-            });
-
-            grid.append(&button);
-        }
-
-        let scroller = gtk::ScrolledWindow::builder()
-            .vexpand(true)
-            .hexpand(true)
-            .child(&grid)
-            .build();
-
-        scroller.upcast()
-    };
+            }
+            if page == Some(name.as_str()) {
+                tab.set_active(true);
+            }
+            tabs.append(&tab);
+        };
 
     if !recent.is_empty() {
-        notebook.append_page(&build_grid(recent), Some(&gtk::Label::new(Some("Recent"))));
+        add_page(
+            "recent".into(),
+            "Recent",
+            Some("document-open-recent-symbolic"),
+            recent,
+        );
     }
-
     if !favorites.is_empty() {
-        notebook.append_page(
-            &build_grid(favorites),
-            Some(&gtk::Label::new(Some("Favorites"))),
+        add_page(
+            "favorites".into(),
+            "Favorites",
+            Some("starred-symbolic"),
+            favorites,
         );
     }
-
     for pack in packs {
-        notebook.append_page(
-            &build_grid(&pack.stickers),
-            Some(&gtk::Label::new(Some(&pack.name))),
+        add_page(
+            format!("pack:{}", pack.dir.display()),
+            &pack.name,
+            None,
+            &pack.stickers,
         );
     }
 
-    popover.set_child(Some(&notebook));
-    popover.set_parent(parent);
-    popover.popup();
+    if first_tab.is_none() {
+        let empty = adw::StatusPage::builder()
+            .icon_name("emoji-nature-symbolic")
+            .title("No Stickers Yet")
+            .description("Stickers you send, receive, or save appear here.")
+            .vexpand(true)
+            .build();
+        empty.add_css_class("compact");
+        content.append(&empty);
+        return (content, stack);
+    }
+    content.append(&stack);
+    content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    let tab_scroller = gtk::ScrolledWindow::builder()
+        .vscrollbar_policy(gtk::PolicyType::Never)
+        .child(&tabs)
+        .build();
+    content.append(&tab_scroller);
+    (content, stack)
 }
 
 fn forward_search_key(chat: &crate::model::Chat) -> String {
