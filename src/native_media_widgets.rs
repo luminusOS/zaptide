@@ -223,7 +223,9 @@ impl AudioControls {
         seek.update_property(&[gtk::accessible::Property::Label("Seek audio")]);
         let action = on_action.clone();
         seek.connect_change_value(move |_, _, value| {
-            action(crate::native_voice::VoiceIntent::Seek(value as f32));
+            action(crate::native_voice::VoiceIntent::Seek(
+                value.clamp(0.0, 1.0) as f32,
+            ));
             gtk::glib::Propagation::Stop
         });
 

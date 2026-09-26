@@ -3566,6 +3566,7 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
          .zaptide-delivery-failed { color: @error_color; }\n\
          .zaptide-sticker { border-radius: 12px; padding: 4px; }\n\
          .zaptide-audio-seek trough, .zaptide-audio-seek highlight, .zaptide-audio-seek slider { background: none; border-color: transparent; box-shadow: none; outline-color: transparent; }\n\
+          .zaptide-audio-seek:focus-visible trough { outline: 2px solid alpha(@accent_color, 0.5); outline-offset: 2px; }\n\
           .zaptide-audio-speed.compact { font-size: 0.85em; }\n\
           .zaptide-reaction { font-size: 1.4em; min-width: 40px; min-height: 40px; padding: 0; }\n\
          .zaptide-reaction.chosen { background-color: alpha(@accent_bg_color, 0.25); }\n\

@@ -807,6 +807,8 @@ impl Archive {
             "SELECT json_extract(content, '$.media.path') AS path, MAX(timestamp), raw
              FROM messages
              WHERE json_extract(content, '$.kind') = 'sticker' AND path IS NOT NULL
+               -- A pending or failed send has no raw message to resend.
+               AND raw IS NOT NULL
              GROUP BY path
              ORDER BY 2 DESC
              LIMIT ?1",
@@ -1889,6 +1891,29 @@ mod sticker_tests {
         );
         // Exclude missing local files.
         assert!(archive.recent_stickers(10).expect("lists").is_empty());
+    }
+
+    #[test]
+    fn recent_stickers_skip_sends_without_a_raw_message() {
+        let file = std::env::temp_dir().join(format!("zaptide-recent-{}.webp", std::process::id()));
+        std::fs::write(&file, b"webp").expect("file");
+        let path = file.to_str().expect("utf-8");
+        let archive = Archive::in_memory().expect("opens");
+        archive.ensure_chat("a@s.whatsapp.net", "A").expect("chat");
+        archive
+            .insert_message(
+                &sticker("a@s.whatsapp.net", "s1", 10, Some(path)),
+                Some(b"raw"),
+            )
+            .expect("inserted");
+        // A newer pending send of the same picker file has no raw message yet.
+        archive
+            .insert_message(&sticker("a@s.whatsapp.net", "s2", 20, Some(path)), None)
+            .expect("inserted");
+        let recent = archive.recent_stickers(10).expect("lists");
+        std::fs::remove_file(&file).ok();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].raw.as_deref(), Some(&b"raw"[..]));
     }
 }
 
