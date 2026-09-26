@@ -608,6 +608,7 @@ pub struct NativeApplication {
     composer: crate::native_composer::NativeComposerState,
     composer_buffer: gtk::TextBuffer,
     composer_view: Option<gtk::TextView>,
+    sticker_button: Option<gtk::Button>,
     pending_composer_request: Option<crate::native_composer::ComposerRequest>,
     pending_attachments: std::collections::HashMap<String, Vec<std::path::PathBuf>>,
     pending_clipboard_images: std::collections::HashMap<String, ClipboardPixels>,
@@ -1337,6 +1338,7 @@ impl SimpleComponent for NativeApplication {
                                             },
                                         },
 
+                                        #[name = "sticker_button"]
                                         append = &gtk::Button {
                                             set_icon_name: "emoji-nature-symbolic",
                                             set_tooltip_text: Some("Sticker"),
@@ -1676,6 +1678,7 @@ impl SimpleComponent for NativeApplication {
             composer: crate::native_composer::NativeComposerState::default(),
             composer_buffer,
             composer_view: None,
+            sticker_button: None,
             pending_composer_request: None,
             pending_attachments: std::collections::HashMap::new(),
             pending_clipboard_images: std::collections::HashMap::new(),
@@ -1737,6 +1740,7 @@ impl SimpleComponent for NativeApplication {
         model.muted_filter = Some(widgets.muted_filter.clone());
         model.chat_kind_filter = Some(widgets.chat_kind_filter.clone());
         model.composer_view = Some(widgets.composer.clone());
+        model.sticker_button = Some(widgets.sticker_button.clone());
         model.message_menu.set_parent(&widgets.conversation_body);
         model.message_menu.set_has_arrow(false);
         model.message_menu.set_halign(gtk::Align::Start);
@@ -2742,8 +2746,11 @@ impl SimpleComponent for NativeApplication {
                 if let Some(backend) = &self.backend {
                     backend.send(crate::backend::Command::RecentStickers);
                 }
+                let Some(anchor) = &self.sticker_button else {
+                    return;
+                };
                 show_sticker_picker(
-                    &self.window,
+                    anchor,
                     &self.sticker_packs,
                     &self.favorite_stickers,
                     &self.recent_stickers,
@@ -5698,18 +5705,24 @@ fn forwardable_chat(chat: &crate::model::Chat) -> bool {
 }
 
 fn show_sticker_picker(
-    parent: &adw::ApplicationWindow,
+    parent: &gtk::Button,
     packs: &[crate::model::StickerPack],
     favorites: &[std::path::PathBuf],
     recent: &[std::path::PathBuf],
     sender: &ComponentSender<NativeApplication>,
 ) {
+    // Anchored to the button, the popover flips above it near screen edges.
     let popover = gtk::Popover::builder()
         .width_request(400)
         .height_request(500)
+        .position(gtk::PositionType::Top)
         .build();
+    popover.connect_closed(|popover| {
+        let popover = popover.clone();
+        gtk::glib::idle_add_local_once(move || popover.unparent());
+    });
 
-    let notebook = adw::TabView::new();
+    let notebook = gtk::Notebook::builder().scrollable(true).build();
 
     let build_grid = |paths: &[std::path::PathBuf]| -> gtk::Widget {
         let grid = gtk::FlowBox::builder()
@@ -5725,15 +5738,41 @@ fn show_sticker_picker(
                 .build();
             button.add_css_class("flat");
 
-            if let Ok(texture) = gtk::gdk::Texture::from_filename(path) {
-                let image = gtk::Image::builder()
-                    .paintable(&texture)
-                    .pixel_size(72)
-                    .build();
-                button.set_child(Some(&image));
-            } else {
-                button.set_label("?");
-            }
+            button.set_child(Some(&gtk::Spinner::builder().spinning(true).build()));
+            button.update_property(&[gtk::accessible::Property::Label("Sticker")]);
+            // Each sticker decodes off the main thread once its page is shown.
+            let path_to_load = path.clone();
+            button.connect_map(move |button| {
+                if !button
+                    .child()
+                    .is_some_and(|child| child.is::<gtk::Spinner>())
+                {
+                    return;
+                }
+                let path = path_to_load.clone();
+                let button = button.downgrade();
+                gtk::glib::spawn_future_local(async move {
+                    let texture = gtk::gio::spawn_blocking(move || {
+                        gtk::gdk::Texture::from_filename(path).ok()
+                    })
+                    .await
+                    .ok()
+                    .flatten();
+                    let Some(button) = button.upgrade() else {
+                        return;
+                    };
+                    match texture {
+                        Some(texture) => button.set_child(Some(
+                            &gtk::Image::builder()
+                                .paintable(&texture)
+                                .pixel_size(72)
+                                .build(),
+                        )),
+                        None => button
+                            .set_child(Some(&gtk::Image::from_icon_name("image-missing-symbolic"))),
+                    }
+                });
+            });
 
             let path_clone = path.clone();
             let sender_clone = sender.clone();
@@ -5754,18 +5793,21 @@ fn show_sticker_picker(
     };
 
     if !recent.is_empty() {
-        let page = notebook.append(&build_grid(recent));
-        page.set_title("Recent");
+        notebook.append_page(&build_grid(recent), Some(&gtk::Label::new(Some("Recent"))));
     }
 
     if !favorites.is_empty() {
-        let page = notebook.append(&build_grid(favorites));
-        page.set_title("Favorites");
+        notebook.append_page(
+            &build_grid(favorites),
+            Some(&gtk::Label::new(Some("Favorites"))),
+        );
     }
 
     for pack in packs {
-        let page = notebook.append(&build_grid(&pack.stickers));
-        page.set_title(&pack.name);
+        notebook.append_page(
+            &build_grid(&pack.stickers),
+            Some(&gtk::Label::new(Some(&pack.name))),
+        );
     }
 
     popover.set_child(Some(&notebook));
