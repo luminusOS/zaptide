@@ -1364,12 +1364,15 @@ impl SimpleComponent for NativeApplication {
                                         },
 
                                         append = &gtk::Button {
-                                            set_icon_name: "document-send-symbolic",
+                                            #[wrap(Some)]
+                                            set_child = &paper_plane_icon() -> gtk::DrawingArea {},
                                             set_valign: gtk::Align::End,
                                             add_css_class: "circular",
                                             add_css_class: "suggested-action",
                                             #[watch]
                                             set_tooltip_text: Some(if model.editing.is_some() { "Save edit" } else { "Send" }),
+                                            #[watch]
+                                            update_property: &[gtk::accessible::Property::Label(if model.editing.is_some() { "Save edit" } else { "Send" })],
                                             #[watch]
                                             set_sensitive: model.active_chat.as_deref().and_then(|id| model.chat_snapshots.iter().find(|chat| chat.id == id)).is_some_and(crate::model::Chat::can_send),
                                             connect_clicked[sender, composer] => move |_| {
@@ -3137,6 +3140,46 @@ fn changed_span<T>(
         old_len - prefix - suffix,
         new.len() - prefix - suffix,
     )
+}
+
+/// A paper-plane send icon filled with the button's text color, so it follows
+/// the theme like a symbolic icon.
+fn paper_plane_icon() -> gtk::DrawingArea {
+    let icon = gtk::DrawingArea::builder()
+        .content_width(16)
+        .content_height(16)
+        .halign(gtk::Align::Center)
+        .valign(gtk::Align::Center)
+        .build();
+    icon.set_draw_func(|area, cairo, _, _| {
+        let color = area.color();
+        cairo.set_source_rgba(
+            color.red().into(),
+            color.green().into(),
+            color.blue().into(),
+            color.alpha().into(),
+        );
+        for (index, (x, y)) in [
+            (1.2, 1.6),
+            (15.2, 8.0),
+            (1.2, 14.4),
+            (3.1, 8.8),
+            (9.5, 8.0),
+            (3.1, 7.2),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if index == 0 {
+                cairo.move_to(x, y);
+            } else {
+                cairo.line_to(x, y);
+            }
+        }
+        cairo.close_path();
+        let _ = cairo.fill();
+    });
+    icon
 }
 
 fn chat_row(chat: crate::model::Chat, avatar: Option<std::path::PathBuf>) -> ChatRow {
