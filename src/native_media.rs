@@ -362,7 +362,7 @@ impl DecodeTicket {
     }
 }
 
-fn image_limits() -> image::Limits {
+pub(crate) fn image_limits() -> image::Limits {
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(MAX_THUMBNAIL_DIMENSION);
     limits.max_image_height = Some(MAX_THUMBNAIL_DIMENSION);

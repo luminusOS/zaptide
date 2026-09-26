@@ -706,15 +706,26 @@ impl RelmListItem for MessageRow {
     }
 }
 
-/// Express a row-local click in the list's coordinates without sending GTK objects across threads.
+/// True when `b` would render the same media as `a`. A sent sticker moves
+/// from the picker file to the uploaded cache copy; the picture is the same,
+/// so keep the decoded one while the old file still exists.
 fn same_media(a: &crate::model::Message, b: &crate::model::Message) -> bool {
+    use crate::model::Content;
+    let same_content = match (&a.content, &b.content) {
+        (Content::Sticker { media: old, .. }, Content::Sticker { media: new, .. }) => {
+            old == new
+                || (new.path.is_some() && old.path.as_ref().is_some_and(|path| path.is_file()))
+        }
+        (old, new) => old == new,
+    };
     a.id == b.id
         && a.chat == b.chat
         && a.from_me == b.from_me
-        && a.content == b.content
+        && same_content
         && a.thumbnail == b.thumbnail
 }
 
+/// Express a row-local click in the list's coordinates without sending GTK objects across threads.
 fn message_menu_position(row: &gtk::Widget, x: f64, y: f64) -> Option<gtk::graphene::Point> {
     let list = row.ancestor(gtk::ListView::static_type())?;
     row.compute_point(&list, &gtk::graphene::Point::new(x as f32, y as f32))
@@ -3555,7 +3566,8 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
          .zaptide-delivery-failed { color: @error_color; }\n\
          .zaptide-sticker { border-radius: 12px; padding: 4px; }\n\
          .zaptide-audio-seek trough, .zaptide-audio-seek highlight, .zaptide-audio-seek slider { background: none; border-color: transparent; box-shadow: none; outline-color: transparent; }\n\
-         .zaptide-reaction { font-size: 1.4em; min-width: 40px; min-height: 40px; padding: 0; }\n\
+          .zaptide-audio-speed.compact { font-size: 0.85em; }\n\
+          .zaptide-reaction { font-size: 1.4em; min-width: 40px; min-height: 40px; padding: 0; }\n\
          .zaptide-reaction.chosen { background-color: alpha(@accent_bg_color, 0.25); }\n\
          .zaptide-sticker-tab { border-radius: 8px; min-width: 36px; min-height: 36px; padding: 2px; }\n\
          .zaptide-sticker-tab:checked { background-color: alpha(currentColor, 0.12); }\n\
@@ -6440,13 +6452,13 @@ fn load_sticker_preview(button: &gtk::Button, path: &std::path::Path, size: i32)
     });
 }
 
-/// Sticker pages over a bottom row of page buttons, like the phone's picker.
 /// Text a message shows, if any: its body or a media caption.
 fn message_text(message: &crate::model::Message) -> Option<String> {
     let text = match &message.content {
         crate::model::Content::Text { text, .. } => Some(text),
         crate::model::Content::Image { caption, .. }
-        | crate::model::Content::Video { caption, .. } => caption.as_ref(),
+        | crate::model::Content::Video { caption, .. }
+        | crate::model::Content::Document { caption, .. } => caption.as_ref(),
         _ => None,
     };
     text.filter(|text| !text.trim().is_empty()).cloned()
@@ -6512,6 +6524,7 @@ fn reaction_bar(
     bar
 }
 
+/// Sticker pages over a bottom row of page buttons, like the phone's picker.
 fn sticker_picker_content(
     packs: &[crate::model::StickerPack],
     favorites: &[std::path::PathBuf],

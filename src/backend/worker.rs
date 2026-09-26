@@ -4726,7 +4726,7 @@ impl Worker {
     }
 
     fn send_sticker(&mut self, chat: ChatId, path: PathBuf) {
-        let Some(client) = self.client.clone() else {
+        let (Some(client), Some(_)) = (self.client.clone(), Self::jid_of(&chat)) else {
             self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
             return;
         };
@@ -4804,11 +4804,12 @@ impl Worker {
                     });
                 }
                 Err(error) => {
+                    log::warn!("could not send the sticker: {error}");
                     let _ = commands.send(Command::Sent {
                         chat,
                         id,
                         session_generation,
-                        error: Some(format!("Could not send the sticker: {error}")),
+                        error: Some(sanitized_send_error().to_owned()),
                     });
                 }
             }
@@ -4820,12 +4821,24 @@ impl Worker {
         if session_generation != self.session_generation || self.archive_cleanup_failed {
             return;
         }
+        // A sticker's pending row is already shown; fail it rather than
+        // leave it pending forever.
+        let fail = |worker: &mut Self, error: &str| {
+            if let Ok(true) =
+                worker
+                    .archive
+                    .set_status(&chat, &row.id, Delivery::Failed, crate::util::now())
+            {
+                worker.emit_message(&chat, &row.id);
+            }
+            worker.emit(Event::Error(error.to_owned()));
+        };
         let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&chat)) else {
-            self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
+            fail(self, "Not connected to WhatsApp");
             return;
         };
         let Ok(mut message) = wa::Message::decode_from_slice(&raw) else {
-            self.emit(Event::Error("Could not encode the attachment".to_owned()));
+            fail(self, "Could not encode the attachment");
             return;
         };
         let expiration = self.apply_ephemeral(&chat, &mut message);

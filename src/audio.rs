@@ -466,10 +466,13 @@ impl Player {
         let total = clip_length(loaded.samples.len());
         let offset = ((fraction.clamp(0.0, 1.0) * buffer.len() as f32) as usize).min(buffer.len());
         if self.output.is_none() {
-            let device = open_device(
+            let mut device = open_device(
                 "No sound output",
                 rodio::DeviceSinkBuilder::open_default_sink,
             )?;
+            // The player deliberately releases or replaces its output device.
+            // Rodio otherwise prints a warning on every intentional drop.
+            device.log_on_drop(false);
             let sink = rodio::Player::connect_new(device.mixer());
             self.output = Some((device, sink));
         }

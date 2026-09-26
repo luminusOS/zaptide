@@ -287,7 +287,10 @@ impl AudioControls {
             .css_classes(["numeric", "dim-label"])
             .build();
         widget.append(&time);
-        let speed = gtk::Button::builder().css_classes(["flat"]).build();
+        let speed = gtk::Button::builder()
+            .css_classes(["flat", "zaptide-audio-speed"])
+            .width_request(58)
+            .build();
         speed.set_visible(voice_note);
         let action = on_action;
         speed.connect_clicked(move |_| action(crate::native_voice::VoiceIntent::CycleSpeed));
@@ -333,7 +336,13 @@ impl AudioControls {
             .set_sensitive(voice.speed.is_some() && voice.control != VoiceControl::Loading);
         self.seek.set_value(f64::from(voice.progress));
         self.time.set_label(&voice.time);
-        self.speed.set_label(voice.speed.as_deref().unwrap_or("1x"));
+        let speed_label = voice.speed.as_deref().unwrap_or("1x");
+        self.speed.set_label(speed_label);
+        if speed_label == "1.5x" {
+            self.speed.add_css_class("compact");
+        } else {
+            self.speed.remove_css_class("compact");
+        }
         *self.bars.borrow_mut() = (voice.waveform.clone(), voice.progress);
         self.waveform.queue_draw();
         if let Some(error) = &voice.error {
@@ -377,30 +386,58 @@ const STICKER_SIZE: u32 = 160;
 // decimated past this cap. Stream frames from disk if long stickers matter.
 const MAX_STICKER_FRAMES: usize = 64;
 
+/// Frames read from one sticker, merged or not; later frames are dropped.
+const MAX_STICKER_DECODED_FRAMES: usize = 1_024;
+
 /// Decodes every frame of an animated WebP or GIF sticker, or its single
-/// frame, keeping at most `MAX_STICKER_FRAMES` by merging neighbours.
-fn decode_sticker(bytes: &[u8]) -> Option<Vec<StickerFrame>> {
-    use image::AnimationDecoder;
+/// frame, keeping at most `MAX_STICKER_FRAMES` by merging neighbours. Stops
+/// early when `current` turns false, as the row was recycled.
+fn decode_sticker(bytes: &[u8], current: impl Fn() -> bool) -> Option<Vec<StickerFrame>> {
+    use crate::native_media::{MAX_THUMBNAIL_DIMENSION, MAX_THUMBNAIL_PIXELS, image_limits};
+    use image::{AnimationDecoder, ImageDecoder};
+    let fits = |(width, height): (u32, u32)| {
+        width > 0
+            && height > 0
+            && width <= MAX_THUMBNAIL_DIMENSION
+            && height <= MAX_THUMBNAIL_DIMENSION
+            && u64::from(width) * u64::from(height) <= MAX_THUMBNAIL_PIXELS
+    };
     let cursor = std::io::Cursor::new(bytes);
     let frames: Box<dyn Iterator<Item = image::ImageResult<image::Frame>>> =
         match image::codecs::webp::WebPDecoder::new(cursor.clone()) {
-            Ok(decoder) if decoder.has_animation() => Box::new(decoder.into_frames()),
-            _ if bytes.starts_with(b"GIF8") => Box::new(
-                image::codecs::gif::GifDecoder::new(cursor)
-                    .ok()?
-                    .into_frames(),
-            ),
+            Ok(mut decoder) if decoder.has_animation() => {
+                decoder.set_limits(image_limits()).ok()?;
+                fits(decoder.dimensions()).then_some(())?;
+                Box::new(decoder.into_frames())
+            }
+            _ if bytes.starts_with(b"GIF8") => {
+                let mut decoder = image::codecs::gif::GifDecoder::new(cursor).ok()?;
+                decoder.set_limits(image_limits()).ok()?;
+                fits(decoder.dimensions()).then_some(())?;
+                Box::new(decoder.into_frames())
+            }
             _ => {
-                let image = image::load_from_memory(bytes).ok()?;
+                let mut reader = image::ImageReader::new(cursor).with_guessed_format().ok()?;
+                reader.limits(image_limits());
+                let image = reader.decode().ok()?;
                 Box::new(std::iter::once(Ok(image::Frame::new(image.to_rgba8()))))
             }
         };
     let mut kept: Vec<StickerFrame> = Vec::new();
     let mut step = 1;
-    for (index, frame) in frames.enumerate() {
-        let frame = frame.ok()?;
+    for (index, frame) in frames.take(MAX_STICKER_DECODED_FRAMES).enumerate() {
+        if !current() {
+            return None;
+        }
+        // A corrupt frame ends the animation; the frames before it still play.
+        let Ok(frame) = frame else { break };
         let (numerator, denominator) = frame.delay().numer_denom_ms();
-        let delay_ms = numerator / denominator.max(1);
+        // Browsers treat delays under 20 ms as 100 ms; do the same before
+        // merging, so merged frames keep the real duration.
+        let delay_ms = match numerator / denominator.max(1) {
+            delay if delay < 20 => 100,
+            delay => delay,
+        };
         if index % step != 0 {
             if let Some(last) = kept.last_mut() {
                 last.delay_ms += delay_ms;
@@ -455,13 +492,23 @@ fn start_sticker_decode(
                 .filter(|meta| meta.len() <= crate::native_media::MAX_THUMBNAIL_INPUT_BYTES as u64)
                 .and_then(|_| std::fs::read(&path).ok())
                 .filter(|_| ticket.is_current())
-                .and_then(|bytes| decode_sticker(&bytes));
+                .and_then(|bytes| decode_sticker(&bytes, || ticket.is_current()));
             main_context.invoke(move || {
                 let Some(image) = image.upgrade() else {
                     return;
                 };
-                let Some(frames) = frames.filter(|_| ticket.is_current()) else {
-                    image.set_tooltip_text(Some("Sticker preview unavailable"));
+                if !ticket.is_current() {
+                    return;
+                }
+                let Some(frames) = frames else {
+                    // Same fallback as a sticker without a file.
+                    image.set_visible(false);
+                    if let Some(parent) = image.parent().and_downcast::<gtk::Box>() {
+                        let label = gtk::Label::new(Some("Sticker"));
+                        label.set_xalign(0.0);
+                        label.add_css_class("dim-label");
+                        parent.append(&label);
+                    }
                     return;
                 };
                 let frames: Vec<(gdk::MemoryTexture, u32)> = frames
@@ -493,13 +540,8 @@ fn animate_sticker(
     frames: std::rc::Rc<Vec<(gdk::MemoryTexture, u32)>>,
     index: usize,
 ) {
-    // Browsers treat delays under 20 ms as 100 ms; do the same.
-    let delay = match frames[index].1 {
-        delay if delay < 20 => 100,
-        delay => delay,
-    };
     glib::timeout_add_local_once(
-        std::time::Duration::from_millis(u64::from(delay)),
+        std::time::Duration::from_millis(u64::from(frames[index].1)),
         move || {
             let Some(widget) = image.upgrade() else {
                 return;
@@ -708,7 +750,7 @@ mod tests {
 
     #[test]
     fn animated_stickers_keep_their_frames_within_the_cap() {
-        let frames = super::decode_sticker(&gif(3)).expect("decoded");
+        let frames = super::decode_sticker(&gif(3), || true).expect("decoded");
         assert_eq!(frames.len(), 3);
         assert!(
             frames
@@ -717,10 +759,24 @@ mod tests {
         );
         assert_eq!(frames[0].delay_ms, 50);
 
-        let frames = super::decode_sticker(&gif(200)).expect("decoded");
+        let frames = super::decode_sticker(&gif(200), || true).expect("decoded");
         assert!(frames.len() <= super::MAX_STICKER_FRAMES);
         let total: u32 = frames.iter().map(|frame| frame.delay_ms).sum();
         assert_eq!(total, 200 * 50, "merged frames keep the clip's length");
+    }
+
+    #[test]
+    fn oversized_or_cancelled_stickers_are_not_decoded() {
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = image::codecs::gif::GifEncoder::new(&mut bytes);
+            for _ in 0..2 {
+                let frame = image::Frame::new(image::RgbaImage::new(9_000, 1));
+                encoder.encode_frame(frame).expect("frame");
+            }
+        }
+        assert!(super::decode_sticker(&bytes, || true).is_none());
+        assert!(super::decode_sticker(&gif(3), || false).is_none());
     }
 
     use std::path::PathBuf;
