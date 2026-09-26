@@ -25,6 +25,8 @@ struct ChatRow {
     preview: String,
     unread: Option<String>,
     avatar: Option<std::path::PathBuf>,
+    pinned: bool,
+    muted: bool,
 }
 
 thread_local! {
@@ -38,6 +40,8 @@ struct ChatRowWidgets {
     name: gtk::Label,
     preview: gtk::Label,
     unread: gtk::Label,
+    pinned: gtk::Image,
+    muted: gtk::Image,
     avatar: adw::Avatar,
 }
 
@@ -198,6 +202,18 @@ impl RelmListItem for ChatRow {
             .valign(gtk::Align::Center)
             .build();
         unread.add_css_class("zaptide-unread-pill");
+        let status_icon = |icon: &str, label: &str| {
+            let image = gtk::Image::builder()
+                .icon_name(icon)
+                .tooltip_text(label)
+                .visible(false)
+                .build();
+            image.add_css_class("dim-label");
+            image.update_property(&[gtk::accessible::Property::Label(label)]);
+            image
+        };
+        let muted = status_icon("notifications-disabled-symbolic", "Muted");
+        let pinned = status_icon("view-pin-symbolic", "Pinned");
         let details = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(3)
@@ -209,6 +225,8 @@ impl RelmListItem for ChatRow {
             .spacing(6)
             .build();
         title.append(&name);
+        title.append(&muted);
+        title.append(&pinned);
         title.append(&unread);
         details.append(&title);
         details.append(&preview);
@@ -220,6 +238,8 @@ impl RelmListItem for ChatRow {
                 name,
                 preview,
                 unread,
+                pinned,
+                muted,
                 avatar,
             },
         )
@@ -228,7 +248,14 @@ impl RelmListItem for ChatRow {
     fn bind(&mut self, widgets: &mut Self::Widgets, _root: &mut Self::Root) {
         widgets.name.set_label(&self.name);
         widgets.preview.set_label(&self.preview);
+        widgets.pinned.set_visible(self.pinned);
+        widgets.muted.set_visible(self.muted);
         widgets.unread.set_visible(self.unread.is_some());
+        if self.muted {
+            widgets.unread.add_css_class("muted");
+        } else {
+            widgets.unread.remove_css_class("muted");
+        }
         if let Some(unread) = &self.unread {
             widgets.unread.set_label(unread);
         }
@@ -3209,6 +3236,7 @@ fn paper_plane_icon() -> gtk::DrawingArea {
 
 fn chat_row(chat: crate::model::Chat, avatar: Option<std::path::PathBuf>) -> ChatRow {
     let unread = (chat.unread != 0).then(|| chat.unread.to_string());
+    let muted = chat.muted(crate::util::now());
     let preview = chat
         .last
         .as_ref()
@@ -3221,6 +3249,8 @@ fn chat_row(chat: crate::model::Chat, avatar: Option<std::path::PathBuf>) -> Cha
         preview,
         unread,
         avatar,
+        pinned: chat.pinned,
+        muted,
     }
 }
 
@@ -3269,6 +3299,7 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
          .zaptide-filter-pill:checked { background-color: alpha(@accent_color, 0.18); color: @accent_color; font-weight: bold; }\n\
          .zaptide-filter-pill:checked:hover { background-color: alpha(@accent_color, 0.24); }\n\
          .zaptide-unread-pill { font-weight: bold; font-size: 0.8em; border-radius: 9999px; min-width: 1.4em; padding: 2px 6px; color: @accent_fg_color; background-color: @accent_bg_color; }\n\
+         .zaptide-unread-pill.muted { color: @window_fg_color; background-color: alpha(currentColor, 0.18); }\n\
          .zaptide-composer { border-radius: 18px; background-color: color-mix(in srgb, currentColor 8%, transparent); }\n\
          .zaptide-composer textview, .zaptide-composer text { background: none; }\n\
          .zaptide-qr { border-radius: 12px; }\n\

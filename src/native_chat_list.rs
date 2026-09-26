@@ -64,6 +64,10 @@ impl ChatListProjection {
                 }
             }
         }
+        // Pinned chats lead, most recently pinned first; the rest keep the
+        // snapshot's activity order.
+        self.chats
+            .sort_by_key(|chat| std::cmp::Reverse((chat.pinned, chat.pinned_at)));
         self.clear_selection_if_missing();
     }
 
@@ -193,6 +197,23 @@ mod tests {
         assert_eq!(ids(&projection), ["ada@s.whatsapp.net"]);
         projection.set_query("missing");
         assert!(ids(&projection).is_empty());
+    }
+
+    #[test]
+    fn pinned_chats_lead_in_pin_order_and_the_rest_keep_activity_order() {
+        let mut old_pin = chat("old-pin", "Old pin");
+        old_pin.pinned = true;
+        old_pin.pinned_at = 100;
+        let mut new_pin = chat("new-pin", "New pin");
+        new_pin.pinned = true;
+        new_pin.pinned_at = 200;
+        let projection = projection([
+            chat("recent", "Recent"),
+            old_pin,
+            chat("older", "Older"),
+            new_pin,
+        ]);
+        assert_eq!(ids(&projection), ["new-pin", "old-pin", "recent", "older"]);
     }
 
     #[test]
