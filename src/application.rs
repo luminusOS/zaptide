@@ -263,6 +263,8 @@ impl RelmListItem for ChatRow {
     }
 
     fn bind(&mut self, widgets: &mut Self::Widgets, root: &mut Self::Root) {
+        // Named by chat, so `mark_open_chat` can find the bound row.
+        root.set_widget_name(&self.id);
         // Not on the list's row: restyling it while binding rebinds rows.
         if self.open {
             root.add_css_class("zaptide-chat-open");
@@ -2608,7 +2610,7 @@ impl SimpleComponent for NativeApplication {
                 }
                 self.chat_projection.select(chat.clone());
                 self.active_chat = Some(chat.clone());
-                self.sync_chat_projection();
+                self.mark_open_chat();
                 self.reply_to = None;
                 self.editing = None;
                 self.pending_edit = None;
@@ -5024,6 +5026,31 @@ impl NativeApplication {
     fn flush_chats(&mut self) {
         if self.chats_dirty {
             self.sync_chat_projection();
+        }
+    }
+
+    /// Moves the open-chat mark without rebuilding the list: rows between
+    /// the old and new open chat would be recreated, losing scroll and focus.
+    fn mark_open_chat(&self) {
+        let open = self.active_chat.as_deref();
+        for (position, id) in self.chat_ids.iter().enumerate() {
+            if let Some(item) = self.chats.get(position as u32) {
+                let is_open = open == Some(id.as_str());
+                if item.borrow().open != is_open {
+                    item.borrow_mut().open = is_open;
+                }
+            }
+        }
+        let mut row = self.chats.view.first_child();
+        while let Some(current) = row {
+            if let Some(root) = current.first_child() {
+                if open == Some(root.widget_name().as_str()) {
+                    root.add_css_class("zaptide-chat-open");
+                } else {
+                    root.remove_css_class("zaptide-chat-open");
+                }
+            }
+            row = current.next_sibling();
         }
     }
 
