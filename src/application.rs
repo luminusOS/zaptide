@@ -485,6 +485,9 @@ impl RelmListItem for MessageRow {
         let gesture_target = menu_target.clone();
         let focus_row = root.downgrade();
         context_click.connect_pressed(move |gesture, _, x, y| {
+            // Claim the click so a selectable label cannot also open its own
+            // context menu over ours; two grabbing popovers freeze the app.
+            gesture.set_state(gtk::EventSequenceState::Claimed);
             if let (Some((id, sender)), Some(row)) =
                 (gesture_target.borrow().clone(), gesture.widget())
             {
@@ -859,6 +862,7 @@ pub enum Input {
     },
     ActivateSelectedAttachment,
     ReactSelected(String),
+    CopySelectedText,
     ShowForward,
     ForwardSelected(String),
     DeleteSelected(bool),
@@ -3139,6 +3143,15 @@ impl SimpleComponent for NativeApplication {
                 }
             }
             Input::CopyTranscript => self.copy_transcript(),
+            Input::CopySelectedText => {
+                if let Some(text) = self.selected_message().and_then(message_text) {
+                    crate::native_portals::NativePortals::write_clipboard_text(
+                        &self.window.clipboard(),
+                        &text,
+                    );
+                    self.toast("Copied");
+                }
+            }
             Input::ActivateVoice => self.activate_voice(&sender),
             Input::CycleVoiceSpeed => self.cycle_voice_speed(),
             Input::SeekVoice(fraction) => self.seek_voice(fraction, &sender),
@@ -4264,6 +4277,9 @@ impl NativeApplication {
         item.set_attribute_value("custom", Some(&"reactions".to_variant()));
         reactions.append_item(&item);
         let respond = gtk::gio::Menu::new();
+        if message_text(message).is_some() {
+            respond.append(Some("Copy Text"), Some("message.copy"));
+        }
         respond.append(Some("Reply"), Some("message.reply"));
         if self.editable_messages.contains_key(&message.id) {
             respond.append(Some("Edit"), Some("message.edit"));
@@ -6046,7 +6062,8 @@ fn install_message_actions(
 ) {
     let group = gtk::gio::SimpleActionGroup::new();
     type MessageAction = (&'static str, fn() -> Input);
-    let actions: [MessageAction; 9] = [
+    let actions: [MessageAction; 10] = [
+        ("copy", || Input::CopySelectedText),
         ("attachment", || Input::ActivateSelectedAttachment),
         ("save", || Input::SaveSelectedAttachment),
         ("open-link", || Input::OpenSelectedUri),
@@ -6410,6 +6427,17 @@ fn load_sticker_preview(button: &gtk::Button, path: &std::path::Path, size: i32)
 }
 
 /// Sticker pages over a bottom row of page buttons, like the phone's picker.
+/// Text a message shows, if any: its body or a media caption.
+fn message_text(message: &crate::model::Message) -> Option<String> {
+    let text = match &message.content {
+        crate::model::Content::Text { text, .. } => Some(text),
+        crate::model::Content::Image { caption, .. }
+        | crate::model::Content::Video { caption, .. } => caption.as_ref(),
+        _ => None,
+    };
+    text.filter(|text| !text.trim().is_empty()).cloned()
+}
+
 /// WhatsApp-style quick reactions above the message menu. Picking the
 /// reaction already sent removes it; "+" opens the full emoji chooser.
 fn reaction_bar(
