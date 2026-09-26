@@ -29,6 +29,8 @@ struct ChatRow {
     muted: bool,
     /// Muted and archived chats count unread messages in grey.
     quiet: bool,
+    /// Delivery of our own last message; `None` for incoming.
+    delivery: crate::model::Delivery,
 }
 
 thread_local! {
@@ -41,6 +43,8 @@ thread_local! {
 struct ChatRowWidgets {
     name: gtk::Label,
     preview: gtk::Label,
+    status: gtk::Label,
+    status_icon: gtk::Image,
     unread: gtk::Label,
     pinned: gtk::Image,
     muted: gtk::Image,
@@ -231,7 +235,16 @@ impl RelmListItem for ChatRow {
         title.append(&pinned);
         title.append(&unread);
         details.append(&title);
-        details.append(&preview);
+        let status = gtk::Label::builder()
+            .css_classes(["caption", "zaptide-delivery"])
+            .visible(false)
+            .build();
+        let status_icon = gtk::Image::builder().pixel_size(12).visible(false).build();
+        let preview_row = gtk::Box::builder().spacing(4).build();
+        preview_row.append(&status);
+        preview_row.append(&status_icon);
+        preview_row.append(&preview);
+        details.append(&preview_row);
         root.append(&avatar);
         root.append(&details);
         (
@@ -239,6 +252,8 @@ impl RelmListItem for ChatRow {
             ChatRowWidgets {
                 name,
                 preview,
+                status,
+                status_icon,
                 unread,
                 pinned,
                 muted,
@@ -250,6 +265,23 @@ impl RelmListItem for ChatRow {
     fn bind(&mut self, widgets: &mut Self::Widgets, _root: &mut Self::Root) {
         widgets.name.set_label(&self.name);
         widgets.preview.set_label(&self.preview);
+        let (glyph, icon, read) = delivery_mark(self.delivery);
+        widgets.status.set_label(glyph);
+        widgets.status.set_visible(!glyph.is_empty());
+        if read {
+            widgets.status.add_css_class("read");
+        } else {
+            widgets.status.remove_css_class("read");
+        }
+        widgets.status_icon.set_icon_name(icon);
+        widgets.status_icon.set_visible(icon.is_some());
+        if self.delivery == crate::model::Delivery::Failed {
+            widgets.status_icon.add_css_class("zaptide-delivery-failed");
+        } else {
+            widgets
+                .status_icon
+                .remove_css_class("zaptide-delivery-failed");
+        }
         widgets.pinned.set_visible(self.pinned);
         widgets.muted.set_visible(self.muted);
         widgets.unread.set_visible(self.unread.is_some());
@@ -3311,6 +3343,11 @@ fn paper_plane_icon() -> gtk::DrawingArea {
 fn chat_row(chat: crate::model::Chat, avatar: Option<std::path::PathBuf>) -> ChatRow {
     let unread = (chat.unread != 0).then(|| chat.unread.to_string());
     let muted = chat.muted(crate::util::now());
+    let delivery = chat
+        .last
+        .as_ref()
+        .filter(|last| last.from_me)
+        .map_or(crate::model::Delivery::None, |last| last.status);
     let preview = chat
         .last
         .as_ref()
@@ -3326,6 +3363,7 @@ fn chat_row(chat: crate::model::Chat, avatar: Option<std::path::PathBuf>) -> Cha
         pinned: chat.pinned,
         muted,
         quiet: muted || chat.archived,
+        delivery,
     }
 }
 
