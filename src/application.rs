@@ -750,8 +750,7 @@ pub struct NativeApplication {
     chat_search: Option<gtk::SearchEntry>,
     unread_filter: Option<gtk::ToggleButton>,
     pinned_filter: Option<gtk::ToggleButton>,
-    chats_section: Option<gtk::ToggleButton>,
-    archived_section: Option<gtk::ToggleButton>,
+    chat_section: Option<adw::ToggleGroup>,
     muted_filter: Option<gtk::ToggleButton>,
     /// The "All" pill; activating it clears the private/group filter.
     chat_kind_filter: Option<gtk::ToggleButton>,
@@ -1176,39 +1175,40 @@ impl SimpleComponent for NativeApplication {
                                     set_margin_start: 12,
                                     set_margin_end: 12,
                                     set_margin_bottom: 6,
-                                    #[name = "chats_section"]
-                                    append = &gtk::ToggleButton {
-                                        set_icon_name: "user-available-symbolic",
-                                        set_tooltip_text: Some("Chats"),
-                                        update_property: &[gtk::accessible::Property::Label("Chats")],
+                                    #[name = "chat_section"]
+                                    append = &adw::ToggleGroup {
                                         set_hexpand: true,
-                                        set_active: true,
+                                        set_homogeneous: true,
                                         add_css_class: "flat",
-                                    },
-                                    #[name = "archived_section"]
-                                    append = &gtk::ToggleButton {
-                                        #[wrap(Some)]
-                                        set_child = &gtk::Box {
-                                            set_spacing: 6,
-                                            set_halign: gtk::Align::Center,
-                                            append = &gtk::Image {
-                                                set_icon_name: Some("package-x-generic-symbolic"),
-                                            },
-                                            append = &gtk::Label {
-                                                add_css_class: "zaptide-unread-pill",
-                                                add_css_class: "muted",
-                                                #[watch]
-                                                set_visible: model.archived_unread_count() > 0,
-                                                #[watch]
-                                                set_label: &model.archived_unread_count().to_string(),
+                                        add = adw::Toggle {
+                                            set_name: Some("chats"),
+                                            set_icon_name: Some("user-available-symbolic"),
+                                            set_tooltip: "Chats",
+                                        },
+                                        add = adw::Toggle {
+                                            set_name: Some("archived"),
+                                            set_tooltip: "Archived",
+                                            #[wrap(Some)]
+                                            set_child = &gtk::Box {
+                                                set_spacing: 6,
+                                                set_halign: gtk::Align::Center,
+                                                append = &gtk::Image {
+                                                    set_icon_name: Some("package-x-generic-symbolic"),
+                                                },
+                                                append = &gtk::Label {
+                                                    add_css_class: "zaptide-unread-pill",
+                                                    add_css_class: "muted",
+                                                    #[watch]
+                                                    set_visible: model.archived_unread_count() > 0,
+                                                    #[watch]
+                                                    set_label: &model.archived_unread_count().to_string(),
+                                                },
                                             },
                                         },
-                                        set_tooltip_text: Some("Archived"),
-                                        update_property: &[gtk::accessible::Property::Label("Archived")],
-                                        set_hexpand: true,
-                                        set_group: Some(&chats_section),
-                                        add_css_class: "flat",
-                                        connect_toggled[sender] => move |button| sender.input(Input::SetArchivedFilter(button.is_active())),
+                                        set_active_name: Some("chats"),
+                                        connect_active_name_notify[sender] => move |group| {
+                                            sender.input(Input::SetArchivedFilter(group.active_name().as_deref() == Some("archived")));
+                                        },
                                     },
                                 },
                                 append = &gtk::ScrolledWindow {
@@ -1795,8 +1795,7 @@ impl SimpleComponent for NativeApplication {
             chat_search: None,
             unread_filter: None,
             pinned_filter: None,
-            chats_section: None,
-            archived_section: None,
+            chat_section: None,
             muted_filter: None,
             chat_kind_filter: None,
             chat_projection: crate::native_chat_list::ChatListProjection::default(),
@@ -1903,8 +1902,7 @@ impl SimpleComponent for NativeApplication {
         model.chat_search = Some(widgets.chat_search.clone());
         model.unread_filter = Some(widgets.unread_filter.clone());
         model.pinned_filter = Some(widgets.pinned_filter.clone());
-        model.chats_section = Some(widgets.chats_section.clone());
-        model.archived_section = Some(widgets.archived_section.clone());
+        model.chat_section = Some(widgets.chat_section.clone());
         model.muted_filter = Some(widgets.muted_filter.clone());
         model.chat_kind_filter = Some(widgets.chat_kind_filter.clone());
         model.composer_view = Some(widgets.composer.clone());
@@ -3985,13 +3983,8 @@ impl NativeApplication {
         if let Some(filter) = &self.chat_kind_filter {
             filter.set_active(true);
         }
-        let section = if archived {
-            &self.archived_section
-        } else {
-            &self.chats_section
-        };
-        if let Some(section) = section {
-            section.set_active(true);
+        if let Some(section) = &self.chat_section {
+            section.set_active_name(Some(if archived { "archived" } else { "chats" }));
         }
     }
 
