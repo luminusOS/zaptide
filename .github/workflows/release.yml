@@ -48,7 +48,7 @@ jobs:
       - run: rustup target add ${{ matrix.target }}
       - name: GUI build dependencies
         if: runner.os == 'Linux'
-        run: dnf install -y --setopt=install_weak_deps=False gcc gcc-c++ git gtk4-devel libadwaita-devel alsa-lib-devel gstreamer1-devel cmake gettext perl make tar zstd
+        run: dnf install -y --setopt=install_weak_deps=False gcc gcc-c++ git gtk4-devel libadwaita-devel alsa-lib-devel gstreamer1-devel cmake gettext libseccomp-devel fontconfig-devel perl make tar zstd
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}

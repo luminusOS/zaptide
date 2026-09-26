@@ -75,6 +75,9 @@ nfpm:
       - glibc >= 2.39
       - gtk4
       - libadwaita >= 1.10
+      # Photos load through glycin's sandboxed loaders.
+      - glycin-loaders
+      - bubblewrap
       - libglvnd-glx
       - libglvnd-egl
       - libxkbcommon

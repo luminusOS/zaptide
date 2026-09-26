@@ -52,7 +52,7 @@ jobs:
         with:
           components: clippy
       - name: System dependencies
-        run: dnf install -y --setopt=install_weak_deps=False gcc gcc-c++ git gtk4-devel libadwaita-devel alsa-lib-devel gstreamer1-devel cmake gettext perl make tar zstd
+        run: dnf install -y --setopt=install_weak_deps=False gcc gcc-c++ git gtk4-devel libadwaita-devel alsa-lib-devel gstreamer1-devel cmake gettext libseccomp-devel fontconfig-devel perl make tar zstd
       - uses: Swatinem/rust-cache@v2
         with:
           key: upstream-clippy
@@ -71,7 +71,7 @@ jobs:
         with:
           components: clippy
       - name: System dependencies
-        run: dnf install -y --setopt=install_weak_deps=False gcc gcc-c++ git gtk4-devel libadwaita-devel alsa-lib-devel gstreamer1-devel cmake gettext perl make tar zstd
+        run: dnf install -y --setopt=install_weak_deps=False gcc gcc-c++ git gtk4-devel libadwaita-devel alsa-lib-devel gstreamer1-devel cmake gettext libseccomp-devel fontconfig-devel perl make tar zstd
       - uses: Swatinem/rust-cache@v2
         with:
           key: upstream-clippy-all
@@ -88,7 +88,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: System dependencies
-        run: dnf install -y --setopt=install_weak_deps=False gcc gcc-c++ git gtk4-devel libadwaita-devel alsa-lib-devel gstreamer1-devel cmake gettext perl make tar zstd
+        run: dnf install -y --setopt=install_weak_deps=False gcc gcc-c++ git gtk4-devel libadwaita-devel alsa-lib-devel gstreamer1-devel cmake gettext libseccomp-devel fontconfig-devel perl make tar zstd
       - uses: Swatinem/rust-cache@v2
         with:
           key: upstream-test
@@ -105,7 +105,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: System dependencies
-        run: dnf install -y --setopt=install_weak_deps=False gcc gcc-c++ git gtk4-devel libadwaita-devel alsa-lib-devel gstreamer1-devel cmake gettext perl make tar zstd
+        run: dnf install -y --setopt=install_weak_deps=False gcc gcc-c++ git gtk4-devel libadwaita-devel alsa-lib-devel gstreamer1-devel cmake gettext libseccomp-devel fontconfig-devel perl make tar zstd
       - uses: Swatinem/rust-cache@v2
         with:
           key: upstream-test-all
@@ -122,7 +122,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: System dependencies
-        run: dnf install -y --setopt=install_weak_deps=False gcc gcc-c++ git gtk4-devel libadwaita-devel alsa-lib-devel gstreamer1-devel cmake gettext perl make tar zstd
+        run: dnf install -y --setopt=install_weak_deps=False gcc gcc-c++ git gtk4-devel libadwaita-devel alsa-lib-devel gstreamer1-devel cmake gettext libseccomp-devel fontconfig-devel perl make tar zstd
       - uses: Swatinem/rust-cache@v2
         with:
           key: upstream-doc
@@ -142,7 +142,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: System dependencies
-        run: dnf install -y --setopt=install_weak_deps=False gcc gcc-c++ git gtk4-devel libadwaita-devel alsa-lib-devel gstreamer1-devel cmake gettext perl make tar zstd
+        run: dnf install -y --setopt=install_weak_deps=False gcc gcc-c++ git gtk4-devel libadwaita-devel alsa-lib-devel gstreamer1-devel cmake gettext libseccomp-devel fontconfig-devel perl make tar zstd
       - uses: Swatinem/rust-cache@v2
         with:
           key: upstream-tree-dupes

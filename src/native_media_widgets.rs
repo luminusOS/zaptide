@@ -5,6 +5,7 @@ use std::{
     thread,
 };
 
+use relm4::adw::{self, prelude::AdwDialogExt};
 use relm4::gtk::{self, gdk, glib, prelude::*};
 
 use crate::{
@@ -76,6 +77,19 @@ pub fn build_media_widget_with_action(
     }
     if let Content::Sticker { media, .. } = &message.content {
         append_sticker(&root, media.path.clone(), &decode_token);
+        return NativeMediaWidget {
+            widget: root,
+            decode_token,
+        };
+    }
+    if let Content::Image { media, .. } = &message.content {
+        append_photo(
+            &root,
+            message,
+            media,
+            &decode_token,
+            std::rc::Rc::new(on_action),
+        );
         return NativeMediaWidget {
             widget: root,
             decode_token,
@@ -632,6 +646,194 @@ impl StickerAnimation {
     }
 }
 
+/// Largest side of a photo in the transcript, in logical pixels.
+const PHOTO_EDGE: u32 = 300;
+
+/// Photo size in the transcript: its aspect ratio within `PHOTO_EDGE`, and
+/// not so thin that it vanishes. Unknown sizes show square.
+fn photo_size(width: Option<u32>, height: Option<u32>) -> (i32, i32) {
+    let (Some(width), Some(height)) = (width.filter(|w| *w > 0), height.filter(|h| *h > 0)) else {
+        return (PHOTO_EDGE as i32, PHOTO_EDGE as i32);
+    };
+    let scale = f64::from(PHOTO_EDGE) / f64::from(width.max(height));
+    let side = |value: u32| ((f64::from(value) * scale).round() as i32).max(PHOTO_EDGE as i32 / 3);
+    (side(width), side(height))
+}
+
+/// A photo in its own rounded frame: the small inline thumbnail at once,
+/// the file itself once downloaded, and a full view on click.
+fn append_photo(
+    parent: &gtk::Box,
+    message: &Message,
+    media: &crate::model::Media,
+    token: &DecodeToken,
+    on_action: std::rc::Rc<dyn Fn(NativeMediaAction)>,
+) {
+    let (width, height) = photo_size(media.width, media.height);
+    let picture = gtk::Picture::builder()
+        .content_fit(gtk::ContentFit::Cover)
+        .can_shrink(true)
+        .width_request(width)
+        .height_request(height)
+        .build();
+    picture.update_property(&[gtk::accessible::Property::Label("Photo")]);
+    // Pictures do not clip their own drawing; a frame with hidden overflow
+    // rounds the corners.
+    let frame = gtk::Overlay::builder()
+        .child(&picture)
+        .halign(gtk::Align::Start)
+        .overflow(gtk::Overflow::Hidden)
+        .css_classes(["zaptide-photo"])
+        .build();
+    parent.append(&frame);
+    if let Some(texture) = message
+        .thumbnail
+        .as_deref()
+        .and_then(|bytes| gdk::Texture::from_bytes(&glib::Bytes::from(bytes)).ok())
+    {
+        picture.set_paintable(Some(&texture));
+    }
+    match (&media.path, attachment_action(message)) {
+        (Some(path), _) if path.is_file() => {
+            // Twice the frame, for high-density screens.
+            load_photo(
+                &picture,
+                path.clone(),
+                2 * width as u32,
+                2 * height as u32,
+                token,
+            );
+            frame.set_cursor_from_name(Some("zoom-in"));
+            frame.set_tooltip_text(Some("View photo"));
+            let click = gtk::GestureClick::new();
+            let (path, frame_ref) = (path.clone(), frame.downgrade());
+            click.connect_released(move |_, _, _, _| {
+                if let Some(frame) = frame_ref.upgrade() {
+                    show_photo(&frame, &path, on_action.clone());
+                }
+            });
+            frame.add_controller(click);
+        }
+        (_, Some(action @ NativeMediaAction::Download { .. })) => {
+            let button = gtk::Button::builder()
+                .icon_name("folder-download-symbolic")
+                .tooltip_text("Download photo")
+                .halign(gtk::Align::Center)
+                .valign(gtk::Align::Center)
+                .css_classes(["osd", "circular"])
+                .build();
+            button.connect_clicked(move |_| on_action(action.clone()));
+            frame.add_overlay(&button);
+        }
+        _ => {
+            let spinner = adw::Spinner::builder()
+                .width_request(32)
+                .height_request(32)
+                .halign(gtk::Align::Center)
+                .valign(gtk::Align::Center)
+                .build();
+            frame.add_overlay(&spinner);
+        }
+    }
+}
+
+/// Opens `path` in a dialog over the window, fitted to it.
+fn show_photo(
+    parent: &impl IsA<gtk::Widget>,
+    path: &std::path::Path,
+    on_action: std::rc::Rc<dyn Fn(NativeMediaAction)>,
+) {
+    let picture = gtk::Picture::builder()
+        .content_fit(gtk::ContentFit::Contain)
+        .can_shrink(true)
+        .vexpand(true)
+        .build();
+    picture.update_property(&[gtk::accessible::Property::Label("Photo")]);
+    let open = gtk::Button::with_label("Open With…");
+    let header = adw::HeaderBar::new();
+    header.pack_start(&open);
+    let view = adw::ToolbarView::new();
+    view.add_top_bar(&header);
+    view.set_content(Some(&picture));
+    let dialog = adw::Dialog::builder()
+        .title("Photo")
+        .content_width(900)
+        .content_height(700)
+        .child(&view)
+        .build();
+    {
+        let (path, dialog) = (path.to_path_buf(), dialog.downgrade());
+        open.connect_clicked(move |_| {
+            on_action(NativeMediaAction::Open(path.clone()));
+            if let Some(dialog) = dialog.upgrade() {
+                dialog.close();
+            }
+        });
+    }
+    // Full size up to a large screen; the view fits it to the dialog.
+    load_photo(
+        &picture,
+        path.to_path_buf(),
+        3840,
+        3840,
+        &DecodeToken::default(),
+    );
+    dialog.present(Some(parent));
+}
+
+#[cfg(target_os = "linux")]
+fn photo_runtime() -> &'static tokio::runtime::Runtime {
+    static RUNTIME: std::sync::LazyLock<tokio::runtime::Runtime> = std::sync::LazyLock::new(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_name("zaptide-photo")
+            .enable_all()
+            .build()
+            .expect("photo runtime")
+    });
+    &RUNTIME
+}
+
+/// Loads `path` through glycin's sandboxed loaders, scaled to fit
+/// `width` by `height`, into `picture`, unless its row moved on first.
+#[cfg(target_os = "linux")]
+fn load_photo(
+    picture: &gtk::Picture,
+    path: std::path::PathBuf,
+    width: u32,
+    height: u32,
+    token: &DecodeToken,
+) {
+    let ticket = token.issue();
+    let picture = glib::SendWeakRef::from(picture.downgrade());
+    let main_context = glib::MainContext::default();
+    photo_runtime().spawn(async move {
+        let texture = async {
+            let mut image = glycin::Loader::new(gtk::gio::File::for_path(&path))
+                .load()
+                .await
+                .ok()?;
+            let frame = image
+                .specific_frame(glycin::FrameRequest::new().scale(width, height))
+                .await
+                .ok()?;
+            Some(frame.texture())
+        }
+        .await;
+        main_context.invoke(move || {
+            if let (true, Some(picture), Some(texture)) =
+                (ticket.is_current(), picture.upgrade(), texture)
+            {
+                picture.set_paintable(Some(&texture));
+            }
+        });
+    });
+}
+
+/// Without glycin, photos keep their inline thumbnail.
+#[cfg(not(target_os = "linux"))]
+fn load_photo(_: &gtk::Picture, _: std::path::PathBuf, _: u32, _: u32, _: &DecodeToken) {}
+
 fn add_label(parent: &gtk::Box, text: &str) {
     let label = gtk::Label::new(Some(text));
     label.set_xalign(0.0);
@@ -926,6 +1128,14 @@ mod tests {
             let projection = project_content(&message);
             assert!(!format!("{projection:?}").contains("private"));
         }
+    }
+
+    #[test]
+    fn photos_keep_their_shape_within_the_frame() {
+        assert_eq!(super::photo_size(Some(4000), Some(3000)), (300, 225));
+        assert_eq!(super::photo_size(Some(1080), Some(1920)), (169, 300));
+        assert_eq!(super::photo_size(Some(3000), Some(100)), (300, 100));
+        assert_eq!(super::photo_size(None, Some(10)), (300, 300));
     }
 
     #[test]

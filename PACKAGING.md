@@ -144,6 +144,7 @@ ZapTide needs libadwaita 1.10, which ships with GNOME 51.
 | ALSA | `alsa-lib-devel` | `libasound2-dev` | `alsa-lib` | Required for audio |
 | GStreamer | `gstreamer1-devel` | `libgstreamer1.0-dev` | `gstreamer` | Linux audio playback; base and good plugins at runtime |
 | cmake | `cmake` | `cmake` | `cmake` | Builds libopus via opusic-sys |
+| libseccomp, fontconfig | `libseccomp-devel fontconfig-devel` | `libseccomp-dev libfontconfig-dev` | `libseccomp fontconfig` | glycin, which loads photos; needs `glycin-loaders` and `bubblewrap` at runtime |
 | gettext | `gettext` | `gettext` | `gettext` | Compiles i18n catalogs |
 | glib2-devel | `glib2-devel` | `libglib2.0-dev-bin` | `glib2` | Provides glib-compile-schemas |
 | desktop-file-utils | `desktop-file-utils` | `desktop-file-utils` | `desktop-file-utils` | desktop-file-validate |

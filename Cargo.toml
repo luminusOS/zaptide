@@ -72,6 +72,8 @@ ogg = "0.9"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gstreamer = "0.25"
+# Loads photos through GNOME's sandboxed image loaders (glycin-loaders).
+glycin = { version = "4", default-features = false, features = ["gdk4", "tokio"] }
 notify = "8.2"
 zbus-secret-service-keyring-store = { version = "1.0.1", features = ["rt-tokio-crypto-rust"] }
 
