@@ -6475,6 +6475,95 @@ fn load_sticker_preview(button: &gtk::Button, path: &std::path::Path, size: i32)
     });
 }
 
+/// Plays an animated sticker while the pointer is over its picker button,
+/// and puts the still preview back when it leaves.
+fn animate_sticker_on_hover(button: &gtk::Button, path: &std::path::Path) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let hovering = std::sync::Arc::new(AtomicBool::new(false));
+    // Known after the first decode; still stickers are not decoded again.
+    let still = std::rc::Rc::new(std::cell::Cell::new(false));
+    let playing: std::rc::Rc<
+        std::cell::RefCell<
+            Option<(
+                crate::native_media_widgets::StickerAnimation,
+                gtk::gdk::Paintable,
+            )>,
+        >,
+    > = Default::default();
+    let hover = gtk::EventControllerMotion::new();
+    {
+        let (hovering, playing, path) = (hovering.clone(), playing.clone(), path.to_path_buf());
+        let button = button.downgrade();
+        hover.connect_enter(move |_, _, _| {
+            if still.get() || hovering.swap(true, Ordering::AcqRel) {
+                return;
+            }
+            let (hovering, playing, still, path) = (
+                hovering.clone(),
+                playing.clone(),
+                still.clone(),
+                path.clone(),
+            );
+            let button = button.clone();
+            gtk::glib::spawn_future_local(async move {
+                let current = hovering.clone();
+                // ponytail: decoded again on every hover, and dropped on leave, so
+                // an open picker holds one sticker's frames at most.
+                let frames = gtk::gio::spawn_blocking(move || {
+                    crate::native_media_widgets::decode_sticker_file(&path, || {
+                        current.load(Ordering::Acquire)
+                    })
+                })
+                .await
+                .ok()
+                .flatten();
+                let Some(frames) = frames else {
+                    return;
+                };
+                if frames.len() < 2 {
+                    still.set(true);
+                    return;
+                }
+                let Some(image) = button
+                    .upgrade()
+                    .and_then(|button| button.child())
+                    .and_downcast::<gtk::Image>()
+                else {
+                    return;
+                };
+                // A quick leave and return starts a second decode; the first
+                // to finish plays.
+                if !hovering.load(Ordering::Acquire) || playing.borrow().is_some() {
+                    return;
+                }
+                let Some(preview) = image.paintable() else {
+                    return;
+                };
+                let animation = crate::native_media_widgets::StickerAnimation::new(&image, frames);
+                animation.play(None);
+                *playing.borrow_mut() = Some((animation, preview));
+            });
+        });
+    }
+    hover.connect_leave(move |controller| {
+        hovering.store(false, Ordering::Release);
+        if let Some((animation, preview)) = playing.borrow_mut().take() {
+            animation.stop();
+            if let Some(image) = controller.widget().and_then(|button| {
+                button
+                    .downcast::<gtk::Button>()
+                    .ok()?
+                    .child()?
+                    .downcast::<gtk::Image>()
+                    .ok()
+            }) {
+                image.set_paintable(Some(&preview));
+            }
+        }
+    });
+    button.add_controller(hover);
+}
+
 /// Text a message shows, if any: its body or a media caption.
 fn message_text(message: &crate::model::Message) -> Option<String> {
     let text = match &message.content {
@@ -6592,6 +6681,7 @@ fn sticker_picker_content(
                     .build();
                 button.update_property(&[gtk::accessible::Property::Label("Sticker")]);
                 load_sticker_preview(&button, path, 72);
+                animate_sticker_on_hover(&button, path);
                 let path = path.clone();
                 let sender = sender.clone();
                 button.connect_clicked(move |_| sender.input(Input::SendSticker(path.clone())));
