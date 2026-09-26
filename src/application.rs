@@ -3654,13 +3654,21 @@ fn connect_widget_changes(widget: &gtk::Widget, sender: &ComponentSender<NativeA
     }
 }
 
-fn conversation_prefixes(timestamps: &[i64], unread: usize) -> Vec<String> {
-    let unread_at = timestamps.len().saturating_sub(unread);
+/// Day separators, and the unread marker before the first of the `unread`
+/// newest incoming messages. Only messages after your own last one can be
+/// unread: replying means you saw them, even before the count catches up.
+fn conversation_prefixes(messages: &[(i64, bool)], unread: usize) -> Vec<String> {
+    let after_own = messages
+        .iter()
+        .rposition(|(_, from_me)| *from_me)
+        .map_or(0, |index| index + 1);
+    let unread = unread.min(messages.len() - after_own);
+    let unread_at = messages.len() - unread;
     let mut previous_day = None;
-    timestamps
+    messages
         .iter()
         .enumerate()
-        .map(|(index, timestamp)| {
+        .map(|(index, (timestamp, _))| {
             let day = crate::util::day_label(*timestamp);
             let mut prefix = String::new();
             if previous_day.as_deref() != Some(day.as_str()) {
@@ -5465,11 +5473,11 @@ impl NativeApplication {
             .iter()
             .filter_map(|id| self.message_snapshots.get(id).cloned())
             .collect::<Vec<_>>();
-        let timestamps = messages
+        let timeline = messages
             .iter()
-            .map(|message| message.timestamp)
+            .map(|message| (message.timestamp, message.from_me))
             .collect::<Vec<_>>();
-        let prefixes = conversation_prefixes(&timestamps, unread);
+        let prefixes = conversation_prefixes(&timeline, unread);
         let boundaries = message_group_boundaries(&messages);
         let rows = messages
             .into_iter()
@@ -7207,12 +7215,32 @@ mod tests {
 
     #[test]
     fn conversation_rows_mark_day_changes_and_unread_boundary() {
-        let timestamps = [1_700_000_000, 1_700_000_060, 1_700_086_400];
-        let prefixes = conversation_prefixes(&timestamps, 2);
+        let timeline = [
+            (1_700_000_000, false),
+            (1_700_000_060, false),
+            (1_700_086_400, false),
+        ];
+        let prefixes = conversation_prefixes(&timeline, 2);
         assert!(prefixes[0].contains("──"));
         assert!(prefixes[1].contains("Unread messages"));
         assert!(prefixes[2].contains("──"));
         assert!(!prefixes[0].contains("Unread messages"));
+    }
+
+    #[test]
+    fn own_messages_never_carry_the_unread_marker() {
+        let unread = |prefixes: Vec<String>| {
+            prefixes
+                .iter()
+                .position(|prefix| prefix.contains("Unread messages"))
+        };
+        // Incoming, then your replies: a stale count must not mark them.
+        let replied = [(1, false), (2, true), (3, true), (4, true)];
+        assert_eq!(unread(conversation_prefixes(&replied, 1)), None);
+        // Only the incoming messages after your last reply are unread.
+        let new = [(1, false), (2, true), (3, false), (4, false)];
+        assert_eq!(unread(conversation_prefixes(&new, 5)), Some(2));
+        assert_eq!(unread(conversation_prefixes(&new, 1)), Some(3));
     }
 
     #[test]
