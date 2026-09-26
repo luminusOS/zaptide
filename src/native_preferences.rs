@@ -24,6 +24,7 @@ pub enum SettingsField {
     ShowShortcutHints,
     ChatLockCodeHash,
     Notifications,
+    NotificationPreviews,
     KeepRunningInBackground,
     VoiceSpeed,
 }
@@ -68,6 +69,7 @@ pub struct PrivacyPreferences {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NotificationPreferences {
     pub enabled: bool,
+    pub previews: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -108,6 +110,7 @@ impl From<&Settings> for NativePreferences {
             },
             notifications: NotificationPreferences {
                 enabled: settings.notifications,
+                previews: settings.notification_previews,
             },
             storage: StoragePreferences {
                 auto_download: settings.auto_download,
@@ -141,6 +144,7 @@ pub enum PreferenceChange {
     SetShowShortcutHints(bool),
     SetChatLockCode(Option<String>),
     SetNotifications(bool),
+    SetNotificationPreviews(bool),
     SetKeepRunningInBackground(bool),
     SetVoiceSpeed(f32),
 }
@@ -198,6 +202,10 @@ impl std::fmt::Debug for PreferenceChange {
                 .debug_tuple("SetNotifications")
                 .field(value)
                 .finish(),
+            Change::SetNotificationPreviews(value) => formatter
+                .debug_tuple("SetNotificationPreviews")
+                .field(value)
+                .finish(),
             Change::SetKeepRunningInBackground(value) => formatter
                 .debug_tuple("SetKeepRunningInBackground")
                 .field(value)
@@ -227,6 +235,7 @@ impl PreferenceChange {
             Self::SetShowShortcutHints(_) => SettingsField::ShowShortcutHints,
             Self::SetChatLockCode(_) => SettingsField::ChatLockCodeHash,
             Self::SetNotifications(_) => SettingsField::Notifications,
+            Self::SetNotificationPreviews(_) => SettingsField::NotificationPreviews,
             Self::SetKeepRunningInBackground(_) => SettingsField::KeepRunningInBackground,
             Self::SetVoiceSpeed(_) => SettingsField::VoiceSpeed,
         }
@@ -503,6 +512,15 @@ impl NativePreferencesDialog {
             changes.clone(),
             errors.clone(),
             PreferenceChange::SetNotifications,
+        );
+        add_switch(
+            &notifications_group,
+            "Show previews",
+            "Include the sender and message text",
+            preferences.notifications.previews,
+            changes.clone(),
+            errors.clone(),
+            PreferenceChange::SetNotificationPreviews,
         );
 
         let storage_page = libadwaita::PreferencesPage::new();
@@ -824,6 +842,7 @@ impl PreferenceChange {
             Self::SetShowShortcutHints(value) => settings.show_shortcut_hints = value,
             Self::SetChatLockCode(value) => settings.set_chat_lock_code(value.as_deref()),
             Self::SetNotifications(value) => settings.notifications = value,
+            Self::SetNotificationPreviews(value) => settings.notification_previews = value,
             Self::SetKeepRunningInBackground(value) => settings.keep_running_in_background = value,
             Self::SetVoiceSpeed(value) => {
                 if ![1.0, 1.5, 2.0].contains(&value) {

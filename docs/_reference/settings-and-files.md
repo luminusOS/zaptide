@@ -50,6 +50,7 @@ Changes on the Settings page are saved to `settings.json` immediately:
 - **Keep running in the background**: keep ZapTide running after its window
   closes.
 - **Notifications**: use desktop notifications with the chat picture.
+- **Show previews**: include the sender and message text in notifications.
 
 ## The log
 

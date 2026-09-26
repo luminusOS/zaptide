@@ -59,7 +59,7 @@ enum KeyKind {
 
 /// Allowlist: every key of the GSettings schema, mapped to its JSON field.
 /// Keys outside this table (secrets, caches, window state) are never read.
-const ALLOWLIST: [(&str, &str, KeyKind); 14] = [
+const ALLOWLIST: [(&str, &str, KeyKind); 15] = [
     ("theme", "theme-choice", KeyKind::ThemeChoice),
     ("zoom", "zoom", KeyKind::Number),
     ("sidebar_width", "sidebar-width", KeyKind::Number),
@@ -75,6 +75,11 @@ const ALLOWLIST: [(&str, &str, KeyKind); 14] = [
     ),
     ("show_shortcut_hints", "show-shortcut-hints", KeyKind::Flag),
     ("notifications", "notifications", KeyKind::Flag),
+    (
+        "notification_previews",
+        "notification-previews",
+        KeyKind::Flag,
+    ),
     (
         "keep_running_in_background",
         "keep-running-in-background",

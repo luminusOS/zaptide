@@ -128,7 +128,8 @@ Development happens at **[github.com/luminusOS/zaptide](https://github.com/lumin
   remain saved and resume automatically. New messages can still arrive.
 - **Desktop notifications.** Get notifications with the chat name, a message
   preview, and the chat picture when the chat is not on screen. A newer message
-  replaces its chat's notification. Muted chats do not notify you, and archived
+  replaces its chat's notification. Turn off **Show previews** in Preferences to
+  hide the sender and text. Muted chats do not notify you, and archived
   chats stay quiet until you unarchive them. GNOME drops notifications from apps
   without an installed desktop file, so a `cargo run` build notifies only after
   `packaging/applications/dev.luminusos.ZapTide.desktop` is copied to

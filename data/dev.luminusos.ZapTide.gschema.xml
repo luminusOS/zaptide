@@ -73,6 +73,12 @@
       <description>Show desktop notifications for new messages when away from the chat.</description>
     </key>
 
+    <key name="notification-previews" type="b">
+      <default>true</default>
+      <summary>Notification previews</summary>
+      <description>Show the sender and message text in desktop notifications.</description>
+    </key>
+
     <key name="names-from-contacts" type="b">
       <default>true</default>
       <summary>Prefer contact names</summary>

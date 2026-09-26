@@ -2296,7 +2296,9 @@ impl SimpleComponent for NativeApplication {
                                     },
                                     |known| known.name.clone(),
                                 );
-                                let body = if known.is_some_and(crate::model::Chat::is_group) {
+                                let body = if !self.settings.notification_previews {
+                                    "New message".to_owned()
+                                } else if known.is_some_and(crate::model::Chat::is_group) {
                                     format!(
                                         "{}: {}",
                                         sender_label(
@@ -6184,9 +6186,15 @@ mod tests {
         crate::native_preferences::PreferenceChange::SetSendTyping(false)
             .apply(&mut settings)
             .expect("valid preference change");
+        crate::native_preferences::PreferenceChange::SetNotificationPreviews(false)
+            .apply(&mut settings)
+            .expect("valid preference change");
         settings.save(&path).expect("persist preference");
 
-        assert!(!crate::settings::Settings::load(&path).send_typing);
+        let loaded = crate::settings::Settings::load(&path);
+        assert!(!loaded.send_typing);
+        assert!(!loaded.notification_previews);
+        assert!(crate::settings::Settings::default().notification_previews);
     }
 
     #[test]

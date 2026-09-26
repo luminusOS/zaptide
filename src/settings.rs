@@ -62,6 +62,8 @@ pub struct Settings {
     pub keep_running_in_background: bool,
     /// Desktop notifications while away from the chat.
     pub notifications: bool,
+    /// Show the sender and message text in notifications.
+    pub notification_previews: bool,
     /// Prefer address-book names over public profile names.
     pub names_from_contacts: bool,
     /// Voice and audio playback speed multiplier.
@@ -96,6 +98,7 @@ impl Default for Settings {
             recent_emoji: Vec::new(),
             keep_running_in_background: true,
             notifications: true,
+            notification_previews: true,
             names_from_contacts: true,
             save_contacts_to_phone: true,
             voice_speed: 1.0,
