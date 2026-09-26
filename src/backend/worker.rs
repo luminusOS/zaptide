@@ -3122,13 +3122,15 @@ impl Worker {
                 if session_generation != self.session_generation {
                     return;
                 }
-                self.sticker_fetches.remove(&hash);
                 match result {
                     Ok(path) => {
+                        self.sticker_fetches.remove(&hash);
                         if self.archive.set_sticker_path(&hash, &path).is_err() {
                             log::warn!("could not file a sticker");
                         }
                     }
+                    // Expired phone stickers fail every time; keep the hash
+                    // in flight so reopening the picker does not refetch it.
                     Err(_error) => log::warn!("could not fetch a sticker"),
                 }
                 self.emit_stickers();
@@ -6196,6 +6198,20 @@ mod tests {
             classify(&message),
             Some(Content::Text { preview: None, .. })
         ));
+    }
+
+    #[tokio::test]
+    async fn a_failed_sticker_fetch_is_not_retried_in_the_same_session() {
+        let (mut worker, _events, _, _) = receipt_tests::worker();
+        worker.sticker_fetches.insert("expired".into());
+        worker
+            .handle_command(Command::StickerFetched {
+                hash: "expired".into(),
+                session_generation: worker.session_generation,
+                result: Err("gone".into()),
+            })
+            .await;
+        assert!(worker.sticker_fetches.contains("expired"));
     }
 
     #[tokio::test]
