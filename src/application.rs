@@ -721,6 +721,23 @@ impl RelmListItem for MessageRow {
 /// True when `b` would render the same media as `a`. A sent sticker moves
 /// from the picker file to the uploaded cache copy; the picture is the same,
 /// so keep the decoded one while the old file still exists.
+/// A funnel, which neither Adwaita nor GTK ships; a `-symbolic` name lets
+/// GTK recolour it with the theme.
+const FILTER_ICON: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><path d="M2.5 2h11a1 1 0 0 1 .78 1.63L10 8.98V13a1 1 0 0 1-.55.9l-2 1A1 1 0 0 1 6 14V8.98L1.72 3.63A1 1 0 0 1 2.5 2z" fill="#2e3436"/></svg>"##;
+
+/// Puts ZapTide's own icons where GTK's icon theme finds them.
+fn install_icons(dir: &std::path::Path) {
+    let icon = dir.join("zaptide-filter-symbolic.svg");
+    if std::fs::create_dir_all(dir).is_ok()
+        && std::fs::read_to_string(&icon).ok().as_deref() != Some(FILTER_ICON)
+    {
+        let _ = std::fs::write(&icon, FILTER_ICON);
+    }
+    if let Some(display) = gtk::gdk::Display::default() {
+        gtk::IconTheme::for_display(&display).add_search_path(dir);
+    }
+}
+
 fn same_media(a: &crate::model::Message, b: &crate::model::Message) -> bool {
     use crate::model::Content;
     let same_content = match (&a.content, &b.content) {
@@ -1120,8 +1137,10 @@ impl SimpleComponent for NativeApplication {
                             #[wrap(Some)]
                             set_content = &gtk::Box {
                                 set_orientation: gtk::Orientation::Vertical,
+                                // Filters as pills in a popover beside the search, as in
+                                // Aetheris; the funnel turns accent while any is on.
                                 append = &gtk::Box {
-                                    set_spacing: 6,
+                                    add_css_class: "linked",
                                     set_margin_start: 12,
                                     set_margin_end: 12,
                                     set_margin_bottom: 6,
@@ -1131,18 +1150,24 @@ impl SimpleComponent for NativeApplication {
                                         set_placeholder_text: Some("Search chats"),
                                         connect_search_changed[sender] => move |entry| sender.input(Input::SearchChats(entry.text().to_string())),
                                     },
-                                },
-                                append = &gtk::ScrolledWindow {
-                                    set_vscrollbar_policy: gtk::PolicyType::Never,
-                                    set_hscrollbar_policy: gtk::PolicyType::Automatic,
-                                    set_margin_start: 12,
-                                    set_margin_end: 12,
-                                    #[wrap(Some)]
-                                    set_child = &gtk::Box {
-                                        set_spacing: 6,
-                                        // Room for the overlay scrollbar below the pills.
-                                        set_margin_bottom: 10,
+                                    append = &gtk::MenuButton {
+                                        set_icon_name: "zaptide-filter-symbolic",
+                                        set_tooltip_text: Some("Filters"),
                                         update_property: &[gtk::accessible::Property::Label("Filter chats")],
+                                        #[watch]
+                                        set_class_active: ("zaptide-filters-active", model.filters_active()),
+                                        #[wrap(Some)]
+                                        set_popover = &gtk::Popover {
+                                            #[wrap(Some)]
+                                            set_child = &gtk::FlowBox {
+                                                set_selection_mode: gtk::SelectionMode::None,
+                                                set_column_spacing: 6,
+                                                set_row_spacing: 6,
+                                                set_max_children_per_line: 3,
+                                                set_margin_top: 6,
+                                                set_margin_bottom: 6,
+                                                set_margin_start: 6,
+                                                set_margin_end: 6,
                                         #[name = "chat_kind_filter"]
                                         append = &gtk::ToggleButton {
                                             set_label: "All",
@@ -1179,6 +1204,8 @@ impl SimpleComponent for NativeApplication {
                                             set_label: "Muted",
                                             add_css_class: "zaptide-filter-pill",
                                             connect_toggled[sender] => move |button| sender.input(Input::SetMutedFilter(button.is_active())),
+                                        },
+                                            },
                                         },
                                     },
                                 },
@@ -1596,6 +1623,7 @@ impl SimpleComponent for NativeApplication {
         root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
+        let icon_dir = init.dirs.icon_dir();
         #[cfg(feature = "demo")]
         if synthetic_e2e_enabled()
             && let Some((width, height)) = std::env::var("ZAPTIDE_NATIVE_SYNTHETIC_SIZE")
@@ -1914,6 +1942,7 @@ impl SimpleComponent for NativeApplication {
         section.append(Some("_Quit"), Some("win.quit"));
         primary_menu.append_section(None, &section);
         install_window_actions(&root, &sender);
+        install_icons(&icon_dir);
         let widgets = view_output!();
         model.chat_search = Some(widgets.chat_search.clone());
         model.unread_filter = Some(widgets.unread_filter.clone());
@@ -3609,6 +3638,7 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
          .zaptide-filter-pill { border-radius: 9999px; padding: 4px 12px; min-height: 22px; background-color: alpha(currentColor, 0.08); box-shadow: none; }\n\
          .zaptide-filter-pill:hover { background-color: alpha(currentColor, 0.11); }\n\
          .zaptide-filter-pill:checked { background-color: alpha(@accent_color, 0.18); color: @accent_color; font-weight: bold; }\n\
+         .zaptide-filters-active { color: @accent_color; }\n\
          .zaptide-filter-pill:checked:hover { background-color: alpha(@accent_color, 0.24); }\n\
          .zaptide-unread-pill { font-weight: bold; font-size: 0.8em; border-radius: 9999px; min-width: 1.4em; padding: 2px 6px; color: @accent_fg_color; background-color: @accent_bg_color; }\n\
          .zaptide-delivery { opacity: 0.6; }\n\
@@ -4048,6 +4078,16 @@ impl NativeApplication {
         if let Some(section) = &self.chat_section {
             section.set_active_name(Some(if archived { "archived" } else { "chats" }));
         }
+    }
+
+    /// Whether any filter in the funnel popover narrows the list.
+    fn filters_active(&self) -> bool {
+        let filters = self.chat_filters;
+        filters.unread_only
+            || filters.pinned_only
+            || filters.private_only
+            || filters.groups_only
+            || filters.muted != crate::native_chat_list::MutedFilter::default()
     }
 
     /// Archived chats with unread messages, as counted on the phone.

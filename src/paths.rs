@@ -76,6 +76,11 @@ impl AppDirs {
         self.state.join("panic.log")
     }
 
+    /// Icons ZapTide draws itself, where GTK's icon theme looks for them.
+    pub fn icon_dir(&self) -> PathBuf {
+        self.cache.join("icons")
+    }
+
     /// Downloaded attachments keyed by message id.
     pub fn media_cache_dir(&self) -> PathBuf {
         self.cache.join("media")
