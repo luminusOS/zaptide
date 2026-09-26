@@ -468,9 +468,11 @@ impl RelmListItem for MessageRow {
         footer_row.append(&status);
         footer_row.append(&status_icon);
         bubble.append(&footer_row);
+        // Only cap the width: below the tightening threshold a Clamp narrows
+        // its child and centres it, leaving wide bubbles off the row's edge.
         let clamp = adw::Clamp::builder()
             .maximum_size(480)
-            .tightening_threshold(360)
+            .tightening_threshold(480)
             .child(&bubble)
             .build();
         row.append(&clamp);
