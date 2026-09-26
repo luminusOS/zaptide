@@ -73,6 +73,8 @@ nfpm:
     rpm:
       depends:
       - glibc >= 2.39
+      - gtk4
+      - libadwaita >= 1.10
       - libglvnd-glx
       - libglvnd-egl
       - libxkbcommon

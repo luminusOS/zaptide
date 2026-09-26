@@ -1187,6 +1187,9 @@ impl SimpleComponent for NativeApplication {
                                         },
                                         add = adw::Toggle {
                                             set_name: Some("archived"),
+                                            // With a child, only the label names the button for
+                                            // screen readers; the child is what is shown.
+                                            set_label: Some("Archived"),
                                             set_tooltip: "Archived",
                                             #[wrap(Some)]
                                             set_child = &gtk::Box {
