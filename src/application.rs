@@ -2917,6 +2917,9 @@ impl SimpleComponent for NativeApplication {
                 self.sticker_picker = Some((popover, stack));
             }
             Input::SendSticker(path) => {
+                if let Some((popover, _)) = self.sticker_picker.take() {
+                    popover.popdown();
+                }
                 if let (Some(chat), Some(backend)) = (&self.active_chat, &self.backend) {
                     backend.send(crate::backend::Command::SendSticker {
                         chat: chat.clone(),
