@@ -91,6 +91,7 @@ if [[ "$BUILD_NATIVE" == "true" ]]; then
     fi
     if [[ -f "$PROJECT_ROOT/packaging/icons/zaptide.svg" ]]; then
         install -Dm644 "$PROJECT_ROOT/packaging/icons/zaptide.svg" "$PREFIX/share/icons/hicolor/scalable/apps/dev.luminusos.ZapTide.svg"
+        install -Dm644 "$PROJECT_ROOT/packaging/icons/zaptide-symbolic.svg" "$PREFIX/share/icons/hicolor/symbolic/apps/dev.luminusos.ZapTide-symbolic.svg"
     fi
 
     echo "PASS: native build and install"

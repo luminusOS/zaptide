@@ -39,6 +39,10 @@ nfpm:
     dst: "/usr/share/icons/hicolor/scalable/apps/zaptide.svg"
     file_info:
       mode: 420
+  - src: "@PAYLOAD@/zaptide-v@VERSION@-@TARGET@/packaging/icons/zaptide-symbolic.svg"
+    dst: "/usr/share/icons/hicolor/symbolic/apps/zaptide-symbolic.svg"
+    file_info:
+      mode: 420
   - src: contrib/omarchy/zaptide.json.tpl
     dst: /usr/share/zaptide/omarchy/zaptide.json.tpl
     file_info:
