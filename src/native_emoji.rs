@@ -50,13 +50,13 @@ thread_local! {
     static EMOJI: Rc<Vec<Emoji>> = Rc::new(load());
 }
 
-/// Codepoints to text. GTK marks where a skin tone may go with a 0; without
-/// a tone the emoji keeps its default yellow.
+/// Codepoints to text. GTK marks where a skin tone may go with a 0, and
+/// without a tone puts the emoji presentation selector there, as here.
 fn text(codepoints: &[u32], modifier: u32) -> String {
     codepoints
         .iter()
         .filter_map(|codepoint| match *codepoint {
-            0 if modifier == 0 => None,
+            0 if modifier == 0 => Some('\u{FE0F}'),
             0 => char::from_u32(modifier),
             codepoint => char::from_u32(codepoint),
         })
@@ -116,7 +116,7 @@ fn remember(settings: &gio::Settings, emoji: &[Emoji], picked: &str) {
     let rest = settings
         .value(RECENT_KEY)
         .iter()
-        .filter(|item| item.child_value(0) != entry.data)
+        .filter(|item| *item != first)
         .take(MAX_RECENT - 1)
         .collect::<Vec<_>>();
     let items = glib::Variant::array_from_iter_with_type(ty, std::iter::once(first).chain(rest));
@@ -336,7 +336,7 @@ fn category_button(title: &str, icon: &str) -> gtk::Button {
 mod tests {
     #[test]
     fn skin_tone_slots_are_dropped_or_filled() {
-        assert_eq!(super::text(&[0x1F44B, 0], 0), "👋");
+        assert_eq!(super::text(&[0x1F44B, 0], 0), "👋\u{FE0F}");
         assert_eq!(super::text(&[0x1F44B, 0], 0x1F3FD), "👋🏽");
     }
 }
