@@ -27,6 +27,8 @@ struct ChatRow {
     avatar: Option<std::path::PathBuf>,
     pinned: bool,
     muted: bool,
+    /// Muted and archived chats count unread messages in grey.
+    quiet: bool,
 }
 
 thread_local! {
@@ -251,7 +253,7 @@ impl RelmListItem for ChatRow {
         widgets.pinned.set_visible(self.pinned);
         widgets.muted.set_visible(self.muted);
         widgets.unread.set_visible(self.unread.is_some());
-        if self.muted {
+        if self.quiet {
             widgets.unread.add_css_class("muted");
         } else {
             widgets.unread.remove_css_class("muted");
@@ -1059,6 +1061,7 @@ impl SimpleComponent for NativeApplication {
                                             },
                                             append = &gtk::Label {
                                                 add_css_class: "zaptide-unread-pill",
+                                                add_css_class: "muted",
                                                 #[watch]
                                                 set_visible: model.archived_unread_count() > 0,
                                                 #[watch]
@@ -3322,6 +3325,7 @@ fn chat_row(chat: crate::model::Chat, avatar: Option<std::path::PathBuf>) -> Cha
         avatar,
         pinned: chat.pinned,
         muted,
+        quiet: muted || chat.archived,
     }
 }
 
