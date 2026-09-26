@@ -3588,6 +3588,7 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
          .zaptide-chat-list > row { padding: 0; }\n\
          .zaptide-emoji-grid { background: none; }\n\
          .zaptide-photo { border-radius: 10px; }\n\
+         .zaptide-photo-button { padding: 0; border-radius: 10px; }\n\
          .zaptide-emoji-grid > child { padding: 0; border-radius: 8px; }\n\
          .zaptide-emoji-cell { font-size: 1.55em; min-width: 38px; min-height: 38px; }\n\
          .zaptide-chat-item { padding: 8px 14px; border-radius: inherit; }\n\

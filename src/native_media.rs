@@ -308,7 +308,8 @@ impl fmt::Debug for NativeMediaAction {
 /// Resolve attachment activation without putting paths or identifiers in presentation data.
 pub fn attachment_action(message: &Message) -> Option<NativeMediaAction> {
     let media = message.content.media()?;
-    if let Some(path) = &media.path {
+    // A file removed from the cache downloads again.
+    if let Some(path) = media.path.as_ref().filter(|path| path.is_file()) {
         return Some(NativeMediaAction::Open(path.clone()));
     }
     match &media.state {
@@ -547,15 +548,17 @@ mod tests {
 
     #[test]
     fn actions_are_typed_and_decode_tickets_cancel_stale_work() {
-        let pending = message(Content::Image {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let mut pending = message(Content::Image {
             media: media(),
             caption: None,
         });
+        if let Content::Image { media, .. } = &mut pending.content {
+            media.path = Some(file.path().to_path_buf());
+        }
         assert_eq!(
             attachment_action(&pending),
-            Some(NativeMediaAction::Open(PathBuf::from(
-                "/private/user/photo.jpg"
-            )))
+            Some(NativeMediaAction::Open(file.path().to_path_buf()))
         );
 
         let mut downloadable = message(Content::Image {

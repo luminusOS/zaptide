@@ -677,15 +677,21 @@ fn append_photo(
         .height_request(height)
         .build();
     picture.update_property(&[gtk::accessible::Property::Label("Photo")]);
+    // A picture's natural size is its texture's, loaded at twice the frame
+    // for dense screens; the clamp keeps the frame at its logical size.
+    let clamp = adw::Clamp::builder()
+        .maximum_size(width)
+        .tightening_threshold(width)
+        .child(&picture)
+        .build();
     // Pictures do not clip their own drawing; a frame with hidden overflow
     // rounds the corners.
     let frame = gtk::Overlay::builder()
-        .child(&picture)
+        .child(&clamp)
         .halign(gtk::Align::Start)
         .overflow(gtk::Overflow::Hidden)
         .css_classes(["zaptide-photo"])
         .build();
-    parent.append(&frame);
     if let Some(texture) = message
         .thumbnail
         .as_deref()
@@ -693,8 +699,8 @@ fn append_photo(
     {
         picture.set_paintable(Some(&texture));
     }
-    match (&media.path, attachment_action(message)) {
-        (Some(path), _) if path.is_file() => {
+    match attachment_action(message) {
+        Some(NativeMediaAction::Open(path)) => {
             // Twice the frame, for high-density screens.
             load_photo(
                 &picture,
@@ -703,18 +709,18 @@ fn append_photo(
                 2 * height as u32,
                 token,
             );
-            frame.set_cursor_from_name(Some("zoom-in"));
-            frame.set_tooltip_text(Some("View photo"));
-            let click = gtk::GestureClick::new();
-            let (path, frame_ref) = (path.clone(), frame.downgrade());
-            click.connect_released(move |_, _, _, _| {
-                if let Some(frame) = frame_ref.upgrade() {
-                    show_photo(&frame, &path, on_action.clone());
-                }
-            });
-            frame.add_controller(click);
+            // A button, so the full view opens from the keyboard too.
+            let button = gtk::Button::builder()
+                .child(&frame)
+                .halign(gtk::Align::Start)
+                .tooltip_text("View photo")
+                .css_classes(["flat", "zaptide-photo-button"])
+                .build();
+            button.update_property(&[gtk::accessible::Property::Label("View photo")]);
+            button.connect_clicked(move |button| show_photo(button, &path, on_action.clone()));
+            parent.append(&button);
         }
-        (_, Some(action @ NativeMediaAction::Download { .. })) => {
+        Some(action @ NativeMediaAction::Download { .. }) => {
             let button = gtk::Button::builder()
                 .icon_name("folder-download-symbolic")
                 .tooltip_text("Download photo")
@@ -724,8 +730,9 @@ fn append_photo(
                 .build();
             button.connect_clicked(move |_| on_action(action.clone()));
             frame.add_overlay(&button);
+            parent.append(&frame);
         }
-        _ => {
+        None => {
             let spinner = adw::Spinner::builder()
                 .width_request(32)
                 .height_request(32)
@@ -733,6 +740,7 @@ fn append_photo(
                 .valign(gtk::Align::Center)
                 .build();
             frame.add_overlay(&spinner);
+            parent.append(&frame);
         }
     }
 }
@@ -807,17 +815,25 @@ fn load_photo(
     let ticket = token.issue();
     let picture = glib::SendWeakRef::from(picture.downgrade());
     let main_context = glib::MainContext::default();
+    let current = ticket.clone();
     photo_runtime().spawn(async move {
         let texture = async {
-            let mut image = glycin::Loader::new(gtk::gio::File::for_path(&path))
-                .load()
-                .await
-                .ok()?;
+            // Rows recycled while scrolling queue loads; skip the stale ones.
+            if !current.is_current() {
+                return None;
+            }
+            let mut loader = glycin::Loader::new(gtk::gio::File::for_path(&path));
+            loader.accepted_memory_formats(glycin::MemoryFormatSelection::R8g8b8a8);
+            let mut image = loader.load().await.inspect_err(photo_error).ok()?;
+            if !current.is_current() {
+                return None;
+            }
             let frame = image
                 .specific_frame(glycin::FrameRequest::new().scale(width, height))
                 .await
+                .inspect_err(photo_error)
                 .ok()?;
-            Some(frame.texture())
+            Some(fit_frame(&frame, width, height))
         }
         .await;
         main_context.invoke(move || {
@@ -828,6 +844,59 @@ fn load_photo(
             }
         });
     });
+}
+
+/// Loaders may ignore the requested scale and return the full image, tens
+/// of megabytes for a phone photo; shrink it to fit `width` by `height`.
+#[cfg(target_os = "linux")]
+fn fit_frame(frame: &glycin::Frame, width: u32, height: u32) -> gdk::Texture {
+    let (frame_width, frame_height) = (frame.width(), frame.height());
+    let fits = frame_width <= width && frame_height <= height;
+    let rgba = frame.memory_format() == glycin::MemoryFormat::R8g8b8a8;
+    let pixels = (!fits && rgba)
+        .then(|| {
+            let stride = frame.stride() as usize;
+            let row = frame_width as usize * 4;
+            let packed = frame
+                .buf_slice()
+                .chunks(stride)
+                .take(frame_height as usize)
+                .flat_map(|line| line.get(..row).unwrap_or_default().iter().copied())
+                .collect::<Vec<u8>>();
+            image::RgbaImage::from_raw(frame_width, frame_height, packed)
+        })
+        .flatten();
+    let Some(pixels) = pixels else {
+        return frame.texture();
+    };
+    let scale = f64::min(
+        f64::from(width) / f64::from(frame_width),
+        f64::from(height) / f64::from(frame_height),
+    );
+    let fitted = image::imageops::thumbnail(
+        &pixels,
+        ((f64::from(frame_width) * scale).round() as u32).max(1),
+        ((f64::from(frame_height) * scale).round() as u32).max(1),
+    );
+    let (fitted_width, fitted_height) = fitted.dimensions();
+    gdk::MemoryTexture::new(
+        fitted_width as i32,
+        fitted_height as i32,
+        gdk::MemoryFormat::R8g8b8a8,
+        &glib::Bytes::from_owned(fitted.into_raw()),
+        fitted_width as usize * 4,
+    )
+    .upcast()
+}
+
+/// Logs the first failure only: without glycin's loaders or bubblewrap,
+/// every photo fails the same way and keeps its thumbnail.
+#[cfg(target_os = "linux")]
+fn photo_error(error: &impl std::fmt::Display) {
+    static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        log::warn!("photo could not be loaded: {error}");
+    }
 }
 
 /// Without glycin, photos keep their inline thumbnail.
@@ -1140,13 +1209,23 @@ mod tests {
 
     #[test]
     fn attachment_activation_returns_only_typed_safe_actions() {
+        let file = tempfile::NamedTempFile::new().unwrap();
         let ready = message(Content::Image {
-            media: media(Some("/tmp/photo.jpg"), MediaState::Idle),
+            media: media(Some(file.path().to_str().unwrap()), MediaState::Idle),
             caption: None,
         });
         assert!(matches!(
             attachment_action(&ready),
             Some(NativeMediaAction::Open(_))
+        ));
+
+        let removed = message(Content::Image {
+            media: media(Some("/nonexistent/zaptide/photo.jpg"), MediaState::Idle),
+            caption: None,
+        });
+        assert!(matches!(
+            attachment_action(&removed),
+            Some(NativeMediaAction::Download { .. })
         ));
 
         let downloading = message(Content::Image {
