@@ -2279,13 +2279,43 @@ impl SimpleComponent for NativeApplication {
                                     media.state = crate::model::MediaState::Downloading;
                                 }
                             }
+                            let known = self.chat_snapshots.iter().find(|known| known.id == chat);
                             if notification_should_show(
                                 self.settings.notifications,
+                                self.window.is_active(),
                                 self.active_chat.as_deref(),
                                 &chat,
-                            ) && let Err(error) = self.notifications.show(&chat)
-                            {
-                                log::warn!("could not show content-free notification: {error}");
+                                known,
+                            ) {
+                                let title = known.map_or_else(
+                                    || {
+                                        sender_label(
+                                            message.sender_name.as_deref(),
+                                            &message.sender,
+                                        )
+                                    },
+                                    |known| known.name.clone(),
+                                );
+                                let body = if known.is_some_and(crate::model::Chat::is_group) {
+                                    format!(
+                                        "{}: {}",
+                                        sender_label(
+                                            message.sender_name.as_deref(),
+                                            &message.sender
+                                        ),
+                                        message.summary()
+                                    )
+                                } else {
+                                    message.summary()
+                                };
+                                if let Err(error) = self.notifications.show(
+                                    &chat,
+                                    &title,
+                                    &body,
+                                    self.avatars.get(&chat).map(std::path::PathBuf::as_path),
+                                ) {
+                                    log::warn!("could not show a notification: {error}");
+                                }
                             }
                         }
                         NativeEvent::Typing {
@@ -3368,8 +3398,19 @@ fn normalized_phone(input: &str) -> Option<String> {
     (7..=15).contains(&digits.len()).then_some(digits)
 }
 
-fn notification_should_show(enabled: bool, active_chat: Option<&str>, chat: &str) -> bool {
-    enabled && active_chat != Some(chat)
+/// Notify unless the chat is on screen, muted, archived, or locked.
+fn notification_should_show(
+    enabled: bool,
+    window_active: bool,
+    active_chat: Option<&str>,
+    chat: &str,
+    known: Option<&crate::model::Chat>,
+) -> bool {
+    enabled
+        && !(window_active && active_chat == Some(chat))
+        && known.is_none_or(|known| {
+            !known.muted(crate::util::now()) && !known.archived && !known.locked
+        })
 }
 
 fn connect_widget_changes(widget: &gtk::Widget, sender: &ComponentSender<NativeApplication>) {
@@ -6199,11 +6240,70 @@ mod tests {
     }
 
     #[test]
-    fn notifications_are_suppressed_when_disabled_or_chat_is_active() {
-        assert!(notification_should_show(true, Some("other"), "chat"));
-        assert!(!notification_should_show(false, Some("other"), "chat"));
-        assert!(!notification_should_show(true, Some("chat"), "chat"));
-        assert!(notification_should_show(true, None, "chat"));
+    fn notifications_skip_the_visible_muted_archived_and_locked_chats() {
+        assert!(notification_should_show(
+            true,
+            true,
+            Some("other"),
+            "chat",
+            None
+        ));
+        assert!(!notification_should_show(
+            false,
+            true,
+            Some("other"),
+            "chat",
+            None
+        ));
+        assert!(!notification_should_show(
+            true,
+            true,
+            Some("chat"),
+            "chat",
+            None
+        ));
+        assert!(notification_should_show(
+            true,
+            false,
+            Some("chat"),
+            "chat",
+            None
+        ));
+        assert!(notification_should_show(true, true, None, "chat", None));
+        let mut known = crate::model::Chat::new("chat".into(), "Chat".into());
+        assert!(notification_should_show(
+            true,
+            true,
+            None,
+            "chat",
+            Some(&known)
+        ));
+        known.muted_until = Some(crate::util::now() + 3600);
+        assert!(!notification_should_show(
+            true,
+            true,
+            None,
+            "chat",
+            Some(&known)
+        ));
+        known.muted_until = None;
+        known.archived = true;
+        assert!(!notification_should_show(
+            true,
+            true,
+            None,
+            "chat",
+            Some(&known)
+        ));
+        known.archived = false;
+        known.locked = true;
+        assert!(!notification_should_show(
+            true,
+            true,
+            None,
+            "chat",
+            Some(&known)
+        ));
     }
 
     #[test]

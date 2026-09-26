@@ -1,7 +1,8 @@
-//! Content-free GNOME notifications with in-memory chat activation routing.
+//! GNOME notifications with in-memory chat activation routing.
 //!
-//! The notification contains only a generic title. Chat identifiers stay in
-//! this process and are reached only after the user activates a notification.
+//! A notification shows the chat, a message preview, and the chat picture.
+//! Chat identifiers stay in this process behind random tokens and are reached
+//! only after the user activates a notification.
 
 use std::collections::{HashMap, VecDeque};
 
@@ -48,6 +49,14 @@ impl ActivationTokens {
         tokens
     }
 
+    /// The pending token of a chat, so a newer message replaces its notification.
+    fn token_for(&self, chat_id: &str) -> Option<String> {
+        self.order
+            .iter()
+            .find(|token| self.chats.get(*token).is_some_and(|chat| chat == chat_id))
+            .cloned()
+    }
+
     fn take_oldest(&mut self) -> Option<String> {
         let token = self.order.pop_front()?;
         self.chats.remove(&token);
@@ -89,8 +98,15 @@ impl NativeNotifications {
         }
     }
 
-    /// Shows generic content and keeps chat ID only in the in-memory token map.
-    pub fn show(&self, chat_id: impl Into<String>) -> Result<(), getrandom::Error> {
+    /// Shows or replaces the chat's notification; the chat ID stays in the
+    /// in-memory token map.
+    pub fn show(
+        &self,
+        chat_id: &str,
+        title: &str,
+        body: &str,
+        icon: Option<&std::path::Path>,
+    ) -> Result<(), getrandom::Error> {
         use gtk::gio::prelude::*;
 
         // Unit/Xvfb harnesses may construct a GTK application without a session
@@ -99,10 +115,14 @@ impl NativeNotifications {
             return Ok(());
         }
 
-        let token = activation_token()?;
+        let existing = self.tokens.borrow().token_for(chat_id);
+        let token = match existing {
+            Some(token) => token,
+            None => activation_token()?,
+        };
         let evicted = {
             let mut tokens = self.tokens.borrow_mut();
-            tokens.insert(token.clone(), chat_id.into());
+            tokens.insert(token.clone(), chat_id.to_owned());
             if tokens.chats.len() > MAX_PENDING_ACTIVATIONS {
                 tokens.take_oldest()
             } else {
@@ -113,7 +133,11 @@ impl NativeNotifications {
             self.application.withdraw_notification(&evicted);
         }
 
-        let notification = gtk::gio::Notification::new("New message");
+        let notification = gtk::gio::Notification::new(title);
+        notification.set_body(Some(body));
+        if let Some(icon) = icon {
+            notification.set_icon(&gtk::gio::FileIcon::new(&gtk::gio::File::for_path(icon)));
+        }
         notification.set_default_action_and_target_value(
             &format!("app.{OPEN_CHAT_ACTION}"),
             Some(&token.to_variant()),
@@ -146,6 +170,16 @@ pub fn activation_token() -> Result<String, getrandom::Error> {
 #[cfg(test)]
 mod tests {
     use super::ActivationTokens;
+
+    #[test]
+    fn a_chat_reuses_its_pending_token_so_notifications_replace() {
+        let mut tokens = ActivationTokens::default();
+        tokens.insert("first".into(), "chat-a".into());
+        tokens.insert("other".into(), "chat-b".into());
+        assert_eq!(tokens.token_for("chat-a").as_deref(), Some("first"));
+        tokens.activate("first");
+        assert_eq!(tokens.token_for("chat-a"), None);
+    }
 
     #[test]
     fn live_token_routes_to_intended_chat() {

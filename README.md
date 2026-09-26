@@ -126,9 +126,13 @@ Development happens at **[github.com/luminusOS/zaptide](https://github.com/lumin
   when validation fails. Private read-state updates run one at a time. Failures
   pause the whole queue with backoff from 30 seconds to 15 minutes; pending reads
   remain saved and resume automatically. New messages can still arrive.
-- **Desktop notifications.** Get notifications with the chat picture when you
-  are away from the open chat. Muted chats do not notify you, and archived
-  chats stay quiet until you unarchive them. Windows notifications
+- **Desktop notifications.** Get notifications with the chat name, a message
+  preview, and the chat picture when the chat is not on screen. A newer message
+  replaces its chat's notification. Muted chats do not notify you, and archived
+  chats stay quiet until you unarchive them. GNOME drops notifications from apps
+  without an installed desktop file, so a `cargo run` build notifies only after
+  `packaging/applications/dev.luminusos.ZapTide.desktop` is copied to
+  `~/.local/share/applications/`. Windows notifications
   identify ZapTide as the sender and show chat pictures as small circular icons;
   installed and portable builds register this identity in the current user's registry.
   On Linux,
