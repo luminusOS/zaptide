@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS messages (
     PRIMARY KEY (chat, id)
 );
 CREATE INDEX IF NOT EXISTS messages_by_time ON messages (chat, timestamp);
+CREATE INDEX IF NOT EXISTS messages_by_id ON messages (id);
 CREATE TABLE IF NOT EXISTS contacts (
     id TEXT PRIMARY KEY,
     full_name TEXT,
@@ -474,6 +475,21 @@ impl Archive {
     }
 
     /// Limit a phone snapshot to messages after any more recent read here.
+    /// The chat holding an incoming message, when exactly one chat has that id.
+    /// Receipts can name a peer by a privacy id that is not mapped yet.
+    pub fn incoming_chat_of(&self, id: &str) -> Result<Option<String>> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT chat FROM messages WHERE id = ?1 AND from_me = 0 LIMIT 2")?;
+        let chats = statement
+            .query_map(params![id], |row| row.get(0))?
+            .collect::<Result<Vec<String>>>()?;
+        Ok(match chats.as_slice() {
+            [chat] => Some(chat.clone()),
+            _ => None,
+        })
+    }
+
     pub fn history_unread(&self, id: &str, unread: u32) -> Result<u32> {
         let Some(through) = self.read_through(id)? else {
             return Ok(unread);

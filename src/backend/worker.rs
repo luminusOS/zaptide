@@ -1717,18 +1717,23 @@ impl Worker {
             ReceiptType::ReadSelf | ReceiptType::PlayedSelf => {
                 // The receipt time is when the phone read, not the position
                 // it read through. A delayed receipt must leave newer messages.
+                // A peer named by an unmapped privacy id is found by message id.
+                let mut read = Vec::new();
                 for id in &receipt.message_ids {
-                    if self
-                        .archive
-                        .message(&chat, id)
-                        .ok()
-                        .flatten()
-                        .is_some_and(|message| !message.from_me)
-                    {
-                        let _ = self.archive.mark_read_to(&chat, id);
+                    let target = match self.archive.message(&chat, id).ok().flatten() {
+                        Some(message) => (!message.from_me).then(|| chat.clone()),
+                        None => self.archive.incoming_chat_of(id).ok().flatten(),
+                    };
+                    if let Some(target) = target {
+                        let _ = self.archive.mark_read_to(&target, id);
+                        if !read.contains(&target) {
+                            read.push(target);
+                        }
                     }
                 }
-                self.emit_chat(&chat);
+                for target in read {
+                    self.emit_chat(&target);
+                }
                 return;
             }
             // Own-device delivery counts as read only in the self chat.
@@ -7913,6 +7918,15 @@ mod receipt_tests {
             "an unknown receipt has no known read position"
         );
         worker.on_receipt(&receipt(PEER_LID, &["new"], ReceiptType::ReadSelf));
+        assert_eq!(unread(&worker), 0);
+    }
+
+    #[test]
+    fn a_phone_read_addressed_to_an_unmapped_privacy_id_still_reads_the_chat() {
+        let (mut worker, _events, _inbox, _wa) = worker();
+        worker.store_message(incoming("seen", 100), None, None);
+        assert_eq!(unread(&worker), 1);
+        worker.on_receipt(&receipt(PEER_LID, &["seen"], ReceiptType::ReadSelf));
         assert_eq!(unread(&worker), 0);
     }
 
