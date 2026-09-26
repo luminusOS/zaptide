@@ -6517,7 +6517,9 @@ fn animate_sticker_on_hover(button: &gtk::Button, path: &std::path::Path) {
                 .await
                 .ok()
                 .flatten();
+                // Undecodable while still pointed at, not cancelled: treat as still.
                 let Some(frames) = frames else {
+                    still.set(hovering.load(Ordering::Acquire));
                     return;
                 };
                 if frames.len() < 2 {
@@ -6545,22 +6547,25 @@ fn animate_sticker_on_hover(button: &gtk::Button, path: &std::path::Path) {
             });
         });
     }
-    hover.connect_leave(move |controller| {
+    // Closing the picker under the pointer sends no leave; stop there too.
+    let rest = std::rc::Rc::new(move |button: &gtk::Button| {
         hovering.store(false, Ordering::Release);
         if let Some((animation, preview)) = playing.borrow_mut().take() {
             animation.stop();
-            if let Some(image) = controller.widget().and_then(|button| {
-                button
-                    .downcast::<gtk::Button>()
-                    .ok()?
-                    .child()?
-                    .downcast::<gtk::Image>()
-                    .ok()
-            }) {
+            if let Some(image) = button.child().and_downcast::<gtk::Image>() {
                 image.set_paintable(Some(&preview));
             }
         }
     });
+    {
+        let rest = rest.clone();
+        hover.connect_leave(move |controller| {
+            if let Some(button) = controller.widget().and_downcast::<gtk::Button>() {
+                rest(&button);
+            }
+        });
+    }
+    button.connect_unmap(move |button| rest(button));
     button.add_controller(hover);
 }
 
