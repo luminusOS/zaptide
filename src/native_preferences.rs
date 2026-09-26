@@ -271,6 +271,7 @@ impl NativePreferencesDialog {
         let errors = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let appearance = libadwaita::PreferencesPage::new();
         appearance.set_title("Appearance");
+        appearance.set_icon_name(Some("preferences-desktop-appearance-symbolic"));
         let appearance_group = libadwaita::PreferencesGroup::new();
         appearance_group.set_title("Display and input");
         appearance.add(&appearance_group);
@@ -338,15 +339,20 @@ impl NativePreferencesDialog {
         });
         appearance_group.add(&custom_theme_row);
 
-        let open_themes_folder = gtk4::Button::with_label("Open themes folder…");
-        open_themes_folder.set_halign(gtk4::Align::Start);
-        appearance_group.add(&open_themes_folder);
+        let open_themes_folder = gtk4::Button::builder()
+            .icon_name("folder-open-symbolic")
+            .tooltip_text("Open Themes Folder")
+            .valign(gtk4::Align::Center)
+            .css_classes(["flat"])
+            .build();
+        set_accessible_label(&open_themes_folder, "Open themes folder");
+        custom_theme_row.add_suffix(&open_themes_folder);
 
         add_numeric_row(
             &appearance_group,
             "Zoom",
             "UI scale, from 0.6× to 2.0×",
-            (f64::from(preferences.appearance.zoom), 0.6, 2.0, 0.05),
+            (f64::from(preferences.appearance.zoom), 0.6, 2.0, 0.05, 2),
             changes.clone(),
             errors.clone(),
             PreferenceChange::SetZoom,
@@ -360,6 +366,7 @@ impl NativePreferencesDialog {
                 260.0,
                 420.0,
                 10.0,
+                0,
             ),
             changes.clone(),
             errors.clone(),
@@ -395,6 +402,7 @@ impl NativePreferencesDialog {
 
         let account_page = libadwaita::PreferencesPage::new();
         account_page.set_title("Account");
+        account_page.set_icon_name(Some("avatar-default-symbolic"));
         let account_group = libadwaita::PreferencesGroup::new();
         account_group.set_title("Contacts");
         account_page.add(&account_group);
@@ -420,6 +428,7 @@ impl NativePreferencesDialog {
 
         let privacy = libadwaita::PreferencesPage::new();
         privacy.set_title("Privacy");
+        privacy.set_icon_name(Some("preferences-system-privacy-symbolic"));
         let privacy_group = libadwaita::PreferencesGroup::new();
         privacy_group.set_title("Privacy controls");
         privacy.add(&privacy_group);
@@ -435,13 +444,13 @@ impl NativePreferencesDialog {
         );
         let lock_row = libadwaita::ActionRow::new();
         lock_row.set_title("Locked chats code");
-        lock_row.set_subtitle("Write-only. Leave blank to keep current code.");
         lock_row.set_subtitle("Write-only. The saved code is never shown.");
         let lock_set = gtk4::Button::with_label(if preferences.privacy.chat_lock_configured {
             "Change…"
         } else {
             "Set…"
         });
+        lock_set.set_valign(gtk4::Align::Center);
         set_accessible_label(&lock_set, "Set locked chats code");
         lock_set.set_tooltip_text(Some("Set or change locked chats code"));
         lock_row.add_suffix(&lock_set);
@@ -469,6 +478,8 @@ impl NativePreferencesDialog {
         }
         if preferences.privacy.chat_lock_configured {
             let clear = gtk4::Button::with_label("Remove…");
+            clear.set_valign(gtk4::Align::Center);
+            clear.add_css_class("destructive-action");
             set_accessible_label(&clear, "Remove locked chats code");
             clear.set_tooltip_text(Some("Remove locked chats code"));
             let changes = changes.clone();
@@ -500,6 +511,7 @@ impl NativePreferencesDialog {
 
         let notifications_page = libadwaita::PreferencesPage::new();
         notifications_page.set_title("Notifications");
+        notifications_page.set_icon_name(Some("preferences-system-notifications-symbolic"));
         let notifications_group = libadwaita::PreferencesGroup::new();
         notifications_group.set_title("Notifications");
         notifications_page.add(&notifications_group);
@@ -525,6 +537,7 @@ impl NativePreferencesDialog {
 
         let storage_page = libadwaita::PreferencesPage::new();
         storage_page.set_title("Storage");
+        storage_page.set_icon_name(Some("drive-harddisk-symbolic"));
         let storage_group = libadwaita::PreferencesGroup::new();
         storage_group.set_title("Downloads");
         storage_page.add(&storage_group);
@@ -541,6 +554,7 @@ impl NativePreferencesDialog {
 
         let background_page = libadwaita::PreferencesPage::new();
         background_page.set_title("Background");
+        background_page.set_icon_name(Some("preferences-system-time-symbolic"));
         let background_group = libadwaita::PreferencesGroup::new();
         background_group.set_title("Background and updates");
         background_page.add(&background_group);
@@ -557,6 +571,7 @@ impl NativePreferencesDialog {
 
         let protocol_page = libadwaita::PreferencesPage::new();
         protocol_page.set_title("Messaging");
+        protocol_page.set_icon_name(Some("mail-send-symbolic"));
         let protocol_group = libadwaita::PreferencesGroup::new();
         protocol_group.set_title("Messaging and media");
         protocol_page.add(&protocol_group);
@@ -756,26 +771,21 @@ fn add_numeric_row(
     group: &libadwaita::PreferencesGroup,
     title: &str,
     subtitle: &str,
-    range: (f64, f64, f64, f64),
+    // Value, minimum, maximum, step, and decimal places shown.
+    range: (f64, f64, f64, f64, u32),
     changes: std::rc::Rc<std::cell::RefCell<Vec<PreferenceChange>>>,
     errors: std::rc::Rc<std::cell::RefCell<Vec<ValidationError>>>,
     make_change: fn(f32) -> PreferenceChange,
 ) {
-    use gtk4::prelude::*;
     use libadwaita::prelude::*;
-    let (value, min, max, step) = range;
-    let row = libadwaita::ActionRow::new();
+    let (value, min, max, step, digits) = range;
+    let adjustment = gtk4::Adjustment::new(value, min, max, step, step * 10.0, 0.0);
+    let row = libadwaita::SpinRow::new(Some(&adjustment), step, digits);
     row.set_title(title);
     row.set_subtitle(subtitle);
-    let adjustment = gtk4::Adjustment::new(value, min, max, step, step * 10.0, 0.0);
-    let input = gtk4::SpinButton::new(Some(&adjustment), step, 2);
-    input.set_numeric(true);
-    set_accessible_label(&input, title);
-    input.set_tooltip_text(Some(title));
-    row.add_suffix(&input);
-    row.set_activatable_widget(Some(&input));
-    input.connect_value_changed(move |input| {
-        push_change(&changes, &errors, make_change(input.value() as f32));
+    row.set_numeric(true);
+    row.connect_value_notify(move |row| {
+        push_change(&changes, &errors, make_change(row.value() as f32));
     });
     group.add(&row);
 }
