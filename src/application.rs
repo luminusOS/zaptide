@@ -1030,11 +1030,9 @@ impl SimpleComponent for NativeApplication {
                                         #[watch]
                                         set_label: model.pair_code().unwrap_or_default(),
                                     },
-                                    append = &gtk::Spinner {
+                                    append = &adw::Spinner {
                                         set_halign: gtk::Align::Center,
                                         set_size_request: (32, 32),
-                                        #[watch]
-                                        set_spinning: model.link_busy(),
                                         #[watch]
                                         set_visible: model.link_busy(),
                                     },
@@ -6402,7 +6400,7 @@ fn load_sticker_preview(button: &gtk::Button, path: &std::path::Path, size: i32)
         show(button, Some(&texture));
         return;
     }
-    button.set_child(Some(&gtk::Spinner::builder().spinning(true).build()));
+    button.set_child(Some(&adw::Spinner::new()));
     let path = path.to_path_buf();
     let started = std::cell::Cell::new(false);
     button.connect_map(move |button| {
