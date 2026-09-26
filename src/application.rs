@@ -2047,11 +2047,39 @@ impl SimpleComponent for NativeApplication {
                 about.present(Some(&self.window));
             }
             Input::ShowShortcuts => {
-                let dialog = adw::AlertDialog::builder()
-                    .heading("Keyboard shortcuts")
-                    .body("Select message text and press Ctrl+C to copy it. Copy Transcript in the chat menu copies the whole conversation.")
-                    .build();
-                dialog.add_response("close", "Close");
+                let (send, newline) = if self.enter_sends.get() {
+                    ("Return", "<Shift>Return")
+                } else {
+                    ("<Control>Return", "Return")
+                };
+                let dialog = adw::ShortcutsDialog::new();
+                for (title, items) in [
+                    (
+                        "Chat List",
+                        &[
+                            ("Previous chat", "Up"),
+                            ("Next chat", "Down"),
+                            ("Open chat", "Return"),
+                        ][..],
+                    ),
+                    (
+                        "Composer",
+                        &[("Send message", send), ("New line", newline)][..],
+                    ),
+                    (
+                        "Messages",
+                        &[
+                            ("Open message menu", "Menu <Shift>F10"),
+                            ("Copy selected text", "<Control>c"),
+                        ][..],
+                    ),
+                ] {
+                    let section = adw::ShortcutsSection::new(Some(title));
+                    for (item, accelerator) in items {
+                        section.add(adw::ShortcutsItem::new(item, accelerator));
+                    }
+                    dialog.add(section);
+                }
                 dialog.present(Some(&self.window));
             }
             Input::ApplyPreferences => {
