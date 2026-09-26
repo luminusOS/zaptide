@@ -4506,6 +4506,7 @@ impl Worker {
                             session_cache_lock: &session_cache_lock,
                         },
                         FileOutboundRequest {
+                            id: None,
                             prepared,
                             caption: caption.clone(),
                             mentions: mentions.clone(),
@@ -4596,6 +4597,7 @@ impl Worker {
                         session_cache_lock: &session_cache_lock,
                     },
                     FileOutboundRequest {
+                        id: None,
                         prepared,
                         caption: request.caption,
                         mentions: request.mentions,
@@ -4666,6 +4668,7 @@ impl Worker {
                         session_cache_lock: &session_cache_lock,
                     },
                     FileOutboundRequest {
+                        id: None,
                         prepared,
                         caption: None,
                         mentions: Vec::new(),
@@ -4733,6 +4736,36 @@ impl Worker {
         let session_cache_lock = self.session_cache_lock.clone();
         let dir = self.dirs.media_cache_dir();
         let me = self.me();
+        // Show the sticker at once, as text sends do; the upload fills in
+        // the same row, or marks it failed.
+        let id = client.generate_message_id();
+        let mut preview = media(Some(&"image/webp".to_owned()), None, None, None);
+        preview.path = Some(path.clone());
+        self.store_message(
+            Message {
+                id: id.clone(),
+                chat: chat.clone(),
+                sender: me.clone(),
+                sender_name: None,
+                from_me: true,
+                timestamp: crate::util::now(),
+                content: Content::Sticker {
+                    media: preview,
+                    animated: false,
+                },
+                status: Delivery::Pending,
+                delivered_at: None,
+                read_at: None,
+                quoted: None,
+                reactions: Vec::new(),
+                edited: false,
+                mentions: Vec::new(),
+                forwarded: false,
+                thumbnail: None,
+            },
+            None,
+            None,
+        );
         tokio::spawn(async move {
             let outcome = async {
                 let bytes = tokio::fs::read(&path)
@@ -4750,6 +4783,7 @@ impl Worker {
                         session_cache_lock: &session_cache_lock,
                     },
                     FileOutboundRequest {
+                        id: Some(id.clone()),
                         prepared,
                         caption: None,
                         mentions: Vec::new(),
@@ -4772,7 +4806,7 @@ impl Worker {
                 Err(error) => {
                     let _ = commands.send(Command::Sent {
                         chat,
-                        id: String::new(),
+                        id,
                         session_generation,
                         error: Some(format!("Could not send the sticker: {error}")),
                     });
@@ -5486,6 +5520,8 @@ struct FileOutboundContext<'a> {
 }
 
 struct FileOutboundRequest {
+    /// Id of a pending row already shown for this send, if any.
+    id: Option<String>,
     prepared: Prepared,
     caption: Option<String>,
     mentions: Vec<String>,
@@ -5761,6 +5797,7 @@ async fn file_outbound(
         session_cache_lock,
     } = context;
     let FileOutboundRequest {
+        id,
         mut prepared,
         caption,
         mentions,
@@ -5790,7 +5827,7 @@ async fn file_outbound(
     if let Some(context) = context {
         prepared.message.set_context_info(context);
     }
-    let id = client.generate_message_id();
+    let id = id.unwrap_or_else(|| client.generate_message_id());
     let path = media_path(
         dir,
         chat,

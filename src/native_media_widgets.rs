@@ -358,8 +358,8 @@ fn append_sticker(parent: &gtk::Box, path: Option<std::path::PathBuf>, token: &D
     let sticker = gtk::Image::new();
     sticker.set_pixel_size(160);
     sticker.set_halign(gtk::Align::Start);
+    // Keep the space reserved while decoding so the transcript does not jump.
     sticker.set_tooltip_text(Some("Sticker"));
-    sticker.set_visible(false);
     parent.append(&sticker);
     decode_preview_async(
         &sticker,

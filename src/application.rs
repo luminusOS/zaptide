@@ -626,7 +626,13 @@ impl RelmListItem for MessageRow {
         ] {
             widget.set_tooltip_text((!words.is_empty()).then_some(words));
         }
-        if widgets.rendered_message.as_ref() != Some(&self.message) {
+        // Delivery and reaction updates must not rebuild media: a rebuilt
+        // sticker or photo blanks while it decodes again and the list jumps.
+        if !widgets
+            .rendered_message
+            .as_ref()
+            .is_some_and(|previous| same_media(previous, &self.message))
+        {
             if let Some(previous) = widgets.rendered_message.as_ref()
                 && previous.id != self.id
             {
@@ -701,6 +707,14 @@ impl RelmListItem for MessageRow {
 }
 
 /// Express a row-local click in the list's coordinates without sending GTK objects across threads.
+fn same_media(a: &crate::model::Message, b: &crate::model::Message) -> bool {
+    a.id == b.id
+        && a.chat == b.chat
+        && a.from_me == b.from_me
+        && a.content == b.content
+        && a.thumbnail == b.thumbnail
+}
+
 fn message_menu_position(row: &gtk::Widget, x: f64, y: f64) -> Option<gtk::graphene::Point> {
     let list = row.ancestor(gtk::ListView::static_type())?;
     row.compute_point(&list, &gtk::graphene::Point::new(x as f32, y as f32))
