@@ -13,6 +13,7 @@ pub mod native_actions;
 pub mod native_attachments;
 pub mod native_chat_list;
 pub mod native_composer;
+pub mod native_emoji;
 pub mod native_media;
 pub mod native_media_widgets;
 pub mod native_notifications;

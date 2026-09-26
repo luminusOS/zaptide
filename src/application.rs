@@ -1505,10 +1505,10 @@ impl SimpleComponent for NativeApplication {
                                             set_valign: gtk::Align::End,
                                             add_css_class: "flat",
                                             add_css_class: "circular",
-                                            #[wrap(Some)]
-                                            set_popover = &gtk::EmojiChooser {
-                                                connect_emoji_picked[sender] => move |_, emoji| sender.input(Input::InsertEmoji(emoji.to_owned())),
-                                            },
+                                            set_popover: Some(&{
+                                                let sender = sender.clone();
+                                                crate::native_emoji::picker(move |emoji| sender.input(Input::InsertEmoji(emoji.to_owned())))
+                                            }),
                                         },
 
                                         #[name = "sticker_button"]
@@ -3584,6 +3584,9 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
         ".zaptide-transcript, .zaptide-transcript textview, .zaptide-transcript text { background: none; }\n\
          .zaptide-message-row { padding: 2px 6px; }\n\
          .zaptide-chat-list > row { padding: 0; }\n\
+         .zaptide-emoji-grid { background: none; }\n\
+         .zaptide-emoji-grid > child { padding: 0; border-radius: 8px; }\n\
+         .zaptide-emoji-cell { font-size: 1.55em; min-width: 38px; min-height: 38px; }\n\
          .zaptide-chat-item { padding: 8px 14px; border-radius: inherit; }\n\
          .zaptide-chat-item.zaptide-chat-open { background-color: alpha(currentColor, 0.22); }\n\
          .zaptide-bubble { padding: 8px 11px; border-radius: 13px; }\n\
@@ -6653,13 +6656,12 @@ fn reaction_bar(
     let (menu, parent, sender) = (menu.clone(), parent.clone(), sender.clone());
     more.connect_clicked(move |_| {
         menu.popdown();
-        let chooser = gtk::EmojiChooser::new();
-        chooser.set_parent(&parent);
-        chooser.set_pointing_to(Some(&rect));
         let sender = sender.clone();
-        chooser.connect_emoji_picked(move |_, emoji| {
+        let chooser = crate::native_emoji::picker(move |emoji| {
             sender.input(Input::ReactSelected(emoji.to_owned()));
         });
+        chooser.set_parent(&parent);
+        chooser.set_pointing_to(Some(&rect));
         chooser.connect_closed(|chooser| {
             let chooser = chooser.clone();
             gtk::glib::idle_add_local_once(move || chooser.unparent());
