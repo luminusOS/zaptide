@@ -376,7 +376,7 @@ fn append_sticker(parent: &gtk::Box, path: Option<std::path::PathBuf>, token: &D
 }
 
 /// One decoded sticker frame, scaled for the transcript.
-struct StickerFrame {
+pub(crate) struct StickerFrame {
     texture_rgba: Vec<u8>,
     width: u32,
     height: u32,
@@ -489,12 +489,7 @@ fn start_sticker_decode(
         .name("zaptide-sticker".into())
         .spawn(move || {
             let _permit = permit;
-            let frames = std::fs::metadata(&path)
-                .ok()
-                .filter(|meta| meta.len() <= crate::native_media::MAX_THUMBNAIL_INPUT_BYTES as u64)
-                .and_then(|_| std::fs::read(&path).ok())
-                .filter(|_| ticket.is_current())
-                .and_then(|bytes| decode_sticker(&bytes, || ticket.is_current()));
+            let frames = decode_sticker_file(&path, || ticket.is_current());
             main_context.invoke(move || {
                 let Some(image) = image.upgrade() else {
                     return;
@@ -513,51 +508,128 @@ fn start_sticker_decode(
                     }
                     return;
                 };
-                let frames: Vec<(gdk::MemoryTexture, u32)> = frames
-                    .into_iter()
-                    .map(|frame| {
-                        let texture = gdk::MemoryTexture::new(
-                            frame.width as i32,
-                            frame.height as i32,
-                            gdk::MemoryFormat::R8g8b8a8,
-                            &glib::Bytes::from_owned(frame.texture_rgba),
-                            frame.width as usize * 4,
-                        );
-                        (texture, frame.delay_ms)
-                    })
-                    .collect();
-                image.set_paintable(Some(&frames[0].0));
-                if frames.len() > 1 {
-                    animate_sticker(image.downgrade(), std::rc::Rc::new(frames), 0);
+                let animation = StickerAnimation::new(&image, frames);
+                if animation.is_animated() {
+                    animation.play(Some(STICKER_PLAY_LIMIT));
+                    // Pointing at a sticker that has stopped plays it again.
+                    let hover = gtk::EventControllerMotion::new();
+                    hover.connect_enter(move |_, _, _| animation.play(Some(STICKER_PLAY_LIMIT)));
+                    image.add_controller(hover);
                 }
             });
         })
         .ok();
 }
 
-/// Shows the next frame after the current one's delay, until the row's
-/// image is dropped. Hidden stickers wait without advancing.
-fn animate_sticker(
+/// How long a sticker in the conversation animates before it rests on its
+/// first frame; it finishes the loop it is in first.
+const STICKER_PLAY_LIMIT: std::time::Duration = std::time::Duration::from_secs(8);
+
+/// Decodes a sticker file for animation, or `None` when it is unreadable,
+/// too large, or `current` turns false first.
+pub(crate) fn decode_sticker_file(
+    path: &std::path::Path,
+    current: impl Fn() -> bool,
+) -> Option<Vec<StickerFrame>> {
+    let size = std::fs::metadata(path).ok()?.len();
+    if size > crate::native_media::MAX_THUMBNAIL_INPUT_BYTES as u64 {
+        return None;
+    }
+    let bytes = std::fs::read(path).ok()?;
+    decode_sticker(&bytes, current)
+}
+
+/// Decoded sticker frames shown on an image, played on demand.
+#[derive(Clone)]
+pub(crate) struct StickerAnimation {
     image: glib::WeakRef<gtk::Image>,
     frames: std::rc::Rc<Vec<(gdk::MemoryTexture, u32)>>,
-    index: usize,
-) {
-    glib::timeout_add_local_once(
-        std::time::Duration::from_millis(u64::from(frames[index].1)),
-        move || {
-            let Some(widget) = image.upgrade() else {
-                return;
-            };
-            let next = if widget.is_mapped() {
-                let next = (index + 1) % frames.len();
-                widget.set_paintable(Some(&frames[next].0));
-                next
-            } else {
-                index
-            };
-            animate_sticker(image, frames, next);
-        },
-    );
+    /// Bumped by every play and stop, so timers of an older run end.
+    generation: std::rc::Rc<std::cell::Cell<u64>>,
+    playing: std::rc::Rc<std::cell::Cell<bool>>,
+}
+
+impl StickerAnimation {
+    /// Uploads the frames and shows the first one on `image`.
+    pub(crate) fn new(image: &gtk::Image, frames: Vec<StickerFrame>) -> Self {
+        let frames: Vec<(gdk::MemoryTexture, u32)> = frames
+            .into_iter()
+            .map(|frame| {
+                let texture = gdk::MemoryTexture::new(
+                    frame.width as i32,
+                    frame.height as i32,
+                    gdk::MemoryFormat::R8g8b8a8,
+                    &glib::Bytes::from_owned(frame.texture_rgba),
+                    frame.width as usize * 4,
+                );
+                (texture, frame.delay_ms)
+            })
+            .collect();
+        if let Some((first, _)) = frames.first() {
+            image.set_paintable(Some(first));
+        }
+        Self {
+            image: image.downgrade(),
+            frames: std::rc::Rc::new(frames),
+            generation: Default::default(),
+            playing: Default::default(),
+        }
+    }
+
+    pub(crate) fn is_animated(&self) -> bool {
+        self.frames.len() > 1
+    }
+
+    /// Plays from the first frame, unless already playing. With a `limit`,
+    /// stops on the first frame at the end of the loop that reaches it.
+    pub(crate) fn play(&self, limit: Option<std::time::Duration>) {
+        if !self.is_animated() || self.playing.replace(true) {
+            return;
+        }
+        let generation = self.generation.get().wrapping_add(1);
+        self.generation.set(generation);
+        let budget = limit.map(|limit| limit.as_millis() as u64);
+        self.schedule(generation, 0, budget);
+    }
+
+    /// Stops and shows the first frame again.
+    pub(crate) fn stop(&self) {
+        self.generation.set(self.generation.get().wrapping_add(1));
+        self.playing.set(false);
+        if let (Some(image), Some((first, _))) = (self.image.upgrade(), self.frames.first()) {
+            image.set_paintable(Some(first));
+        }
+    }
+
+    /// Shows the frame after `index` once its delay passes. Hidden stickers
+    /// wait without advancing or spending their budget.
+    fn schedule(&self, generation: u64, index: usize, budget: Option<u64>) {
+        let delay = self.frames[index].1;
+        let animation = self.clone();
+        glib::timeout_add_local_once(
+            std::time::Duration::from_millis(u64::from(delay)),
+            move || {
+                if animation.generation.get() != generation {
+                    return;
+                }
+                let Some(image) = animation.image.upgrade() else {
+                    return;
+                };
+                if !image.is_mapped() {
+                    animation.schedule(generation, index, budget);
+                    return;
+                }
+                let next = (index + 1) % animation.frames.len();
+                let budget = budget.map(|budget| budget.saturating_sub(u64::from(delay)));
+                if next == 0 && budget == Some(0) {
+                    animation.stop();
+                    return;
+                }
+                image.set_paintable(Some(&animation.frames[next].0));
+                animation.schedule(generation, next, budget);
+            },
+        );
+    }
 }
 
 fn add_label(parent: &gtk::Box, text: &str) {
