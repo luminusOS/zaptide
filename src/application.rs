@@ -332,6 +332,8 @@ struct MessageRowWidgets {
     quote: gtk::Label,
     body: gtk::Label,
     footer: gtk::Label,
+    status: gtk::Label,
+    status_icon: gtk::Image,
     media: gtk::Box,
     action_generation: std::rc::Rc<std::cell::Cell<u64>>,
     decode_token: Option<crate::native_media::DecodeToken>,
@@ -412,7 +414,18 @@ impl RelmListItem for MessageRow {
             .max_width_chars(52)
             .css_classes(["dim-label", "caption"])
             .build();
-        bubble.append(&footer);
+        let status = gtk::Label::builder()
+            .css_classes(["caption", "zaptide-delivery"])
+            .build();
+        let status_icon = gtk::Image::builder().pixel_size(12).build();
+        let footer_row = gtk::Box::builder()
+            .spacing(4)
+            .halign(gtk::Align::End)
+            .build();
+        footer_row.append(&footer);
+        footer_row.append(&status);
+        footer_row.append(&status_icon);
+        bubble.append(&footer_row);
         let clamp = adw::Clamp::builder()
             .maximum_size(480)
             .tightening_threshold(360)
@@ -484,6 +497,8 @@ impl RelmListItem for MessageRow {
                 quote,
                 body,
                 footer,
+                status,
+                status_icon,
                 media,
                 action_generation,
                 decode_token: None,
@@ -540,6 +555,30 @@ impl RelmListItem for MessageRow {
         *widgets.menu_target.borrow_mut() = Some((self.id.clone(), self.pointer_sender.clone()));
         widgets.footer.set_label(&self.footer);
         widgets.footer.set_visible(!self.footer.is_empty());
+        let (glyph, icon, read) = delivery_mark(self.message.status);
+        widgets.status.set_label(glyph);
+        widgets.status.set_visible(!glyph.is_empty());
+        if read {
+            widgets.status.add_css_class("read");
+        } else {
+            widgets.status.remove_css_class("read");
+        }
+        widgets.status_icon.set_icon_name(icon);
+        if self.message.status == crate::model::Delivery::Failed {
+            widgets.status_icon.add_css_class("zaptide-delivery-failed");
+        } else {
+            widgets
+                .status_icon
+                .remove_css_class("zaptide-delivery-failed");
+        }
+        widgets.status_icon.set_visible(icon.is_some());
+        let words = delivery_label(self.message.status).trim_start_matches(" · ");
+        for widget in [
+            widgets.status.upcast_ref::<gtk::Widget>(),
+            widgets.status_icon.upcast_ref(),
+        ] {
+            widget.set_tooltip_text((!words.is_empty()).then_some(words));
+        }
         if let Some(token) = widgets.decode_token.take() {
             token.cancel();
         }
@@ -3299,6 +3338,9 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
          .zaptide-filter-pill:checked { background-color: alpha(@accent_color, 0.18); color: @accent_color; font-weight: bold; }\n\
          .zaptide-filter-pill:checked:hover { background-color: alpha(@accent_color, 0.24); }\n\
          .zaptide-unread-pill { font-weight: bold; font-size: 0.8em; border-radius: 9999px; min-width: 1.4em; padding: 2px 6px; color: @accent_fg_color; background-color: @accent_bg_color; }\n\
+         .zaptide-delivery { opacity: 0.6; }\n\
+         .zaptide-delivery.read { opacity: 1; color: #53bdeb; }\n\
+         .zaptide-delivery-failed { color: @error_color; }\n\
          .zaptide-unread-pill.muted { color: @window_fg_color; background-color: alpha(currentColor, 0.18); }\n\
          .zaptide-composer { border-radius: 18px; background-color: color-mix(in srgb, currentColor 8%, transparent); }\n\
          .zaptide-composer textview, .zaptide-composer text { background: none; }\n\
@@ -3375,12 +3417,25 @@ fn sender_label(name: Option<&str>, id: &str) -> String {
 fn delivery_label(delivery: crate::model::Delivery) -> &'static str {
     match delivery {
         crate::model::Delivery::Pending => " · Queued",
-        crate::model::Delivery::Sent => " · Sent ✓",
-        crate::model::Delivery::Delivered => " · Delivered ✓✓",
-        crate::model::Delivery::Read => " · Read ✓✓",
-        crate::model::Delivery::Played => " · Played ✓✓",
+        crate::model::Delivery::Sent => " · Sent",
+        crate::model::Delivery::Delivered => " · Delivered",
+        crate::model::Delivery::Read => " · Read",
+        crate::model::Delivery::Played => " · Played",
         crate::model::Delivery::Failed => " · Failed",
         crate::model::Delivery::None => "",
+    }
+}
+
+/// Compact delivery indicator: check glyphs, highlighted once read, or an
+/// icon for queued and failed sends.
+fn delivery_mark(delivery: crate::model::Delivery) -> (&'static str, Option<&'static str>, bool) {
+    match delivery {
+        crate::model::Delivery::Pending => ("", Some("document-open-recent-symbolic"), false),
+        crate::model::Delivery::Failed => ("", Some("dialog-error-symbolic"), false),
+        crate::model::Delivery::Sent => ("✓", None, false),
+        crate::model::Delivery::Delivered => ("✓✓", None, false),
+        crate::model::Delivery::Read | crate::model::Delivery::Played => ("✓✓", None, true),
+        crate::model::Delivery::None => ("", None, false),
     }
 }
 
@@ -3442,9 +3497,6 @@ fn message_row(
         footer.push(reactions.trim().to_owned());
     }
     footer.push(clock.clone());
-    if !delivery.is_empty() {
-        footer.push(delivery.trim_start_matches(" · ").to_owned());
-    }
     let accessible_label = format!(
         "{prefix}{sender}: {}{}{} · {clock}{delivery}",
         transcript_text(&message),
@@ -6221,15 +6273,24 @@ mod tests {
     #[test]
     fn delivery_projection_distinguishes_each_outgoing_state() {
         assert_eq!(delivery_label(crate::model::Delivery::Pending), " · Queued");
-        assert_eq!(delivery_label(crate::model::Delivery::Sent), " · Sent ✓");
+        assert_eq!(delivery_label(crate::model::Delivery::Sent), " · Sent");
         assert_eq!(
             delivery_label(crate::model::Delivery::Delivered),
-            " · Delivered ✓✓"
+            " · Delivered"
         );
-        assert_eq!(delivery_label(crate::model::Delivery::Read), " · Read ✓✓");
+        assert_eq!(delivery_label(crate::model::Delivery::Read), " · Read");
+        assert_eq!(delivery_label(crate::model::Delivery::Played), " · Played");
         assert_eq!(
-            delivery_label(crate::model::Delivery::Played),
-            " · Played ✓✓"
+            delivery_mark(crate::model::Delivery::Sent),
+            ("✓", None, false)
+        );
+        assert!(!delivery_mark(crate::model::Delivery::Delivered).2);
+        assert!(delivery_mark(crate::model::Delivery::Read).2);
+        assert!(delivery_mark(crate::model::Delivery::Pending).1.is_some());
+        assert!(delivery_mark(crate::model::Delivery::Failed).1.is_some());
+        assert_eq!(
+            delivery_mark(crate::model::Delivery::None),
+            ("", None, false)
         );
         assert_eq!(delivery_label(crate::model::Delivery::Failed), " · Failed");
         assert_eq!(delivery_label(crate::model::Delivery::None), "");
