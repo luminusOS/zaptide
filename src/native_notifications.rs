@@ -135,7 +135,7 @@ impl NativeNotifications {
 
         let notification = gtk::gio::Notification::new(title);
         notification.set_body(Some(body));
-        if let Some(icon) = icon {
+        if let Some(icon) = icon.and_then(round_icon) {
             notification.set_icon(&gtk::gio::FileIcon::new(&gtk::gio::File::for_path(icon)));
         }
         notification.set_default_action_and_target_value(
@@ -155,6 +155,34 @@ impl NativeNotifications {
     }
 }
 
+/// A circular copy of a chat picture, as the desktop shows icons unmasked.
+/// Cached beside the source and rebuilt when the source is newer.
+fn round_icon(source: &std::path::Path) -> Option<std::path::PathBuf> {
+    const SIZE: u32 = 96;
+    let target = source.with_extension("round.png");
+    let modified =
+        |path: &std::path::Path| std::fs::metadata(path).and_then(|meta| meta.modified());
+    if let (Ok(round), Ok(original)) = (modified(&target), modified(source))
+        && round >= original
+    {
+        return Some(target);
+    }
+    let mut image = image::open(source)
+        .ok()?
+        .resize_to_fill(SIZE, SIZE, image::imageops::FilterType::Triangle)
+        .to_rgba8();
+    let radius = SIZE as f32 / 2.0;
+    for (x, y, pixel) in image.enumerate_pixels_mut() {
+        let distance =
+            ((x as f32 + 0.5 - radius).powi(2) + (y as f32 + 0.5 - radius).powi(2)).sqrt();
+        // One pixel of falloff keeps the edge smooth.
+        let coverage = (radius - distance + 0.5).clamp(0.0, 1.0);
+        pixel[3] = (f32::from(pixel[3]) * coverage) as u8;
+    }
+    image.save(&target).ok()?;
+    Some(target)
+}
+
 pub fn activation_token() -> Result<String, getrandom::Error> {
     let mut bytes = [0_u8; 16];
     getrandom::fill(&mut bytes)?;
@@ -170,6 +198,24 @@ pub fn activation_token() -> Result<String, getrandom::Error> {
 #[cfg(test)]
 mod tests {
     use super::ActivationTokens;
+
+    #[test]
+    fn chat_pictures_become_circles_with_transparent_corners() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("avatar.png");
+        image::RgbaImage::from_pixel(40, 40, image::Rgba([200, 10, 10, 255]))
+            .save(&source)
+            .unwrap();
+        let round = super::round_icon(&source).expect("round icon");
+        let image = image::open(&round).unwrap().to_rgba8();
+        assert_eq!(image.get_pixel(0, 0)[3], 0, "corner is transparent");
+        assert_eq!(image.get_pixel(48, 48)[3], 255, "centre is opaque");
+        assert_eq!(
+            super::round_icon(&source),
+            Some(round),
+            "cached copy reused"
+        );
+    }
 
     #[test]
     fn a_chat_reuses_its_pending_token_so_notifications_replace() {
