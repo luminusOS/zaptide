@@ -563,12 +563,13 @@ pub struct NativeApplication {
     shutdown_started: bool,
     chats: TypedListView<ChatRow, gtk::SingleSelection>,
     chat_search: Option<gtk::SearchEntry>,
-    unread_filter: Option<gtk::CheckButton>,
-    pinned_filter: Option<gtk::CheckButton>,
+    unread_filter: Option<gtk::ToggleButton>,
+    pinned_filter: Option<gtk::ToggleButton>,
     chats_section: Option<gtk::ToggleButton>,
     archived_section: Option<gtk::ToggleButton>,
-    muted_filter: Option<gtk::CheckButton>,
-    chat_kind_filter: Option<gtk::DropDown>,
+    muted_filter: Option<gtk::ToggleButton>,
+    /// The "All" pill; activating it clears the private/group filter.
+    chat_kind_filter: Option<gtk::ToggleButton>,
     chat_projection: crate::native_chat_list::ChatListProjection,
     chat_filters: crate::native_chat_list::ChatListFilters,
     chat_ids: Vec<String>,
@@ -915,37 +916,54 @@ impl SimpleComponent for NativeApplication {
                                         set_placeholder_text: Some("Search chats"),
                                         connect_search_changed[sender] => move |entry| sender.input(Input::SearchChats(entry.text().to_string())),
                                     },
-                                    append = &gtk::MenuButton {
-                                        set_icon_name: "view-list-symbolic",
-                                        set_tooltip_text: Some("Filter chats"),
-                                        add_css_class: "flat",
-                                        #[wrap(Some)]
-                                        set_popover = &gtk::Popover {
-                                            #[wrap(Some)]
-                                            set_child = &gtk::Box {
-                                                set_orientation: gtk::Orientation::Vertical,
-                                                set_spacing: 6,
-                                                #[name = "chat_kind_filter"]
-                                                append = &gtk::DropDown {
-                                                    set_model: Some(&gtk::StringList::new(&["All chats", "Private", "Groups"])),
-                                                    connect_selected_notify[sender] => move |dropdown| sender.input(Input::SetChatKindFilter(dropdown.selected() as usize)),
-                                                },
-                                                #[name = "unread_filter"]
-                                                append = &gtk::CheckButton {
-                                                    set_label: Some("Unread"),
-                                                    connect_toggled[sender] => move |button| sender.input(Input::SetUnreadFilter(button.is_active())),
-                                                },
-                                                #[name = "pinned_filter"]
-                                                append = &gtk::CheckButton {
-                                                    set_label: Some("Pinned"),
-                                                    connect_toggled[sender] => move |button| sender.input(Input::SetPinnedFilter(button.is_active())),
-                                                },
-                                                #[name = "muted_filter"]
-                                                append = &gtk::CheckButton {
-                                                    set_label: Some("Muted"),
-                                                    connect_toggled[sender] => move |button| sender.input(Input::SetMutedFilter(button.is_active())),
-                                                },
-                                            },
+                                },
+                                append = &gtk::ScrolledWindow {
+                                    set_vscrollbar_policy: gtk::PolicyType::Never,
+                                    set_hscrollbar_policy: gtk::PolicyType::Automatic,
+                                    set_margin_start: 12,
+                                    set_margin_end: 12,
+                                    #[wrap(Some)]
+                                    set_child = &gtk::Box {
+                                        set_spacing: 6,
+                                        // Room for the overlay scrollbar below the pills.
+                                        set_margin_bottom: 10,
+                                        update_property: &[gtk::accessible::Property::Label("Filter chats")],
+                                        #[name = "chat_kind_filter"]
+                                        append = &gtk::ToggleButton {
+                                            set_label: "All",
+                                            set_active: true,
+                                            add_css_class: "zaptide-filter-pill",
+                                            connect_toggled[sender] => move |button| if button.is_active() { sender.input(Input::SetChatKindFilter(0)) },
+                                        },
+                                        append = &gtk::ToggleButton {
+                                            set_label: "Private",
+                                            set_group: Some(&chat_kind_filter),
+                                            add_css_class: "zaptide-filter-pill",
+                                            connect_toggled[sender] => move |button| if button.is_active() { sender.input(Input::SetChatKindFilter(1)) },
+                                        },
+                                        append = &gtk::ToggleButton {
+                                            set_label: "Groups",
+                                            set_group: Some(&chat_kind_filter),
+                                            add_css_class: "zaptide-filter-pill",
+                                            connect_toggled[sender] => move |button| if button.is_active() { sender.input(Input::SetChatKindFilter(2)) },
+                                        },
+                                        #[name = "unread_filter"]
+                                        append = &gtk::ToggleButton {
+                                            set_label: "Unread",
+                                            add_css_class: "zaptide-filter-pill",
+                                            connect_toggled[sender] => move |button| sender.input(Input::SetUnreadFilter(button.is_active())),
+                                        },
+                                        #[name = "pinned_filter"]
+                                        append = &gtk::ToggleButton {
+                                            set_label: "Pinned",
+                                            add_css_class: "zaptide-filter-pill",
+                                            connect_toggled[sender] => move |button| sender.input(Input::SetPinnedFilter(button.is_active())),
+                                        },
+                                        #[name = "muted_filter"]
+                                        append = &gtk::ToggleButton {
+                                            set_label: "Muted",
+                                            add_css_class: "zaptide-filter-pill",
+                                            connect_toggled[sender] => move |button| sender.input(Input::SetMutedFilter(button.is_active())),
                                         },
                                     },
                                 },
@@ -3239,6 +3257,10 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
          .zaptide-sender-purple { color: @purple_3; }\n\
          .zaptide-bubble:hover { box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 12%, transparent); }\n\
          .zaptide-message-timestamp { min-width: 36px; font-weight: normal; }\n\
+         .zaptide-filter-pill { border-radius: 9999px; padding: 4px 12px; min-height: 22px; background-color: alpha(currentColor, 0.08); box-shadow: none; }\n\
+         .zaptide-filter-pill:hover { background-color: alpha(currentColor, 0.11); }\n\
+         .zaptide-filter-pill:checked { background-color: alpha(@accent_color, 0.18); color: @accent_color; font-weight: bold; }\n\
+         .zaptide-filter-pill:checked:hover { background-color: alpha(@accent_color, 0.24); }\n\
          .zaptide-unread-pill { font-weight: bold; font-size: 0.8em; border-radius: 9999px; min-width: 1.4em; padding: 2px 6px; color: @accent_fg_color; background-color: @accent_bg_color; }\n\
          .zaptide-composer { border-radius: 18px; background-color: color-mix(in srgb, currentColor 8%, transparent); }\n\
          .zaptide-composer textview, .zaptide-composer text { background: none; }\n\
@@ -3580,7 +3602,7 @@ impl NativeApplication {
             filter.set_active(false);
         }
         if let Some(filter) = &self.chat_kind_filter {
-            filter.set_selected(0);
+            filter.set_active(true);
         }
         let section = if archived {
             &self.archived_section
@@ -3608,11 +3630,19 @@ impl NativeApplication {
         chat.locked || chat.archived != self.showing_archived()
     }
 
+    /// Whether a search or filter pill, rather than an empty section, hides chats.
+    fn chat_list_narrowed(&self) -> bool {
+        let filters = self.chat_filters;
+        !self.chat_projection.query().is_empty()
+            || filters.unread_only
+            || filters.pinned_only
+            || filters.private_only
+            || filters.groups_only
+            || filters.muted == crate::native_chat_list::MutedFilter::Only
+    }
+
     fn chat_list_empty_title(&self) -> &'static str {
-        match (
-            self.chat_projection.query().is_empty(),
-            self.showing_archived(),
-        ) {
+        match (!self.chat_list_narrowed(), self.showing_archived()) {
             (false, _) => "No Results",
             (true, true) => "No Archived Chats",
             (true, false) => "No Chats Yet",
@@ -3620,11 +3650,8 @@ impl NativeApplication {
     }
 
     fn chat_list_empty_description(&self) -> &'static str {
-        match (
-            self.chat_projection.query().is_empty(),
-            self.showing_archived(),
-        ) {
-            (false, _) => "No chats match this search.",
+        match (!self.chat_list_narrowed(), self.showing_archived()) {
+            (false, _) => "No chats match this search or filter.",
             (true, true) => "Archived conversations appear here.",
             (true, false) => "Conversations appear here as WhatsApp syncs.",
         }

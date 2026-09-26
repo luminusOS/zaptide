@@ -24,8 +24,8 @@ Development happens at **[github.com/luminusOS/zaptide](https://github.com/lumin
   Recent history is copied to this computer after linking and stored here.
 - **Chats.** See pinned, unread, muted, and archived chats, typing indicators,
   and message status. Search chats, saved messages, and contacts.
-  Filter the list to unread, private (one-to-one), or group chats with the
-  chips under the search bar; a chip with unread chats shows how many it has.
+  Filter the list to private (one-to-one) or group chats, and to unread,
+  pinned, or muted chats, with the pills under the search bar.
   Pinned chats stay in pin order (most recently pinned first), regardless of
   new messages. Chat and contact name searches ignore accents, so `Angel`
   finds `Ángel`.
