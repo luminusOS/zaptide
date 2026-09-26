@@ -43,7 +43,7 @@ thread_local! {
 struct ChatRowWidgets {
     name: gtk::Label,
     preview: gtk::Label,
-    status: gtk::Label,
+    status: gtk::DrawingArea,
     status_icon: gtk::Image,
     unread: gtk::Label,
     pinned: gtk::Image,
@@ -235,10 +235,8 @@ impl RelmListItem for ChatRow {
         title.append(&pinned);
         title.append(&unread);
         details.append(&title);
-        let status = gtk::Label::builder()
-            .css_classes(["caption", "zaptide-delivery"])
-            .visible(false)
-            .build();
+        let status = delivery_ticks();
+        status.set_visible(false);
         let status_icon = gtk::Image::builder().pixel_size(12).visible(false).build();
         let preview_row = gtk::Box::builder().spacing(4).build();
         preview_row.append(&status);
@@ -266,8 +264,7 @@ impl RelmListItem for ChatRow {
         widgets.name.set_label(&self.name);
         widgets.preview.set_label(&self.preview);
         let (glyph, icon, read) = delivery_mark(self.delivery);
-        widgets.status.set_label(glyph);
-        widgets.status.set_visible(!glyph.is_empty());
+        set_delivery_ticks(&widgets.status, glyph);
         if read {
             widgets.status.add_css_class("read");
         } else {
@@ -366,7 +363,7 @@ struct MessageRowWidgets {
     quote: gtk::Label,
     body: gtk::Label,
     footer: gtk::Label,
-    status: gtk::Label,
+    status: gtk::DrawingArea,
     status_icon: gtk::Image,
     media: gtk::Box,
     action_generation: std::rc::Rc<std::cell::Cell<u64>>,
@@ -448,9 +445,7 @@ impl RelmListItem for MessageRow {
             .max_width_chars(52)
             .css_classes(["dim-label", "caption"])
             .build();
-        let status = gtk::Label::builder()
-            .css_classes(["caption", "zaptide-delivery"])
-            .build();
+        let status = delivery_ticks();
         let status_icon = gtk::Image::builder().pixel_size(12).build();
         let footer_row = gtk::Box::builder()
             .spacing(4)
@@ -590,8 +585,7 @@ impl RelmListItem for MessageRow {
         widgets.footer.set_label(&self.footer);
         widgets.footer.set_visible(!self.footer.is_empty());
         let (glyph, icon, read) = delivery_mark(self.message.status);
-        widgets.status.set_label(glyph);
-        widgets.status.set_visible(!glyph.is_empty());
+        set_delivery_ticks(&widgets.status, glyph);
         if read {
             widgets.status.add_css_class("read");
         } else {
@@ -3557,6 +3551,53 @@ fn delivery_mark(delivery: crate::model::Delivery) -> (&'static str, Option<&'st
         crate::model::Delivery::Read | crate::model::Delivery::Played => ("✓✓", None, true),
         crate::model::Delivery::None => ("", None, false),
     }
+}
+
+/// WhatsApp-style check marks, drawn so the double tick overlaps like the
+/// original instead of depending on the font's check glyph.
+fn delivery_ticks() -> gtk::DrawingArea {
+    let area = gtk::DrawingArea::builder()
+        .content_width(16)
+        .content_height(11)
+        .valign(gtk::Align::Center)
+        .css_classes(["zaptide-delivery"])
+        .build();
+    area.set_draw_func(|area, cr, _, height| {
+        let color = area.color();
+        let bottom = f64::from(height) - 2.0;
+        cr.set_source_rgba(
+            color.red().into(),
+            color.green().into(),
+            color.blue().into(),
+            color.alpha().into(),
+        );
+        cr.set_line_width(1.5);
+        cr.set_line_cap(gtk::cairo::LineCap::Round);
+        cr.set_line_join(gtk::cairo::LineJoin::Round);
+        let double = area.has_css_class("double");
+        let first = if double { 1.0 } else { 3.0 };
+        cr.move_to(first, bottom - 3.5);
+        cr.line_to(first + 3.5, bottom);
+        cr.line_to(first + 10.0, 1.5);
+        if double {
+            // The second tick's short stroke hides behind the first one.
+            cr.move_to(first + 6.0, bottom - 1.5);
+            cr.line_to(first + 7.5, bottom);
+            cr.line_to(first + 14.0, 1.5);
+        }
+        let _ = cr.stroke();
+    });
+    area
+}
+
+fn set_delivery_ticks(area: &gtk::DrawingArea, glyph: &str) {
+    area.set_visible(!glyph.is_empty());
+    if glyph.chars().count() == 2 {
+        area.add_css_class("double");
+    } else {
+        area.remove_css_class("double");
+    }
+    area.queue_draw();
 }
 
 fn message_row(
