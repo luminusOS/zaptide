@@ -361,15 +361,158 @@ fn append_sticker(parent: &gtk::Box, path: Option<std::path::PathBuf>, token: &D
     // Keep the space reserved while decoding so the transcript does not jump.
     sticker.set_tooltip_text(Some("Sticker"));
     parent.append(&sticker);
-    decode_preview_async(
-        &sticker,
+    start_sticker_decode(sticker.downgrade(), path, token.issue());
+}
+
+/// One decoded sticker frame, scaled for the transcript.
+struct StickerFrame {
+    texture_rgba: Vec<u8>,
+    width: u32,
+    height: u32,
+    delay_ms: u32,
+}
+
+const STICKER_SIZE: u32 = 160;
+// ponytail: frames kept in memory per visible sticker (~100 KB each);
+// decimated past this cap. Stream frames from disk if long stickers matter.
+const MAX_STICKER_FRAMES: usize = 64;
+
+/// Decodes every frame of an animated WebP or GIF sticker, or its single
+/// frame, keeping at most `MAX_STICKER_FRAMES` by merging neighbours.
+fn decode_sticker(bytes: &[u8]) -> Option<Vec<StickerFrame>> {
+    use image::AnimationDecoder;
+    let cursor = std::io::Cursor::new(bytes);
+    let frames: Box<dyn Iterator<Item = image::ImageResult<image::Frame>>> =
+        match image::codecs::webp::WebPDecoder::new(cursor.clone()) {
+            Ok(decoder) if decoder.has_animation() => Box::new(decoder.into_frames()),
+            _ if bytes.starts_with(b"GIF8") => Box::new(
+                image::codecs::gif::GifDecoder::new(cursor)
+                    .ok()?
+                    .into_frames(),
+            ),
+            _ => {
+                let image = image::load_from_memory(bytes).ok()?;
+                Box::new(std::iter::once(Ok(image::Frame::new(image.to_rgba8()))))
+            }
+        };
+    let mut kept: Vec<StickerFrame> = Vec::new();
+    let mut step = 1;
+    for (index, frame) in frames.enumerate() {
+        let frame = frame.ok()?;
+        let (numerator, denominator) = frame.delay().numer_denom_ms();
+        let delay_ms = numerator / denominator.max(1);
+        if index % step != 0 {
+            if let Some(last) = kept.last_mut() {
+                last.delay_ms += delay_ms;
+            }
+            continue;
+        }
+        let image = image::DynamicImage::ImageRgba8(frame.into_buffer())
+            .thumbnail(STICKER_SIZE, STICKER_SIZE)
+            .to_rgba8();
+        kept.push(StickerFrame {
+            width: image.width(),
+            height: image.height(),
+            texture_rgba: image.into_raw(),
+            delay_ms,
+        });
+        if kept.len() > MAX_STICKER_FRAMES {
+            let mut pairs = std::mem::take(&mut kept).into_iter();
+            while let Some(mut first) = pairs.next() {
+                if let Some(second) = pairs.next() {
+                    first.delay_ms += second.delay_ms;
+                }
+                kept.push(first);
+            }
+            step *= 2;
+        }
+    }
+    (!kept.is_empty()).then_some(kept)
+}
+
+fn start_sticker_decode(
+    image: glib::WeakRef<gtk::Image>,
+    path: std::path::PathBuf,
+    ticket: crate::native_media::DecodeTicket,
+) {
+    if !ticket.is_current() || image.upgrade().is_none() {
+        return;
+    }
+    let Some(permit) = ThumbnailDecodePermit::acquire() else {
+        glib::timeout_add_local_once(std::time::Duration::from_millis(50), move || {
+            start_sticker_decode(image, path, ticket);
+        });
+        return;
+    };
+    let image = glib::SendWeakRef::from(image);
+    let main_context = glib::MainContext::default();
+    thread::Builder::new()
+        .name("zaptide-sticker".into())
+        .spawn(move || {
+            let _permit = permit;
+            let frames = std::fs::metadata(&path)
+                .ok()
+                .filter(|meta| meta.len() <= crate::native_media::MAX_THUMBNAIL_INPUT_BYTES as u64)
+                .and_then(|_| std::fs::read(&path).ok())
+                .filter(|_| ticket.is_current())
+                .and_then(|bytes| decode_sticker(&bytes));
+            main_context.invoke(move || {
+                let Some(image) = image.upgrade() else {
+                    return;
+                };
+                let Some(frames) = frames.filter(|_| ticket.is_current()) else {
+                    image.set_tooltip_text(Some("Sticker preview unavailable"));
+                    return;
+                };
+                let frames: Vec<(gdk::MemoryTexture, u32)> = frames
+                    .into_iter()
+                    .map(|frame| {
+                        let texture = gdk::MemoryTexture::new(
+                            frame.width as i32,
+                            frame.height as i32,
+                            gdk::MemoryFormat::R8g8b8a8,
+                            &glib::Bytes::from_owned(frame.texture_rgba),
+                            frame.width as usize * 4,
+                        );
+                        (texture, frame.delay_ms)
+                    })
+                    .collect();
+                image.set_paintable(Some(&frames[0].0));
+                if frames.len() > 1 {
+                    animate_sticker(image.downgrade(), std::rc::Rc::new(frames), 0);
+                }
+            });
+        })
+        .ok();
+}
+
+/// Shows the next frame after the current one's delay, until the row's
+/// image is dropped. Hidden stickers wait without advancing.
+fn animate_sticker(
+    image: glib::WeakRef<gtk::Image>,
+    frames: std::rc::Rc<Vec<(gdk::MemoryTexture, u32)>>,
+    index: usize,
+) {
+    // Browsers treat delays under 20 ms as 100 ms; do the same.
+    let delay = match frames[index].1 {
+        delay if delay < 20 => 100,
+        delay => delay,
+    };
+    glib::timeout_add_local_once(
+        std::time::Duration::from_millis(u64::from(delay)),
         move || {
-            let size = std::fs::metadata(&path).ok()?.len();
-            (size <= crate::native_media::MAX_THUMBNAIL_INPUT_BYTES as u64)
-                .then(|| std::fs::read(&path).ok())
-                .flatten()
+            let Some(widget) = image.upgrade() else {
+                return;
+            };
+            let next = if widget.is_mapped() {
+                let next = (index + 1) % frames.len();
+                widget.set_paintable(Some(&frames[next].0));
+                next
+            } else {
+                index
+            };
+            animate_sticker(image, frames, next);
         },
-        token,
     );
 }
 
@@ -545,6 +688,41 @@ fn start_preview_decode(
 
 #[cfg(test)]
 mod tests {
+    fn gif(frames: usize) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = image::codecs::gif::GifEncoder::new(&mut bytes);
+            for index in 0..frames {
+                let pixel = image::Rgba([(index * 7) as u8, 0, 0, 255]);
+                let frame = image::Frame::from_parts(
+                    image::RgbaImage::from_pixel(320, 320, pixel),
+                    0,
+                    0,
+                    image::Delay::from_numer_denom_ms(50, 1),
+                );
+                encoder.encode_frame(frame).expect("frame");
+            }
+        }
+        bytes
+    }
+
+    #[test]
+    fn animated_stickers_keep_their_frames_within_the_cap() {
+        let frames = super::decode_sticker(&gif(3)).expect("decoded");
+        assert_eq!(frames.len(), 3);
+        assert!(
+            frames
+                .iter()
+                .all(|frame| frame.width == super::STICKER_SIZE)
+        );
+        assert_eq!(frames[0].delay_ms, 50);
+
+        let frames = super::decode_sticker(&gif(200)).expect("decoded");
+        assert!(frames.len() <= super::MAX_STICKER_FRAMES);
+        let total: u32 = frames.iter().map(|frame| frame.delay_ms).sum();
+        assert_eq!(total, 200 * 50, "merged frames keep the clip's length");
+    }
+
     use std::path::PathBuf;
 
     use super::*;
