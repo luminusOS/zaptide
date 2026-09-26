@@ -316,14 +316,26 @@ fn decode_preview_async(
     load: impl FnOnce() -> Option<Vec<u8>> + Send + 'static,
     token: &DecodeToken,
 ) {
+    start_preview_decode(image.downgrade(), load, token.issue());
+}
+
+/// Waits for a decode slot instead of dropping the preview, until the row is
+/// recycled or destroyed.
+fn start_preview_decode(
+    image: glib::WeakRef<gtk::Image>,
+    load: impl FnOnce() -> Option<Vec<u8>> + Send + 'static,
+    ticket: crate::native_media::DecodeTicket,
+) {
+    if !ticket.is_current() || image.upgrade().is_none() {
+        return;
+    }
     let Some(permit) = ThumbnailDecodePermit::acquire() else {
-        image.set_tooltip_text(Some(
-            "Too many previews are decoding; open attachment to view",
-        ));
+        glib::timeout_add_local_once(std::time::Duration::from_millis(50), move || {
+            start_preview_decode(image, load, ticket);
+        });
         return;
     };
-    let ticket = token.issue();
-    let image = glib::SendWeakRef::from(image.downgrade());
+    let image = glib::SendWeakRef::from(image);
     let main_context = glib::MainContext::default();
     thread::Builder::new()
         .name("zaptide-thumbnail".into())
