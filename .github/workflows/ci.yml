@@ -43,6 +43,8 @@ jobs:
   clippy:
     name: clippy
     runs-on: ubuntu-24.04
+    # libadwaita 1.10 (GNOME 51); Ubuntu does not package it yet.
+    container: registry.fedoraproject.org/fedora:45
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -50,9 +52,7 @@ jobs:
         with:
           components: clippy
       - name: System dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libasound2-dev libgstreamer1.0-dev cmake
+        run: dnf install -y --setopt=install_weak_deps=False gcc gcc-c++ git gtk4-devel libadwaita-devel alsa-lib-devel gstreamer1-devel cmake gettext tar zstd
       - uses: Swatinem/rust-cache@v2
         with:
           key: clippy
@@ -61,6 +61,8 @@ jobs:
   clippy-all:
     name: clippy (all features)
     runs-on: ubuntu-24.04
+    # libadwaita 1.10 (GNOME 51); Ubuntu does not package it yet.
+    container: registry.fedoraproject.org/fedora:45
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -68,9 +70,7 @@ jobs:
         with:
           components: clippy
       - name: System dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libasound2-dev libgstreamer1.0-dev cmake
+        run: dnf install -y --setopt=install_weak_deps=False gcc gcc-c++ git gtk4-devel libadwaita-devel alsa-lib-devel gstreamer1-devel cmake gettext tar zstd
       - uses: Swatinem/rust-cache@v2
         with:
           key: clippy-all
@@ -79,14 +79,14 @@ jobs:
   test:
     name: test
     runs-on: ubuntu-24.04
+    # libadwaita 1.10 (GNOME 51); Ubuntu does not package it yet.
+    container: registry.fedoraproject.org/fedora:45
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: System dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libasound2-dev libgstreamer1.0-dev cmake
+        run: dnf install -y --setopt=install_weak_deps=False gcc gcc-c++ git gtk4-devel libadwaita-devel alsa-lib-devel gstreamer1-devel cmake gettext tar zstd
       - uses: Swatinem/rust-cache@v2
         with:
           key: test
@@ -95,14 +95,14 @@ jobs:
   test-all:
     name: test (all features)
     runs-on: ubuntu-24.04
+    # libadwaita 1.10 (GNOME 51); Ubuntu does not package it yet.
+    container: registry.fedoraproject.org/fedora:45
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: System dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libasound2-dev libgstreamer1.0-dev cmake
+        run: dnf install -y --setopt=install_weak_deps=False gcc gcc-c++ git gtk4-devel libadwaita-devel alsa-lib-devel gstreamer1-devel cmake gettext tar zstd
       - uses: Swatinem/rust-cache@v2
         with:
           key: test-all
@@ -111,14 +111,14 @@ jobs:
   doc:
     name: doc
     runs-on: ubuntu-24.04
+    # libadwaita 1.10 (GNOME 51); Ubuntu does not package it yet.
+    container: registry.fedoraproject.org/fedora:45
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: System dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libasound2-dev libgstreamer1.0-dev cmake
+        run: dnf install -y --setopt=install_weak_deps=False gcc gcc-c++ git gtk4-devel libadwaita-devel alsa-lib-devel gstreamer1-devel cmake gettext tar zstd
       - uses: Swatinem/rust-cache@v2
         with:
           key: doc
@@ -130,14 +130,14 @@ jobs:
   tree-dupes:
     name: tree-dupes
     runs-on: ubuntu-24.04
+    # libadwaita 1.10 (GNOME 51); Ubuntu does not package it yet.
+    container: registry.fedoraproject.org/fedora:45
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: System dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libasound2-dev libgstreamer1.0-dev cmake
+        run: dnf install -y --setopt=install_weak_deps=False gcc gcc-c++ git gtk4-devel libadwaita-devel alsa-lib-devel gstreamer1-devel cmake gettext tar zstd
       - uses: Swatinem/rust-cache@v2
         with:
           key: tree-dupes

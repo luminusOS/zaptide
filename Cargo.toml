@@ -34,7 +34,7 @@ env_logger = { version = "0.11", default-features = false, features = ["auto-col
 directories = "6"
 # Native GTK4/libadwaita/Relm4 stack.
 gtk4 = { version = "0.11", features = ["v4_14"] }
-libadwaita = { version = "0.9", features = ["v1_5"] }
+libadwaita = { version = "0.9", features = ["v1_10"] }
 relm4 = { version = "0.11", default-features = false, features = ["macros", "libadwaita", "gnome_46"] }
 # Gettext bindings for i18n. Uses system gettext library on Linux.
 gettext-rs = { version = "0.7", features = ["gettext-system"] }

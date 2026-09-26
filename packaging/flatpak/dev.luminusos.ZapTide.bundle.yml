@@ -2,9 +2,9 @@
 # into the same sandbox as dev.luminusos.ZapTide.yml describes. The
 # job unpacks the release tarball into built/ beside this file first.
 id: dev.luminusos.ZapTide
-runtime: org.freedesktop.Platform
-runtime-version: '26.08'
-sdk: org.freedesktop.Sdk
+runtime: org.gnome.Platform
+runtime-version: '51'
+sdk: org.gnome.Sdk
 command: zaptide
 finish-args:
   - --socket=wayland

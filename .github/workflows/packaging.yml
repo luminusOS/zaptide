@@ -64,7 +64,8 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, ubuntu-24.04-arm]
-        image: ['ubuntu:24.04', 'debian:13-slim', 'fedora:41', 'fedora:latest']
+        # libadwaita 1.10: GNOME 51 distributions only.
+        image: ['fedora:45']
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4

@@ -121,24 +121,26 @@ not make ZapTide available in Flathub. A maintainer must submit it manually:
 [Flathub's requirements](https://docs.flathub.org/docs/for-app-authors/requirements#generative-ai-policy)
 prohibit AI agents from submitting or writing submission interactions and require
 disclosure of generated material. Review the manifests and these changes before
-submitting. The manifests use the current Freedesktop 26.08 runtime; the CI builder
+submitting. The manifests use the GNOME 51 runtime, the first with libadwaita 1.10; the CI builder
 container is 25.08 and installs the runtime and SDK named by the manifest. The GitHub release job includes the bundle
 in `checksums.txt`. No existing release files are replaced by this change.
 
 ## Supported distributions
 
-- **Fedora 40+**: GTK 4.14, libadwaita 1.5.
-- **Ubuntu 24.04 LTS**: GTK 4.12+, libadwaita 1.4+ (may require PPA for newer GTK).
+ZapTide needs libadwaita 1.10, which ships with GNOME 51.
+
+- **Fedora 45+**.
 - **Arch Linux**: rolling release, always has latest GTK and libadwaita.
-- **Flatpak**: GNOME 46 runtime (Freedesktop 26.08 in manifests).
+- **Flatpak**: GNOME 51 runtime, for every other distribution.
+- **Ubuntu and Debian**: not until they package libadwaita 1.10; use the Flatpak.
 
 ## Build dependencies
 
 | Dependency | Fedora | Ubuntu/Debian | Arch | Notes |
 |------------|--------|---------------|------|-------|
 | Rust 1.75+ | `rust cargo` | `rustc cargo` | `rust` | Stable channel |
-| GTK 4.14+ | `gtk4-devel` | `libgtk-4-dev` | `gtk4` | 4.12+ acceptable on Ubuntu |
-| libadwaita 1.5+ | `libadwaita-devel` | `libadwaita-1-dev` | `libadwaita` | 1.4+ acceptable on Ubuntu |
+| GTK 4.14+ | `gtk4-devel` | `libgtk-4-dev` | `gtk4` | |
+| libadwaita 1.10+ | `libadwaita-devel` | `libadwaita-1-dev` | `libadwaita` | GNOME 51 |
 | ALSA | `alsa-lib-devel` | `libasound2-dev` | `alsa-lib` | Required for audio |
 | GStreamer | `gstreamer1-devel` | `libgstreamer1.0-dev` | `gstreamer` | Linux audio playback; base and good plugins at runtime |
 | cmake | `cmake` | `cmake` | `cmake` | Builds libopus via opusic-sys |

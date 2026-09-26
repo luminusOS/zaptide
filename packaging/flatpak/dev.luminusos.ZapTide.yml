@@ -10,9 +10,9 @@
 # binary the Linux job already built, through the bundle manifest beside
 # this one, whose finish-args are the same as these.
 id: dev.luminusos.ZapTide
-runtime: org.freedesktop.Platform
-runtime-version: '26.08'
-sdk: org.freedesktop.Sdk
+runtime: org.gnome.Platform
+runtime-version: '51'
+sdk: org.gnome.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
 command: zaptide
