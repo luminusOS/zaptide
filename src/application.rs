@@ -319,12 +319,15 @@ struct MessageRow {
     show_timestamp: bool,
     pointer_sender: ComponentSender<NativeApplication>,
     message: crate::model::Message,
+    audio: Option<crate::native_voice::VoiceMessage>,
+    audio_registry: AudioRegistry,
 }
 
 impl MessageRow {
     /// Whether rebinding `other` would draw exactly this row.
     fn renders_like(&self, other: &Self) -> bool {
         self.message == other.message
+            && self.audio == other.audio
             && self.separator == other.separator
             && self.avatar == other.avatar
             && self.show_sender == other.show_sender
@@ -366,6 +369,9 @@ struct MessageRowWidgets {
     status: gtk::DrawingArea,
     status_icon: gtk::Image,
     media: gtk::Box,
+    audio: gtk::Box,
+    audio_controls: Option<crate::native_media_widgets::AudioControls>,
+    rendered_message: Option<crate::model::Message>,
     action_generation: std::rc::Rc<std::cell::Cell<u64>>,
     decode_token: Option<crate::native_media::DecodeToken>,
     menu_target: MenuTarget,
@@ -374,6 +380,11 @@ struct MessageRowWidgets {
 /// The bound message and its sender, read by the row's context-menu gesture.
 type MenuTarget =
     std::rc::Rc<std::cell::RefCell<Option<(String, ComponentSender<NativeApplication>)>>>;
+type AudioRegistry = std::rc::Rc<
+    std::cell::RefCell<
+        std::collections::HashMap<String, crate::native_media_widgets::AudioControls>,
+    >,
+>;
 
 impl RelmListItem for MessageRow {
     type Root = gtk::Box;
@@ -439,6 +450,8 @@ impl RelmListItem for MessageRow {
         bubble.append(&body);
         let media = gtk::Box::new(gtk::Orientation::Vertical, 0);
         bubble.append(&media);
+        let audio = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        bubble.append(&audio);
         let footer = gtk::Label::builder()
             .xalign(1.0)
             .wrap(true)
@@ -529,6 +542,9 @@ impl RelmListItem for MessageRow {
                 status,
                 status_icon,
                 media,
+                audio,
+                audio_controls: None,
+                rendered_message: None,
                 action_generation,
                 decode_token: None,
                 menu_target,
@@ -607,30 +623,77 @@ impl RelmListItem for MessageRow {
         ] {
             widget.set_tooltip_text((!words.is_empty()).then_some(words));
         }
-        if let Some(token) = widgets.decode_token.take() {
-            token.cancel();
+        if widgets.rendered_message.as_ref() != Some(&self.message) {
+            if let Some(previous) = widgets.rendered_message.as_ref()
+                && previous.id != self.id
+            {
+                self.audio_registry.borrow_mut().remove(&previous.id);
+            }
+            if let Some(token) = widgets.decode_token.take() {
+                token.cancel();
+            }
+            while let Some(child) = widgets.media.first_child() {
+                widgets.media.remove(&child);
+            }
+            while let Some(child) = widgets.audio.first_child() {
+                widgets.audio.remove(&child);
+            }
+            widgets.audio_controls = None;
+            let generation = widgets.action_generation.get().wrapping_add(1);
+            widgets.action_generation.set(generation);
+            let active_generation = widgets.action_generation.clone();
+            let media = widgets.media.downgrade();
+            let sender = self.pointer_sender.clone();
+            let rendered = crate::native_media_widgets::build_media_widget_with_action(
+                &self.message,
+                move |action| {
+                    if active_generation.get() == generation && media.upgrade().is_some() {
+                        sender.input(Input::MediaAction(action));
+                    }
+                },
+            );
+            widgets
+                .media
+                .set_visible(rendered.widget.first_child().is_some());
+            widgets.media.append(&rendered.widget);
+            widgets.decode_token = Some(rendered.decode_token);
+            widgets.rendered_message = Some(self.message.clone());
         }
-        while let Some(child) = widgets.media.first_child() {
-            widgets.media.remove(&child);
+        if let Some(voice) = &self.audio {
+            if widgets.audio_controls.is_none() {
+                let sender = self.pointer_sender.clone();
+                let id = self.id.clone();
+                let generation = widgets.action_generation.get();
+                let active_generation = widgets.action_generation.clone();
+                let voice_note = matches!(
+                    &self.message.content,
+                    crate::model::Content::Audio {
+                        voice_note: true,
+                        ..
+                    }
+                );
+                let controls = crate::native_media_widgets::AudioControls::new(
+                    voice,
+                    voice_note,
+                    move |intent| {
+                        if active_generation.get() == generation {
+                            sender.input(Input::AudioControl {
+                                id: id.clone(),
+                                intent,
+                            });
+                        }
+                    },
+                );
+                widgets.audio.append(&controls.widget);
+                self.audio_registry
+                    .borrow_mut()
+                    .insert(self.id.clone(), controls.clone());
+                widgets.audio_controls = Some(controls);
+            } else if let Some(controls) = &widgets.audio_controls {
+                controls.update(voice);
+            }
         }
-        let generation = widgets.action_generation.get().wrapping_add(1);
-        widgets.action_generation.set(generation);
-        let active_generation = widgets.action_generation.clone();
-        let media = widgets.media.downgrade();
-        let sender = self.pointer_sender.clone();
-        let rendered = crate::native_media_widgets::build_media_widget_with_action(
-            &self.message,
-            move |action| {
-                if active_generation.get() == generation && media.upgrade().is_some() {
-                    sender.input(Input::MediaAction(action));
-                }
-            },
-        );
-        widgets
-            .media
-            .set_visible(rendered.widget.first_child().is_some());
-        widgets.media.append(&rendered.widget);
-        widgets.decode_token = Some(rendered.decode_token);
+        widgets.audio.set_visible(self.audio.is_some());
     }
 }
 
@@ -688,6 +751,14 @@ pub struct NativeApplication {
     selected_voice: Option<crate::native_voice::VoiceMessage>,
     selected_voice_message: Option<String>,
     media: crate::services::media::MediaService,
+    audio_waveforms: std::collections::HashMap<(String, String), Vec<u8>>,
+    waveform_queue: std::collections::VecDeque<(String, String, std::path::PathBuf)>,
+    waveform_busy: bool,
+    waveform_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    waveform_attempted: std::collections::HashSet<(String, String)>,
+    playing_audio: Option<String>,
+    audio_errors: std::collections::HashMap<(String, String), String>,
+    audio_registry: AudioRegistry,
     voice_send_pending: bool,
     message_target: Option<String>,
     message_menu: gtk::PopoverMenu,
@@ -777,6 +848,15 @@ pub enum Input {
     ActivateVoice,
     CycleVoiceSpeed,
     SeekVoice(f64),
+    AudioControl {
+        id: String,
+        intent: crate::native_voice::VoiceIntent,
+    },
+    AudioWaveformReady {
+        chat: String,
+        id: String,
+        bars: Option<Vec<u8>>,
+    },
     ActivateSelectedAttachment,
     ReactSelected(String),
     ShowForward,
@@ -1236,51 +1316,6 @@ impl SimpleComponent for NativeApplication {
                                             add_css_class: "zaptide-transcript",
                                             set_single_click_activate: true,
                                             connect_activate[sender] => move |_, position| sender.input(Input::SelectMessage(position)),
-                                        },
-                                    },
-
-                                    append = &gtk::Box {
-                                        set_margin_start: 12,
-                                        set_margin_end: 12,
-                                        set_spacing: 8,
-                                        #[watch]
-                                        set_visible: model.selected_voice.is_some(),
-
-                                        append = &gtk::Button {
-                                            add_css_class: "circular",
-                                            #[watch]
-                                            set_label: model.voice_action_label(),
-                                            #[watch]
-                                            set_sensitive: model.voice_action_available(),
-                                            connect_clicked => Input::ActivateVoice,
-                                        },
-                                        append = &gtk::Scale {
-                                            set_hexpand: true,
-                                            set_range: (0.0, 1.0),
-                                            set_draw_value: false,
-                                            set_tooltip_text: Some("Voice waveform; use slider to seek"),
-                                            #[watch]
-                                            set_sensitive: model.selected_voice.as_ref().is_some_and(|voice| voice.speed.is_some()),
-                                            #[watch]
-                                            set_value: model.selected_voice.as_ref().map_or(0.0, |voice| voice.progress as f64),
-                                            connect_change_value[sender] => move |_, _, value| {
-                                                sender.input(Input::SeekVoice(value));
-                                                gtk::glib::Propagation::Stop
-                                            },
-                                        },
-                                        append = &gtk::Label {
-                                            add_css_class: "dim-label",
-                                            add_css_class: "numeric",
-                                            #[watch]
-                                            set_label: &model.voice_progress_label(),
-                                        },
-                                        append = &gtk::Button {
-                                            add_css_class: "flat",
-                                            #[watch]
-                                            set_label: &model.voice_speed_label(),
-                                            #[watch]
-                                            set_visible: model.voice_speed_available(),
-                                            connect_clicked => Input::CycleVoiceSpeed,
                                         },
                                     },
 
@@ -1761,6 +1796,14 @@ impl SimpleComponent for NativeApplication {
             selected_voice: None,
             selected_voice_message: None,
             media: media_service,
+            audio_waveforms: Default::default(),
+            waveform_queue: Default::default(),
+            waveform_busy: false,
+            waveform_cancel: None,
+            waveform_attempted: Default::default(),
+            playing_audio: None,
+            audio_errors: Default::default(),
+            audio_registry: Default::default(),
             voice_send_pending: false,
             message_target: None,
             message_menu: gtk::PopoverMenu::from_model(None::<&gtk::gio::MenuModel>),
@@ -2130,6 +2173,16 @@ impl SimpleComponent for NativeApplication {
                     match event {
                         NativeEvent::Link(link) => {
                             if matches!(link, LinkStatus::LoggedOut) {
+                                self.media.stop_playback();
+                                self.playing_audio = None;
+                                self.waveform_queue.clear();
+                                if let Some(cancel) = self.waveform_cancel.take() {
+                                    cancel.store(true, std::sync::atomic::Ordering::Release);
+                                }
+                                self.audio_waveforms.clear();
+                                self.waveform_attempted.clear();
+                                self.audio_errors.clear();
+                                self.audio_registry.borrow_mut().clear();
                                 for chat in &self.chat_snapshots {
                                     self.notifications.clear_chat(&chat.id);
                                 }
@@ -2461,6 +2514,16 @@ impl SimpleComponent for NativeApplication {
                 }
                 if self.active_chat.as_deref() != Some(&chat) {
                     self.cancel_portal_requests();
+                    self.media.stop_playback();
+                    self.playing_audio = None;
+                    self.waveform_queue.clear();
+                    if let Some(cancel) = self.waveform_cancel.take() {
+                        cancel.store(true, std::sync::atomic::Ordering::Release);
+                    }
+                    self.audio_waveforms.clear();
+                    self.waveform_attempted.clear();
+                    self.audio_errors.clear();
+                    self.audio_registry.borrow_mut().clear();
                 }
                 self.notifications.clear_chat(&chat);
                 if let Some(previous) = self.active_chat.as_deref() {
@@ -2534,7 +2597,11 @@ impl SimpleComponent for NativeApplication {
                             filler
                         })
                         .collect::<Vec<_>>();
-                    messages.extend([message, attachment]);
+                    let mut voice = synthetic_audio_message(true);
+                    voice.chat.clone_from(&chat);
+                    let mut audio = synthetic_audio_message(false);
+                    audio.chat.clone_from(&chat);
+                    messages.extend([message, attachment, voice, audio]);
                     let _ = events.send(crate::backend::Event::Messages {
                         chat,
                         messages,
@@ -3075,6 +3142,18 @@ impl SimpleComponent for NativeApplication {
             Input::ActivateVoice => self.activate_voice(&sender),
             Input::CycleVoiceSpeed => self.cycle_voice_speed(),
             Input::SeekVoice(fraction) => self.seek_voice(fraction, &sender),
+            Input::AudioControl { id, intent } => self.audio_control(&id, intent, &sender),
+            Input::AudioWaveformReady { chat, id, bars } => {
+                self.waveform_busy = false;
+                self.waveform_cancel = None;
+                if self.active_chat.as_deref() == Some(&chat)
+                    && let Some(bars) = bars
+                {
+                    self.audio_waveforms.insert((chat, id.clone()), bars);
+                    self.refresh_message_row(&id);
+                }
+                self.pump_waveforms(&sender);
+            }
             Input::MediaAction(action) => match action {
                 crate::native_media::NativeMediaAction::Download { message, .. } => {
                     self.activate_attachment(&message)
@@ -3148,8 +3227,17 @@ impl SimpleComponent for NativeApplication {
                 self.schedule_voice_poll(&sender);
             }
             Input::PollVoice => {
-                if self.media.poll().is_err() {
-                    self.status = "Voice playback could not continue.".into();
+                if let Err(error) = self.media.poll() {
+                    self.status = "Audio playback could not continue.".into();
+                    if let (Some(chat), Some(id)) = (&self.active_chat, &self.playing_audio) {
+                        self.audio_errors.insert((chat.clone(), id.clone()), error);
+                    }
+                }
+                if let Some(id) = self.playing_audio.clone() {
+                    if self.media.actually_playing(&id) {
+                        self.tell_played(&id);
+                    }
+                    self.update_audio_row(&id);
                 }
                 self.refresh_selected_voice();
                 self.schedule_voice_poll(&sender);
@@ -3439,6 +3527,7 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
          .zaptide-delivery.read { opacity: 1; color: #53bdeb; }\n\
          .zaptide-delivery-failed { color: @error_color; }\n\
          .zaptide-sticker { border-radius: 12px; padding: 4px; }\n\
+         .zaptide-audio-seek trough, .zaptide-audio-seek highlight, .zaptide-audio-seek slider { background: none; border-color: transparent; box-shadow: none; outline-color: transparent; }\n\
          .zaptide-reaction { font-size: 1.4em; min-width: 40px; min-height: 40px; padding: 0; }\n\
          .zaptide-reaction.chosen { background-color: alpha(@accent_bg_color, 0.25); }\n\
          .zaptide-sticker-tab { border-radius: 8px; min-width: 36px; min-height: 36px; padding: 2px; }\n\
@@ -3607,6 +3696,7 @@ fn message_row(
     avatar: Option<std::path::PathBuf>,
     show_sender: bool,
     show_timestamp: bool,
+    audio_registry: AudioRegistry,
 ) -> MessageRow {
     const SENDER_CLASSES: [&str; 6] = [
         "zaptide-sender-blue",
@@ -3683,6 +3773,8 @@ fn message_row(
         show_timestamp,
         pointer_sender,
         message,
+        audio: None,
+        audio_registry,
     }
 }
 
@@ -4553,6 +4645,24 @@ impl NativeApplication {
         }
     }
 
+    fn update_audio_row(&mut self, id: &str) {
+        let Some(voice) = self
+            .message_snapshots
+            .get(id)
+            .and_then(|message| self.project_voice(message))
+        else {
+            return;
+        };
+        if let Some(position) = self.message_ids.iter().position(|known| known == id)
+            && let Some(row) = self.messages.get(position as u32)
+        {
+            row.borrow_mut().audio = Some(voice.clone());
+        }
+        if let Some(controls) = self.audio_registry.borrow().get(id) {
+            controls.update(&voice);
+        }
+    }
+
     fn react_selected(&mut self, emoji: String) {
         let Some((chat, message)) = self.active_chat.clone().zip(self.selected_message_id()) else {
             return;
@@ -4698,7 +4808,7 @@ impl NativeApplication {
             if self.media.seek(&message, &path, fraction).is_err() {
                 self.status = "Voice playback could not seek".into();
             } else {
-                self.tell_played(&message);
+                self.playing_audio = Some(message.clone());
             }
             self.refresh_selected_voice();
             self.schedule_voice_poll(sender);
@@ -4985,6 +5095,7 @@ impl NativeApplication {
             self.message_snapshots.remove(&id);
         }
         self.download_missing_stickers();
+        self.queue_waveforms();
         self.rebuild_message_rows();
         self.sync_transcript();
         if older
@@ -5161,12 +5272,21 @@ impl NativeApplication {
         }
         self.refresh_message_row(id);
         self.refresh_selected_voice();
+        self.queue_waveforms();
     }
 
     fn message_deleted(&mut self, chat: &str, id: &str) {
         if self.active_chat.as_deref() != Some(chat) {
             return;
         }
+        if self.playing_audio.as_deref() == Some(id) {
+            self.media.stop_playback();
+            self.playing_audio = None;
+        }
+        self.audio_waveforms
+            .remove(&(chat.to_owned(), id.to_owned()));
+        self.audio_errors.remove(&(chat.to_owned(), id.to_owned()));
+        self.audio_registry.borrow_mut().remove(id);
         let Some(position) = self.message_ids.iter().position(|known| known == id) else {
             return;
         };
@@ -5200,6 +5320,16 @@ impl NativeApplication {
     }
 
     fn clear_active_chat(&mut self) {
+        self.media.stop_playback();
+        self.playing_audio = None;
+        self.waveform_queue.clear();
+        if let Some(cancel) = self.waveform_cancel.take() {
+            cancel.store(true, std::sync::atomic::Ordering::Release);
+        }
+        self.audio_waveforms.clear();
+        self.waveform_attempted.clear();
+        self.audio_errors.clear();
+        self.audio_registry.borrow_mut().clear();
         self.active_chat = None;
         self.pending_send = None;
         self.pending_edit = None;
@@ -5278,18 +5408,22 @@ impl NativeApplication {
             .into_iter()
             .enumerate()
             .map(|(index, message)| {
+                let audio = self.project_voice(&message);
                 let (show_sender, show_timestamp) = boundaries[index];
                 let avatar = (!message.from_me)
                     .then(|| self.avatars.get(&message.sender).cloned())
                     .flatten();
-                message_row(
+                let mut row = message_row(
                     message,
                     self.pointer_sender.clone(),
                     &prefixes[index],
                     avatar,
                     show_sender,
                     show_timestamp,
-                )
+                    self.audio_registry.clone(),
+                );
+                row.audio = audio;
+                row
             })
             .collect::<Vec<_>>();
         let at_bottom = self.messages.view.vadjustment().is_none_or(|adjustment| {
@@ -5331,6 +5465,187 @@ impl NativeApplication {
         }
     }
 
+    fn queue_waveforms(&mut self) {
+        let Some(chat) = &self.active_chat else {
+            return;
+        };
+        for id in &self.message_ids {
+            let Some(message) = self.message_snapshots.get(id) else {
+                continue;
+            };
+            let crate::model::Content::Audio {
+                media, waveform, ..
+            } = &message.content
+            else {
+                continue;
+            };
+            let Some(path) = &media.path else { continue };
+            if !waveform.is_empty()
+                || self
+                    .audio_waveforms
+                    .contains_key(&(chat.clone(), id.clone()))
+                || self
+                    .waveform_attempted
+                    .contains(&(chat.clone(), id.clone()))
+                || self
+                    .waveform_queue
+                    .iter()
+                    .any(|(queued_chat, queued_id, _)| queued_chat == chat && queued_id == id)
+                || !path.is_file()
+            {
+                continue;
+            }
+            self.waveform_queue
+                .push_back((chat.clone(), id.clone(), path.clone()));
+        }
+        self.pump_waveforms(&self.pointer_sender.clone());
+    }
+
+    fn pump_waveforms(&mut self, sender: &ComponentSender<Self>) {
+        if self.waveform_busy {
+            return;
+        }
+        while let Some((chat, id, path)) = self.waveform_queue.pop_front() {
+            if self.active_chat.as_deref() != Some(&chat)
+                || self
+                    .audio_waveforms
+                    .contains_key(&(chat.clone(), id.clone()))
+            {
+                continue;
+            }
+            let sender = sender.clone();
+            self.waveform_busy = true;
+            self.waveform_attempted.insert((chat.clone(), id.clone()));
+            let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            self.waveform_cancel = Some(cancel.clone());
+            if std::thread::Builder::new()
+                .name("audio-waveform".into())
+                .spawn(move || {
+                    let bars = crate::audio::waveform_file_cancellable(&path, &cancel).ok();
+                    sender.input(Input::AudioWaveformReady { chat, id, bars });
+                })
+                .is_err()
+            {
+                self.waveform_busy = false;
+                self.waveform_cancel = None;
+            }
+            break;
+        }
+    }
+
+    fn audio_control(
+        &mut self,
+        id: &str,
+        intent: crate::native_voice::VoiceIntent,
+        sender: &ComponentSender<Self>,
+    ) {
+        let Some(audio_message) = self
+            .message_snapshots
+            .get(id)
+            .cloned()
+            .filter(|message| self.active_chat.as_deref() == Some(&message.chat))
+        else {
+            return;
+        };
+        let Some(voice) = self.project_voice(&audio_message) else {
+            return;
+        };
+        let Some(action) = voice.action(intent) else {
+            return;
+        };
+        match action {
+            crate::model::Action::Download { chat, message } => {
+                if let Some(backend) = &self.backend {
+                    if let Some(media) = self
+                        .message_snapshots
+                        .get_mut(&message)
+                        .and_then(|message| message.content.media_mut())
+                    {
+                        media.state = crate::model::MediaState::Downloading;
+                    }
+                    backend.send(crate::backend::Command::Download {
+                        chat,
+                        message: message.clone(),
+                    });
+                    self.refresh_message_row(&message);
+                }
+            }
+            crate::model::Action::PlayVoice { message, path } => {
+                let voice_note = matches!(
+                    self.message_snapshots
+                        .get(&message)
+                        .map(|message| &message.content),
+                    Some(crate::model::Content::Audio {
+                        voice_note: true,
+                        ..
+                    })
+                );
+                self.media.set_speed(if voice_note {
+                    self.settings.voice_speed
+                } else {
+                    1.0
+                });
+                self.audio_errors
+                    .remove(&(audio_message.chat.clone(), message.clone()));
+                let previous = self.playing_audio.replace(message.clone());
+                if let Err(error) = self.media.toggle_playback(&message, &path) {
+                    self.audio_errors.insert(
+                        (
+                            self.active_chat.clone().unwrap_or_default(),
+                            message.clone(),
+                        ),
+                        error,
+                    );
+                }
+                if let Some(previous) = previous {
+                    self.refresh_message_row(&previous);
+                }
+                self.refresh_message_row(&message);
+                self.schedule_voice_poll(sender);
+            }
+            crate::model::Action::SeekVoice {
+                message,
+                path,
+                fraction,
+            } => {
+                if matches!(
+                    audio_message.content,
+                    crate::model::Content::Audio {
+                        voice_note: false,
+                        ..
+                    }
+                ) {
+                    self.media.set_speed(1.0);
+                }
+                let previous = self.playing_audio.replace(message.clone());
+                if let Err(error) = self.media.seek(&message, &path, fraction) {
+                    self.audio_errors.insert(
+                        (
+                            self.active_chat.clone().unwrap_or_default(),
+                            message.clone(),
+                        ),
+                        error,
+                    );
+                }
+                if let Some(previous) = previous {
+                    self.refresh_message_row(&previous);
+                }
+                self.refresh_message_row(&message);
+                self.schedule_voice_poll(sender);
+            }
+            crate::model::Action::CycleVoiceSpeed => {
+                self.settings.voice_speed = self.media.cycle_speed();
+                if self.settings.save(&self.settings_path).is_err() {
+                    self.status = "Could not save voice playback speed".into();
+                }
+                if let Some(id) = self.playing_audio.clone() {
+                    self.refresh_message_row(&id);
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn project_voice(
         &self,
         message: &crate::model::Message,
@@ -5338,24 +5653,36 @@ impl NativeApplication {
         let crate::model::Content::Audio {
             media,
             seconds,
-            voice_note: true,
+            voice_note,
             waveform,
         } = &message.content
         else {
             return None;
         };
-        Some(crate::native_voice::project(
-            crate::native_voice::VoiceMessageInput {
-                chat: &message.chat,
-                message: &message.id,
-                media,
-                seconds: *seconds,
-                waveform,
-                generated_waveform: self.media.waveform(&message.id),
-                playback: self.media.playback_status(&message.id),
-                speed: self.media.speed(),
-            },
-        ))
+        if message.from_me && !voice_note {
+            return None;
+        }
+        let mut projected = crate::native_voice::project(crate::native_voice::VoiceMessageInput {
+            chat: &message.chat,
+            message: &message.id,
+            media,
+            seconds: *seconds,
+            waveform,
+            generated_waveform: self
+                .audio_waveforms
+                .get(&(message.chat.clone(), message.id.clone()))
+                .map(Vec::as_slice)
+                .or_else(|| self.media.waveform(&message.id)),
+            playback: self.media.playback_status(&message.id),
+            speed: if *voice_note { self.media.speed() } else { 1.0 },
+        });
+        if let Some(error) = self
+            .audio_errors
+            .get(&(message.chat.clone(), message.id.clone()))
+        {
+            projected.error = Some(error.clone());
+        }
+        Some(projected)
     }
 
     fn refresh_selected_voice(&mut self) {
@@ -5367,49 +5694,6 @@ impl NativeApplication {
         if self.selected_voice.is_none() {
             self.selected_voice_message = None;
         }
-    }
-
-    fn voice_action_label(&self) -> &str {
-        match self.selected_voice.as_ref().map(|voice| voice.control) {
-            Some(crate::native_voice::VoiceControl::Download) => "Download voice",
-            Some(crate::native_voice::VoiceControl::Loading) => "Loading voice",
-            Some(crate::native_voice::VoiceControl::Play) => "Play voice",
-            Some(crate::native_voice::VoiceControl::Pause) => "Pause voice",
-            None => "Voice",
-        }
-    }
-
-    fn voice_action_available(&self) -> bool {
-        !matches!(
-            self.selected_voice.as_ref().map(|voice| voice.control),
-            Some(crate::native_voice::VoiceControl::Loading) | None
-        )
-    }
-
-    fn voice_speed_available(&self) -> bool {
-        self.selected_voice
-            .as_ref()
-            .is_some_and(|voice| voice.speed.is_some())
-    }
-
-    fn voice_speed_label(&self) -> String {
-        self.selected_voice
-            .as_ref()
-            .and_then(|voice| voice.speed.clone())
-            .unwrap_or_default()
-    }
-
-    fn voice_progress_label(&self) -> String {
-        self.selected_voice
-            .as_ref()
-            .map(|voice| {
-                format!(
-                    "Playback {} · {}%",
-                    voice.time,
-                    (voice.progress * 100.0).round()
-                )
-            })
-            .unwrap_or_default()
     }
 
     fn activate_voice(&mut self, sender: &ComponentSender<Self>) {
@@ -5439,7 +5723,7 @@ impl NativeApplication {
                 if self.media.toggle_playback(&message, &path).is_err() {
                     self.status = "Voice playback could not start.".into();
                 } else if self.media.is_playing() {
-                    self.tell_played(&message);
+                    self.playing_audio = Some(message.clone());
                 }
                 self.refresh_selected_voice();
                 self.schedule_voice_poll(sender);
@@ -5453,7 +5737,16 @@ impl NativeApplication {
             .active_chat
             .as_ref()
             .zip(self.message_snapshots.get(id))
-            .filter(|(_, message)| !message.from_me)
+            .filter(|(_, message)| {
+                !message.from_me
+                    && matches!(
+                        message.content,
+                        crate::model::Content::Audio {
+                            voice_note: true,
+                            ..
+                        }
+                    )
+            })
             .map(|(chat, message)| (chat.clone(), message.clone()))
         else {
             return;
@@ -5702,6 +5995,39 @@ fn synthetic_attachment_message() -> crate::model::Message {
         forwarded: false,
         thumbnail: Some(vec![0; 64]),
     }
+}
+
+#[cfg(feature = "demo")]
+fn synthetic_audio_message(voice_note: bool) -> crate::model::Message {
+    let mut message = synthetic_message();
+    message.id = if voice_note {
+        "synthetic-voice"
+    } else {
+        "synthetic-audio"
+    }
+    .into();
+    message.timestamp += if voice_note { 4 } else { 5 };
+    message.content = crate::model::Content::Audio {
+        media: crate::model::Media {
+            mime: if voice_note {
+                "audio/ogg"
+            } else {
+                "audio/mpeg"
+            }
+            .into(),
+            size: 8_192,
+            width: None,
+            height: None,
+            path: None,
+            state: crate::model::MediaState::Idle,
+        },
+        seconds: Some(14),
+        voice_note,
+        waveform: (0..crate::voice::BARS)
+            .map(|bar| (bar * 13 % 80 + 12) as u8)
+            .collect(),
+    };
+    message
 }
 
 #[cfg(feature = "demo")]

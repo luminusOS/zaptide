@@ -99,14 +99,15 @@ protocol. These notes are for coding agents and new contributors.
   (the `ogg` crate for the container, `opus` with libopus bundled and
   built by cmake for the codec, so cmake is a build dependency), plus
   the 64-bar waveform WhatsApp draws and a mono/48 kHz resampler.
-  `src/audio.rs` is the sound: `Player` plays one clip at a time through
-  rodio (OGG/Opus through `voice`, MP3/M4A/WAV through rodio's decoders,
-  decoded on a thread, the device opened on demand and released when the
-  clip ends) and `Recorder` reads the default microphone through rodio's
-  `Microphone` on a thread, keeping a loudness per 50 ms for the live bars.
-  Linux needs ALSA headers to build (`libasound2-dev` on Debian,
-  `alsa-lib` on Arch). `Action::PlayVoice/SeekVoice` drive the player from
-  the bubble; `StartRecording/CancelRecording/SendRecording` the
+  `src/services/media.rs` plays one clip at a time with GStreamer on Linux;
+  on macOS/Windows and when the Linux `scaletempo` plugin is unavailable for
+  accelerated playback, `src/audio.rs` uses rodio. Bounded waveform decoding
+  also uses `src/audio.rs` on a worker thread. `Recorder` reads the default
+  microphone through rodio's `Microphone` on a thread, keeping a loudness per
+  50 ms for the live bars. Linux needs ALSA and GStreamer headers to build
+  (`libasound2-dev` and `libgstreamer1.0-dev` on Debian, `alsa-lib` and
+  `gstreamer` on Arch). Audio controls live in each message bubble;
+  `StartRecording/CancelRecording/SendRecording` drive the
   microphone from the composer (the send button is a microphone when there
   is nothing to send); `Command::SendVoice` normalizes
   (`voice::normalize`, quiet takes up to just under full scale, gain

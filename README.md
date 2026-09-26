@@ -67,11 +67,14 @@ Development happens at **[github.com/luminusOS/zaptide](https://github.com/lumin
   phone survive history arriving later, including during initial linking.
   Existing installations request one settings refresh after upgrading to
   recover previously lost mute settings and pin order, without relinking.
-- **Voice messages.** Play, seek, record, reply with, and send voice messages
-  in the chat. The playback speed cycles between 1x, 1.5x, and 2x from the
-  bubble, keeping the speaker's pitch, and the last choice applies to later
-  messages. The app normalizes quiet recordings and handles OGG/Opus
-  without external tools.
+- **Audio in the conversation.** Play and seek received voice notes and audio
+  files in their message bubbles, with a waveform and keyboard-accessible seek
+  control. Voice playback cycles between 1x, 1.5x, and 2x without changing
+  pitch; the last choice applies to later voice notes. On Linux, GStreamer
+  handles playback, with a Rust fallback for accelerated playback if its
+  `scaletempo` plugin is missing. Other platforms retain the Rust audio player. You can
+  record, reply with, and send voice notes; recordings are normalized and
+  OGG/Opus needs no external decoder.
 - **Send messages.** Press Enter to send text and Shift+Enter for a new line.
   You can swap these keys in Settings. The composer is focused when you open
   or return to a conversation; invoking search keeps focus in search, and
@@ -214,9 +217,9 @@ it also needs GUI development packages:
 
 ```sh
 # Debian and Ubuntu
-sudo apt install libxkbcommon-dev libwayland-dev libgl1-mesa-dev libasound2-dev cmake perl
+sudo apt install libxkbcommon-dev libwayland-dev libgl1-mesa-dev libasound2-dev libgstreamer1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good cmake perl
 # Arch
-sudo pacman -S libxkbcommon wayland mesa alsa-lib cmake perl
+sudo pacman -S libxkbcommon wayland mesa alsa-lib gstreamer gst-plugins-base gst-plugins-good cmake perl
 ```
 
 Then:

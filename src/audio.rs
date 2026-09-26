@@ -583,6 +583,20 @@ fn decode_file_with(path: &Path, cancelled: &AtomicBool) -> Result<Vec<f32>, Str
     collect_samples(decoder, channels, rate, cancelled)
 }
 
+/// Generate bounded waveform data off the GTK thread for an attachment.
+pub fn waveform_file(path: &Path) -> Result<Vec<u8>, String> {
+    waveform_file_cancellable(path, &AtomicBool::new(false))
+}
+
+pub(crate) fn waveform_file_cancellable(
+    path: &Path,
+    cancelled: &AtomicBool,
+) -> Result<Vec<u8>, String> {
+    let _permit =
+        DecodePermit::acquire().ok_or_else(|| "Too many audio clips are decoding".to_owned())?;
+    decode_file_with(path, cancelled).map(|samples| voice::waveform(&samples))
+}
+
 fn is_cancelled(cancelled: &AtomicBool) -> bool {
     cancelled.load(Ordering::Acquire)
 }

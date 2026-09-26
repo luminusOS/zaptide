@@ -21,13 +21,13 @@ On Linux, the build needs the GTK4 and libadwaita development libraries, ALSA, a
 libopus and the H.264 decoder build from source. On Arch Linux:
 
 ```sh
-sudo pacman -S --needed gtk4 libadwaita alsa-lib cmake
+sudo pacman -S --needed gtk4 libadwaita alsa-lib gstreamer gst-plugins-base gst-plugins-good cmake
 ```
 
 On Debian or Ubuntu:
 
 ```sh
-sudo apt install build-essential cmake libasound2-dev libgtk-4-dev libadwaita-1-dev
+sudo apt install build-essential cmake libasound2-dev libgstreamer1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good libgtk-4-dev libadwaita-1-dev
 ```
 
 A desktop entry ships in `packaging/applications/dev.luminusos.ZapTide.desktop`.

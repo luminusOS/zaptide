@@ -52,7 +52,7 @@ jobs:
       - name: System dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libasound2-dev cmake
+          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libasound2-dev libgstreamer1.0-dev cmake
       - uses: Swatinem/rust-cache@v2
         with:
           key: clippy
@@ -70,7 +70,7 @@ jobs:
       - name: System dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libasound2-dev cmake
+          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libasound2-dev libgstreamer1.0-dev cmake
       - uses: Swatinem/rust-cache@v2
         with:
           key: clippy-all
@@ -86,7 +86,7 @@ jobs:
       - name: System dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libasound2-dev cmake
+          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libasound2-dev libgstreamer1.0-dev cmake
       - uses: Swatinem/rust-cache@v2
         with:
           key: test
@@ -102,7 +102,7 @@ jobs:
       - name: System dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libasound2-dev cmake
+          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libasound2-dev libgstreamer1.0-dev cmake
       - uses: Swatinem/rust-cache@v2
         with:
           key: test-all
@@ -118,7 +118,7 @@ jobs:
       - name: System dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libasound2-dev cmake
+          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libasound2-dev libgstreamer1.0-dev cmake
       - uses: Swatinem/rust-cache@v2
         with:
           key: doc
@@ -137,7 +137,7 @@ jobs:
       - name: System dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libasound2-dev cmake
+          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libasound2-dev libgstreamer1.0-dev cmake
       - uses: Swatinem/rust-cache@v2
         with:
           key: tree-dupes

@@ -43,6 +43,46 @@ fn write_ogg_temp(samples: &[f32]) -> NamedTempFile {
     file
 }
 
+#[test]
+fn received_audio_without_sender_waveform_generates_bars_off_ui_thread() {
+    let samples = synthetic_tone(0.5, 440.0, 0.4);
+    let file = write_ogg_temp(&samples);
+    let bars = std::thread::spawn(move || zaptide::audio::waveform_file(file.path()))
+        .join()
+        .expect("waveform worker completes")
+        .expect("OGG/Opus decoded");
+    assert_eq!(bars.len(), voice::BARS);
+    assert!(bars.iter().any(|bar| *bar > 0));
+}
+
+#[test]
+fn ordinary_wav_attachment_generates_a_waveform() {
+    let samples = synthetic_tone(0.25, 220.0, 0.4);
+    let pcm: Vec<u8> = samples
+        .iter()
+        .flat_map(|sample| ((*sample * i16::MAX as f32) as i16).to_le_bytes())
+        .collect();
+    let mut wav = Vec::new();
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36 + pcm.len() as u32).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16_u32.to_le_bytes());
+    wav.extend_from_slice(&1_u16.to_le_bytes());
+    wav.extend_from_slice(&1_u16.to_le_bytes());
+    wav.extend_from_slice(&voice::RATE.to_le_bytes());
+    wav.extend_from_slice(&(voice::RATE * 2).to_le_bytes());
+    wav.extend_from_slice(&2_u16.to_le_bytes());
+    wav.extend_from_slice(&16_u16.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&(pcm.len() as u32).to_le_bytes());
+    wav.extend_from_slice(&pcm);
+    let file = NamedTempFile::new().expect("temp file created");
+    std::fs::write(file.path(), wav).expect("write WAV bytes");
+    let bars = zaptide::audio::waveform_file(file.path()).expect("WAV decoded");
+    assert_eq!(bars.len(), voice::BARS);
+    assert!(bars.iter().any(|bar| *bar > 0));
+}
+
 fn poll_until_loaded(player: &mut Player, message: &str, timeout: Duration) -> Result<(), String> {
     let started = Instant::now();
     while started.elapsed() < timeout {

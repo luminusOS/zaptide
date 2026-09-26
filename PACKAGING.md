@@ -140,6 +140,7 @@ in `checksums.txt`. No existing release files are replaced by this change.
 | GTK 4.14+ | `gtk4-devel` | `libgtk-4-dev` | `gtk4` | 4.12+ acceptable on Ubuntu |
 | libadwaita 1.5+ | `libadwaita-devel` | `libadwaita-1-dev` | `libadwaita` | 1.4+ acceptable on Ubuntu |
 | ALSA | `alsa-lib-devel` | `libasound2-dev` | `alsa-lib` | Required for audio |
+| GStreamer | `gstreamer1-devel` | `libgstreamer1.0-dev` | `gstreamer` | Linux audio playback; base and good plugins at runtime |
 | cmake | `cmake` | `cmake` | `cmake` | Builds libopus via opusic-sys |
 | gettext | `gettext` | `gettext` | `gettext` | Compiles i18n catalogs |
 | glib2-devel | `glib2-devel` | `libglib2.0-dev-bin` | `glib2` | Provides glib-compile-schemas |
@@ -155,19 +156,19 @@ SQLCipher, OpenSSL, openh264, and libopus are bundled via their respective `-sys
 **Fedora:**
 
 ```sh
-sudo dnf install rust cargo gtk4-devel libadwaita-devel alsa-lib-devel cmake gettext glib2-devel desktop-file-utils appstream
+sudo dnf install rust cargo gtk4-devel libadwaita-devel alsa-lib-devel gstreamer1-devel gstreamer1-plugins-base gstreamer1-plugins-good cmake gettext glib2-devel desktop-file-utils appstream
 ```
 
 **Ubuntu/Debian:**
 
 ```sh
-sudo apt install rustc cargo libgtk-4-dev libadwaita-1-dev libasound2-dev cmake gettext libglib2.0-dev-bin desktop-file-utils appstream
+sudo apt install rustc cargo libgtk-4-dev libadwaita-1-dev libasound2-dev libgstreamer1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good cmake gettext libglib2.0-dev-bin desktop-file-utils appstream
 ```
 
 **Arch:**
 
 ```sh
-sudo pacman -S rust gtk4 libadwaita alsa-lib cmake gettext glib2 desktop-file-utils appstream
+sudo pacman -S rust gtk4 libadwaita alsa-lib gstreamer gst-plugins-base gst-plugins-good cmake gettext glib2 desktop-file-utils appstream
 ```
 
 ### Build and test

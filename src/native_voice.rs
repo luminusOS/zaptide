@@ -128,9 +128,18 @@ pub fn project(input: VoiceMessageInput<'_>) -> VoiceMessage {
         (true, _, State::Idle | State::Paused) => VoiceControl::Play,
     };
     let waveform = if !input.waveform.is_empty() {
-        input.waveform.to_vec()
+        input
+            .waveform
+            .iter()
+            .take(crate::voice::BARS)
+            .map(|bar| (*bar).min(100))
+            .collect()
     } else if let Some(generated) = input.generated_waveform.filter(|bars| !bars.is_empty()) {
-        generated.to_vec()
+        generated
+            .iter()
+            .take(crate::voice::BARS)
+            .map(|bar| (*bar).min(100))
+            .collect()
     } else {
         vec![12; crate::voice::BARS]
     };
@@ -331,6 +340,23 @@ mod tests {
 
         assert_eq!(voice.waveform, vec![12; crate::voice::BARS]);
         assert_eq!(voice.progress, 1.0);
+    }
+
+    #[test]
+    fn sender_waveform_is_bounded_for_native_rendering() {
+        let media = media(Some("audio.ogg"), MediaState::Idle);
+        let oversized = [200_u8; 128];
+        let voice = project(VoiceMessageInput {
+            chat: "chat",
+            message: "message",
+            media: &media,
+            seconds: Some(1),
+            waveform: &oversized,
+            generated_waveform: None,
+            playback: status(State::Idle, 0, 1),
+            speed: 1.0,
+        });
+        assert_eq!(voice.waveform, vec![100; crate::voice::BARS]);
     }
 
     #[test]
