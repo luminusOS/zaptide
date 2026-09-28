@@ -28,6 +28,8 @@ finish-args:
   - --share=network
   # Archive key.
   - --talk-name=org.freedesktop.secrets
+  # Tray icon, shown by KDE or GNOME's AppIndicator extension.
+  - --talk-name=org.kde.StatusNotifierWatcher
   # Older Flatpak versions leave XDG_STATE_HOME unset. Keep the fallback
   # state directory (session, history, logs, and credential markers) durable.
   - --persist=.local/state

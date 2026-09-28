@@ -76,6 +76,8 @@ gstreamer = "0.25"
 glycin = { version = "4", default-features = false, features = ["gdk4", "tokio"] }
 notify = "8.2"
 zbus-secret-service-keyring-store = { version = "1.0.1", features = ["rt-tokio-crypto-rust"] }
+# Tray icon: StatusNotifierItem with its menu over com.canonical.dbusmenu.
+ksni = { version = "0.3", default-features = false, features = ["tokio", "blocking"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 apple-native-keyring-store = { version = "1.0.2", features = ["keychain"] }

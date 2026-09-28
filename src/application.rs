@@ -726,12 +726,38 @@ impl RelmListItem for MessageRow {
 const FILTER_ICON: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><path d="M2.5 2h11a1 1 0 0 1 .78 1.63L10 8.98V13a1 1 0 0 1-.55.9l-2 1A1 1 0 0 1 6 14V8.98L1.72 3.63A1 1 0 0 1 2.5 2z" fill="#2e3436"/></svg>"##;
 
 /// Puts ZapTide's own icons where GTK's icon theme finds them.
+/// The app's symbolic icon, drawn in the tray.
+const TRAY_ICON: &str = include_str!("../packaging/icons/zaptide-symbolic.svg");
+
+/// The tray icon with a dot for unread chats, cut out of the bubble so it
+/// reads at 16px. The `error` class lets hosts recolour it like GTK does.
+fn tray_unread_icon() -> String {
+    TRAY_ICON
+        .replacen(
+            "<path ",
+            r##"<mask id="dot"><rect width="16" height="16" fill="#fff"/><circle cx="13" cy="3" r="4" fill="#000"/></mask><path mask="url(#dot)" "##,
+            1,
+        )
+        .replacen(
+            "</svg>",
+            r##"<circle class="error" cx="13" cy="3" r="2.5" fill="#e01b24"/></svg>"##,
+            1,
+        )
+}
+
 fn install_icons(dir: &std::path::Path) {
-    let icon = dir.join("zaptide-filter-symbolic.svg");
-    if std::fs::create_dir_all(dir).is_ok()
-        && std::fs::read_to_string(&icon).ok().as_deref() != Some(FILTER_ICON)
-    {
-        let _ = std::fs::write(&icon, FILTER_ICON);
+    let icons = [
+        ("zaptide-filter-symbolic.svg", FILTER_ICON.to_owned()),
+        ("zaptide-tray-symbolic.svg", TRAY_ICON.to_owned()),
+        ("zaptide-tray-unread-symbolic.svg", tray_unread_icon()),
+    ];
+    if std::fs::create_dir_all(dir).is_ok() {
+        for (name, svg) in icons {
+            let icon = dir.join(name);
+            if std::fs::read_to_string(&icon).ok() != Some(svg.clone()) {
+                let _ = std::fs::write(&icon, svg);
+            }
+        }
     }
     if let Some(display) = gtk::gdk::Display::default() {
         gtk::IconTheme::for_display(&display).add_search_path(dir);
@@ -792,6 +818,11 @@ pub struct NativeApplication {
     chat_menu: gtk::gio::Menu,
     /// (group, pinned, muted, archived) the chat menu was last labelled for.
     chat_menu_state: Option<(bool, bool, bool, bool)>,
+    tray: Option<crate::native_tray::TrayHandle>,
+    /// Last state sent to the tray.
+    tray_state: crate::native_tray::TrayState,
+    /// Whether a tray host shows the icon, so closing can hide the window.
+    tray_shown: bool,
     avatars: std::collections::HashMap<String, std::path::PathBuf>,
     avatar_requests: std::collections::HashSet<String>,
     typing: std::collections::HashMap<String, String>,
@@ -970,6 +1001,9 @@ pub enum Input {
     UnlinkConfirmed,
     ShowChatInfo,
     ShowNewChat,
+    Tray(crate::native_tray::TrayAction),
+    /// The window was shown or hidden outside the tray; `update` resyncs it.
+    WindowVisibilityChanged,
     /// Opens the chat with a contact picked in New Chat, creating it if new.
     StartChat {
         id: String,
@@ -1834,6 +1868,9 @@ impl SimpleComponent for NativeApplication {
             contacts: std::collections::HashMap::new(),
             chat_menu: gtk::gio::Menu::new(),
             chat_menu_state: None,
+            tray: None,
+            tray_state: crate::native_tray::TrayState::default(),
+            tray_shown: false,
             avatars: std::collections::HashMap::new(),
             avatar_requests: std::collections::HashSet::new(),
             typing: std::collections::HashMap::new(),
@@ -1930,6 +1967,23 @@ impl SimpleComponent for NativeApplication {
         primary_menu.append_section(None, &section);
         install_window_actions(&root, &sender);
         install_icons(&icon_dir);
+        let (tray_actions, tray_receiver) = relm4::channel();
+        let tray_sender = sender.clone();
+        gtk::glib::spawn_future_local(async move {
+            while let Some(action) = tray_receiver.recv().await {
+                tray_sender.input(Input::Tray(action));
+            }
+        });
+        model.tray = crate::native_tray::TrayHandle::spawn(
+            &icon_dir,
+            model.tray_state.clone(),
+            tray_actions,
+        );
+        model.tray_shown = model.tray.is_some();
+        let visibility_sender = sender.clone();
+        root.connect_visible_notify(move |_| {
+            visibility_sender.input(Input::WindowVisibilityChanged)
+        });
         let widgets = view_output!();
         model.chat_search = Some(widgets.chat_search.clone());
         model.unread_filter = Some(widgets.unread_filter.clone());
@@ -2063,6 +2117,7 @@ impl SimpleComponent for NativeApplication {
     fn update(&mut self, input: Self::Input, sender: ComponentSender<Self>) {
         self.handle_input(input, sender);
         self.sync_chat_menu();
+        self.sync_tray();
     }
 }
 
@@ -2920,6 +2975,38 @@ impl NativeApplication {
                 }
                 sender.input(Input::OpenChatId(id));
             }
+            Input::Tray(action) => {
+                use crate::native_tray::TrayAction;
+                match action {
+                    TrayAction::ToggleWindow if self.window.is_visible() => {
+                        self.window.set_visible(false)
+                    }
+                    TrayAction::ToggleWindow => self.window.present(),
+                    TrayAction::NewChat => {
+                        self.window.present();
+                        sender.input(Input::ShowNewChat);
+                    }
+                    TrayAction::ToggleNotifications => {
+                        self.settings.notifications = !self.settings.notifications;
+                        if self.settings.save(&self.settings_path).is_err() {
+                            self.status = "Could not save preferences".into();
+                        }
+                    }
+                    TrayAction::Preferences => {
+                        self.window.present();
+                        sender.input(Input::ShowPreferences);
+                    }
+                    TrayAction::Quit => sender.input(Input::Quit),
+                    TrayAction::Shown(shown) => {
+                        self.tray_shown = shown;
+                        // Without a tray there is no way back to a hidden window.
+                        if !shown {
+                            self.window.present();
+                        }
+                    }
+                }
+            }
+            Input::WindowVisibilityChanged => {}
             Input::TogglePhoneLinking => self.phone_linking = !self.phone_linking,
             Input::FlushChats => {
                 self.chats_flush_scheduled = false;
@@ -3535,7 +3622,9 @@ impl NativeApplication {
             }
             Input::Close => {
                 self.cancel_portal_requests();
-                if self.settings.keep_running_in_background {
+                if self.settings.keep_running_in_background && self.tray_shown {
+                    self.window.set_visible(false);
+                } else if self.settings.keep_running_in_background {
                     self.present_quit_confirmation_dialog(sender);
                 } else {
                     self.request_shutdown(sender);
@@ -4160,6 +4249,30 @@ impl NativeApplication {
             || filters.private_only
             || filters.groups_only
             || filters.muted != crate::native_chat_list::MutedFilter::default()
+    }
+
+    /// Sends the tray what changed: window visibility, unread chats that are
+    /// not muted or archived, and whether notifications are on.
+    fn sync_tray(&mut self) {
+        let Some(tray) = &self.tray else {
+            return;
+        };
+        let now = crate::util::now();
+        let state = crate::native_tray::TrayState {
+            window_visible: self.window.is_visible(),
+            unread_chats: self
+                .chat_snapshots
+                .iter()
+                .filter(|chat| {
+                    chat.unread > 0 && !chat.archived && !chat.locked && !chat.muted(now)
+                })
+                .count(),
+            notifications: self.settings.notifications,
+        };
+        if state != self.tray_state {
+            tray.update(state.clone());
+            self.tray_state = state;
+        }
     }
 
     /// Relabels the chat menu for the open chat. Rebuilt only when a label
@@ -6122,8 +6235,8 @@ impl NativeApplication {
         let alert = adw::AlertDialog::new(
             Some("Quit ZapTide?"),
             Some(
-                "This build cannot keep ZapTide running in the background. \
-                 Closing the window will quit the app.",
+                "ZapTide stays in the background when the desktop shows tray \
+                 icons, and none is shown now. Closing the window will quit the app.",
             ),
         );
         alert.add_response("cancel", "Cancel");

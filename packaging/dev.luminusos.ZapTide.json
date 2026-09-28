@@ -15,6 +15,7 @@
         "--socket=pulseaudio",
         "--device=dri",
         "--talk-name=org.freedesktop.secrets",
+        "--talk-name=org.kde.StatusNotifierWatcher",
         "--filesystem=xdg-config/zaptide",
         "--filesystem=xdg-cache/zaptide",
         "--persist=.local/state"
