@@ -825,21 +825,6 @@ impl Recorder {
         }
     }
 
-    /// Simulated recorder for demos and tests.
-    #[cfg(any(test, feature = "demo"))]
-    pub fn rehearsal() -> Self {
-        let levels: Vec<f32> = (0..90)
-            .map(|index| 0.05 + 0.2 * ((index as f32 * 0.6).sin().abs()))
-            .collect();
-        Self {
-            started: Instant::now() - Duration::from_millis(4_500),
-            stop: Arc::new(AtomicBool::new(true)),
-            levels: Arc::new(Mutex::new(levels)),
-            outcome: Default::default(),
-            thread: None,
-        }
-    }
-
     pub fn elapsed(&self) -> Duration {
         self.started.elapsed()
     }

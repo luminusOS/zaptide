@@ -231,6 +231,7 @@ impl Archive {
         Ok(Self::prepare(encryption::open(path, key)?)?)
     }
 
+    #[cfg(test)]
     pub fn in_memory() -> Result<Self> {
         Self::prepare(Connection::open_in_memory()?)
     }
@@ -355,6 +356,7 @@ impl Archive {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn set_locked(&self, id: &str, locked: bool) -> Result<()> {
         self.set_locked_at(id, locked, jiff::Timestamp::now().as_millisecond())
     }

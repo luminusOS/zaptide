@@ -146,30 +146,6 @@ mod tests {
         assert!(!current.contains(code));
         assert!(!current.contains(phone));
     }
-
-    #[cfg(feature = "demo")]
-    #[test]
-    fn synthetic_command_audit_keeps_only_variant_counts() {
-        let (mut backend, _) = super::Backend::detached();
-        backend.record_demo_commands();
-        backend.send(super::Command::MarkRead {
-            chat: "private-chat-id".into(),
-            receipts: true,
-        });
-        backend.send(super::Command::SendText {
-            chat: "private-chat-id".into(),
-            text: "private message body".into(),
-            quoting: Some("private-message-id".into()),
-            mentions: Vec::new(),
-        });
-
-        let audit = backend.take_demo_command_counts();
-        assert_eq!(audit, [("MarkRead", 1), ("SendText", 1)]);
-        let output = format!("{audit:?}");
-        assert!(!output.contains("private-chat-id"));
-        assert!(!output.contains("private message body"));
-        assert!(!output.contains("private-message-id"));
-    }
 }
 
 /// Oldest loaded message timestamp and id used as a page boundary.
@@ -593,10 +569,11 @@ pub enum Event {
     Error(String),
 }
 
-/// Wake handle for backends without a window, such as tests.
+#[cfg(test)]
 #[derive(Clone, Copy, Default)]
 pub struct Waker;
 
+#[cfg(test)]
 impl Wake for Waker {
     fn wake(&self) {}
 }
@@ -613,12 +590,10 @@ pub struct Backend {
     commands: mpsc::UnboundedSender<Command>,
     events: std::sync::mpsc::Receiver<Event>,
     thread: Option<std::thread::JoinHandle<()>>,
-    offline: bool,
-    #[cfg(feature = "demo")]
-    demo_commands: Option<std::sync::Mutex<Vec<Command>>>,
 }
 
 impl Backend {
+    #[cfg(test)]
     pub fn spawn(dirs: AppDirs, waker: impl Wake + 'static) -> Self {
         Self::try_spawn(dirs, waker).expect("unable to start backend")
     }
@@ -651,13 +626,11 @@ impl Backend {
             commands: command_tx,
             events: event_rx,
             thread: Some(thread),
-            offline: false,
-            #[cfg(feature = "demo")]
-            demo_commands: None,
         })
     }
 
-    /// Creates a disconnected backend and event sender for demos and tests.
+    /// Creates a disconnected backend and event sender for tests.
+    #[cfg(test)]
     pub fn detached() -> (Self, std::sync::mpsc::Sender<Event>) {
         let (command_tx, _command_rx) = mpsc::unbounded_channel();
         let (event_tx, event_rx) = std::sync::mpsc::channel();
@@ -667,62 +640,16 @@ impl Backend {
                 commands: command_tx,
                 events: event_rx,
                 thread: None,
-                offline: true,
-                #[cfg(feature = "demo")]
-                demo_commands: None,
             },
             event_tx,
         )
     }
 
     pub fn send(&self, command: Command) {
-        if self.offline && !matches!(command, Command::Shutdown) {
-            #[cfg(feature = "demo")]
-            if let Some(commands) = &self.demo_commands {
-                commands
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .push(command);
-            }
-            return;
-        }
         let _ = self.commands.send(command);
     }
 
-    /// Captures real UI commands for an offline demo's local responder.
-    #[cfg(feature = "demo")]
-    pub(crate) fn record_demo_commands(&mut self) {
-        assert!(self.offline && self.thread.is_none());
-        self.demo_commands = Some(Default::default());
-    }
-
-    #[cfg(feature = "demo")]
-    pub(crate) fn take_demo_commands(&self) -> Vec<Command> {
-        self.demo_commands
-            .as_ref()
-            .map_or_else(Vec::new, |commands| {
-                std::mem::take(&mut *commands.lock().unwrap_or_else(|p| p.into_inner()))
-            })
-    }
-
-    /// Returns safe counts for UI commands used by the synthetic native harness.
-    /// Unknown commands are deliberately omitted rather than formatting payloads.
-    #[cfg(feature = "demo")]
-    pub(crate) fn take_demo_command_counts(&self) -> Vec<(&'static str, usize)> {
-        let mut counts = std::collections::BTreeMap::new();
-        for command in self.take_demo_commands() {
-            let variant = match command {
-                Command::MarkRead { .. } => "MarkRead",
-                Command::LoadChat { .. } => "LoadChat",
-                Command::SendText { .. } => "SendText",
-                Command::Composing { .. } => "Composing",
-                _ => continue,
-            };
-            *counts.entry(variant).or_insert(0) += 1;
-        }
-        counts.into_iter().collect()
-    }
-
+    #[cfg(test)]
     pub fn poll(&self) -> Vec<Event> {
         self.events.try_iter().collect()
     }

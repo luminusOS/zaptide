@@ -824,10 +824,6 @@ pub struct Init {
 pub struct NativeApplication {
     window: adw::ApplicationWindow,
     backend: Option<Backend>,
-    #[cfg(feature = "demo")]
-    synthetic_events: Option<std::sync::mpsc::Sender<crate::backend::Event>>,
-    #[cfg(feature = "demo")]
-    synthetic_flow_started: bool,
     notifications: crate::native_notifications::NativeNotifications,
     notifier: EventNotifier,
     _event_drain: GlibEventDrain,
@@ -1713,22 +1709,6 @@ impl SimpleComponent for NativeApplication {
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         let icon_dir = init.dirs.icon_dir();
-        #[cfg(feature = "demo")]
-        if synthetic_e2e_enabled()
-            && let Some((width, height)) = std::env::var("ZAPTIDE_NATIVE_SYNTHETIC_SIZE")
-                .ok()
-                .and_then(|size| {
-                    size.split_once('x')
-                        .map(|(width, height)| (width.to_owned(), height.to_owned()))
-                })
-                .and_then(|(width, height)| {
-                    Some((width.parse::<i32>().ok()?, height.parse::<i32>().ok()?))
-                })
-            && (720..=3_000).contains(&width)
-            && (480..=2_000).contains(&height)
-        {
-            root.set_default_size(width, height);
-        }
         let (notifier, drain) = EventNotifier::new();
         let input = sender.clone();
         let event_drain = GlibEventDrain::install(
@@ -1823,9 +1803,6 @@ impl SimpleComponent for NativeApplication {
         });
         let settings_path = init.dirs.settings_file();
         let settings = crate::settings::Settings::load(&settings_path);
-        // Mirror allowlisted preferences into GSettings. The JSON file stays
-        // authoritative and untouched, so theming below reads it as before.
-        crate::native_settings_migration::migrate_json_to_gsettings(&init.dirs);
         enter_sends.set(settings.enter_sends);
         let mut theme_catalog = crate::theme::custom::Catalog::default();
         theme_catalog.enable_desktop_themes();
@@ -1839,65 +1816,6 @@ impl SimpleComponent for NativeApplication {
         );
         let mut media_service = crate::services::media::MediaService::default();
         media_service.set_speed(settings.voice_speed);
-        #[cfg(feature = "demo")]
-        let synthetic = synthetic_e2e_enabled();
-        #[cfg(feature = "demo")]
-        let (backend, synthetic_events, page_title, status) = if synthetic {
-            let (mut backend, events) = Backend::detached();
-            backend.record_demo_commands();
-            let mut chat = crate::model::Chat::new(
-                "synthetic-contact@s.whatsapp.net".into(),
-                "Synthetic Contact".into(),
-            );
-            chat.unread = 1;
-            chat.last_activity = 1_700_000_002;
-            chat.last = Some(crate::model::LastMessage {
-                from_me: false,
-                sender: chat.id.clone(),
-                sender_name: None,
-                summary: "Offline link preview sample".into(),
-                status: crate::model::Delivery::None,
-            });
-            let _ = events.send(crate::backend::Event::Link(LinkStatus::Connected));
-            let _ = events.send(crate::backend::Event::Chats(vec![chat]));
-            let incoming = synthetic_message();
-            let _ = events.send(crate::backend::Event::Incoming {
-                chat: incoming.chat.clone(),
-                message: Box::new(incoming),
-            });
-            crate::backend::Wake::wake(&notifier);
-            if let Some(count) = std::env::var("ZAPTIDE_NATIVE_SYNTHETIC_FLOOD")
-                .ok()
-                .and_then(|count| count.parse().ok())
-            {
-                synthetic_flood(events.clone(), notifier.clone(), count);
-            }
-            (
-                Some(backend),
-                Some(events),
-                "Synthetic offline conversation".into(),
-                "Development-only synthetic data · offline".into(),
-            )
-        } else {
-            match Backend::try_spawn(init.dirs, notifier.clone()) {
-                Ok(backend) => (
-                    Some(backend),
-                    None,
-                    "Starting ZapTide".into(),
-                    "Waiting for first native frame".into(),
-                ),
-                Err(_) => {
-                    log::error!("native backend could not start");
-                    (
-                        None,
-                        None,
-                        "ZapTide needs attention".into(),
-                        "Backend unavailable".into(),
-                    )
-                }
-            }
-        };
-        #[cfg(not(feature = "demo"))]
         let (backend, page_title, status) = match Backend::try_spawn(init.dirs, notifier.clone()) {
             Ok(backend) => (
                 Some(backend),
@@ -1916,10 +1834,6 @@ impl SimpleComponent for NativeApplication {
         let mut model = Self {
             window: root.clone(),
             backend,
-            #[cfg(feature = "demo")]
-            synthetic_events,
-            #[cfg(feature = "demo")]
-            synthetic_flow_started: false,
             notifications,
             notifier,
             _event_drain: event_drain,
@@ -2492,16 +2406,6 @@ impl NativeApplication {
                         }
                         NativeEvent::Chats(chats) => {
                             self.apply_chat_changes(vec![ChatChange::Snapshot(chats)]);
-                            #[cfg(feature = "demo")]
-                            if synthetic_e2e_enabled() {
-                                let sender = sender.clone();
-                                gtk::glib::idle_add_local_once(move || {
-                                    sender.input(Input::SearchChats("Synthetic".into()));
-                                    sender.input(Input::OpenChatId(
-                                        "synthetic-contact@s.whatsapp.net".into(),
-                                    ));
-                                });
-                            }
                         }
                         NativeEvent::ChatUpdated(chat) => {
                             self.apply_chat_changes(vec![ChatChange::Update(*chat)]);
@@ -2530,23 +2434,6 @@ impl NativeApplication {
                                 self.loading_older = false;
                             }
                             self.apply_messages(chat.clone(), messages, older);
-                            #[cfg(feature = "demo")]
-                            if synthetic_e2e_enabled()
-                                && !self.synthetic_flow_started
-                                && self.active_chat.as_deref() == Some(&chat)
-                            {
-                                self.synthetic_flow_started = true;
-                                let sender = sender.clone();
-                                gtk::glib::idle_add_local_once(move || {
-                                    sender.input(Input::LoadOlder);
-                                    sender.input(Input::DraftChanged(
-                                        "Synthetic end-to-end message".into(),
-                                    ));
-                                    sender.input(Input::SendText(
-                                        "Synthetic end-to-end message".into(),
-                                    ));
-                                });
-                            }
                             if let Some((target_chat, target_id)) =
                                 self.pending_quote_navigation.clone()
                                 && target_chat == chat
@@ -2763,8 +2650,6 @@ impl NativeApplication {
                     );
                 }
                 self.poll_theme_catalog();
-                #[cfg(feature = "demo")]
-                self.audit_synthetic_commands();
             }
             Input::SelectChat(position) => {
                 let Some(chat) = self.chat_ids.get(position as usize).cloned() else {
@@ -2843,46 +2728,6 @@ impl NativeApplication {
                     backend.send(crate::backend::Command::LoadChat { chat, before: None });
                 }
                 self.focus_composer();
-                #[cfg(feature = "demo")]
-                if synthetic_e2e_enabled()
-                    && let Some(events) = &self.synthetic_events
-                {
-                    let chat = "synthetic-contact@s.whatsapp.net".to_owned();
-                    let mut message = synthetic_message();
-                    message.chat.clone_from(&chat);
-                    let mut attachment = synthetic_attachment_message();
-                    attachment.chat.clone_from(&chat);
-                    let filler = std::env::var("ZAPTIDE_NATIVE_SYNTHETIC_MESSAGES")
-                        .ok()
-                        .and_then(|count| count.parse::<usize>().ok())
-                        .unwrap_or(0);
-                    let mut messages = (0..filler)
-                        .map(|index| {
-                            let mut filler = synthetic_message();
-                            filler.id = format!("synthetic-filler-{index}");
-                            filler.chat.clone_from(&chat);
-                            filler.from_me = index % 3 == 0;
-                            filler.timestamp = 1_699_990_000 + index as i64 * 90;
-                            filler.content = crate::model::Content::text(format!(
-                                "Synthetic message {index} with enough words to wrap on narrow windows"
-                            ));
-                            filler
-                        })
-                        .collect::<Vec<_>>();
-                    let mut voice = synthetic_audio_message(true);
-                    voice.chat.clone_from(&chat);
-                    let mut audio = synthetic_audio_message(false);
-                    audio.chat.clone_from(&chat);
-                    messages.extend([message, attachment, voice, audio]);
-                    let _ = events.send(crate::backend::Event::Messages {
-                        chat,
-                        messages,
-                        older: false,
-                        complete: false,
-                    });
-                    crate::backend::Wake::wake(&self.notifier);
-                    self.audit_synthetic_commands();
-                }
             }
             Input::HighlightChat(position) => {
                 if let Some(chat) = self.chat_ids.get(position as usize) {
@@ -2915,20 +2760,6 @@ impl NativeApplication {
                     });
                 } else {
                     self.loading_older = false;
-                }
-                #[cfg(feature = "demo")]
-                if synthetic_e2e_enabled()
-                    && let Some(events) = &self.synthetic_events
-                    && !self.history_complete
-                {
-                    let older = synthetic_older_message(&chat);
-                    let _ = events.send(crate::backend::Event::Messages {
-                        chat,
-                        messages: vec![older],
-                        older: true,
-                        complete: false,
-                    });
-                    crate::backend::Wake::wake(&self.notifier);
                 }
             }
             Input::OpenChatId(chat) => {
@@ -3729,8 +3560,6 @@ impl NativeApplication {
                 } else {
                     self.status = "Backend unavailable. Draft kept.".into();
                 }
-                #[cfg(feature = "demo")]
-                self.audit_synthetic_commands();
             }
             Input::Close => {
                 self.cancel_portal_requests();
@@ -4805,18 +4634,6 @@ impl NativeApplication {
         let ids: Vec<_> = self.portal_requests.borrow_mut().drain().collect();
         for id in ids {
             self.portals.cancel(id);
-        }
-    }
-
-    #[cfg(feature = "demo")]
-    fn audit_synthetic_commands(&self) {
-        if !synthetic_e2e_enabled() {
-            return;
-        }
-        if let Some(backend) = &self.backend {
-            for (variant, count) in backend.take_demo_command_counts() {
-                log::info!("synthetic command audit {variant}={count}");
-            }
         }
     }
 
@@ -6670,162 +6487,6 @@ fn sanitized_error_feedback(error: &str) -> &'static str {
     }
 }
 
-#[cfg(feature = "demo")]
-fn synthetic_e2e_enabled() -> bool {
-    std::env::var_os("ZAPTIDE_NATIVE_SYNTHETIC").as_deref() == Some(std::ffi::OsStr::new("1"))
-}
-
-/// Replays a history-sync sized burst: `count` chats, twenty rounds of
-/// updates, and an avatar per chat, paced like the worker sends them.
-#[cfg(feature = "demo")]
-fn synthetic_flood(
-    events: std::sync::mpsc::Sender<crate::backend::Event>,
-    notifier: EventNotifier,
-    count: usize,
-) {
-    std::thread::spawn(move || {
-        let avatar = std::env::temp_dir().join("zaptide-synthetic-avatar.png");
-        let _ =
-            image::RgbaImage::from_pixel(96, 96, image::Rgba([40, 120, 200, 255])).save(&avatar);
-        let chat = |index: usize, activity: i64| {
-            let mut chat = crate::model::Chat::new(
-                format!("{index}@s.whatsapp.net"),
-                format!("Synthetic {index}"),
-            );
-            chat.last_activity = activity;
-            chat
-        };
-        let _ = events.send(crate::backend::Event::Chats(
-            (0..count).map(|index| chat(index, index as i64)).collect(),
-        ));
-        for round in 0..20 {
-            for index in 0..count {
-                let _ = events.send(crate::backend::Event::ChatUpdated(Box::new(chat(
-                    index,
-                    (round * count + index) as i64,
-                ))));
-                if round == 0 {
-                    let _ = events.send(crate::backend::Event::Avatar {
-                        id: format!("{index}@s.whatsapp.net"),
-                        full: false,
-                        path: Some(avatar.clone()),
-                    });
-                }
-                if index % 50 == 0 {
-                    crate::backend::Wake::wake(&notifier);
-                    std::thread::sleep(std::time::Duration::from_millis(1));
-                }
-            }
-        }
-        crate::backend::Wake::wake(&notifier);
-        eprintln!("synthetic flood sent");
-    });
-}
-
-#[cfg(feature = "demo")]
-fn synthetic_message() -> crate::model::Message {
-    crate::model::Message {
-        id: "synthetic-message-001".into(),
-        chat: "synthetic-contact@s.whatsapp.net".into(),
-        sender: "synthetic-contact@s.whatsapp.net".into(),
-        sender_name: Some("Synthetic Contact".into()),
-        from_me: false,
-        timestamp: 1_700_000_002,
-        content: crate::model::Content::Text {
-            text: "Offline link preview sample".into(),
-            preview: Some(crate::model::LinkPreview {
-                url: "https://example.invalid/synthetic".into(),
-                title: Some("Synthetic preview".into()),
-                description: Some("Generated locally for native UI testing".into()),
-            }),
-        },
-        status: crate::model::Delivery::None,
-        delivered_at: None,
-        read_at: None,
-        quoted: None,
-        reactions: Vec::new(),
-        edited: false,
-        mentions: Vec::new(),
-        forwarded: false,
-        thumbnail: None,
-    }
-}
-
-#[cfg(feature = "demo")]
-fn synthetic_attachment_message() -> crate::model::Message {
-    crate::model::Message {
-        id: "synthetic-message-002".into(),
-        chat: "synthetic-contact@s.whatsapp.net".into(),
-        sender: "synthetic-contact@s.whatsapp.net".into(),
-        sender_name: Some("Synthetic Contact".into()),
-        from_me: false,
-        timestamp: 1_700_000_003,
-        content: crate::model::Content::Image {
-            media: crate::model::Media {
-                mime: "image/png".into(),
-                size: 1_024,
-                width: Some(16),
-                height: Some(16),
-                path: None,
-                state: crate::model::MediaState::Idle,
-            },
-            caption: Some("Synthetic preview image".into()),
-        },
-        status: crate::model::Delivery::None,
-        delivered_at: None,
-        read_at: None,
-        quoted: None,
-        reactions: Vec::new(),
-        edited: false,
-        mentions: Vec::new(),
-        forwarded: false,
-        thumbnail: Some(vec![0; 64]),
-    }
-}
-
-#[cfg(feature = "demo")]
-fn synthetic_audio_message(voice_note: bool) -> crate::model::Message {
-    let mut message = synthetic_message();
-    message.id = if voice_note {
-        "synthetic-voice"
-    } else {
-        "synthetic-audio"
-    }
-    .into();
-    message.timestamp += if voice_note { 4 } else { 5 };
-    message.content = crate::model::Content::Audio {
-        media: crate::model::Media {
-            mime: if voice_note {
-                "audio/ogg"
-            } else {
-                "audio/mpeg"
-            }
-            .into(),
-            size: 8_192,
-            width: None,
-            height: None,
-            path: None,
-            state: crate::model::MediaState::Idle,
-        },
-        seconds: Some(14),
-        voice_note,
-        waveform: (0..crate::voice::BARS)
-            .map(|bar| (bar * 13 % 80 + 12) as u8)
-            .collect(),
-    };
-    message
-}
-
-#[cfg(feature = "demo")]
-fn synthetic_older_message(chat: &str) -> crate::model::Message {
-    let mut message = synthetic_message();
-    message.id = "synthetic-message-older".into();
-    message.chat = chat.to_owned();
-    message.timestamp = 1_700_000_001;
-    message.content = crate::model::Content::text("Earlier synthetic history row");
-    message
-}
-
 fn install_message_actions(
     window: &adw::ApplicationWindow,
     sender: &ComponentSender<NativeApplication>,
@@ -7965,21 +7626,6 @@ fn show_unlink_confirmation(
 
 /// Runs the native shell and starts the backend only after the first main-context turn.
 pub fn run(dirs: AppDirs) {
-    use gettextrs::{LocaleCategory, bindtextdomain, setlocale, textdomain};
-
-    let app_id = "zaptide";
-    let locale_dir = option_env!("ZAPTIDE_LOCALE_DIR").unwrap_or("/usr/share/locale");
-
-    setlocale(LocaleCategory::LcAll, "");
-    let _ = textdomain(app_id);
-    let _ = bindtextdomain(app_id, locale_dir);
-    #[cfg(feature = "demo")]
-    let application_id = if synthetic_e2e_enabled() {
-        format!("dev.luminusos.ZapTide.Synthetic.p{}", std::process::id())
-    } else {
-        std::env::var("FLATPAK_ID").unwrap_or_else(|_| "dev.luminusos.ZapTide".into())
-    };
-    #[cfg(not(feature = "demo"))]
     let application_id =
         std::env::var("FLATPAK_ID").unwrap_or_else(|_| "dev.luminusos.ZapTide".into());
     RelmApp::new(&application_id).run::<NativeApplication>(Init { dirs });

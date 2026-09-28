@@ -154,9 +154,9 @@ Before writing release notes, read the previous two stable releases of
 and `Fixed` sections with bold user-facing results, a `Thanks` section, and
 a full-changelog link. Credit who did what on the relevant item, with issue
 or PR numbers, and acknowledge reporters separately from implementers.
-Include screenshots or short videos of the main features when relevant. Capture only synthetic offline demo content,
-never real chats. Verify every media link and do not leave generated notes
-in place. Describe known limitations honestly.
+Include screenshots or short videos of the main features when relevant.
+Never capture real chats. Verify every media link and do not leave
+generated notes in place. Describe known limitations honestly.
 
 Do not cut a release for every fix. Work accumulates on `main` until
 there is something substantial to announce: a feature, or a batch of
@@ -185,10 +185,7 @@ A release is not finished when the tag is pushed. Do these in order:
 
 ## Definition of done
 
-- Add focused tests for changed behaviour. The `demo` feature carries sample
-  data and a headless layout test of every screen (`src/demo.rs`); extend
-  the sample when a new kind of content or state is added, and use
-  `--demo-shot` to look at the result.
+- Add focused tests for changed behaviour.
 - Update the README when user-visible behaviour, settings, files, or network
   access changes.
 - Run the full checks before finishing:
@@ -196,10 +193,8 @@ A release is not finished when the tag is pushed. Do these in order:
   ```sh
   cargo fmt --all --check
   cargo clippy --locked --all-targets -- -D warnings
-  cargo clippy --locked --all-targets --all-features -- -D warnings
   cargo test --locked --all-targets
-  cargo test --locked --all-targets --all-features
-  RUSTDOCFLAGS='-D warnings' cargo doc --locked --all-features --no-deps
+  RUSTDOCFLAGS='-D warnings' cargo doc --locked --no-deps
   ```
 
   Do not weaken a lint, delete a test, or add an `allow` merely to make

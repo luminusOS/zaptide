@@ -1,6 +1,3 @@
-# Feature flags:
-# - demo: Sample data, layout tests, and screenshots. Not used in release builds.
-
 [package]
 name = "zaptide"
 version = "0.14.0"
@@ -36,8 +33,6 @@ directories = "6"
 gtk4 = { version = "0.11", features = ["v4_14"] }
 libadwaita = { version = "0.9", features = ["v1_10"] }
 relm4 = { version = "0.11", default-features = false, features = ["macros", "libadwaita", "gnome_46"] }
-# Gettext bindings for i18n. Uses system gettext library on Linux.
-gettext-rs = { version = "0.7", features = ["gettext-system"] }
 # Decodes JPEG, PNG, WebP, and GIF images.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
 # WhatsApp Web protocol: pairing, encryption, history sync, and media. Version
@@ -81,10 +76,6 @@ ksni = { version = "0.3", default-features = false, features = ["tokio", "blocki
 tempfile = "3"
 # Encodes oversized clipboard images in portal tests. Already included through image.
 png = "0.18"
-
-[features]
-# Sample data, layout tests, and screenshots. Not used in release builds.
-demo = []
 
 [profile.release]
 lto = "thin"

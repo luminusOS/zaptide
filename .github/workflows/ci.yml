@@ -41,12 +41,12 @@ jobs:
       - name: System dependencies
         run: dnf install -y --setopt=install_weak_deps=False gcc gcc-c++ git gtk4-devel libadwaita-devel alsa-lib-devel gstreamer1-devel cmake libseccomp-devel fontconfig-devel perl make tar zstd
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --locked --all-targets --all-features -- -D warnings
-      - run: cargo test --locked --all-targets --all-features
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked --all-targets
       - name: Rustdoc
         env:
           RUSTDOCFLAGS: -D warnings
-        run: cargo doc --locked --all-features --no-deps
+        run: cargo doc --locked --no-deps
       - name: No duplicate GTK/GLib/libadwaita/Relm4 crates
         shell: bash
         run: |

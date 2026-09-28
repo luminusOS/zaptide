@@ -25,7 +25,6 @@ pub mod native_media_widgets;
 pub mod native_notifications;
 pub mod native_portals;
 pub mod native_preferences;
-pub mod native_settings_migration;
 pub mod native_theme;
 pub mod native_transcript;
 pub mod native_tray;

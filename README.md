@@ -252,9 +252,6 @@ Protocol logs omit private payloads and raw error details, including verbose
 logging. Panic logs record the source location without the panic payload.
 Pairing signature failures and rate limits retain a diagnostic category.
 
-Offline previews for these states use `--demo --demo-page channel`,
-`--demo --demo-page locked`, and `--demo --demo-page keyring`.
-
 The protocol dependency includes the upstream WhatsApp Business pairing fix.
 Device-store migration waits until an updated window is acknowledged, preserving
 startup rollback; an unused legacy column is retained for 0.14 compatibility.
@@ -310,12 +307,9 @@ from. It does not download or install releases itself.
 ## Developing
 
 ```sh
-cargo run --features demo -- --demo            # sample chats, no connection
-cargo run --features demo -- --demo-page login # or settings, pair, info, light, …
-cargo run --features demo -- --demo-shot shot.png --demo-page chat,light
-cargo run --features demo -- --demo-tour      # Space starts/replays a 41-second tour
-cargo test --all-features                      # includes a headless layout of every screen
-cargo clippy --all-targets --all-features -- -D warnings
+cargo run
+cargo test --all-targets
+cargo clippy --all-targets -- -D warnings
 ```
 
 To include a default GIPHY key for GIF search, set it at build time. A key in
@@ -326,31 +320,6 @@ ZAPTIDE_GIPHY_KEY=your-key cargo build --release
 ```
 
 `AGENTS.md` describes the architecture and the rules for changes.
-
-### Recording a demo
-
-The `demo` feature uses offline sample chats in a fresh temporary directory.
-It does not open your linked account, read your message archive, connect to
-WhatsApp, or register a tray icon. You can run it alongside your regular app.
-
-```sh
-cargo build --locked --features demo
-./target/debug/zaptide --demo-tour --demo-size 1280x800
-```
-
-The **ZapTide Demo** window waits for **Space**. The 41-second tour starts with
-search, switches chats with keyboard shortcuts, scrolls, right-clicks a message
-and selects Reply, types quickly, completes emoji and mentions, searches the GIF
-picker and sends a still sticker, opens group information and the shortcut list,
-and changes themes through Settings. It uses the normal mouse and keyboard handlers;
-a local responder handles outgoing messages with no WhatsApp connection.
-Demo GIF search uses local fixtures. The tour makes no
-sound and holds its final frame. Space rebuilds the sample and replays.
-For an automatic start, add `--demo-tour-delay 5000` (milliseconds).
-Use `--demo` instead of `--demo-tour` to explore the sample chats yourself.
-
-To record the tour, start a screen recording of the demo window, then press
-Space in ZapTide. Keep the window visible and stationary until the tour finishes.
 
 ## Disclaimer
 
