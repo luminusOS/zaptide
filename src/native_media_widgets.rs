@@ -909,10 +909,16 @@ fn show_video(
     stack.add_named(&failed, Some("failed"));
     if let Some(stream) = video.media_stream() {
         let stack = stack.downgrade();
+        let failed = failed.downgrade();
         stream.connect_error_notify(move |stream| {
-            if stream.error().is_some()
-                && let Some(stack) = stack.upgrade()
+            if let (Some(error), Some(stack), Some(failed)) =
+                (stream.error(), stack.upgrade(), failed.upgrade())
             {
+                // GStreamer names what is missing, such as a decoder.
+                log::warn!("video could not be played: {error}");
+                failed.set_description(Some(&format!(
+                    "{error}\n\nOpen it with another app instead."
+                )));
                 stack.set_visible_child_name("failed");
             }
         });
@@ -1023,7 +1029,7 @@ fn open_with_button(
     std::rc::Rc<std::cell::RefCell<glib::WeakRef<adw::Dialog>>>,
 ) {
     let button = gtk::Button::builder()
-        .icon_name("external-link-symbolic")
+        .icon_name("adw-external-link-symbolic")
         .tooltip_text("Open With Another App")
         .build();
     let dialog: std::rc::Rc<std::cell::RefCell<glib::WeakRef<adw::Dialog>>> =
