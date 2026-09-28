@@ -3316,11 +3316,19 @@ impl NativeApplication {
                 let mut chats: Vec<_> = self
                     .chat_snapshots
                     .iter()
-                    .filter(|chat| forwardable_chat(chat))
+                    .filter(|chat| {
+                        forwardable_chat(chat)
+                            && !chat.archived
+                            && self.active_chat.as_ref() != Some(&chat.id)
+                    })
                     .cloned()
                     .collect();
                 chats.sort_by_key(|chat| std::cmp::Reverse(chat.last_activity));
-                show_forward_dialog(&self.window, &sender, chats);
+                let summary = self
+                    .selected_message()
+                    .map(crate::model::Message::summary)
+                    .unwrap_or_default();
+                show_forward_dialog(&self.window, &sender, &summary, chats, &self.avatars);
             }
             Input::ForwardSelected(destination) => self.forward_selected(destination),
             Input::DeleteSelected(everyone) => {
@@ -6580,123 +6588,132 @@ fn show_new_contact_dialog(
     dialog.present();
 }
 
+/// Picks the chat to forward the selected message to.
 fn show_forward_dialog(
     parent: &adw::ApplicationWindow,
     sender: &ComponentSender<NativeApplication>,
+    summary: &str,
     chats: Vec<crate::model::Chat>,
+    avatars: &std::collections::HashMap<String, std::path::PathBuf>,
 ) {
-    let dialog = gtk::Window::builder()
-        .title("Forward message")
-        .transient_for(parent)
-        .modal(true)
-        .default_width(400)
-        .default_height(480)
+    let dialog = adw::Dialog::builder()
+        .title("Forward To")
+        .content_width(400)
+        .content_height(560)
+        .build();
+    let search = gtk::SearchEntry::builder()
+        .placeholder_text("Search chats")
+        .margin_start(12)
+        .margin_end(12)
+        .margin_bottom(6)
         .build();
     let content = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(12)
-        .margin_top(16)
-        .margin_bottom(16)
-        .margin_start(16)
-        .margin_end(16)
+        .margin_top(6)
+        .margin_bottom(12)
+        .margin_start(12)
+        .margin_end(12)
         .build();
-    let search = gtk::SearchEntry::builder()
-        .placeholder_text("Search chats")
-        .build();
-    let scroll = gtk::ScrolledWindow::builder()
-        .vexpand(true)
-        .min_content_height(180)
-        .build();
-    let list = gtk::ListBox::builder()
-        .selection_mode(gtk::SelectionMode::None)
-        .build();
-    let rows = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-
-    for chat in chats {
-        let title = gtk::Label::builder()
-            .label(&chat.name)
-            .xalign(0.0)
-            .ellipsize(gtk::pango::EllipsizeMode::End)
-            .build();
-        let summary = forward_chat_detail(&chat);
-        let subtitle = gtk::Label::builder()
-            .label(&summary)
-            .xalign(0.0)
-            .ellipsize(gtk::pango::EllipsizeMode::End)
-            .build();
-        subtitle.add_css_class("dim-label");
-        subtitle.add_css_class("caption");
-        let labels = gtk::Box::builder()
+    if !summary.is_empty() {
+        let card = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(3)
-            .hexpand(true)
+            .margin_top(9)
+            .margin_bottom(9)
+            .margin_start(12)
+            .margin_end(12)
             .build();
-        labels.append(&title);
-        labels.append(&subtitle);
-        let button = gtk::Button::builder()
-            .child(&labels)
-            .hexpand(true)
-            .halign(gtk::Align::Fill)
-            .build();
-        let accessible_name = forward_accessible_label(&chat);
-        button.update_property(&[gtk::accessible::Property::Label(&accessible_name)]);
-        let row = gtk::ListBoxRow::builder().child(&button).build();
-        let close = dialog.clone();
-        let input = sender.clone();
-        let destination = chat.id.clone();
-        button.connect_clicked(move |_| {
-            input.input(Input::ForwardSelected(destination.clone()));
-            close.close();
-        });
-        rows.borrow_mut()
-            .push((row.clone(), forward_search_key(&chat)));
-        list.append(&row);
+        card.append(
+            &gtk::Label::builder()
+                .label("Forwarding")
+                .xalign(0.0)
+                .css_classes(["caption-heading", "dim-label"])
+                .build(),
+        );
+        card.append(
+            &gtk::Label::builder()
+                .label(summary)
+                .xalign(0.0)
+                .lines(2)
+                .wrap(true)
+                .ellipsize(gtk::pango::EllipsizeMode::End)
+                .build(),
+        );
+        content.append(
+            &gtk::Frame::builder()
+                .child(&card)
+                .css_classes(["card"])
+                .build(),
+        );
     }
 
-    let empty = gtk::Label::builder()
-        .label(if rows.borrow().is_empty() {
-            "No available chats to forward to."
-        } else {
-            "No chats match this search."
-        })
-        .wrap(true)
-        .margin_top(8)
-        .margin_bottom(8)
+    let list = gtk::ListBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .css_classes(["boxed-list"])
         .build();
-    empty.add_css_class("dim-label");
-    empty.set_visible(rows.borrow().is_empty());
-    let filter_rows = rows.clone();
-    let no_matches = empty.clone();
+    list.set_placeholder(Some(
+        &gtk::Label::builder()
+            .label(if chats.is_empty() {
+                "No chats to forward to."
+            } else {
+                "No chats match this search."
+            })
+            .wrap(true)
+            .margin_top(18)
+            .margin_bottom(18)
+            .css_classes(["dim-label"])
+            .build(),
+    ));
+    let rows = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    for chat in chats {
+        let row = adw::ActionRow::builder()
+            .title(&chat.name)
+            .title_lines(1)
+            .subtitle(forward_chat_detail(&chat))
+            .activatable(true)
+            .build();
+        let avatar = adw::Avatar::new(32, Some(&chat.name), true);
+        let image = avatars.get(&chat.id).and_then(|path| {
+            AVATAR_TEXTURES.with_borrow_mut(|cache| {
+                if !cache.contains_key(path) {
+                    cache.insert(path.clone(), gtk::gdk::Texture::from_filename(path).ok()?);
+                }
+                cache.get(path).cloned()
+            })
+        });
+        avatar.set_custom_image(image.as_ref());
+        row.add_prefix(&avatar);
+        rows.borrow_mut()
+            .push((row.clone(), forward_search_key(&chat)));
+        let (close, input) = (dialog.clone(), sender.clone());
+        row.connect_activated(move |_| {
+            input.input(Input::ForwardSelected(chat.id.clone()));
+            close.close();
+        });
+        list.append(&row);
+    }
     search.connect_search_changed(move |entry| {
         let needle = entry.text().trim().to_lowercase();
-        let mut any_visible = false;
-        for (row, searchable) in filter_rows.borrow().iter() {
-            let visible = needle.is_empty() || searchable.contains(&needle);
-            row.set_visible(visible);
-            any_visible |= visible;
+        for (row, key) in rows.borrow().iter() {
+            row.set_visible(needle.is_empty() || key.contains(&needle));
         }
-        no_matches.set_visible(!any_visible);
     });
-    scroll.set_child(Some(&list));
-    let buttons = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(8)
-        .halign(gtk::Align::End)
-        .build();
-    let cancel = gtk::Button::with_label("Cancel");
-    buttons.append(&cancel);
-    let close = dialog.clone();
-    cancel.connect_clicked(move |_| close.close());
-    content.append(&search);
-    content.append(&scroll);
-    content.append(&empty);
-    content.append(&buttons);
-    dialog.set_child(Some(&content));
-    dialog.set_default_widget(Some(&search));
-    search.connect_map(|entry| {
-        entry.grab_focus();
-    });
-    dialog.present();
+    content.append(&list);
+
+    let view = adw::ToolbarView::new();
+    view.add_top_bar(&adw::HeaderBar::new());
+    view.add_top_bar(&search);
+    view.set_content(Some(
+        &gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .vexpand(true)
+            .child(&content)
+            .build(),
+    ));
+    dialog.set_child(Some(&view));
+    dialog.set_focus(Some(&search));
+    dialog.present(Some(parent));
 }
 
 fn forwardable_chat(chat: &crate::model::Chat) -> bool {
@@ -7083,12 +7100,10 @@ fn forward_chat_detail(chat: &crate::model::Chat) -> String {
     if chat.is_group() {
         format!("Group · {} participants", chat.participants.len())
     } else {
-        chat.phone().unwrap_or("Direct chat").to_owned()
+        chat.phone()
+            .map(crate::util::phone)
+            .unwrap_or_else(|| "Direct chat".into())
     }
-}
-
-fn forward_accessible_label(chat: &crate::model::Chat) -> String {
-    format!("Forward to {}, {}", chat.name, forward_chat_detail(chat))
 }
 
 /// Contact or group details: photo, name, number, and group members.
@@ -7389,8 +7404,8 @@ mod tests {
         let same_name =
             crate::model::Chat::new("15557654321@s.whatsapp.net".into(), "Ada Lovelace".into());
         assert_ne!(
-            forward_accessible_label(&chat),
-            forward_accessible_label(&same_name),
+            forward_chat_detail(&chat),
+            forward_chat_detail(&same_name),
             "duplicate chat names remain distinguishable to assistive technology"
         );
 
