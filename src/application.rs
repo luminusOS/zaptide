@@ -932,6 +932,7 @@ pub struct NativeApplication {
 #[derive(Debug)]
 pub enum Input {
     WindowMapped,
+    WindowActivated,
     ToggleSidebar,
     StartBackend,
     BackendReady,
@@ -1065,6 +1066,12 @@ impl SimpleComponent for NativeApplication {
             set_size_request: (360, 480),
 
             connect_map[sender] => move |_| sender.input(Input::WindowMapped),
+
+            connect_is_active_notify[sender] => move |window| {
+                if window.is_active() {
+                    sender.input(Input::WindowActivated);
+                }
+            },
 
             connect_close_request[sender] => move |_| {
                 sender.input(Input::Close);
@@ -2160,6 +2167,7 @@ impl SimpleComponent for NativeApplication {
 impl NativeApplication {
     fn handle_input(&mut self, input: Input, sender: ComponentSender<Self>) {
         match input {
+            Input::WindowActivated => self.read_open_chat(),
             Input::WindowMapped => {
                 gtk::glib::idle_add_local_once(move || sender.input(Input::StartBackend));
             }
@@ -2467,7 +2475,8 @@ impl NativeApplication {
                             }
                         }
                         NativeEvent::ChatUpdated(chat) => {
-                            self.apply_chat_changes(vec![ChatChange::Update(*chat)])
+                            self.apply_chat_changes(vec![ChatChange::Update(*chat)]);
+                            self.read_open_chat();
                         }
                         // An empty list clears contacts on logout; otherwise
                         // the backend sends the full set or single updates.
@@ -5430,6 +5439,28 @@ impl NativeApplication {
 
     /// Moves the open-chat mark without rebuilding the list: rows between
     /// the old and new open chat would be recreated, losing scroll and focus.
+    /// Messages arriving in the chat on screen are read as they come in,
+    /// but only while the window has focus, as on the phone.
+    fn read_open_chat(&self) {
+        if !self.window.is_active() {
+            return;
+        }
+        let Some(chat) = self.active_chat.as_deref() else {
+            return;
+        };
+        if self
+            .chat_snapshots
+            .iter()
+            .any(|known| known.id == chat && known.unread > 0)
+            && let Some(backend) = &self.backend
+        {
+            backend.send(crate::backend::Command::MarkRead {
+                chat: chat.to_owned(),
+                receipts: self.settings.send_read_receipts && !self.account_receipts_off,
+            });
+        }
+    }
+
     fn mark_open_chat(&self) {
         let open = self.active_chat.as_deref();
         for (position, id) in self.chat_ids.iter().enumerate() {
