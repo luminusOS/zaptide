@@ -135,8 +135,14 @@ impl NativeNotifications {
 
         let notification = gtk::gio::Notification::new(title);
         notification.set_body(Some(body));
-        if let Some(icon) = icon.and_then(round_icon) {
-            notification.set_icon(&gtk::gio::FileIcon::new(&gtk::gio::File::for_path(icon)));
+        // The notification portal drops file icons, so a Flatpak build sends the bytes.
+        if let Some(bytes) = icon
+            .and_then(round_icon)
+            .and_then(|path| std::fs::read(path).ok())
+        {
+            notification.set_icon(&gtk::gio::BytesIcon::new(&gtk::glib::Bytes::from_owned(
+                bytes,
+            )));
         }
         notification.set_default_action_and_target_value(
             &format!("app.{OPEN_CHAT_ACTION}"),
