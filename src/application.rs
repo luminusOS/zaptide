@@ -2016,6 +2016,44 @@ impl SimpleComponent for NativeApplication {
             true
         });
         widgets.composer.add_controller(drop_target);
+        // Ctrl+V of copied files or of an image attaches them. Text copied
+        // from office apps also carries a picture of itself, so an image
+        // offered alongside text pastes as text.
+        let paste_sender = sender.clone();
+        widgets.composer.connect_paste_clipboard(move |view| {
+            let clipboard = view.clipboard();
+            let formats = clipboard.formats();
+            if formats.contains_type(gtk::gdk::FileList::static_type()) {
+                view.stop_signal_emission_by_name("paste-clipboard");
+                let input = paste_sender.clone();
+                gtk::glib::spawn_future_local(async move {
+                    let Ok(value) = clipboard
+                        .read_value_future(
+                            gtk::gdk::FileList::static_type(),
+                            gtk::glib::Priority::DEFAULT,
+                        )
+                        .await
+                    else {
+                        return;
+                    };
+                    let paths: Vec<_> = value
+                        .get::<gtk::gdk::FileList>()
+                        .map(|files| files.files())
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter_map(|file| file.path())
+                        .collect();
+                    if !paths.is_empty() {
+                        input.input(Input::AttachDropped(paths));
+                    }
+                });
+            } else if formats.contains_type(gtk::gdk::Texture::static_type())
+                && !formats.contains_type(String::static_type())
+            {
+                view.stop_signal_emission_by_name("paste-clipboard");
+                paste_sender.input(Input::PasteClipboardImage);
+            }
+        });
         model.install_zoom_provider();
         model.apply_runtime_settings();
 
@@ -3178,9 +3216,11 @@ impl NativeApplication {
                     .or_default()
                     .extend(paths);
                 self.status = attachment_summary(self.pending_attachment_count());
+                self.show_attachment_preview(&sender);
             }
             Input::ClipboardImageReady { chat, pixels } => {
                 self.stage_clipboard_image(chat, pixels);
+                self.show_attachment_preview(&sender);
             }
             Input::OpenSelectedUri => self.open_selected_uri(&sender),
             Input::PortalUriFinished(success) => {
@@ -3253,6 +3293,7 @@ impl NativeApplication {
                     .entry(chat)
                     .or_default()
                     .extend(paths);
+                self.show_attachment_preview(&sender);
             }
             Input::ClearAttachments => {
                 if let Some(chat) = &self.active_chat {
@@ -4709,6 +4750,26 @@ impl NativeApplication {
         }
     }
 
+    /// Previews what is staged for the open chat with a caption field that
+    /// starts from the draft. Closing without sending drops the attachments.
+    fn show_attachment_preview(&self, sender: &ComponentSender<Self>) {
+        let Some(chat) = self.active_chat.as_ref() else {
+            return;
+        };
+        let image = self
+            .pending_clipboard_images
+            .get(chat)
+            .map(|image| image.preview.clone());
+        let paths = self
+            .pending_attachments
+            .get(chat)
+            .cloned()
+            .unwrap_or_default();
+        if image.is_some() || !paths.is_empty() {
+            show_attachment_preview_dialog(&self.window, sender, image, &paths, &self.draft);
+        }
+    }
+
     fn stage_clipboard_image(&mut self, chat: String, pixels: ClipboardPixels) {
         if self.active_chat.as_deref() != Some(&chat) || !self.can_attach() {
             self.status = "Choose an available conversation before pasting an image".into();
@@ -4729,7 +4790,7 @@ impl NativeApplication {
             return;
         }
         self.pending_clipboard_images.insert(chat, pixels);
-        self.status = "Clipboard image ready. Review preview, then press Send.".into();
+        self.status = "Clipboard image ready".into();
     }
 
     fn open_selected_uri(&mut self, sender: &ComponentSender<Self>) {
@@ -7235,6 +7296,135 @@ fn show_chat_info_dialog(
     dialog.present(Some(parent));
 }
 
+/// "Send Image", "Send 3 Files": images when every item is one.
+fn attachment_preview_title(count: usize, images: bool) -> String {
+    let noun = if images { "Image" } else { "File" };
+    if count == 1 {
+        format!("Send {noun}")
+    } else {
+        format!("Send {count} {noun}s")
+    }
+}
+
+fn is_image_file(path: &std::path::Path) -> bool {
+    gtk::gio::content_type_guess(Some(path), None)
+        .0
+        .starts_with("image/")
+}
+
+fn show_attachment_preview_dialog(
+    parent: &adw::ApplicationWindow,
+    sender: &ComponentSender<NativeApplication>,
+    image: Option<gtk::gdk::Texture>,
+    paths: &[std::path::PathBuf],
+    draft: &str,
+) {
+    let carousel = adw::Carousel::builder().vexpand(true).spacing(12).build();
+    let picture = |picture: gtk::Picture| {
+        picture.set_content_fit(gtk::ContentFit::Contain);
+        picture.set_can_shrink(true);
+        picture.set_hexpand(true);
+        picture.set_vexpand(true);
+        picture
+    };
+    if let Some(texture) = &image {
+        carousel.append(&picture(gtk::Picture::for_paintable(texture)));
+    }
+    for path in paths {
+        // ponytail: decodes on the main thread; fine for a few photos, move
+        // to glycin like the timeline if large batches stall the window.
+        if is_image_file(path) {
+            carousel.append(&picture(gtk::Picture::for_filename(path)));
+            continue;
+        }
+        let page = adw::StatusPage::builder()
+            .icon_name("text-x-generic-symbolic")
+            .title(
+                path.file_name()
+                    .map(|name| name.to_string_lossy())
+                    .unwrap_or_default(),
+            )
+            .hexpand(true)
+            .build();
+        page.add_css_class("compact");
+        carousel.append(&page);
+    }
+    let count = carousel.n_pages() as usize;
+    let dots = adw::CarouselIndicatorDots::builder()
+        .carousel(&carousel)
+        .visible(count > 1)
+        .build();
+
+    let caption = gtk::Entry::builder()
+        .placeholder_text("Add a caption")
+        .text(draft)
+        .hexpand(true)
+        .build();
+    let send = gtk::Button::builder()
+        .child(&paper_plane_icon())
+        .tooltip_text("Send")
+        .valign(gtk::Align::Center)
+        .css_classes(["circular", "suggested-action"])
+        .build();
+    send.update_property(&[gtk::accessible::Property::Label("Send")]);
+    let bar = gtk::Box::builder()
+        .spacing(6)
+        .margin_top(6)
+        .margin_bottom(12)
+        .margin_start(12)
+        .margin_end(12)
+        .build();
+    bar.append(&caption);
+    bar.append(&send);
+
+    let content = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(6)
+        .margin_start(12)
+        .margin_end(12)
+        .build();
+    content.append(&carousel);
+    content.append(&dots);
+    let view = adw::ToolbarView::new();
+    view.add_top_bar(&adw::HeaderBar::new());
+    view.set_content(Some(&content));
+    view.add_bottom_bar(&bar);
+    let dialog = adw::Dialog::builder()
+        .title(attachment_preview_title(
+            count,
+            image.is_some() || paths.iter().all(|path| is_image_file(path)),
+        ))
+        .content_width(520)
+        .content_height(560)
+        .child(&view)
+        .build();
+
+    let sent = std::rc::Rc::new(std::cell::Cell::new(false));
+    let (close, input, sending) = (dialog.clone(), sender.clone(), sent.clone());
+    let entry = caption.clone();
+    send.connect_clicked(move |_| {
+        sending.set(true);
+        input.input(Input::SendText(entry.text().to_string()));
+        close.close();
+    });
+    let button = send.clone();
+    caption.connect_activate(move |_| button.emit_clicked());
+    let input = sender.clone();
+    dialog.connect_closed(move |_| {
+        if !sent.get() {
+            input.input(Input::ClearAttachments);
+        }
+    });
+    // Keep the draft that became the caption instead of selecting it, so
+    // typing adds to it.
+    caption.connect_has_focus_notify(|entry| {
+        let entry = entry.clone();
+        gtk::glib::idle_add_local_once(move || entry.set_position(-1));
+    });
+    dialog.set_focus(Some(&caption));
+    dialog.present(Some(parent));
+}
+
 fn show_archive_confirmation(
     parent: &adw::ApplicationWindow,
     sender: &ComponentSender<NativeApplication>,
@@ -7335,6 +7525,13 @@ mod tests {
             forwarded: false,
             thumbnail: None,
         }
+    }
+
+    #[test]
+    fn attachment_preview_titles_count_images_and_files() {
+        assert_eq!(attachment_preview_title(1, true), "Send Image");
+        assert_eq!(attachment_preview_title(3, true), "Send 3 Images");
+        assert_eq!(attachment_preview_title(2, false), "Send 2 Files");
     }
 
     #[test]
