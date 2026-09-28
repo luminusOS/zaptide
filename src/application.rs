@@ -376,6 +376,7 @@ struct MessageRowWidgets {
     quote: gtk::Label,
     body: gtk::Label,
     footer: gtk::Label,
+    reactions: gtk::Box,
     status: gtk::DrawingArea,
     status_icon: gtk::Image,
     media: gtk::Box,
@@ -480,10 +481,19 @@ impl RelmListItem for MessageRow {
         bubble.append(&footer_row);
         // Only cap the width: below the tightening threshold a Clamp narrows
         // its child and centres it, leaving wide bubbles off the row's edge.
+        let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        column.append(&bubble);
+        let reactions = gtk::Box::builder()
+            .spacing(4)
+            .margin_top(3)
+            .margin_start(6)
+            .margin_end(6)
+            .build();
+        column.append(&reactions);
         let clamp = adw::Clamp::builder()
             .maximum_size(480)
             .tightening_threshold(480)
-            .child(&bubble)
+            .child(&column)
             .build();
         row.append(&clamp);
         let trailing_space = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -554,6 +564,7 @@ impl RelmListItem for MessageRow {
                 quote,
                 body,
                 footer,
+                reactions,
                 status,
                 status_icon,
                 media,
@@ -615,6 +626,25 @@ impl RelmListItem for MessageRow {
         *widgets.menu_target.borrow_mut() = Some((self.id.clone(), self.pointer_sender.clone()));
         widgets.footer.set_label(&self.footer);
         widgets.footer.set_visible(!self.footer.is_empty());
+        while let Some(child) = widgets.reactions.first_child() {
+            widgets.reactions.remove(&child);
+        }
+        widgets.reactions.set_halign(if outgoing {
+            gtk::Align::End
+        } else {
+            gtk::Align::Start
+        });
+        let counts = reaction_counts(&self.message.reactions);
+        widgets.reactions.set_visible(!counts.is_empty());
+        for (emoji, count, from_me) in counts {
+            widgets.reactions.append(&reaction_chip(
+                &self.id,
+                &emoji,
+                count,
+                from_me,
+                &self.pointer_sender,
+            ));
+        }
         let (glyph, icon, read) = delivery_mark(self.message.status);
         set_delivery_ticks(&widgets.status, glyph);
         if read {
@@ -950,6 +980,10 @@ pub enum Input {
     },
     ActivateSelectedAttachment,
     ReactSelected(String),
+    ReactTo {
+        id: String,
+        emoji: String,
+    },
     CopySelectedText,
     ShowForward,
     ForwardSelected(String),
@@ -3442,6 +3476,10 @@ impl NativeApplication {
                 }
             }
             Input::ReactSelected(emoji) => self.react_selected(emoji),
+            Input::ReactTo { id, emoji } => {
+                self.message_target = Some(id);
+                self.react_selected(emoji);
+            }
             Input::ShowForward => {
                 let mut chats: Vec<_> = self
                     .chat_snapshots
@@ -3813,6 +3851,11 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
           .zaptide-audio-speed.compact { font-size: 0.85em; }\n\
           .zaptide-reaction { font-size: 1.4em; min-width: 40px; min-height: 40px; padding: 0; }\n\
          .zaptide-reaction.chosen { background-color: alpha(@accent_bg_color, 0.25); }\n\
+         .zaptide-reaction > label { transition: transform 120ms ease-out; }\n\
+         .zaptide-reaction:hover > label { transform: scale(1.25); }\n\
+         .zaptide-reaction-chip { min-height: 0; min-width: 0; padding: 1px 8px; border-radius: 9999px; font-size: 0.9em; background-color: @window_bg_color; box-shadow: 0 0 0 1px alpha(currentColor, 0.12); }\n\
+         .zaptide-reaction-chip:hover { background-color: color-mix(in srgb, currentColor 8%, @window_bg_color); }\n\
+         .zaptide-reaction-chip.chosen { background-color: color-mix(in srgb, @accent_bg_color 18%, @window_bg_color); box-shadow: 0 0 0 1px alpha(@accent_color, 0.55); color: @accent_color; }\n\
          .zaptide-sticker-tab { border-radius: 8px; min-width: 36px; min-height: 36px; padding: 2px; }\n\
          .zaptide-sticker-tab:checked { background-color: alpha(currentColor, 0.12); }\n\
          .zaptide-sticker-picker > contents { padding: 0; }\n\
@@ -4036,9 +4079,6 @@ fn message_row(
         footer.push("Edited".to_owned());
     }
     let reactions = reaction_summary(&message.reactions);
-    if !reactions.is_empty() {
-        footer.push(reactions.trim().to_owned());
-    }
     footer.push(clock.clone());
     let accessible_label = format!(
         "{prefix}{sender}: {}{}{} · {clock}{delivery}",
@@ -4091,19 +4131,81 @@ fn message_group_boundaries(messages: &[crate::model::Message]) -> Vec<(bool, bo
         .collect()
 }
 
-fn reaction_summary(reactions: &[crate::model::Reaction]) -> String {
-    let mut counts = std::collections::BTreeMap::<String, (usize, bool)>::new();
-    for reaction in reactions {
-        let entry = counts.entry(reaction.emoji.clone()).or_default();
-        entry.0 += 1;
-        entry.1 |= reaction.from_me;
+/// Reactions grouped by emoji, in first-seen order: (emoji, count, ours).
+fn reaction_counts(reactions: &[crate::model::Reaction]) -> Vec<(String, usize, bool)> {
+    let mut counts = Vec::<(String, usize, bool)>::new();
+    for reaction in reactions
+        .iter()
+        .filter(|reaction| !reaction.emoji.is_empty())
+    {
+        match counts.iter_mut().find(|entry| entry.0 == reaction.emoji) {
+            Some(entry) => {
+                entry.1 += 1;
+                entry.2 |= reaction.from_me;
+            }
+            None => counts.push((reaction.emoji.clone(), 1, reaction.from_me)),
+        }
     }
+    counts
+}
+
+/// A pill under the bubble; clicking it adds this reaction, or removes ours.
+fn reaction_chip(
+    id: &str,
+    emoji: &str,
+    count: usize,
+    from_me: bool,
+    sender: &ComponentSender<NativeApplication>,
+) -> gtk::Button {
+    let others = count - usize::from(from_me);
+    let who = match (from_me, others) {
+        (true, 0) => "You".to_owned(),
+        (true, 1) => "You and 1 other".to_owned(),
+        (true, n) => format!("You and {n} others"),
+        (false, 1) => "1 person".to_owned(),
+        (false, n) => format!("{n} people"),
+    };
+    let button = gtk::Button::builder()
+        .label(if count > 1 {
+            format!("{emoji} {count}")
+        } else {
+            emoji.to_owned()
+        })
+        .tooltip_text(format!(
+            "{who} reacted with {emoji}\n{}",
+            if from_me {
+                "Click to remove"
+            } else {
+                "Click to react"
+            }
+        ))
+        .css_classes(["zaptide-reaction-chip"])
+        .build();
+    if from_me {
+        button.add_css_class("chosen");
+    }
+    let (id, emoji, sender) = (id.to_owned(), emoji.to_owned(), sender.clone());
+    button.connect_clicked(move |_| {
+        sender.input(Input::ReactTo {
+            id: id.clone(),
+            emoji: if from_me {
+                String::new()
+            } else {
+                emoji.clone()
+            },
+        });
+    });
+    button
+}
+
+fn reaction_summary(reactions: &[crate::model::Reaction]) -> String {
+    let counts = reaction_counts(reactions);
     if counts.is_empty() {
         return String::new();
     }
     let summary = counts
         .into_iter()
-        .map(|(emoji, (count, from_me))| {
+        .map(|(emoji, count, from_me)| {
             format!("{emoji} × {count}{}", if from_me { " · You" } else { "" })
         })
         .collect::<Vec<_>>()
@@ -7388,7 +7490,10 @@ fn show_chat_info_dialog(
             .collect();
         members.sort_by_cached_key(|(name, _)| name.to_lowercase());
         for (name, id) in members {
-            let row = adw::ActionRow::builder().title(&name).use_markup(false).build();
+            let row = adw::ActionRow::builder()
+                .title(&name)
+                .use_markup(false)
+                .build();
             if let Some(phone) = crate::model::phone_of(id).map(crate::util::phone)
                 && phone != name
             {
@@ -8060,6 +8165,24 @@ mod tests {
         ];
 
         assert_eq!(reaction_summary(&reactions), "\n👍 × 2 · You");
+        let mut reactions = reactions;
+        reactions.insert(
+            0,
+            crate::model::Reaction {
+                sender: "c".into(),
+                from_me: false,
+                emoji: "😂".into(),
+            },
+        );
+        reactions.push(crate::model::Reaction {
+            sender: "d".into(),
+            from_me: false,
+            emoji: String::new(),
+        });
+        assert_eq!(
+            reaction_counts(&reactions),
+            [("😂".to_owned(), 1, false), ("👍".to_owned(), 2, true)]
+        );
     }
 
     #[test]
