@@ -1129,7 +1129,7 @@ impl SimpleComponent for NativeApplication {
                                         set_wrap: true,
                                         set_justify: gtk::Justification::Center,
                                         #[watch]
-                                        set_label: if model.phone_linking && model.pair_code().is_none() && !model.pairing_requested() { "Enter your phone number with country code. WhatsApp will send a code to type on your phone." } else { model.status.as_str() },
+                                        set_label: if model.phone_linking && model.pair_code().is_none() && !model.pairing_requested() { "Choose your country and enter your phone number. WhatsApp will send a code to type on your phone." } else { model.status.as_str() },
                                     },
                                     append = &gtk::Picture {
                                         add_css_class: "zaptide-qr",
@@ -1176,18 +1176,24 @@ impl SimpleComponent for NativeApplication {
                                         set_spacing: 12,
                                         #[watch]
                                         set_visible: model.phone_linking && model.pair_code().is_none() && !model.pairing_requested(),
-                                        #[name = "phone_entry"]
-                                        append = &gtk::Entry {
-                                            set_placeholder_text: Some("+55 11 91234 5678"),
-                                            set_input_purpose: gtk::InputPurpose::Phone,
-                                            connect_activate[sender] => move |entry| sender.input(Input::PairWithPhone(entry.text().to_string())),
+                                        append = &gtk::Box {
+                                            set_spacing: 8,
+                                            #[name = "country_picker"]
+                                            append = &country_picker() -> gtk::DropDown {},
+                                            #[name = "phone_entry"]
+                                            append = &gtk::Entry {
+                                                set_hexpand: true,
+                                                set_placeholder_text: Some("Phone number"),
+                                                set_input_purpose: gtk::InputPurpose::Phone,
+                                                connect_activate[sender, country_picker] => move |entry| sender.input(Input::PairWithPhone(international_phone(&country_picker, entry))),
+                                            },
                                         },
                                         append = &gtk::Button {
                                             set_label: "Get Code",
                                             set_halign: gtk::Align::Center,
                                             add_css_class: "pill",
                                             add_css_class: "suggested-action",
-                                            connect_clicked[sender, phone_entry] => move |_| sender.input(Input::PairWithPhone(phone_entry.text().to_string())),
+                                            connect_clicked[sender, phone_entry, country_picker] => move |_| sender.input(Input::PairWithPhone(international_phone(&country_picker, &phone_entry))),
                                         },
                                     },
                                     append = &gtk::Button {
@@ -3980,6 +3986,71 @@ fn should_auto_download(media: Option<&crate::model::Media>) -> bool {
 
 fn should_send_on_enter(enter_sends: bool, control: bool, shift: bool) -> bool {
     !shift && (enter_sends || control)
+}
+
+/// A searchable country list for linking by phone number, starting at the
+/// locale's country. The button shows the flag and code; the list, names.
+fn country_picker() -> gtk::DropDown {
+    let labels: Vec<String> = crate::countries::COUNTRIES
+        .iter()
+        .map(crate::countries::Country::label)
+        .collect();
+    let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+    let picker = gtk::DropDown::builder()
+        .model(&gtk::StringList::new(&labels))
+        .enable_search(true)
+        .search_match_mode(gtk::StringFilterMatchMode::Substring)
+        .expression(gtk::PropertyExpression::new(
+            gtk::StringObject::static_type(),
+            None::<gtk::Expression>,
+            "string",
+        ))
+        .tooltip_text("Country")
+        .build();
+    // The popup lists full names; the button shows only the flag and code.
+    picker.set_list_factory(Some(&label_factory(|text| text.to_owned())));
+    picker.set_factory(Some(&label_factory(|text| {
+        let flag = text.split(' ').next().unwrap_or_default();
+        let code = text.rsplit(' ').next().unwrap_or_default();
+        format!("{flag} {code}")
+    })));
+    let locale = ["LC_ALL", "LC_TELEPHONE", "LANG"]
+        .into_iter()
+        .filter_map(|name| std::env::var(name).ok())
+        .find(|value| !value.is_empty())
+        .unwrap_or_default();
+    picker.set_selected(crate::countries::from_locale(&locale) as u32);
+    picker
+}
+
+/// Labels for a string list, with `text` shaping what each row shows.
+fn label_factory(text: impl Fn(&str) -> String + 'static) -> gtk::SignalListItemFactory {
+    let factory = gtk::SignalListItemFactory::new();
+    factory.connect_setup(|_, item| {
+        if let Some(item) = item.downcast_ref::<gtk::ListItem>() {
+            item.set_child(Some(&gtk::Label::builder().xalign(0.0).build()));
+        }
+    });
+    factory.connect_bind(move |_, item| {
+        let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
+            return;
+        };
+        if let (Some(label), Some(string)) = (
+            item.child().and_downcast::<gtk::Label>(),
+            item.item().and_downcast::<gtk::StringObject>(),
+        ) {
+            label.set_label(&text(&string.string()));
+        }
+    });
+    factory
+}
+
+/// The number typed next to `picker`, with the chosen country's code.
+fn international_phone(picker: &gtk::DropDown, entry: &gtk::Entry) -> String {
+    match crate::countries::COUNTRIES.get(picker.selected() as usize) {
+        Some(country) => crate::countries::international(country, &entry.text()),
+        None => entry.text().to_string(),
+    }
 }
 
 fn normalized_phone(input: &str) -> Option<String> {
