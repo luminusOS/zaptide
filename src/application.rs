@@ -6256,7 +6256,7 @@ impl NativeApplication {
         if let Some(child) = gtk::prelude::GtkWindowExt::child(&self.window)
             && let Ok(overlay) = child.downcast::<adw::ToastOverlay>()
         {
-            overlay.add_toast(adw::Toast::new(text));
+            overlay.add_toast(adw::Toast::builder().title(text).use_markup(false).build());
         }
     }
 }
@@ -6660,6 +6660,7 @@ fn show_new_chat_dialog(
     for (id, name, phone) in contacts {
         let row = adw::ActionRow::builder()
             .title(&name)
+            .use_markup(false)
             .title_lines(1)
             .activatable(true)
             .build();
@@ -6843,6 +6844,7 @@ fn show_forward_dialog(
     for chat in chats {
         let row = adw::ActionRow::builder()
             .title(&chat.name)
+            .use_markup(false)
             .title_lines(1)
             .subtitle(forward_chat_detail(&chat))
             .activatable(true)
@@ -7336,6 +7338,7 @@ fn show_chat_info_dialog(
         let phone = crate::util::phone(phone);
         let row = adw::ActionRow::builder()
             .title("Phone")
+            .use_markup(false)
             .subtitle(&phone)
             .subtitle_selectable(true)
             .css_classes(["property"])
@@ -7361,6 +7364,7 @@ fn show_chat_info_dialog(
         group.add(
             &adw::ActionRow::builder()
                 .title("Name on WhatsApp")
+                .use_markup(false)
                 .subtitle(format!("~{push}"))
                 .css_classes(["property"])
                 .build(),
@@ -7381,7 +7385,7 @@ fn show_chat_info_dialog(
             .collect();
         members.sort_by_cached_key(|(name, _)| name.to_lowercase());
         for (name, id) in members {
-            let row = adw::ActionRow::builder().title(&name).build();
+            let row = adw::ActionRow::builder().title(&name).use_markup(false).build();
             if let Some(phone) = crate::model::phone_of(id).map(crate::util::phone)
                 && phone != name
             {
