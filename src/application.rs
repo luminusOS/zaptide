@@ -788,6 +788,10 @@ pub struct NativeApplication {
     chat_ids: Vec<String>,
     chat_snapshots: Vec<crate::model::Chat>,
     contacts: std::collections::HashMap<String, crate::model::Contact>,
+    /// Header menu for the open chat, relabelled by `sync_chat_menu`.
+    chat_menu: gtk::gio::Menu,
+    /// (group, pinned, muted, archived) the chat menu was last labelled for.
+    chat_menu_state: Option<(bool, bool, bool, bool)>,
     avatars: std::collections::HashMap<String, std::path::PathBuf>,
     avatar_requests: std::collections::HashSet<String>,
     typing: std::collections::HashMap<String, String>,
@@ -947,6 +951,8 @@ pub enum Input {
     SaveAttachmentFinished(bool),
     ToggleSelectedPin,
     ToggleSelectedArchive,
+    /// Flips this chat's archive state; archiving is confirmed first.
+    ArchiveChat(String),
     ToggleSelectedMute,
     Close,
     Quit,
@@ -1303,46 +1309,7 @@ impl SimpleComponent for NativeApplication {
                                     set_tooltip_text: Some("Chat menu"),
                                     #[watch]
                                     set_visible: model.active_chat.is_some(),
-                                    #[wrap(Some)]
-                                    #[name = "chat_popover"]
-                                    set_popover = &gtk::Popover {
-                                        add_css_class: "menu",
-                                        #[wrap(Some)]
-                                        set_child = &gtk::Box {
-                                            set_orientation: gtk::Orientation::Vertical,
-                                            append = &gtk::Button {
-                                                set_label: "Chat Info",
-                                                add_css_class: "flat",
-                                                connect_clicked[sender, chat_popover] => move |_| { chat_popover.popdown(); sender.input(Input::ShowChatInfo) },
-                                            },
-                                            append = &gtk::Button {
-                                                add_css_class: "flat",
-                                                #[watch]
-                                                set_label: if model.selected_chat().is_some_and(|chat| chat.pinned) { "Unpin" } else { "Pin" },
-                                                connect_clicked[sender, chat_popover] => move |_| { chat_popover.popdown(); sender.input(Input::ToggleSelectedPin) },
-                                            },
-                                            append = &gtk::Button {
-                                                add_css_class: "flat",
-                                                #[watch]
-                                                set_label: if model.selected_chat().is_some_and(|chat| chat.archived) { "Unarchive" } else { "Archive" },
-                                                connect_clicked[sender, chat_popover] => move |_| { chat_popover.popdown(); sender.input(Input::ToggleSelectedArchive) },
-                                            },
-                                            append = &gtk::Button {
-                                                add_css_class: "flat",
-                                                #[watch]
-                                                set_label: if model.selected_chat().is_some_and(|chat| chat.muted(crate::util::now())) { "Unmute" } else { "Mute" },
-                                                connect_clicked[sender, chat_popover] => move |_| { chat_popover.popdown(); sender.input(Input::ToggleSelectedMute) },
-                                            },
-                                            append = &gtk::Separator {},
-                                            append = &gtk::Button {
-                                                set_label: "Copy Transcript",
-                                                add_css_class: "flat",
-                                                #[watch]
-                                                set_sensitive: !model.message_ids.is_empty(),
-                                                connect_clicked[sender, chat_popover] => move |_| { chat_popover.popdown(); sender.input(Input::CopyTranscript) },
-                                            },
-                                        },
-                                    },
+                                    set_menu_model: Some(&model.chat_menu),
                                 },
                             },
                             add_top_bar = &adw::Banner {
@@ -1847,6 +1814,8 @@ impl SimpleComponent for NativeApplication {
             chat_ids: Vec::new(),
             chat_snapshots: Vec::new(),
             contacts: std::collections::HashMap::new(),
+            chat_menu: gtk::gio::Menu::new(),
+            chat_menu_state: None,
             avatars: std::collections::HashMap::new(),
             avatar_requests: std::collections::HashSet::new(),
             typing: std::collections::HashMap::new(),
@@ -2036,6 +2005,13 @@ impl SimpleComponent for NativeApplication {
     }
 
     fn update(&mut self, input: Self::Input, sender: ComponentSender<Self>) {
+        self.handle_input(input, sender);
+        self.sync_chat_menu();
+    }
+}
+
+impl NativeApplication {
+    fn handle_input(&mut self, input: Input, sender: ComponentSender<Self>) {
         match input {
             Input::WindowMapped => {
                 gtk::glib::idle_add_local_once(move || sender.input(Input::StartBackend));
@@ -2816,13 +2792,19 @@ impl SimpleComponent for NativeApplication {
                 }
             }
             Input::ToggleSelectedArchive => {
-                if let Some(chat) = self.selected_chat().cloned()
+                if let Some(chat) = self.selected_chat() {
+                    if chat.archived {
+                        sender.input(Input::ArchiveChat(chat.id.clone()));
+                    } else {
+                        show_archive_confirmation(&self.window, &sender, chat);
+                    }
+                }
+            }
+            Input::ArchiveChat(id) => {
+                if let Some(chat) = self.chat_snapshots.iter().find(|chat| chat.id == id)
                     && let Some(backend) = &self.backend
                 {
-                    backend.send(crate::backend::Command::SetArchived(
-                        chat.id,
-                        !chat.archived,
-                    ));
+                    backend.send(crate::backend::Command::SetArchived(id, !chat.archived));
                 }
             }
             Input::ToggleSelectedMute => {
@@ -4088,6 +4070,54 @@ impl NativeApplication {
             || filters.private_only
             || filters.groups_only
             || filters.muted != crate::native_chat_list::MutedFilter::default()
+    }
+
+    /// Relabels the chat menu for the open chat. Rebuilt only when a label
+    /// changes, so an open menu is left alone by unrelated updates.
+    fn sync_chat_menu(&mut self) {
+        let state = self.selected_chat().map(|chat| {
+            (
+                chat.is_group(),
+                chat.pinned,
+                chat.muted(crate::util::now()),
+                chat.archived,
+            )
+        });
+        if state == self.chat_menu_state {
+            return;
+        }
+        self.chat_menu_state = state;
+        self.chat_menu.remove_all();
+        let Some((group, pinned, muted, archived)) = state else {
+            return;
+        };
+        let section = gtk::gio::Menu::new();
+        let info = if group {
+            "_Group Info"
+        } else {
+            "_Contact Info"
+        };
+        section.append(Some(info), Some("win.chat-info"));
+        self.chat_menu.append_section(None, &section);
+        let section = gtk::gio::Menu::new();
+        let pin = if pinned { "Un_pin Chat" } else { "_Pin Chat" };
+        section.append(Some(pin), Some("win.chat-pin"));
+        let mute = if muted {
+            "_Unmute Notifications"
+        } else {
+            "_Mute Notifications"
+        };
+        section.append(Some(mute), Some("win.chat-mute"));
+        let archive = if archived {
+            "Un_archive Chat"
+        } else {
+            "_Archive Chat"
+        };
+        section.append(Some(archive), Some("win.chat-archive"));
+        self.chat_menu.append_section(None, &section);
+        let section = gtk::gio::Menu::new();
+        section.append(Some("Copy _Transcript"), Some("win.copy-transcript"));
+        self.chat_menu.append_section(None, &section);
     }
 
     /// Archived chats with unread messages, as counted on the phone.
@@ -6257,6 +6287,11 @@ fn install_window_actions(
     add("preferences", input(|| Input::ShowPreferences));
     add("shortcuts", input(|| Input::ShowShortcuts));
     add("about", input(|| Input::ShowAbout));
+    add("chat-info", input(|| Input::ShowChatInfo));
+    add("chat-pin", input(|| Input::ToggleSelectedPin));
+    add("chat-mute", input(|| Input::ToggleSelectedMute));
+    add("chat-archive", input(|| Input::ToggleSelectedArchive));
+    add("copy-transcript", input(|| Input::CopyTranscript));
     add("quit", input(|| Input::Quit));
     let (parent, dialog_sender) = (window.clone(), sender.clone());
     add(
@@ -6915,6 +6950,32 @@ fn show_chat_info_dialog(
         .build();
     dialog.add_response("close", "Close");
     dialog.set_default_response(Some("close"));
+    dialog.present(Some(parent));
+}
+
+fn show_archive_confirmation(
+    parent: &adw::ApplicationWindow,
+    sender: &ComponentSender<NativeApplication>,
+    chat: &crate::model::Chat,
+) {
+    let dialog = adw::AlertDialog::builder()
+        .heading("Archive Chat?")
+        .body(format!(
+            "{} moves to your archived chats. You can unarchive it at any time.",
+            chat.name
+        ))
+        .build();
+    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("archive", "Archive");
+    dialog.set_response_appearance("archive", adw::ResponseAppearance::Suggested);
+    dialog.set_default_response(Some("archive"));
+    dialog.set_close_response("cancel");
+    let (sender, id) = (sender.clone(), chat.id.clone());
+    dialog.connect_response(None, move |_, response| {
+        if response == "archive" {
+            sender.input(Input::ArchiveChat(id.clone()));
+        }
+    });
     dialog.present(Some(parent));
 }
 
