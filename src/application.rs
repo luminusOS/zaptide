@@ -3722,6 +3722,14 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
+fn gliding() -> bool {
+    END_GLIDE.with_borrow(|running| {
+        running
+            .as_ref()
+            .is_some_and(|animation| animation.state() == adw::AnimationState::Playing)
+    })
+}
+
 /// Scrolls smoothly to the end for new messages. Each frame aims at the
 /// current end, so row heights settling mid-way bend the path instead of
 /// jumping. Reduced motion skips straight to the end.
@@ -6027,9 +6035,12 @@ impl NativeApplication {
                 row
             })
             .collect::<Vec<_>>();
-        let at_bottom = self.messages.view.vadjustment().is_none_or(|adjustment| {
-            adjustment.value() + adjustment.page_size() >= adjustment.upper() - 48.0
-        });
+        // A glide still under way counts as the end: a covered window gets no
+        // frames, so the glide waits there and finishes once it is shown.
+        let at_bottom = gliding()
+            || self.messages.view.vadjustment().is_none_or(|adjustment| {
+                adjustment.value() + adjustment.page_size() >= adjustment.upper() - 48.0
+            });
         // Rebinding only the changed span keeps the reader's scroll position
         // through receipts, reactions, and incoming messages.
         let old_len = self.messages.len() as usize;
