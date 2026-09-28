@@ -1286,6 +1286,8 @@ impl SimpleComponent for NativeApplication {
                                                 append = &gtk::Label {
                                                     add_css_class: "zaptide-unread-pill",
                                                     add_css_class: "muted",
+                                                    add_css_class: "compact",
+                                                    set_valign: gtk::Align::Center,
                                                     #[watch]
                                                     set_visible: model.archived_unread_count() > 0,
                                                     #[watch]
@@ -3814,6 +3816,7 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
          .zaptide-sticker-tab { border-radius: 8px; min-width: 36px; min-height: 36px; padding: 2px; }\n\
          .zaptide-sticker-tab:checked { background-color: alpha(currentColor, 0.12); }\n\
          .zaptide-sticker-picker > contents { padding: 0; }\n\
+         .zaptide-unread-pill.compact { font-size: 0.75em; min-width: 1.2em; padding: 0 5px; }\n\
          .zaptide-unread-pill.muted { color: @window_fg_color; background-color: alpha(currentColor, 0.18); }\n\
          .zaptide-composer { border-radius: 18px; background-color: color-mix(in srgb, currentColor 8%, transparent); }\n\
          .zaptide-composer textview, .zaptide-composer text { background: none; }\n\
