@@ -16,11 +16,7 @@ pub(super) struct ThemeWatch {
 }
 
 impl ThemeWatch {
-    pub(super) fn new(
-        local: &Path,
-        system: Option<&Path>,
-        waker: Arc<dyn crate::backend::Wake>,
-    ) -> notify::Result<Self> {
+    pub(super) fn new(local: &Path, waker: Arc<dyn crate::backend::Wake>) -> notify::Result<Self> {
         let changed = Arc::new(AtomicBool::new(false));
         let signal = changed.clone();
         let wake = waker;
@@ -34,9 +30,6 @@ impl ThemeWatch {
                 }
             })?;
         watcher.watch(local, RecursiveMode::NonRecursive)?;
-        if let Some(system) = system {
-            watcher.watch(system, RecursiveMode::Recursive)?;
-        }
         Ok(Self {
             _watcher: watcher,
             changed,
@@ -60,15 +53,12 @@ mod tests {
     fn a_palette_replacement_signals_once_without_idle_notifications() {
         let directory = tempfile::tempdir().unwrap();
         let local = directory.path().join("themes");
-        let system = directory.path().join("current");
         fs::create_dir_all(&local).unwrap();
-        fs::create_dir_all(&system).unwrap();
-        let watch =
-            ThemeWatch::new(&local, Some(&system), Arc::new(crate::backend::Waker)).unwrap();
+        let watch = ThemeWatch::new(&local, Arc::new(crate::backend::Waker)).unwrap();
         assert!(!watch.take_changed());
         let temporary = directory.path().join("next");
         fs::write(&temporary, "{}").unwrap();
-        fs::rename(temporary, system.join("colors.toml")).unwrap();
+        fs::rename(temporary, local.join("palette.json")).unwrap();
         let deadline = Instant::now() + Duration::from_secs(3);
         while !watch.take_changed() {
             assert!(Instant::now() < deadline, "theme change was not delivered");

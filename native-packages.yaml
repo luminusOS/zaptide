@@ -43,14 +43,6 @@ nfpm:
     dst: "/usr/share/icons/hicolor/symbolic/apps/zaptide-symbolic.svg"
     file_info:
       mode: 420
-  - src: contrib/omarchy/zaptide.json.tpl
-    dst: /usr/share/zaptide/omarchy/zaptide.json.tpl
-    file_info:
-      mode: 420
-  - src: contrib/omarchy/zaptide-theme
-    dst: /usr/share/zaptide/omarchy/zaptide-theme
-    file_info:
-      mode: 493
   overrides:
     deb:
       depends:

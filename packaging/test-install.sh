@@ -43,13 +43,9 @@ docker run --rm \
     test -s /usr/share/icons/hicolor/scalable/apps/zaptide.svg
     grep -qx "Icon=zaptide" /usr/share/applications/dev.luminusos.ZapTide.desktop
     grep -qx "StartupWMClass=dev.luminusos.ZapTide" /usr/share/applications/dev.luminusos.ZapTide.desktop
-    test -s /usr/share/zaptide/omarchy/zaptide.json.tpl
-    test -x /usr/share/zaptide/omarchy/zaptide-theme
     if [ "$FORMAT" = deb ]; then apt-get remove -y zaptide; else dnf remove -y zaptide; fi
     test ! -e /usr/bin/zaptide
     test ! -e /usr/share/applications/dev.luminusos.ZapTide.desktop
     test ! -e /usr/share/icons/hicolor/scalable/apps/zaptide.svg
-    test ! -e /usr/share/zaptide/omarchy/zaptide.json.tpl
-    test ! -e /usr/share/zaptide/omarchy/zaptide-theme
     test "$(cat /root/.config/zaptide/fixture)" = preserve-existing-settings
   '

@@ -168,8 +168,6 @@ fn read_theme(directory: &Path, filename: &str) -> Result<CustomTheme, String> {
 struct Loaded {
     themes: Vec<CustomTheme>,
     problem: Option<String>,
-    follows_omarchy: bool,
-    system_theme: Option<CustomTheme>,
     #[cfg(target_os = "linux")]
     watch: Option<super::watch::ThemeWatch>,
 }
@@ -250,27 +248,16 @@ pub struct Catalog {
     problem: Option<String>,
     receiver: Option<mpsc::Receiver<Loaded>>,
     pending: Option<Scan>,
-    follows_omarchy: bool,
-    system_theme: Option<CustomTheme>,
     presets: bool,
     #[cfg(target_os = "linux")]
     watch: Option<super::watch::ThemeWatch>,
-    #[cfg(target_os = "linux")]
-    setup: Option<super::omarchy::Setup>,
-    #[cfg(target_os = "linux")]
-    setup_pending: bool,
 }
 
 impl Catalog {
-    /// Normal launches load the bundled palettes and the active desktop theme.
+    /// Normal launches load the bundled palettes and watch the themes folder.
     /// Demo profiles remain isolated from the desktop and its files.
     pub fn enable_desktop_themes(&mut self) {
         self.presets = true;
-        #[cfg(target_os = "linux")]
-        {
-            self.setup = super::omarchy::Setup::discover();
-            self.setup_pending = true;
-        }
     }
 
     pub fn needs_reload(&self) -> bool {
@@ -303,27 +290,23 @@ impl Catalog {
         let presets = self.presets;
         #[cfg(target_os = "linux")]
         let needs_watch = presets && self.watch.is_none();
-        #[cfg(target_os = "linux")]
-        let setup = self.setup.clone();
-        #[cfg(target_os = "linux")]
-        let install = std::mem::take(&mut self.setup_pending);
         let waker = scan.waker.clone();
         self.spawn(waker, move || {
-            #[cfg(target_os = "linux")]
-            if install
-                && let Some(setup) = &setup
-                && let Err(error) = setup.install(&scan.directory)
-            {
-                log::warn!("unable to prepare the optional Omarchy theme: {error}");
-            }
             let selected_file = scan.selected.as_deref().filter(|filename| {
-                !presets || !super::presets::contains(filename) || scan.directory.join(filename).exists()
+                !presets
+                    || !super::presets::contains(filename)
+                    || scan.directory.join(filename).exists()
             });
             let mut loaded = discover(&scan.directory, selected_file);
             if presets {
                 for theme in super::presets::themes() {
-                    if selected_file == Some(theme.filename.as_str()) && scan.directory.join(&theme.filename).exists()
-                        && !loaded.themes.iter().any(|local| local.filename == theme.filename) {
+                    if selected_file == Some(theme.filename.as_str())
+                        && scan.directory.join(&theme.filename).exists()
+                        && !loaded
+                            .themes
+                            .iter()
+                            .any(|local| local.filename == theme.filename)
+                    {
                         // A broken user override keeps the cached selection; it
                         // must not silently turn back into the bundled default.
                         continue;
@@ -339,46 +322,17 @@ impl Catalog {
                 loaded.themes.sort_by(|a, b| a.filename.cmp(&b.filename));
             }
             #[cfg(target_os = "linux")]
-            let loaded = {
-                let mut loaded = loaded;
-                if needs_watch {
-                    let system = setup
-                        .as_ref()
-                        .filter(|setup| setup.active())
-                        .map(|setup| setup.watch_directory());
-                    let watch = std::fs::create_dir_all(&scan.directory)
-                        .map_err(notify::Error::io)
-                        .and_then(|()| {
-                            super::watch::ThemeWatch::new(
-                                &scan.directory,
-                                system.as_deref(),
-                                scan.waker.clone(),
-                            )
-                        });
-                    match watch {
-                        Ok(watch) => loaded.watch = Some(watch),
-                        Err(error) => log::warn!("unable to watch theme changes: {error}"),
-                    }
+            if needs_watch {
+                let watch = std::fs::create_dir_all(&scan.directory)
+                    .map_err(notify::Error::io)
+                    .and_then(|()| {
+                        super::watch::ThemeWatch::new(&scan.directory, scan.waker.clone())
+                    });
+                match watch {
+                    Ok(watch) => loaded.watch = Some(watch),
+                    Err(error) => log::warn!("unable to watch theme changes: {error}"),
                 }
-                if let Some(setup) = &setup
-                    && setup.active()
-                {
-                    loaded.follows_omarchy = true;
-                    match setup.current_theme() {
-                        Ok(theme) => {
-                            loaded.themes.retain(|old| old.filename != "omarchy.json");
-                            loaded.themes.push(theme.clone());
-                            loaded.system_theme = Some(theme);
-                        }
-                        Err(error) => {
-                            log::warn!("unable to read the current Omarchy palette: {error}");
-                            loaded.problem.get_or_insert_with(|| "The Omarchy palette could not be loaded. Keeping the last usable appearance. See the log for details.".into());
-                        }
-                    }
-                }
-
-                loaded
-            };
+            }
             loaded
         });
     }
@@ -409,26 +363,12 @@ impl Catalog {
         }
     }
 
-    /// Live Omarchy comes first on its desktop; other local palettes retain
-    /// their catalogue order. A leftover generated file is not a live option
-    /// when the integration is unavailable.
     pub fn picker_themes(&self) -> impl Iterator<Item = &CustomTheme> {
-        self.themes
-            .iter()
-            .filter(|theme| self.follows_omarchy && theme.filename == "omarchy.json")
-            .chain(
-                self.themes
-                    .iter()
-                    .filter(|theme| theme.filename != "omarchy.json"),
-            )
+        self.themes.iter()
     }
 
     pub fn find(&self, filename: &str) -> Option<&CustomTheme> {
         self.themes.iter().find(|theme| theme.filename == filename)
-    }
-
-    pub fn system_theme(&self) -> Option<&CustomTheme> {
-        self.system_theme.as_ref()
     }
 
     pub fn loading(&self) -> bool {
@@ -454,8 +394,6 @@ impl Catalog {
             Ok(loaded) => {
                 self.themes = loaded.themes;
                 self.problem = loaded.problem;
-                self.follows_omarchy = loaded.follows_omarchy;
-                self.system_theme = loaded.system_theme;
                 #[cfg(target_os = "linux")]
                 if loaded.watch.is_some() {
                     self.watch = loaded.watch;
@@ -471,61 +409,10 @@ impl Catalog {
         }
         true
     }
-
-    /// Deterministic theme menus for native demo captures, without desktop setup.
-    #[cfg(any(test, feature = "demo"))]
-    pub fn preview(themes: Vec<CustomTheme>, follows_omarchy: bool) -> Self {
-        let system_theme = follows_omarchy
-            .then(|| {
-                themes
-                    .iter()
-                    .find(|theme| theme.filename == "omarchy.json")
-                    .cloned()
-            })
-            .flatten();
-        Self {
-            themes,
-            follows_omarchy,
-            system_theme,
-            ..Self::default()
-        }
-    }
 }
 
 #[cfg(test)]
 mod custom_theme_tests {
-
-    #[test]
-    fn picker_places_live_omarchy_first_only_when_the_integration_is_available() {
-        for available in [false, true] {
-            let catalog = super::Catalog::preview(
-                ["Catppuccin.json", "Tokyo Night.json", "omarchy.json"]
-                    .into_iter()
-                    .map(|filename| super::CustomTheme {
-                        filename: filename.into(),
-                        palette: super::Palette::dark(),
-                    })
-                    .collect(),
-                available,
-            );
-            let names: Vec<_> = catalog
-                .picker_themes()
-                .map(|theme| theme.filename.as_str())
-                .collect();
-            assert_eq!(
-                names,
-                if available {
-                    vec!["omarchy.json", "Catppuccin.json", "Tokyo Night.json"]
-                } else {
-                    vec!["Catppuccin.json", "Tokyo Night.json"]
-                }
-            );
-            assert!(
-                catalog.find("omarchy.json").is_some(),
-                "menu filtering must preserve cached selections"
-            );
-        }
-    }
 
     use super::*;
 

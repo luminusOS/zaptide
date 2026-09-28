@@ -67,11 +67,9 @@ protocol. These notes are for coding agents and new contributors.
   self-updater.
 - `src/theme/custom.rs` scans local JSON palettes off the UI thread, caching the
   last usable choice in settings, with shared Spotifast palettes embedded as
-  defaults. On Linux filesystem notifications reload the catalog and the active
-  Omarchy palette without a repaint timer; following Omarchy does not require
-  packaged assets. Native packages ship optional hooks and templates, preserving
-  existing per-user files. `reload-themes` uses the single-instance channel
-  without opening a window.
+  defaults. On Linux filesystem notifications reload the catalog without a
+  repaint timer. `reload-themes` uses the single-instance channel without
+  opening a window.
 - `src/native_theme.rs` turns a palette into GTK CSS; structural styling lives
   beside `apply_theme` in `src/application.rs`. Use libadwaita style classes and
   symbolic icons from the icon theme before adding custom CSS.
@@ -157,8 +155,7 @@ Before writing release notes, read the previous two stable releases of
 and `Fixed` sections with bold user-facing results, a `Thanks` section, and
 a full-changelog link. Credit who did what on the relevant item, with issue
 or PR numbers, and acknowledge reporters separately from implementers.
-Include screenshots or short videos of the main features, especially Omarchy
-theme integration when relevant. Capture only synthetic offline demo content,
+Include screenshots or short videos of the main features when relevant. Capture only synthetic offline demo content,
 never real chats. Verify every media link and do not leave generated notes
 in place. Describe known limitations honestly.
 

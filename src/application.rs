@@ -4635,14 +4635,10 @@ impl NativeApplication {
         }
 
         let previous_palette = self.settings.cached_palette();
-        if let Some(filename) = self.settings.custom_theme.as_deref() {
-            if let Some(theme) = self.theme_catalog.find(filename).cloned() {
-                self.settings.custom_theme_cache = Some(theme);
-            }
-        } else if self.settings.theme == crate::settings::ThemeChoice::System {
-            self.settings.system_theme_cache = self.theme_catalog.system_theme().cloned();
-        } else {
-            self.settings.system_theme_cache = None;
+        if let Some(filename) = self.settings.custom_theme.as_deref()
+            && let Some(theme) = self.theme_catalog.find(filename).cloned()
+        {
+            self.settings.custom_theme_cache = Some(theme);
         }
 
         if self.settings.cached_palette() != previous_palette {

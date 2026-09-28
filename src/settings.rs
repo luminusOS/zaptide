@@ -33,12 +33,6 @@ pub struct Settings {
         skip_serializing_if = "Option::is_none"
     )]
     pub custom_theme_cache: Option<crate::theme::custom::CustomTheme>,
-    #[serde(
-        default,
-        deserialize_with = "crate::theme::custom::read_cached_theme",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub system_theme_cache: Option<crate::theme::custom::CustomTheme>,
     /// Interface zoom factor.
     pub zoom: f32,
     pub sidebar_width: f32,
@@ -85,7 +79,6 @@ impl Default for Settings {
             theme: ThemeChoice::Dark,
             custom_theme: None,
             custom_theme_cache: None,
-            system_theme_cache: None,
             zoom: 1.0,
             sidebar_width: 320.0,
             enter_sends: true,
@@ -111,14 +104,10 @@ impl Default for Settings {
 
 impl Settings {
     pub(crate) fn cached_palette(&self) -> Option<crate::theme::Palette> {
-        let theme = if self.custom_theme.is_some() {
-            self.custom_theme_cache.as_ref()
-        } else if self.theme == ThemeChoice::System {
-            self.system_theme_cache.as_ref()
-        } else {
-            None
-        };
-        theme.map(|theme| theme.palette)
+        self.custom_theme
+            .as_ref()
+            .and(self.custom_theme_cache.as_ref())
+            .map(|theme| theme.palette)
     }
 
     pub fn load(path: &Path) -> Self {

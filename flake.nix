@@ -124,10 +124,6 @@
                 $out/share/applications/dev.luminusos.ZapTide.desktop
               install -Dm644 packaging/icons/zaptide.svg \
                 $out/share/icons/hicolor/scalable/apps/zaptide.svg
-              install -Dm644 contrib/omarchy/zaptide.json.tpl \
-                $out/share/zaptide/omarchy/zaptide.json.tpl
-              install -Dm755 contrib/omarchy/zaptide-theme \
-                $out/share/zaptide/omarchy/zaptide-theme
             '';
 
             meta = {

@@ -144,8 +144,7 @@ Development happens at **[github.com/luminusOS/zaptide](https://github.com/lumin
   device dismisses its outstanding notifications. On macOS, notifications use
   the installed ZapTide application's identity without an application chooser;
   unregistered development builds skip notifications if that identity is unavailable.
-- **Themes.** Light, dark, follow the system, or a local JSON palette. Native
-  Linux packages can follow Omarchy colors without restarting the app. Zoom with
+- **Themes.** Light, dark, follow the system, or a local JSON palette. Zoom with
   Ctrl+plus and Ctrl+minus.
 - **Message bubbles.** Incoming messages align left, outgoing messages align
   right. Right-click a message or focus it and press Menu or Shift+F10 for
@@ -328,12 +327,7 @@ Linux watches the themes folder for changes without periodic repaints. On other
 platforms, use `zaptide reload-themes` after editing. The command also works while
 the window is closed and never launches a stopped app.
 
-On Omarchy, **Follow system** and **Omarchy** read the active desktop palette and
-follow its changes in native, portable, and source builds, even without installed
-hooks. Other desktops keep their normal light/dark system preference. Native
-packages additionally register a missing per-user template and theme hook on
-first launch; existing user files are preserved. Flatpak uses the desktop's
-light/dark preference and does not read host theme files or install desktop hooks.
+**Follow system** uses the desktop's light/dark preference.
 
 ### Updating ZapTide
 
@@ -396,15 +390,9 @@ Noto emoji font; demo GIF search uses these local fixtures. The tour makes no
 sound and holds its final frame. Space rebuilds the sample and replays.
 For an automatic start, add `--demo-tour-delay 5000` (milliseconds).
 Use `--demo` instead of `--demo-tour` to explore the sample chats yourself.
-For deterministic theme screenshots, `--demo-page settings,omarchy` and
-`--demo-page settings,omarchy-light` preview following dark and light Omarchy
-palettes without changing the desktop theme.
 
-On Omarchy, run `omarchy screenrecord`, select the demo window, then press Space
-in ZapTide. Recording has no audio unless you explicitly enable desktop or
-microphone audio. Stop with `omarchy screenrecord --stop-recording` after the
-tour finishes. The default capture records a fixed rectangle, so keep the demo
-window visible and stationary until recording stops.
+To record the tour, start a screen recording of the demo window, then press
+Space in ZapTide. Keep the window visible and stationary until the tour finishes.
 
 To annotate the video with a visible pointer, click rings, and outlined shortcut
 labels, add `--demo-tour-events tour.json` when launching the tour. After

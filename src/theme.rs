@@ -5,8 +5,6 @@
 use crate::color::Color;
 
 pub mod custom;
-#[cfg(target_os = "linux")]
-mod omarchy;
 pub(crate) mod presets;
 #[cfg(target_os = "linux")]
 mod watch;
