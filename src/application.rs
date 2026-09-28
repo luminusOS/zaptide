@@ -6393,8 +6393,9 @@ fn show_poll_dialog(parent: &adw::ApplicationWindow, sender: &ComponentSender<Na
     dialog.present();
 }
 
-/// Contacts offered in New Chat as (id, name, formatted phone): people with
-/// a phone number, named ones first, then bare numbers.
+/// Contacts offered in New Chat as (id, name, formatted phone): only people
+/// saved in the address book, so not everyone who has messaged or joined a
+/// group with us.
 fn new_chat_contacts(
     contacts: &std::collections::HashMap<String, crate::model::Contact>,
 ) -> Vec<(String, String, String)> {
@@ -6402,11 +6403,11 @@ fn new_chat_contacts(
         .values()
         .filter_map(|contact| {
             let phone = crate::util::phone(crate::model::phone_of(&contact.id)?);
-            let name = contact.display_name().unwrap_or(&phone).to_owned();
-            Some((contact.id.clone(), name, phone))
+            let name = contact.full_name.as_deref()?.trim();
+            (!name.is_empty()).then(|| (contact.id.clone(), name.to_owned(), phone))
         })
         .collect();
-    rows.sort_by_cached_key(|(_, name, phone)| (name == phone, name.to_lowercase()));
+    rows.sort_by_cached_key(|(_, name, _)| name.to_lowercase());
     rows
 }
 
@@ -7322,14 +7323,15 @@ mod tests {
     }
 
     #[test]
-    fn new_chat_lists_named_contacts_then_bare_numbers() {
+    fn new_chat_lists_only_saved_contacts() {
         let contact = |id: &str, name: Option<&str>| crate::model::Contact {
             id: id.into(),
             full_name: name.map(Into::into),
-            push_name: None,
+            push_name: Some("Push".into()),
         };
         let contacts = [
             contact("5511999990001@s.whatsapp.net", None),
+            contact("5511999990004@s.whatsapp.net", Some(" ")),
             contact("5511999990002@s.whatsapp.net", Some("bruna")),
             contact("5511999990003@s.whatsapp.net", Some("Ana")),
             contact("123456@lid", Some("Hidden")),
@@ -7342,7 +7344,7 @@ mod tests {
             .into_iter()
             .map(|(_, name, _)| name)
             .collect();
-        assert_eq!(names, ["Ana", "bruna", "+55 119 999 900 01"]);
+        assert_eq!(names, ["Ana", "bruna"]);
     }
 
     #[test]
