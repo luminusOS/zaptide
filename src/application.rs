@@ -1296,13 +1296,25 @@ impl SimpleComponent for NativeApplication {
                                     set_visible: !model.sidebar_visible || model.split_view.as_ref().is_some_and(adw::OverlaySplitView::is_collapsed),
                                     connect_clicked => Input::ToggleSidebar,
                                 },
+                                // The title opens the chat's details, as in GNOME's
+                                // chat apps.
                                 #[wrap(Some)]
-                                #[name = "conversation_title"]
-                                set_title_widget = &adw::WindowTitle {
+                                set_title_widget = &gtk::Button {
+                                    add_css_class: "flat",
+                                    set_tooltip_text: Some("Chat details"),
                                     #[watch]
-                                    set_title: if model.active_chat.is_some() { model.page_title.as_str() } else { "" },
+                                    set_can_target: model.active_chat.is_some(),
                                     #[watch]
-                                    set_subtitle: &model.header_subtitle(),
+                                    set_can_focus: model.active_chat.is_some(),
+                                    connect_clicked => Input::ShowChatInfo,
+                                    #[wrap(Some)]
+                                    #[name = "conversation_title"]
+                                    set_child = &adw::WindowTitle {
+                                        #[watch]
+                                        set_title: if model.active_chat.is_some() { model.page_title.as_str() } else { "" },
+                                        #[watch]
+                                        set_subtitle: &model.header_subtitle(),
+                                    },
                                 },
                                 pack_end = &gtk::MenuButton {
                                     set_icon_name: "view-more-symbolic",
@@ -2838,7 +2850,12 @@ impl NativeApplication {
                     .as_ref()
                     .and_then(|id| self.chat_snapshots.iter().find(|chat| &chat.id == id))
                 {
-                    show_chat_info_dialog(&self.window, chat, self.contacts.get(&chat.id));
+                    show_chat_info_dialog(
+                        &self.window,
+                        chat,
+                        &self.contacts,
+                        self.avatars.get(&chat.id).map(std::path::PathBuf::as_path),
+                    );
                 }
             }
             Input::TogglePhoneLinking => self.phone_linking = !self.phone_linking,
@@ -6927,29 +6944,132 @@ fn forward_accessible_label(chat: &crate::model::Chat) -> String {
     format!("Forward to {}, {}", chat.name, forward_chat_detail(chat))
 }
 
+/// Contact or group details: photo, name, number, and group members.
 fn show_chat_info_dialog(
     parent: &adw::ApplicationWindow,
     chat: &crate::model::Chat,
-    contact: Option<&crate::model::Contact>,
+    contacts: &std::collections::HashMap<String, crate::model::Contact>,
+    avatar: Option<&std::path::Path>,
 ) {
-    let dialog = adw::AlertDialog::builder()
-        .heading(chat.name.as_str())
-        .body(format!(
-            "{}\n{}",
-            contact
-                .and_then(crate::model::Contact::display_name)
-                .unwrap_or(&chat.name),
-            if chat.is_group() {
-                format!("Group · {} participants", chat.participants.len())
-            } else {
-                chat.phone()
-                    .unwrap_or("Phone number unavailable")
-                    .to_owned()
-            }
-        ))
+    let name_of = |id: &str| {
+        sender_label(
+            contacts
+                .get(id)
+                .and_then(crate::model::Contact::display_name),
+            id,
+        )
+    };
+    let page = adw::PreferencesPage::new();
+
+    let header = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(6)
         .build();
-    dialog.add_response("close", "Close");
-    dialog.set_default_response(Some("close"));
+    let picture = adw::Avatar::new(96, Some(&chat.name), true);
+    let image = avatar.and_then(|path| gtk::gdk::Texture::from_filename(path).ok());
+    picture.set_custom_image(image.as_ref());
+    picture.set_margin_bottom(6);
+    header.append(&picture);
+    header.append(
+        &gtk::Label::builder()
+            .label(&chat.name)
+            .wrap(true)
+            .justify(gtk::Justification::Center)
+            .css_classes(["title-2"])
+            .build(),
+    );
+    let detail = if chat.is_group() {
+        format!("Group · {} participants", chat.participants.len())
+    } else {
+        chat.phone()
+            .map(crate::util::phone)
+            .unwrap_or_else(|| "Phone number unavailable".into())
+    };
+    header.append(
+        &gtk::Label::builder()
+            .label(&detail)
+            .css_classes(["dim-label"])
+            .build(),
+    );
+    let group = adw::PreferencesGroup::new();
+    group.add(&header);
+    page.add(&group);
+
+    let group = adw::PreferencesGroup::new();
+    if let Some(phone) = chat.phone() {
+        let phone = crate::util::phone(phone);
+        let row = adw::ActionRow::builder()
+            .title("Phone")
+            .subtitle(&phone)
+            .subtitle_selectable(true)
+            .css_classes(["property"])
+            .build();
+        let copy = gtk::Button::builder()
+            .icon_name("edit-copy-symbolic")
+            .tooltip_text("Copy phone number")
+            .valign(gtk::Align::Center)
+            .css_classes(["flat"])
+            .build();
+        copy.connect_clicked(move |button| {
+            crate::native_portals::NativePortals::write_clipboard_text(&button.clipboard(), &phone);
+            button.set_icon_name("object-select-symbolic");
+        });
+        row.add_suffix(&copy);
+        group.add(&row);
+    }
+    if let Some(push) = contacts
+        .get(&chat.id)
+        .and_then(|contact| contact.push_name.as_deref())
+        .filter(|push| !push.is_empty() && *push != chat.name)
+    {
+        group.add(
+            &adw::ActionRow::builder()
+                .title("Name on WhatsApp")
+                .subtitle(format!("~{push}"))
+                .css_classes(["property"])
+                .build(),
+        );
+    }
+    if chat.phone().is_some() {
+        page.add(&group);
+    }
+
+    if chat.is_group() && !chat.participants.is_empty() {
+        let group = adw::PreferencesGroup::builder()
+            .title("Participants")
+            .build();
+        let mut members: Vec<_> = chat
+            .participants
+            .iter()
+            .map(|id| (name_of(id), id))
+            .collect();
+        members.sort_by_cached_key(|(name, _)| name.to_lowercase());
+        for (name, id) in members {
+            let row = adw::ActionRow::builder().title(&name).build();
+            if let Some(phone) = crate::model::phone_of(id).map(crate::util::phone)
+                && phone != name
+            {
+                row.set_subtitle(&phone);
+            }
+            row.add_prefix(&adw::Avatar::new(32, Some(&name), true));
+            group.add(&row);
+        }
+        page.add(&group);
+    }
+
+    let view = adw::ToolbarView::new();
+    view.add_top_bar(&adw::HeaderBar::new());
+    view.set_content(Some(&page));
+    let dialog = adw::Dialog::builder()
+        .title(if chat.is_group() {
+            "Group Info"
+        } else {
+            "Contact Info"
+        })
+        .content_width(400)
+        .content_height(if chat.is_group() { 600 } else { 380 })
+        .child(&view)
+        .build();
     dialog.present(Some(parent));
 }
 
