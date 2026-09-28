@@ -3230,6 +3230,14 @@ impl Worker {
                     let _ = commands.send(Command::PairCode { request_id, result });
                 });
             }
+            Command::CancelPhonePairing => {
+                // A later answer to the abandoned request is ignored.
+                self.pair_request_id = self.pair_request_id.wrapping_add(1);
+                self.pairing_phone = None;
+                self.pair_code = None;
+                let status = self.unlinked();
+                self.set_status(status);
+            }
             Command::PairCode { request_id, result } => {
                 if request_id != self.pair_request_id {
                     return;
@@ -6287,6 +6295,32 @@ mod tests {
             classify(&message),
             Some(Content::Text { preview: None, .. })
         ));
+    }
+
+    #[tokio::test]
+    async fn cancelling_phone_pairing_returns_to_the_qr_code() {
+        let (mut worker, _events, _, _) = receipt_tests::worker();
+        worker.qr = Some("qr".into());
+        worker.pairing_phone = Some("15551234567".into());
+        worker.pair_code = Some("ABCD-EFGH".into());
+        let request_id = worker.pair_request_id;
+        worker.handle_command(Command::CancelPhonePairing).await;
+        assert_eq!(
+            worker.unlinked(),
+            LinkStatus::Unlinked {
+                qr: Some("qr".into()),
+                pair_code: None,
+                pairing_phone: None,
+            }
+        );
+        // The abandoned request's answer no longer shows a code.
+        worker
+            .handle_command(Command::PairCode {
+                request_id,
+                result: Ok("LATE-CODE".into()),
+            })
+            .await;
+        assert_eq!(worker.pair_code, None);
     }
 
     #[tokio::test]

@@ -390,6 +390,8 @@ pub enum Command {
     SetArchived(ChatId, bool),
     SetPinned(ChatId, bool),
     PairWithPhone(String),
+    /// Drops a phone-number pairing so the QR code links instead.
+    CancelPhonePairing,
     /// Unlinks the device remotely and locally.
     Unlink,
     Reconnect,

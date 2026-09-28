@@ -1051,6 +1051,7 @@ pub enum Input {
     },
     PairWithPhone(String),
     TogglePhoneLinking,
+    CopyPairCode,
     FlushChats,
     NewContact {
         phone: String,
@@ -1141,14 +1142,28 @@ impl SimpleComponent for NativeApplication {
                                         #[watch]
                                         set_paintable: model.qr_texture.as_ref(),
                                     },
-                                    append = &gtk::Label {
-                                        add_css_class: "title-1",
-                                        add_css_class: "monospace",
-                                        set_selectable: true,
+                                    append = &gtk::Box {
+                                        set_halign: gtk::Align::Center,
+                                        set_spacing: 12,
+                                        add_css_class: "card",
+                                        add_css_class: "zaptide-pair-code",
                                         #[watch]
                                         set_visible: model.pair_code().is_some(),
-                                        #[watch]
-                                        set_label: model.pair_code().unwrap_or_default(),
+                                        append = &gtk::Label {
+                                            add_css_class: "zaptide-pair-code-label",
+                                            add_css_class: "monospace",
+                                            set_selectable: true,
+                                            #[watch]
+                                            set_label: model.pair_code().unwrap_or_default(),
+                                        },
+                                        append = &gtk::Button {
+                                            set_icon_name: "edit-copy-symbolic",
+                                            set_tooltip_text: Some("Copy Code"),
+                                            set_valign: gtk::Align::Center,
+                                            add_css_class: "flat",
+                                            add_css_class: "circular",
+                                            connect_clicked => Input::CopyPairCode,
+                                        },
                                     },
                                     append = &adw::Spinner {
                                         set_halign: gtk::Align::Center,
@@ -1179,9 +1194,9 @@ impl SimpleComponent for NativeApplication {
                                         set_halign: gtk::Align::Center,
                                         add_css_class: "pill",
                                         #[watch]
-                                        set_visible: matches!(model.link, LinkStatus::Unlinked { pairing_phone: None, pair_code: None, .. }),
+                                        set_visible: matches!(model.link, LinkStatus::Unlinked { .. }),
                                         #[watch]
-                                        set_label: if model.phone_linking { "Use QR Code Instead" } else { "Link With Phone Number" },
+                                        set_label: if model.phone_linking || model.pairing_requested() || model.pair_code().is_some() { "Use QR Code Instead" } else { "Link With Phone Number" },
                                         connect_clicked => Input::TogglePhoneLinking,
                                     },
                                     append = &gtk::Button {
@@ -3065,7 +3080,26 @@ impl NativeApplication {
                 }
             }
             Input::WindowVisibilityChanged => {}
-            Input::TogglePhoneLinking => self.phone_linking = !self.phone_linking,
+            Input::TogglePhoneLinking => {
+                // Leaving a requested or shown code goes back to the QR code.
+                if self.pairing_requested() || self.pair_code().is_some() {
+                    self.phone_linking = false;
+                    if let Some(backend) = &self.backend {
+                        backend.send(crate::backend::Command::CancelPhonePairing);
+                    }
+                } else {
+                    self.phone_linking = !self.phone_linking;
+                }
+            }
+            Input::CopyPairCode => {
+                if let Some(code) = self.pair_code().map(str::to_owned) {
+                    crate::native_portals::NativePortals::write_clipboard_text(
+                        &self.window.clipboard(),
+                        &code,
+                    );
+                    self.toast("Code copied");
+                }
+            }
             Input::FlushChats => {
                 self.chats_flush_scheduled = false;
                 self.flush_chats();
@@ -3928,6 +3962,8 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
          .zaptide-composer { border-radius: 18px; background-color: color-mix(in srgb, currentColor 8%, transparent); }\n\
          .zaptide-composer textview, .zaptide-composer text { background: none; }\n\
          .zaptide-qr { border-radius: 12px; }\n\
+         .zaptide-pair-code { padding: 16px 16px 16px 28px; }\n\
+         .zaptide-pair-code-label { font-size: 2.4em; font-weight: 800; letter-spacing: 0.14em; }\n\
          .zaptide-quote { border-left: 2px solid @accent_bg_color; padding-left: 6px; opacity: 0.7; }\n",
     );
     theme_provider.load_from_string(&css);
@@ -4312,12 +4348,14 @@ fn link_page(link: &LinkStatus) -> (String, String) {
             "Starting ZapTide".into(),
             "Preparing WhatsApp connection.".into(),
         ),
+        // The code itself is shown large below the text, with a copy button.
         LinkStatus::Unlinked {
-            pair_code: Some(pair_code),
-            ..
+            pair_code: Some(_), ..
         } => (
             "Enter code on your phone".into(),
-            format!("Enter {pair_code} in WhatsApp under Linked devices."),
+            "In WhatsApp on your phone, open Linked devices, tap Link a device, then \
+             Link with phone number instead, and enter this code."
+                .into(),
         ),
         LinkStatus::Unlinked { pairing_phone, .. } if pairing_phone.is_some() => (
             "Requesting pairing code".into(),
@@ -8222,7 +8260,7 @@ mod tests {
         });
         let (_, failure) = link_page(&LinkStatus::Failed("private protocol detail".into()));
 
-        assert!(pairing.contains("123-456"));
+        assert!(pairing.contains("Link with phone number instead"));
         assert!(!pairing.contains("15551234567"));
         assert!(!failure.contains("private protocol detail"));
     }
