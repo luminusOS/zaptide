@@ -276,7 +276,8 @@ pub fn project_content(message: &Message) -> NativeMessageContent {
     }
 }
 
-fn safe_file_name(file_name: &str) -> String {
+/// Keeps document labels to a filename component, even for Windows-style paths.
+pub(crate) fn safe_file_name(file_name: &str) -> String {
     let name = file_name.rsplit(['/', '\\']).next().unwrap_or_default();
     let name: String = name
         .chars()

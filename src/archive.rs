@@ -131,13 +131,45 @@ const CHAT_JOIN: &str = "FROM chats c
                  SELECT rowid FROM messages WHERE chat = c.id ORDER BY timestamp DESC, rowid DESC LIMIT 1
              )";
 
+const MESSAGE_COLUMNS: &str = "id, sender, sender_name, from_me, timestamp, content, status, quoted, reactions, edited, thumbnail, mentions, forwarded, delivered_at, read_at";
+
+fn content_from_json(json: &str) -> Content {
+    serde_json::from_str(json).unwrap_or(Content::Unsupported {
+        what: "unreadable".into(),
+    })
+}
+
+/// Maps a row selected with [`MESSAGE_COLUMNS`].
+fn message_from_row(chat: &str, row: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
+    let content: String = row.get(5)?;
+    let quoted: Option<String> = row.get(7)?;
+    let reactions: String = row.get(8)?;
+    let mentions: String = row.get(11)?;
+    Ok(Message {
+        id: row.get(0)?,
+        chat: chat.to_owned(),
+        sender: row.get(1)?,
+        sender_name: row.get(2)?,
+        from_me: row.get(3)?,
+        timestamp: row.get(4)?,
+        content: content_from_json(&content),
+        status: status_from_rank(row.get(6)?),
+        delivered_at: row.get(13)?,
+        read_at: row.get(14)?,
+        quoted: quoted.and_then(|quoted| serde_json::from_str(&quoted).ok()),
+        reactions: serde_json::from_str(&reactions).unwrap_or_default(),
+        edited: row.get(9)?,
+        mentions: serde_json::from_str(&mentions).unwrap_or_default(),
+        forwarded: row.get(12)?,
+        thumbnail: row.get(10)?,
+    })
+}
+
 fn chat_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Chat> {
     let content: Option<String> = row.get(10)?;
     let last = match content {
         Some(content) => {
-            let content: Content = serde_json::from_str(&content).unwrap_or(Content::Unsupported {
-                what: "unreadable".into(),
-            });
+            let content = content_from_json(&content);
             Some(LastMessage {
                 from_me: row.get(8)?,
                 sender: row.get::<_, Option<String>>(12)?.unwrap_or_default(),
@@ -711,41 +743,18 @@ impl Archive {
         before: Option<(i64, &str)>,
         limit: usize,
     ) -> Result<Vec<Message>> {
-        let mut statement = self.connection.prepare(
-            "SELECT id, sender, sender_name, from_me, timestamp, content, status, quoted, reactions, edited, thumbnail, mentions, forwarded, delivered_at, read_at
+        let mut statement = self.connection.prepare(&format!(
+            "SELECT {MESSAGE_COLUMNS}
              FROM messages
              WHERE chat = ?1 AND (timestamp < ?2 OR (timestamp = ?2 AND rowid <
                  (SELECT rowid FROM messages WHERE chat = ?1 AND id = ?3)))
              ORDER BY timestamp DESC, rowid DESC
-             LIMIT ?4",
-        )?;
+             LIMIT ?4"
+        ))?;
         let (before_time, before_id) = before.unwrap_or((i64::MAX, ""));
-        let rows =
-            statement.query_map(params![chat, before_time, before_id, limit as i64], |row| {
-                let content: String = row.get(5)?;
-                let quoted: Option<String> = row.get(7)?;
-                let reactions: String = row.get(8)?;
-                let mentions: String = row.get(11)?;
-                Ok(Message {
-                    id: row.get(0)?,
-                    chat: chat.to_owned(),
-                    sender: row.get(1)?,
-                    sender_name: row.get(2)?,
-                    from_me: row.get(3)?,
-                    timestamp: row.get(4)?,
-                    content: serde_json::from_str(&content).unwrap_or(Content::Unsupported {
-                        what: "unreadable".into(),
-                    }),
-                    status: status_from_rank(row.get(6)?),
-                    delivered_at: row.get(13)?,
-                    read_at: row.get(14)?,
-                    quoted: quoted.and_then(|quoted| serde_json::from_str(&quoted).ok()),
-                    reactions: serde_json::from_str(&reactions).unwrap_or_default(),
-                    edited: row.get(9)?,
-                    mentions: serde_json::from_str(&mentions).unwrap_or_default(),
-                    forwarded: row.get(12)?,
-                    thumbnail: row.get(10)?,
-                })
+        let rows = statement
+            .query_map(params![chat, before_time, before_id, limit as i64], |row| {
+                message_from_row(chat, row)
             })?;
         let mut messages: Vec<Message> = rows.collect::<Result<_>>()?;
         messages.reverse();
@@ -760,42 +769,17 @@ impl Archive {
         before: (i64, &str),
         limit: usize,
     ) -> Result<Vec<Message>> {
-        let mut statement = self.connection.prepare(
-            "SELECT id, sender, sender_name, from_me, timestamp, content, status, quoted, reactions, edited, thumbnail, mentions, forwarded, delivered_at, read_at
+        let mut statement = self.connection.prepare(&format!(
+            "SELECT {MESSAGE_COLUMNS}
              FROM messages
              WHERE chat = ?1 AND timestamp >= ?2 AND (timestamp < ?3 OR (timestamp = ?3 AND rowid <
                  (SELECT rowid FROM messages WHERE chat = ?1 AND id = ?4)))
              ORDER BY timestamp ASC, rowid ASC
-             LIMIT ?5",
-        )?;
+             LIMIT ?5"
+        ))?;
         let rows = statement.query_map(
             params![chat, from, before.0, before.1, limit as i64],
-            |row| {
-                let content: String = row.get(5)?;
-                let quoted: Option<String> = row.get(7)?;
-                let reactions: String = row.get(8)?;
-                let mentions: String = row.get(11)?;
-                Ok(Message {
-                    id: row.get(0)?,
-                    chat: chat.to_owned(),
-                    sender: row.get(1)?,
-                    sender_name: row.get(2)?,
-                    from_me: row.get(3)?,
-                    timestamp: row.get(4)?,
-                    content: serde_json::from_str(&content).unwrap_or(Content::Unsupported {
-                        what: "unreadable".into(),
-                    }),
-                    status: status_from_rank(row.get(6)?),
-                    delivered_at: row.get(13)?,
-                    read_at: row.get(14)?,
-                    quoted: quoted.and_then(|quoted| serde_json::from_str(&quoted).ok()),
-                    reactions: serde_json::from_str(&reactions).unwrap_or_default(),
-                    edited: row.get(9)?,
-                    mentions: serde_json::from_str(&mentions).unwrap_or_default(),
-                    forwarded: row.get(12)?,
-                    thumbnail: row.get(10)?,
-                })
-            },
+            |row| message_from_row(chat, row),
         )?;
         rows.collect()
     }
@@ -931,37 +915,12 @@ impl Archive {
     }
 
     pub fn message(&self, chat: &str, id: &str) -> Result<Option<Message>> {
-        let mut statement = self.connection.prepare(
-            "SELECT sender, sender_name, from_me, timestamp, content, status, quoted, reactions, edited, thumbnail, mentions, forwarded, delivered_at, read_at
-             FROM messages WHERE chat = ?1 AND id = ?2",
-        )?;
-        statement
-            .query_row(params![chat, id], |row| {
-                let content: String = row.get(4)?;
-                let quoted: Option<String> = row.get(6)?;
-                let reactions: String = row.get(7)?;
-                let mentions: String = row.get(10)?;
-                Ok(Message {
-                    id: id.to_owned(),
-                    chat: chat.to_owned(),
-                    sender: row.get(0)?,
-                    sender_name: row.get(1)?,
-                    from_me: row.get(2)?,
-                    timestamp: row.get(3)?,
-                    content: serde_json::from_str(&content).unwrap_or(Content::Unsupported {
-                        what: "unreadable".into(),
-                    }),
-                    status: status_from_rank(row.get(5)?),
-                    delivered_at: row.get(12)?,
-                    read_at: row.get(13)?,
-                    quoted: quoted.and_then(|quoted| serde_json::from_str(&quoted).ok()),
-                    reactions: serde_json::from_str(&reactions).unwrap_or_default(),
-                    edited: row.get(8)?,
-                    mentions: serde_json::from_str(&mentions).unwrap_or_default(),
-                    forwarded: row.get(11)?,
-                    thumbnail: row.get(9)?,
-                })
-            })
+        self.connection
+            .query_row(
+                &format!("SELECT {MESSAGE_COLUMNS} FROM messages WHERE chat = ?1 AND id = ?2"),
+                params![chat, id],
+                |row| message_from_row(chat, row),
+            )
             .optional()
     }
 
@@ -1557,6 +1516,53 @@ pub(crate) mod tests {
         assert_eq!(
             older.iter().map(|m| m.timestamp).collect::<Vec<_>>(),
             vec![104, 105, 106]
+        );
+    }
+
+    #[test]
+    fn message_reads_preserve_every_column() {
+        let archive = Archive::in_memory().expect("opens");
+        let chat = "1@s.whatsapp.net";
+        archive.ensure_chat(chat, "A").expect("chat");
+        let mut expected = message(chat, "m1", 100, true);
+        expected.sender_name = Some("Sender".into());
+        expected.status = Delivery::Read;
+        expected.delivered_at = Some(101);
+        expected.read_at = Some(102);
+        expected.quoted = Some(crate::model::Quoted {
+            id: "original".into(),
+            sender: chat.into(),
+            sender_name: Some("Quoted sender".into()),
+            summary: "Earlier message".into(),
+            mentions: Vec::new(),
+        });
+        expected.reactions.push(crate::model::Reaction {
+            sender: chat.into(),
+            from_me: false,
+            emoji: "👍".into(),
+        });
+        expected.edited = true;
+        expected.mentions.push(crate::model::MentionRef {
+            user: "@someone".into(),
+            id: chat.into(),
+        });
+        expected.forwarded = true;
+        expected.thumbnail = Some(vec![1, 2, 3]);
+        archive.insert_message(&expected, None).expect("insert");
+
+        assert_eq!(
+            archive.message(chat, "m1").expect("read"),
+            Some(expected.clone())
+        );
+        assert_eq!(
+            archive.messages(chat, None, 10).expect("page"),
+            vec![expected.clone()]
+        );
+        assert_eq!(
+            archive
+                .messages_range(chat, 100, (101, "later"), 10)
+                .expect("range"),
+            vec![expected]
         );
     }
 

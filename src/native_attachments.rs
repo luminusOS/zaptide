@@ -131,7 +131,7 @@ pub fn project(message: &Message) -> Option<AttachmentPresentation> {
             pages,
             ..
         } => {
-            let title = safe_file_name(file_name);
+            let title = crate::native_media::safe_file_name(file_name);
             let mut details = vec![crate::util::bytes(media.size)];
             if let Some(pages) = pages {
                 details.push(format!("{pages} pages"));
@@ -164,20 +164,6 @@ pub fn project(message: &Message) -> Option<AttachmentPresentation> {
 
 fn dimensions(media: &Media) -> Option<String> {
     Some(format!("{} × {}", media.width?, media.height?))
-}
-
-/// Keeps document labels to a filename component, even for Windows-style paths.
-fn safe_file_name(file_name: &str) -> String {
-    let name = file_name.rsplit(['/', '\\']).next().unwrap_or_default();
-    let name: String = name
-        .chars()
-        .filter(|character| !character.is_control())
-        .collect();
-    if name.trim().is_empty() || name == "." || name == ".." {
-        "Document".to_owned()
-    } else {
-        name
-    }
 }
 
 #[cfg(test)]
