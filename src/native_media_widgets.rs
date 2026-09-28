@@ -931,12 +931,8 @@ fn location_card(
     address: Option<&str>,
     thumbnail: Option<Vec<u8>>,
     decode_token: &DecodeToken,
-) -> gtk::Box {
+) -> gtk::Button {
     let card = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    card.add_css_class("card");
-    card.add_css_class("zaptide-media-card");
-    card.add_css_class("zaptide-link-card");
-    card.set_tooltip_text(Some("Open in Maps"));
     if let Some(bytes) = thumbnail {
         let image = gtk::Image::new();
         image.set_pixel_size(160);
@@ -979,12 +975,8 @@ fn location_card(
             );
         }
     }
-    let click = gtk::GestureClick::new();
-    click.connect_released(move |gesture, _, _, _| {
-        let window = gesture
-            .widget()
-            .and_then(|widget| widget.root())
-            .and_downcast::<gtk::Window>();
+    clickable_card(&card, "Open in Maps", move |button| {
+        let window = button.root().and_downcast::<gtk::Window>();
         let fallback = format!(
             "https://www.openstreetmap.org/?mlat={latitude}&mlon={longitude}#map=16/{latitude}/{longitude}"
         );
@@ -1002,10 +994,24 @@ fn location_card(
                 }
             },
         );
-    });
-    card.add_controller(click);
-    card.set_cursor_from_name(Some("pointer"));
-    card
+    })
+}
+
+/// Wraps card content in a flat button, so it takes focus and opens with
+/// Enter or Space as well as a click.
+fn clickable_card(
+    content: &gtk::Box,
+    tooltip: &str,
+    on_click: impl Fn(&gtk::Button) + 'static,
+) -> gtk::Button {
+    let button = gtk::Button::builder()
+        .child(content)
+        .tooltip_text(tooltip)
+        .css_classes(["flat", "card", "zaptide-media-card", "zaptide-link-card"])
+        .build();
+    button.set_cursor_from_name(Some("pointer"));
+    button.connect_clicked(on_click);
+    button
 }
 
 /// Link preview as WhatsApp sends it: the sender's thumbnail, title,
@@ -1014,12 +1020,8 @@ fn link_card(
     preview: &crate::model::LinkPreview,
     thumbnail: Option<Vec<u8>>,
     decode_token: &DecodeToken,
-) -> gtk::Box {
+) -> gtk::Button {
     let card = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-    card.add_css_class("card");
-    card.add_css_class("zaptide-media-card");
-    card.add_css_class("zaptide-link-card");
-    card.set_tooltip_text(Some(&preview.url));
     if let Some(bytes) = thumbnail {
         let image = gtk::Image::new();
         image.set_pixel_size(72);
@@ -1062,17 +1064,10 @@ fn link_card(
     }
     card.append(&text);
     let url = preview.url.clone();
-    let click = gtk::GestureClick::new();
-    click.connect_released(move |gesture, _, _, _| {
-        let window = gesture
-            .widget()
-            .and_then(|widget| widget.root())
-            .and_downcast::<gtk::Window>();
+    clickable_card(&card, &preview.url, move |button| {
+        let window = button.root().and_downcast::<gtk::Window>();
         gtk::UriLauncher::new(&url).launch(window.as_ref(), gtk::gio::Cancellable::NONE, |_| {});
-    });
-    card.add_controller(click);
-    card.set_cursor_from_name(Some("pointer"));
-    card
+    })
 }
 
 fn add_label(parent: &gtk::Box, text: &str) {
