@@ -320,7 +320,6 @@ impl Player {
         self.stretching = None;
     }
 
-    /// Whether audio is currently playing.
     pub fn is_playing(&self) -> bool {
         self.decoding.is_some()
             || self

@@ -1,6 +1,4 @@
 //! Toolkit-neutral color representation.
-//!
-//! [`Color`] provides a simple RGBA color type for use throughout the codebase.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Color {
@@ -49,7 +47,6 @@ impl Color {
     /// `t = 0.0` returns `self`, `t = 1.0` returns `other`.
     pub fn lerp_to_gamma(self, other: Color, t: f32) -> Color {
         let t = t.clamp(0.0, 1.0);
-        // Convert to linear space, interpolate, convert back
         let to_linear = |c: u8| {
             let c = c as f32 / 255.0;
             if c <= 0.04045 {

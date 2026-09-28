@@ -476,7 +476,6 @@ impl Archive {
         Ok(())
     }
 
-    /// Limit a phone snapshot to messages after any more recent read here.
     /// The chat holding an incoming message, when exactly one chat has that id.
     /// Receipts can name a peer by a privacy id that is not mapped yet.
     pub fn incoming_chat_of(&self, id: &str) -> Result<Option<String>> {
@@ -549,7 +548,6 @@ impl Archive {
         rows.collect()
     }
 
-    /// Records an attachment's local path.
     pub fn set_media_path(&self, chat: &str, id: &str, path: &Path) -> Result<Option<Message>> {
         self.put_media_path(chat, id, Some(path))
     }
@@ -571,7 +569,6 @@ impl Archive {
         Ok(Some(message))
     }
 
-    /// Returns all recorded attachment paths.
     pub fn media_paths(&self) -> Result<Vec<(String, String, std::path::PathBuf)>> {
         let mut statement = self.connection.prepare(
             "SELECT chat, id, json_extract(content, '$.media.path') AS path
@@ -1137,7 +1134,6 @@ impl Archive {
         Ok(())
     }
 
-    /// Returns a contact by id.
     pub fn contact(&self, id: &str) -> Result<Option<Contact>> {
         self.connection
             .query_row(

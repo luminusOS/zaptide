@@ -115,7 +115,6 @@ fn player_handles_missing_device_gracefully() {
     // playback begins. Neither path panics.
     match poll_until_loaded(&mut player, "missing-device", Duration::from_secs(3)) {
         Ok(()) => {
-            // Device was available; stop playback.
             player.stop();
         }
         Err(error) => {
@@ -346,78 +345,4 @@ fn alsa_capture_produces_at_least_one_second_of_audio() {
         "expected at least {min_samples} samples (80% of 1s at 48kHz mono), got {}",
         samples.len()
     );
-}
-
-// ─── Deferred: device hotplug simulation ──────────────────────────────────────
-//
-// These tests require physical device removal events that cannot be reliably
-// reproduced in CI without hardware. The underlying logic is covered by unit
-// tests in src/audio.rs:
-//
-//   player unplug  → audio::tests::an_unplugged_playback_sink_marks_clip_complete
-//   recorder unplug → audio::tests::recorder_handles_unplug_and_cancellation_with_synthetic_samples
-
-#[test]
-#[ignore = "requires physical device hotplug; covered by unit tests in src/audio.rs"]
-fn player_handles_device_unplug_during_playback() {
-    unimplemented!(
-        "start playback on a real device, remove it mid-stream, \
-         verify playback_ended() fires and state returns to Idle"
-    );
-}
-
-#[test]
-#[ignore = "requires physical device hotplug; covered by unit tests in src/audio.rs"]
-fn recorder_handles_device_unplug_during_capture() {
-    unimplemented!(
-        "start recording, remove the microphone mid-capture, \
-         verify record_with() breaks and returns partial samples"
-    );
-}
-
-// ─── Flatpak permission simulation ────────────────────────────────────────────
-//
-// Flatpak enforces audio access through the sandbox, not through ZapTide code.
-// These skeletons document the expected behavior and the exact commands needed
-// to reproduce the denial or revocation scenarios.
-//
-// Required Flatpak finish-args for audio:
-//   --socket=pulseaudio     (PulseAudio or PipeWire-Pulse socket; covers both
-//                            playback and capture)
-//
-// To reproduce microphone denial:
-//   flatpak run --nosocket=pulseaudio --noflatpak-spawn com.luminus.ZapTide
-//
-// To revoke microphone permission at runtime:
-//   flatpak permission-remove com.luminus.ZapTide   (then restart the app)
-//
-// Expected behavior on denial:
-//   Recorder::start() → thread fails → failure() returns
-//   "No microphone available: ..." and the app shows a recoverable toast.
-
-#[test]
-#[ignore = "requires Flatpak sandbox; run: flatpak run --nosocket=pulseaudio ..."]
-fn flatpak_microphone_denial_produces_recoverable_error() {
-    // Under Flatpak with --nosocket=pulseaudio:
-    //
-    // let recorder = Recorder::start();
-    // std::thread::sleep(Duration::from_millis(500));
-    // let error = recorder.failure().expect("microphone must be denied");
-    // assert!(
-    //     error.contains("microphone") || error.contains("device"),
-    //     "error should describe the denial: {error}"
-    // );
-    unimplemented!("run inside Flatpak with --nosocket=pulseaudio");
-}
-
-#[test]
-#[ignore = "requires Flatpak sandbox with runtime permission revocation"]
-fn flatpak_microphone_revocation_stops_capture() {
-    // Under Flatpak, after `flatpak permission-remove com.luminus.ZapTide`:
-    //
-    // 1. Recorder::start() succeeds initially
-    // 2. The PulseAudio socket is revoked mid-capture
-    // 3. record_with() detects the stream error and returns partial samples
-    // 4. Subsequent Recorder::start() calls fail with a clean error
-    unimplemented!("requires Flatpak Portal runtime interaction");
 }

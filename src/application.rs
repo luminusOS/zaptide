@@ -749,14 +749,10 @@ impl RelmListItem for MessageRow {
     }
 }
 
-/// True when `b` would render the same media as `a`. A sent sticker moves
-/// from the picker file to the uploaded cache copy; the picture is the same,
-/// so keep the decoded one while the old file still exists.
 /// A funnel, which neither Adwaita nor GTK ships; a `-symbolic` name lets
 /// GTK recolour it with the theme.
 const FILTER_ICON: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><path d="M2.5 2h11a1 1 0 0 1 .78 1.63L10 8.98V13a1 1 0 0 1-.55.9l-2 1A1 1 0 0 1 6 14V8.98L1.72 3.63A1 1 0 0 1 2.5 2z" fill="#2e3436"/></svg>"##;
 
-/// Puts ZapTide's own icons where GTK's icon theme finds them.
 /// The app's symbolic icon, drawn in the tray.
 const TRAY_ICON: &str = include_str!("../packaging/icons/zaptide-symbolic.svg");
 
@@ -795,6 +791,9 @@ fn install_icons(dir: &std::path::Path) {
     }
 }
 
+/// True when `b` would render the same media as `a`. A sent sticker moves
+/// from the picker file to the uploaded cache copy; the picture is the same,
+/// so keep the decoded one while the old file still exists.
 fn same_media(a: &crate::model::Message, b: &crate::model::Message) -> bool {
     use crate::model::Content;
     let same_content = match (&a.content, &b.content) {
@@ -3847,7 +3846,6 @@ fn country_picker() -> gtk::DropDown {
         ))
         .tooltip_text("Country")
         .build();
-    // The popup lists full names; the button shows only the flag and code.
     picker.set_list_factory(Some(&label_factory(|text| text.to_owned())));
     picker.set_factory(Some(&label_factory(|text| {
         let flag = text.split(' ').next().unwrap_or_default();
@@ -5425,8 +5423,6 @@ impl NativeApplication {
         }
     }
 
-    /// Moves the open-chat mark without rebuilding the list: rows between
-    /// the old and new open chat would be recreated, losing scroll and focus.
     /// Messages arriving in the chat on screen are read as they come in,
     /// but only while the window has focus, as on the phone.
     fn read_open_chat(&self) {
@@ -5449,6 +5445,8 @@ impl NativeApplication {
         }
     }
 
+    /// Moves the open-chat mark without rebuilding the list: rows between
+    /// the old and new open chat would be recreated, losing scroll and focus.
     fn mark_open_chat(&self) {
         let open = self.active_chat.as_deref();
         for (position, id) in self.chat_ids.iter().enumerate() {

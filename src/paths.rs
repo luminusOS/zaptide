@@ -61,7 +61,6 @@ impl AppDirs {
         self.state.join("session.db")
     }
 
-    /// Local message archive.
     pub fn archive_db(&self) -> PathBuf {
         self.state.join("archive.db")
     }

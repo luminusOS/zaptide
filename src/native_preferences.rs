@@ -648,7 +648,6 @@ impl NativePreferencesDialog {
             .unblock_signal(&self.custom_theme_handler);
     }
 
-    /// Present dialog relative to its transient parent.
     pub fn present(&self, parent: &impl gtk4::prelude::IsA<gtk4::Widget>) {
         use libadwaita::prelude::*;
         self.dialog.present(Some(parent));

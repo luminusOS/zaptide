@@ -1,5 +1,3 @@
-//! ZapTide library root.
-
 // GNOME desktop client: GTK4, libadwaita, D-Bus, GStreamer, and the
 // Secret Service keyring are assumed throughout.
 #[cfg(not(target_os = "linux"))]

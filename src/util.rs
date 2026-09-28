@@ -3,7 +3,6 @@
 use jiff::civil::Date;
 use jiff::{Timestamp, Zoned};
 
-/// Converts a Unix timestamp to local time.
 fn zoned(unix_seconds: i64) -> Option<Zoned> {
     let timestamp = Timestamp::from_second(unix_seconds).ok()?;
     Some(timestamp.to_zoned(jiff::tz::TimeZone::system()))

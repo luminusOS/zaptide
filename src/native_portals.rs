@@ -300,7 +300,6 @@ impl NativePortals {
         Some(id)
     }
 
-    /// Replaces clipboard contents with text.
     pub fn write_clipboard_text(clipboard: &gdk::Clipboard, text: &str) {
         clipboard.set_text(text);
     }

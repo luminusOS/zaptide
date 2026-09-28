@@ -154,7 +154,6 @@ pub struct Message {
     /// Mentions in the text or caption.
     #[serde(default)]
     pub mentions: Vec<MentionRef>,
-    /// Forwarded from another chat.
     #[serde(default)]
     pub forwarded: bool,
     /// JPEG preview sent with an attachment or link.
@@ -511,7 +510,6 @@ pub enum Action {
         chat: ChatId,
         message: String,
     },
-    /// Deletes a message locally.
     DeleteForMe {
         chat: ChatId,
         message: String,

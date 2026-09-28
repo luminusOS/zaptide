@@ -978,7 +978,6 @@ impl Worker {
 
     // --- names -----------------------------------------------------------
 
-    /// The address-book name, if the contact is saved.
     fn saved_name(&self, id: &str) -> Option<String> {
         self.contacts
             .get(id)
@@ -1110,7 +1109,6 @@ impl Worker {
         }
     }
 
-    /// Group metadata retry delay.
     fn group_retry_delay(tries: u32) -> Duration {
         Duration::from_secs(30 * 2u64.pow(tries.saturating_sub(1).min(5)))
             .min(Duration::from_secs(600))
@@ -1154,7 +1152,6 @@ impl Worker {
         }
     }
 
-    /// Requests metadata for one group.
     fn query_group_info(&mut self, id: &str) {
         let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(id)) else {
             // Requeue until the link is available.
@@ -3797,7 +3794,6 @@ impl Worker {
             Err(error) => self.emit(Event::Error(format!("Could not read the chat: {error}"))),
         }
         if before.is_none() && ChatKind::from_id(&chat) == ChatKind::Group {
-            // Force group metadata when opening a group.
             self.request_group_info(&chat, false);
         }
         if before.is_none()
@@ -6732,7 +6728,6 @@ mod receipt_tests {
     const PEER: &str = "4917663430455@s.whatsapp.net";
     const PEER_LID: &str = "167650256810092@lid";
 
-    /// Creates a test worker with an in-memory archive and open channels.
     #[test]
     fn group_questions_wait_in_line() {
         let (mut worker, _events, _inbox, _wa) = worker();
