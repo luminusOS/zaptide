@@ -33,9 +33,7 @@ EXCLUDE_DIRS=(
     "docs"
 )
 
-EXCLUDE_FILES=(
-    "UPSTREAM.md"
-)
+EXCLUDE_FILES=()
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"

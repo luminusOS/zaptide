@@ -188,7 +188,7 @@ Replaced:
 - ZapFast's egui/eframe interface with native GTK4/libadwaita/Relm4
 - ZapFast's package identity and XDG namespace (isolated; no data migration)
 
-ZapFast upstream fixes can be imported via the process documented in `UPSTREAM.md`. ZapTide does not provide, conflict with, replace, or migrate ZapFast packages.
+ZapTide does not provide, conflict with, replace, or migrate ZapFast packages.
 
 ## Packaging scripts
 
