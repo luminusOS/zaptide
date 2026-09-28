@@ -977,6 +977,14 @@ impl Worker {
 
     // --- names -----------------------------------------------------------
 
+    /// The address-book name, if the contact is saved.
+    fn saved_name(&self, id: &str) -> Option<String> {
+        self.contacts
+            .get(id)
+            .and_then(|contact| contact.full_name.clone())
+            .filter(|name| !name.is_empty())
+    }
+
     fn contact_name(&self, id: &str) -> Option<String> {
         self.contacts.get(id).and_then(Contact::label)
     }
@@ -3721,11 +3729,21 @@ impl Worker {
     /// Refreshes stored quote ids and names with current mappings.
     fn polish(&self, message: &mut Message) {
         self.polish_poll(message);
+        // Stored names are the sender's push name; a saved contact wins.
+        if !message.from_me
+            && let Some(name) = self.saved_name(&message.sender)
+        {
+            message.sender_name = Some(name);
+        }
         if let Some(quoted) = message.quoted.as_mut() {
             let sender = self.canonical_str(&quoted.sender);
             if sender != quoted.sender || quoted.sender_name.is_none() {
                 quoted.sender_name = self.name_for(&sender);
                 quoted.sender = sender;
+            } else if quoted.sender_name.as_deref() != Some("You")
+                && let Some(name) = self.saved_name(&quoted.sender)
+            {
+                quoted.sender_name = Some(name);
             }
             quoted.summary = self.pn_tokens(&quoted.summary);
             for mention in &mut quoted.mentions {
@@ -7553,6 +7571,27 @@ mod receipt_tests {
             status: Delivery::None,
             ..own_message(id, timestamp)
         }
+    }
+
+    #[test]
+    fn saved_contact_name_replaces_push_name_on_messages() {
+        let (mut worker, _events, _commands, _runtime) = worker();
+        let mut message = Message {
+            sender_name: Some("~pushed".into()),
+            ..incoming("M1", 1)
+        };
+        worker.polish(&mut message);
+        assert_eq!(message.sender_name.as_deref(), Some("~pushed"));
+        worker.contacts.insert(
+            PEER.into(),
+            Contact {
+                id: PEER.into(),
+                full_name: Some("Ada Saved".into()),
+                push_name: Some("pushed".into()),
+            },
+        );
+        worker.polish(&mut message);
+        assert_eq!(message.sender_name.as_deref(), Some("Ada Saved"));
     }
 
     #[test]
