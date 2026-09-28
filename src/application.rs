@@ -1018,6 +1018,7 @@ pub enum Input {
     PortalActionFinished(String),
     OpenSelectedUri,
     PortalUriFinished(bool),
+    ShowSelectedInFolder,
     SaveSelectedAttachment,
     SaveAttachmentFinished(bool),
     ToggleSelectedPin,
@@ -3416,6 +3417,15 @@ impl NativeApplication {
                 };
             }
             Input::SaveSelectedAttachment => self.save_selected_attachment(&sender),
+            Input::ShowSelectedInFolder => {
+                if let Some(path) = self
+                    .selected_message()
+                    .and_then(|message| message.content.media())
+                    .and_then(|media| media.path.clone())
+                {
+                    crate::native_media_widgets::show_in_folder(&self.window, &path);
+                }
+            }
             Input::SaveAttachmentFinished(success) => {
                 self.status = if success {
                     "Attachment saved".into()
@@ -3968,6 +3978,7 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
          .zaptide-composer { border-radius: 18px; background-color: color-mix(in srgb, currentColor 8%, transparent); }\n\
          .zaptide-composer textview, .zaptide-composer text { background: none; }\n\
          .zaptide-qr { border-radius: 12px; }\n\
+         .zaptide-document { padding: 10px 10px 10px 12px; }\n\
          .zaptide-pair-code { padding: 16px 16px 16px 28px; }\n\
          .zaptide-pair-code-label { font-size: 2.4em; font-weight: 800; letter-spacing: 0.14em; }\n\
          .zaptide-quote { border-left: 2px solid @accent_bg_color; padding-left: 6px; opacity: 0.7; }\n",
@@ -4883,6 +4894,7 @@ impl NativeApplication {
                 Some("message.attachment"),
             );
             if downloaded {
+                open.append(Some("Show in Folder"), Some("message.folder"));
                 open.append(Some("Save Attachment…"), Some("message.save"));
             }
         }
@@ -6820,9 +6832,10 @@ fn install_message_actions(
 ) {
     let group = gtk::gio::SimpleActionGroup::new();
     type MessageAction = (&'static str, fn() -> Input);
-    let actions: [MessageAction; 10] = [
+    let actions: [MessageAction; 11] = [
         ("copy", || Input::CopySelectedText),
         ("attachment", || Input::ActivateSelectedAttachment),
+        ("folder", || Input::ShowSelectedInFolder),
         ("save", || Input::SaveSelectedAttachment),
         ("open-link", || Input::OpenSelectedUri),
         ("quoted", || Input::OpenQuoted),

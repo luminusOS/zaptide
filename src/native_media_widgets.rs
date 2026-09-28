@@ -121,6 +121,13 @@ pub fn build_media_widget_with_action(
             decode_token,
         };
     }
+    if let Content::Document { media, .. } = &message.content {
+        root.append(&document_card(message, media, std::rc::Rc::new(on_action)));
+        return NativeMediaWidget {
+            widget: root,
+            decode_token,
+        };
+    }
     if let Content::Image { media, .. } = &message.content {
         append_photo(
             &root,
@@ -924,7 +931,12 @@ fn show_video(
         });
     }
     let (open, target) = open_with_button(path, on_action);
-    let dialog = media_viewer(parent, details, &stack, &[open.upcast()]);
+    let dialog = media_viewer(
+        parent,
+        details,
+        &stack,
+        &[open.upcast(), show_in_folder_button(path).upcast()],
+    );
     *target.borrow_mut() = dialog.downgrade();
     dialog.connect_closed(move |_| {
         if let Some(stream) = video.media_stream() {
@@ -932,6 +944,120 @@ fn show_video(
         }
     });
     dialog.present(Some(parent));
+}
+
+/// Opens the file manager at `path` with the file selected, through the
+/// portal inside Flatpak.
+pub fn show_in_folder(widget: &impl IsA<gtk::Widget>, path: &std::path::Path) {
+    let window = widget.as_ref().root().and_downcast::<gtk::Window>();
+    gtk::FileLauncher::new(Some(&gtk::gio::File::for_path(path))).open_containing_folder(
+        window.as_ref(),
+        gtk::gio::Cancellable::NONE,
+        |result| {
+            if let Err(error) = result {
+                log::warn!("could not show the attachment in its folder: {error}");
+            }
+        },
+    );
+}
+
+fn show_in_folder_button(path: &std::path::Path) -> gtk::Button {
+    let button = gtk::Button::builder()
+        .icon_name("folder-open-symbolic")
+        .tooltip_text("Show in Folder")
+        .valign(gtk::Align::Center)
+        .build();
+    let path = path.to_path_buf();
+    button.connect_clicked(move |button| show_in_folder(button, &path));
+    button
+}
+
+/// A document as a file row: its type icon, name, size and pages, and the
+/// actions its download state allows.
+fn document_card(
+    message: &Message,
+    media: &crate::model::Media,
+    on_action: std::rc::Rc<dyn Fn(NativeMediaAction)>,
+) -> gtk::Box {
+    let (file_name, detail) = match project_content(message).content {
+        NativeMediaContent::Document { file_name, detail } => (file_name, detail),
+        _ => ("Document".to_owned(), String::new()),
+    };
+    let card = gtk::Box::builder()
+        .spacing(12)
+        .css_classes(["card", "zaptide-media-card", "zaptide-document"])
+        .build();
+    let (content_type, _) = gtk::gio::content_type_guess(Some(file_name.as_str()), None);
+    let icon = gtk::Image::builder()
+        .gicon(&gtk::gio::content_type_get_icon(&content_type))
+        .pixel_size(40)
+        .valign(gtk::Align::Center)
+        .build();
+    card.append(&icon);
+    let text = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(2)
+        .hexpand(true)
+        .valign(gtk::Align::Center)
+        .build();
+    text.append(
+        &gtk::Label::builder()
+            .label(&file_name)
+            .xalign(0.0)
+            .ellipsize(gtk::pango::EllipsizeMode::Middle)
+            .max_width_chars(32)
+            .tooltip_text(&file_name)
+            .css_classes(["heading"])
+            .build(),
+    );
+    let kind = gtk::gio::content_type_get_description(&content_type);
+    let detail = [kind.as_str(), detail.as_str()]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ");
+    text.append(
+        &gtk::Label::builder()
+            .label(&detail)
+            .xalign(0.0)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .css_classes(["caption", "dim-label"])
+            .build(),
+    );
+    card.append(&text);
+    let actions = gtk::Box::builder().css_classes(["linked"]).build();
+    match attachment_action(message) {
+        Some(NativeMediaAction::Open(path)) => {
+            let open = gtk::Button::builder()
+                .icon_name("adw-external-link-symbolic")
+                .tooltip_text("Open")
+                .valign(gtk::Align::Center)
+                .build();
+            let target = path.clone();
+            open.connect_clicked(move |_| on_action(NativeMediaAction::Open(target.clone())));
+            actions.append(&open);
+            actions.append(&show_in_folder_button(&path));
+        }
+        Some(action @ NativeMediaAction::Download { .. }) => {
+            let download = gtk::Button::builder()
+                .icon_name("folder-download-symbolic")
+                .tooltip_text(format!("Download ({})", crate::util::bytes(media.size)))
+                .valign(gtk::Align::Center)
+                .build();
+            download.connect_clicked(move |_| on_action(action.clone()));
+            actions.append(&download);
+        }
+        None => actions.append(
+            &adw::Spinner::builder()
+                .width_request(24)
+                .height_request(24)
+                .valign(gtk::Align::Center)
+                .tooltip_text("Downloading")
+                .build(),
+        ),
+    }
+    card.append(&actions);
+    card
 }
 
 /// Who sent a photo or video, when, and its caption, for the viewer.
@@ -1146,7 +1272,12 @@ fn show_photo(
         parent,
         details,
         &scroller,
-        &[open.upcast(), copy.upcast(), zoom.upcast()],
+        &[
+            open.upcast(),
+            show_in_folder_button(path).upcast(),
+            copy.upcast(),
+            zoom.upcast(),
+        ],
     );
     *target.borrow_mut() = dialog.downgrade();
     // Full size up to a large screen; the view fits it to the dialog.
