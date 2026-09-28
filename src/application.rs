@@ -579,6 +579,7 @@ impl RelmListItem for MessageRow {
     }
 
     fn bind(&mut self, widgets: &mut Self::Widgets, root: &mut Self::Root) {
+        root.set_widget_name(&self.id);
         root.update_property(&[
             gtk::accessible::Property::Label(&self.accessible_label),
             gtk::accessible::Property::Description("Press Menu or Shift+F10 for actions"),
@@ -882,6 +883,10 @@ pub struct NativeApplication {
     audio_registry: AudioRegistry,
     voice_send_pending: bool,
     message_target: Option<String>,
+    /// Unread count when the chat was opened, until the first page pins it
+    /// to `unread_marker`, so live arrivals never move the "Unread" line.
+    opened_unread: usize,
+    unread_marker: Option<String>,
     message_menu: gtk::PopoverMenu,
     poll_choice: usize,
     sticker_packs: Vec<crate::model::StickerPack>,
@@ -1943,6 +1948,8 @@ impl SimpleComponent for NativeApplication {
             audio_registry: Default::default(),
             voice_send_pending: false,
             message_target: None,
+            opened_unread: 0,
+            unread_marker: None,
             message_menu: gtk::PopoverMenu::from_model(None::<&gtk::gio::MenuModel>),
             poll_choice: 0,
             sticker_packs: Vec::new(),
@@ -2785,6 +2792,12 @@ impl NativeApplication {
                 self.composer_buffer.set_text(&self.draft);
                 self.messages.clear();
                 self.message_target = None;
+                self.opened_unread = self
+                    .chat_snapshots
+                    .iter()
+                    .find(|known| known.id == chat)
+                    .map_or(0, |known| known.unread as usize);
+                self.unread_marker = None;
                 self.history_complete = false;
                 self.loading_older = false;
                 self.message_ids.clear();
@@ -5943,11 +5956,17 @@ impl NativeApplication {
     }
 
     fn rebuild_message_rows(&mut self) {
+        let len = self.message_ids.len();
+        if self.opened_unread > 0 && len > 0 {
+            let first_unread = len - self.opened_unread.min(len);
+            self.unread_marker = Some(self.message_ids[first_unread].clone());
+            self.opened_unread = 0;
+        }
         let unread = self
-            .active_chat
-            .as_deref()
-            .and_then(|chat_id| self.chat_snapshots.iter().find(|chat| chat.id == chat_id))
-            .map_or(0, |chat| chat.unread as usize);
+            .unread_marker
+            .as_ref()
+            .and_then(|marker| self.message_ids.iter().position(|id| id == marker))
+            .map_or(0, |position| len - position);
         let messages = self
             .message_ids
             .iter()
@@ -5993,20 +6012,67 @@ impl NativeApplication {
                 .is_some_and(|item| item.borrow().renders_like(row))
         });
         let count = rows.len();
-        if removed + inserted > old_len.max(count) / 2 {
+        // Rows that only changed (delivery, reactions, grouping) keep their
+        // widget; replacing them re-creates it, which blanks media and shifts
+        // the scroll anchor.
+        let in_place = removed.min(inserted);
+        let reusable = (0..in_place).all(|offset| {
+            self.messages
+                .get((prefix + offset) as u32)
+                .is_some_and(|item| item.borrow().id == rows[prefix + offset].id)
+        });
+        if !reusable && removed + inserted > old_len.max(count) / 2 {
             self.messages.clear();
             self.messages.extend_from_iter(rows);
         } else {
-            for _ in 0..removed {
-                self.messages.remove(prefix as u32);
+            let mut span = rows.into_iter().skip(prefix).take(inserted);
+            let mut position = prefix;
+            if reusable {
+                for row in span.by_ref().take(in_place) {
+                    self.rebind_message(position, row);
+                    position += 1;
+                }
+                for _ in in_place..removed {
+                    self.messages.remove(position as u32);
+                }
+            } else {
+                for _ in 0..removed {
+                    self.messages.remove(prefix as u32);
+                }
             }
-            for (offset, row) in rows.into_iter().skip(prefix).take(inserted).enumerate() {
-                self.messages.insert((prefix + offset) as u32, row);
+            for row in span {
+                self.messages.insert(position as u32, row);
+                position += 1;
             }
         }
         // Follow the conversation only when the reader is already at its end.
         if at_bottom && count > 0 && (removed > 0 || inserted > 0) {
             scroll_to_end(&self.messages.view);
+        }
+    }
+
+    /// Swaps the row at `position` and redraws its widget in place, if shown.
+    fn rebind_message(&mut self, position: usize, row: MessageRow) {
+        let Some(item) = self.messages.get(position as u32) else {
+            return;
+        };
+        let id = row.id.clone();
+        *item.borrow_mut() = row;
+        let mut child = self.messages.view.first_child();
+        while let Some(current) = child {
+            if let Some(mut root) = current.first_child().and_downcast::<gtk::Box>()
+                && root.widget_name() == id.as_str()
+            {
+                // relm4's list factory keeps each row's widgets under this key.
+                if let Some(mut widgets) =
+                    unsafe { root.steal_data::<MessageRowWidgets>("widgets") }
+                {
+                    item.borrow_mut().bind(&mut widgets, &mut root);
+                    unsafe { root.set_data("widgets", widgets) };
+                }
+                return;
+            }
+            child = current.next_sibling();
         }
     }
 
