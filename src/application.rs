@@ -861,6 +861,8 @@ pub struct NativeApplication {
     composing_until: std::collections::HashMap<String, std::time::Instant>,
     presence: std::collections::HashMap<String, (bool, Option<i64>)>,
     messages: TypedListView<MessageRow, gtk::NoSelection>,
+    /// Whether the conversation stays pinned to its newest message.
+    follow_messages: std::rc::Rc<std::cell::Cell<bool>>,
     qr_texture: Option<gtk::gdk::Texture>,
     history_complete: bool,
     loading_older: bool,
@@ -1926,6 +1928,7 @@ impl SimpleComponent for NativeApplication {
             composing_until: std::collections::HashMap::new(),
             presence: std::collections::HashMap::new(),
             messages,
+            follow_messages: std::rc::Rc::new(std::cell::Cell::new(true)),
             qr_texture: None,
             history_complete: false,
             loading_older: false,
@@ -2047,6 +2050,28 @@ impl SimpleComponent for NativeApplication {
         model.message_menu.set_has_arrow(false);
         model.message_menu.set_halign(gtk::Align::Start);
         install_message_actions(&root, &sender);
+        // Row heights are estimated until measured, so the end moves as rows
+        // settle; re-pin on each change in the same frame instead of jumping
+        // to a stale end and correcting later.
+        if let Some(scroller) = model
+            .messages
+            .view
+            .parent()
+            .and_downcast::<gtk::ScrolledWindow>()
+        {
+            let adjustment = scroller.vadjustment();
+            let follow = model.follow_messages.clone();
+            adjustment.connect_value_changed(move |adjustment| {
+                follow
+                    .set(adjustment.value() + adjustment.page_size() >= adjustment.upper() - 48.0);
+            });
+            let follow = model.follow_messages.clone();
+            adjustment.connect_changed(move |adjustment| {
+                if follow.get() {
+                    adjustment.set_value(adjustment.upper() - adjustment.page_size());
+                }
+            });
+        }
         widgets
             .status_label
             .set_accessible_role(gtk::AccessibleRole::Status);
@@ -2791,6 +2816,7 @@ impl NativeApplication {
                 self.draft = self.composer.draft(&chat).to_owned();
                 self.composer_buffer.set_text(&self.draft);
                 self.messages.clear();
+                self.follow_messages.set(true);
                 self.message_target = None;
                 self.opened_unread = self
                     .chat_snapshots
@@ -3705,16 +3731,15 @@ impl NativeApplication {
 }
 
 /// Moves a list to its end once rows are laid out. `ListView::scroll_to`
-/// leaves blank space with rows of varying height, and the height estimate
-/// only settles after the newly shown rows are measured, hence the second pass.
+/// leaves blank space with rows of varying height. Later height corrections
+/// are followed by the adjustment's `changed` handler.
 fn scroll_to_end(view: &gtk::ListView) {
     let Some(adjustment) = view.vadjustment() else {
         return;
     };
-    let end = move || adjustment.set_value(adjustment.upper() - adjustment.page_size());
-    let settle = end.clone();
-    gtk::glib::idle_add_local_once(end);
-    gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(150), settle);
+    gtk::glib::idle_add_local_once(move || {
+        adjustment.set_value(adjustment.upper() - adjustment.page_size());
+    });
 }
 
 /// Start, removed count, and inserted count of the span where `new` differs
@@ -6000,9 +6025,7 @@ impl NativeApplication {
                 row
             })
             .collect::<Vec<_>>();
-        let at_bottom = self.messages.view.vadjustment().is_none_or(|adjustment| {
-            adjustment.value() + adjustment.page_size() >= adjustment.upper() - 48.0
-        });
+        let at_bottom = self.follow_messages.get();
         // Rebinding only the changed span keeps the reader's scroll position
         // through receipts, reactions, and incoming messages.
         let old_len = self.messages.len() as usize;
