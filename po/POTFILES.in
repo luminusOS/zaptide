@@ -1,9 +1,0 @@
-# List of source files containing translatable strings.
-# Rust source files
-src/application.rs
-src/native_preferences.rs
-src/native_notifications.rs
-src/tray.rs
-# UI templates and data files
-data/dev.luminusos.ZapTide.desktop.in
-data/dev.luminusos.ZapTide.metainfo.xml.in

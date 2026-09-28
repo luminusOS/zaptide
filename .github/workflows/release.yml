@@ -41,7 +41,7 @@ jobs:
       # library to the toolchain the pin actually resolves to.
       - run: rustup target add ${{ matrix.target }}
       - name: GUI build dependencies
-        run: dnf install -y --setopt=install_weak_deps=False gcc gcc-c++ git gtk4-devel libadwaita-devel alsa-lib-devel gstreamer1-devel cmake gettext libseccomp-devel fontconfig-devel perl make tar zstd
+        run: dnf install -y --setopt=install_weak_deps=False gcc gcc-c++ git gtk4-devel libadwaita-devel alsa-lib-devel gstreamer1-devel cmake libseccomp-devel fontconfig-devel perl make tar zstd
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
@@ -115,10 +115,3 @@ jobs:
           files: dist/*
           generate_release_notes: true
 
-  packaging:
-    if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')
-    needs: publish
-    uses: ./.github/workflows/packaging.yml
-    with:
-      version: ${{ github.ref_name }}
-    secrets: inherit

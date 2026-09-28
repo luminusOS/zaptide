@@ -10,13 +10,9 @@ WhatsApp Web and its Chromium processes. [See the upstream measurements](https:/
 
 ZapTide retains ZapFast's direct WhatsApp protocol implementation.
 
-![ZapTide showing a chat with a photo, a document, a voice message, a quoted reply, and a link](docs/screenshot.png)
+![ZapTide showing a chat](packaging/screenshots/screenshot.png)
 
 Development happens at **[github.com/luminusOS/zaptide](https://github.com/luminusOS/zaptide)**.
-
-![A group chat with sender names and pictures, a photo with reactions, a reply with a mention, and a poll](docs/screenshot-group.png)
-
-![The linking screen with the QR code](docs/screenshot-link.png)
 
 ## What it does
 
@@ -47,8 +43,8 @@ Development happens at **[github.com/luminusOS/zaptide](https://github.com/lumin
 - **WhatsApp formatting.** Bold, italic, strikethrough, code, lists, quotes,
   mentions, and link previews are supported. Links are clickable. Hebrew and
   Arabic RTL paragraphs keep logical word order by reordering font runs; this
-  is not a full Unicode Bidirectional Algorithm. ZapTide prefers an installed
-  Noto Color Emoji and falls back to the bundled copy. Emoji-only messages
+  is not a full Unicode Bidirectional Algorithm. Emoji use the system's
+  color emoji font. Emoji-only messages
   are larger.
 - **Screen-reader access.** AccessKit exposes the interface to desktop
   accessibility services. Custom buttons, chat rows, settings switches and
@@ -164,13 +160,10 @@ Development happens at **[github.com/luminusOS/zaptide](https://github.com/lumin
 
 ## Installing
 
-ZapTide has no stable release yet. Build it from source.
+ZapTide ships as a Flatpak. It has no stable release yet; build it from source.
+Existing ZapFast packages are not ZapTide packages and do not share application data.
 
-Native and Flatpak packaging will be published after the GTK/libadwaita migration passes its
-release gates. Existing ZapFast packages are not ZapTide packages and do not share application data.
-
-To build and install the current checkout as a Flatpak (requires `flatpak-builder`
-and a Flathub remote):
+To build and install the current checkout (requires `flatpak-builder` and a Flathub remote):
 
 ```sh
 flatpak-builder --user --install --force-clean --install-deps-from=flathub build-dir packaging/flatpak/dev.luminusos.ZapTide.yml
@@ -202,13 +195,9 @@ while your login is unlocked.
 
 ### From source
 
-ZapTide needs Rust, a C/C++ toolchain, CMake and Perl (for bundled OpenSSL). `rust-toolchain.toml` pins the exact version. On Linux,
-it also needs GUI development packages:
-
-```sh
-# Arch
-sudo pacman -S libxkbcommon wayland mesa alsa-lib gstreamer gst-plugins-base gst-plugins-good cmake perl
-```
+ZapTide needs Rust, a C/C++ toolchain, CMake and Perl (for bundled OpenSSL);
+`rust-toolchain.toml` pins the exact version. The GUI development packages are listed in
+[PACKAGING.md](PACKAGING.md#build-dependencies).
 
 Then:
 
@@ -329,20 +318,6 @@ cargo test --all-features                      # includes a headless layout of e
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-The Task 4 native-shell synthetic harness requires `native-shell,demo` and the
-explicit `ZAPTIDE_NATIVE_SYNTHETIC=1` opt-in. It uses a detached command recorder and
-synthetic Link, Chats, and Messages events; no account, session, user archive,
-or network connection is opened. Audit lines contain only command variant names
-and counts. Run its Xvfb smoke test with:
-
-```sh
-scripts/native-synthetic-e2e.sh
-```
-
-The script drives the synthetic chat through AT-SPI with `pyatspi` when installed,
-or `xdotool` otherwise. Requires GTK development dependencies, Xvfb, D-Bus, and
-either `pyatspi` or `xdotool`.
-
 To include a default GIPHY key for GIF search, set it at build time. A key in
 Settings overrides it:
 
@@ -369,8 +344,7 @@ and selects Reply, types quickly, completes emoji and mentions, searches the GIF
 picker and sends a still sticker, opens group information and the shortcut list,
 and changes themes through Settings. It uses the normal mouse and keyboard handlers;
 a local responder handles outgoing messages with no WhatsApp connection.
-The GIF-search thumbnails and still stickers are rendered from the bundled
-Noto emoji font; demo GIF search uses these local fixtures. The tour makes no
+Demo GIF search uses local fixtures. The tour makes no
 sound and holds its final frame. Space rebuilds the sample and replays.
 For an automatic start, add `--demo-tour-delay 5000` (milliseconds).
 Use `--demo` instead of `--demo-tour` to explore the sample chats yourself.
@@ -378,31 +352,16 @@ Use `--demo` instead of `--demo-tour` to explore the sample chats yourself.
 To record the tour, start a screen recording of the demo window, then press
 Space in ZapTide. Keep the window visible and stationary until the tour finishes.
 
-To annotate the video with a visible pointer, click rings, and outlined shortcut
-labels, add `--demo-tour-events tour.json` when launching the tour. After
-recording, run:
-
-```sh
-python3 scripts/render-demo.py recording.mp4 tour.json launch.mp4 --start 0.8
-```
-
-Set `--start` to the recording time (in seconds) when you pressed Space. The
-export trims the setup footage, adds a caption band below the app, and produces
-a silent H.264 MP4. It requires `ffmpeg` with libass support and `ffprobe`.
-These annotations are added during video export, not drawn by the app. The
-trace contains only pointer coordinates and shortcut labels, not typed text.
-
 ## Disclaimer
 
 ZapTide is an unofficial client and is not affiliated with WhatsApp or
 Meta. Using an unofficial client may be against WhatsApp's terms of service
 and could get an account suspended. Use it at your own risk.
 
-## Packaging maintenance
+## Packaging
 
-Release packaging uses the [native-packages](https://rubygems.org/gems/native-packages) gem. `native-packages.yaml` declares the RPM package; installation assets live in `packaging/`; see [PACKAGING.md](PACKAGING.md) for local commands and CI behavior.
+See [PACKAGING.md](PACKAGING.md).
 
 ## License
 
-MIT. Inter and Noto Color Emoji are under the SIL Open Font License; the icons
-are from [Lucide](https://lucide.dev) (ISC).
+MIT.

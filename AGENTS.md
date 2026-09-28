@@ -176,13 +176,6 @@ A release is not finished when the tag is pushed. Do these in order:
    and `Fixed`, credit contributors and reporters where it helps, and end
    with a full-changelog link comparing the previous tag. Write about what
    changed for the user, not the commit history.
-4. After the release files exist, update both `zaptide_version` in
-   `docs/_config.yml` and the version menu in `docs/_data/versions.yml`.
-   The menu lists only the current version, which points to `/download/`,
-   and the Changelog link; do not add older versions to it. Never point the
-   download page at files that do not exist yet. Set `release_asset_prefix` to
-   `zaptide` and `release_app_name` to `ZapTide` only once those assets exist.
-
 ## Platform dependencies
 
 - `gtk::EmojiChooser` renders emoji through the system's color emoji font.
