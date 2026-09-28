@@ -3,7 +3,6 @@
 .idea/
 .vscode/
 .claude/
-.direnv/
 
 /.cache/
 

@@ -164,15 +164,7 @@ Development happens at **[github.com/luminusOS/zaptide](https://github.com/lumin
 
 ## Installing
 
-ZapTide has no stable release yet. Build the transition baseline from source or use its Nix flake:
-
-```sh
-nix profile install github:luminusOS/zaptide
-```
-
-NixOS configurations can add the repository as a flake input and include
-`inputs.zaptide.packages.${pkgs.system}.default` in
-`environment.systemPackages`.
+ZapTide has no stable release yet. Build it from source.
 
 Native and Flatpak packaging will be published after the GTK/libadwaita migration passes its
 release gates. Existing ZapFast packages are not ZapTide packages and do not share application data.
@@ -219,10 +211,6 @@ Then:
 cargo install --path .
 zaptide
 ```
-
-With Nix, `nix develop` provides the pinned Rust toolchain and all native build
-dependencies. From the checkout, use `nix build .#zaptide` to build the package
-or `nix run .#zaptide` to run it.
 
 The desktop file and icon are in `packaging/`.
 
