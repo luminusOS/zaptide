@@ -74,6 +74,26 @@ pub fn build_media_widget_with_action(
             decode_token,
         };
     }
+    if let Content::Location {
+        latitude,
+        longitude,
+        name,
+        address,
+    } = &message.content
+    {
+        root.append(&location_card(
+            *latitude,
+            *longitude,
+            name.as_deref(),
+            address.as_deref(),
+            message.thumbnail.clone(),
+            &decode_token,
+        ));
+        return NativeMediaWidget {
+            widget: root,
+            decode_token,
+        };
+    }
     if let Content::Sticker { media, .. } = &message.content {
         append_sticker(&root, media.path.clone(), &decode_token);
         return NativeMediaWidget {
@@ -901,6 +921,92 @@ fn photo_error(error: &impl std::fmt::Display) {
 /// Without glycin, photos keep their inline thumbnail.
 #[cfg(not(target_os = "linux"))]
 fn load_photo(_: &gtk::Picture, _: std::path::PathBuf, _: u32, _: u32, _: &DecodeToken) {}
+
+/// A shared place: the sender's map snapshot, name, address, and
+/// coordinates. Clicking opens the default maps app, else OpenStreetMap.
+fn location_card(
+    latitude: f64,
+    longitude: f64,
+    name: Option<&str>,
+    address: Option<&str>,
+    thumbnail: Option<Vec<u8>>,
+    decode_token: &DecodeToken,
+) -> gtk::Box {
+    let card = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    card.add_css_class("card");
+    card.add_css_class("zaptide-media-card");
+    card.add_css_class("zaptide-link-card");
+    card.set_tooltip_text(Some("Open in Maps"));
+    if let Some(bytes) = thumbnail {
+        let image = gtk::Image::new();
+        image.set_pixel_size(160);
+        image.set_halign(gtk::Align::Start);
+        image.add_css_class("zaptide-link-thumbnail");
+        image.set_overflow(gtk::Overflow::Hidden);
+        image.set_visible(false);
+        card.append(&image);
+        decode_preview_async(&image, move || Some(bytes), decode_token);
+    }
+    let heading = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    heading.append(&gtk::Image::from_icon_name("mark-location-symbolic"));
+    let title = gtk::Label::builder()
+        .label(name.unwrap_or("Location"))
+        .xalign(0.0)
+        .wrap(true)
+        .max_width_chars(44)
+        .css_classes(["heading"])
+        .build();
+    heading.append(&title);
+    card.append(&heading);
+    let coordinates = format!("{latitude:.5}, {longitude:.5}");
+    for (text, classes) in [
+        (address, &["caption"][..]),
+        (
+            Some(coordinates.as_str()),
+            &["caption", "dim-label", "numeric"][..],
+        ),
+    ] {
+        if let Some(text) = text {
+            card.append(
+                &gtk::Label::builder()
+                    .label(text)
+                    .xalign(0.0)
+                    .wrap(true)
+                    .max_width_chars(44)
+                    .selectable(false)
+                    .css_classes(classes)
+                    .build(),
+            );
+        }
+    }
+    let click = gtk::GestureClick::new();
+    click.connect_released(move |gesture, _, _, _| {
+        let window = gesture
+            .widget()
+            .and_then(|widget| widget.root())
+            .and_downcast::<gtk::Window>();
+        let fallback = format!(
+            "https://www.openstreetmap.org/?mlat={latitude}&mlon={longitude}#map=16/{latitude}/{longitude}"
+        );
+        let retry = window.clone();
+        gtk::UriLauncher::new(&format!("geo:{latitude},{longitude}")).launch(
+            window.as_ref(),
+            gtk::gio::Cancellable::NONE,
+            move |result| {
+                if result.is_err() {
+                    gtk::UriLauncher::new(&fallback).launch(
+                        retry.as_ref(),
+                        gtk::gio::Cancellable::NONE,
+                        |_| {},
+                    );
+                }
+            },
+        );
+    });
+    card.add_controller(click);
+    card.set_cursor_from_name(Some("pointer"));
+    card
+}
 
 /// Link preview as WhatsApp sends it: the sender's thumbnail, title,
 /// description, and site. Clicking it opens the link.

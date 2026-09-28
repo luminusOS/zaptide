@@ -747,7 +747,8 @@ impl Worker {
     }
 
     fn backfill(&mut self) {
-        const VERSION: &str = "2";
+        // Bump to re-derive stored rows after `classify` or `thumbnail_of` change.
+        const VERSION: &str = "3";
         if self.archive.meta("derived").ok().flatten().as_deref() == Some(VERSION) {
             return;
         }
@@ -5305,6 +5306,10 @@ fn thumbnail_of(base: &wa::Message) -> Option<Vec<u8>> {
         document.jpeg_thumbnail.clone()
     } else if let Some(text) = base.extended_text_message.as_option() {
         text.jpeg_thumbnail.clone()
+    } else if let Some(location) = base.location_message.as_option() {
+        location.jpeg_thumbnail.clone()
+    } else if let Some(live) = base.live_location_message.as_option() {
+        live.jpeg_thumbnail.clone()
     } else {
         None
     };
@@ -6248,6 +6253,22 @@ mod tests {
             other => panic!("unexpected {other:?}"),
         }
         assert_eq!(thumbnail_of(&image), Some(vec![0xff, 0xd8]));
+        let place = wa::Message {
+            location_message: whatsapp_rust::prelude::MessageField::some(
+                wa::message::LocationMessage {
+                    degrees_latitude: Some(-23.5),
+                    degrees_longitude: Some(-46.6),
+                    jpeg_thumbnail: Some(vec![0xff, 0xd8, 1]),
+                    ..Default::default()
+                },
+            ),
+            ..Default::default()
+        };
+        assert!(matches!(
+            classify(&place),
+            Some(Content::Location { latitude, .. }) if latitude == -23.5
+        ));
+        assert_eq!(thumbnail_of(&place), Some(vec![0xff, 0xd8, 1]));
         assert_eq!(classify(&wa::Message::default()), None);
     }
 
