@@ -26,8 +26,6 @@ on:
         required: false
       AUR_KNOWN_HOSTS:
         required: false
-      HOMEBREW_TAP_GITHUB_TOKEN:
-        required: false
 
 permissions:
   contents: read

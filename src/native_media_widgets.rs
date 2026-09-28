@@ -1160,7 +1160,6 @@ fn show_photo(
     dialog.present(Some(parent));
 }
 
-#[cfg(target_os = "linux")]
 fn photo_runtime() -> &'static tokio::runtime::Runtime {
     static RUNTIME: std::sync::LazyLock<tokio::runtime::Runtime> = std::sync::LazyLock::new(|| {
         tokio::runtime::Builder::new_multi_thread()
@@ -1175,7 +1174,6 @@ fn photo_runtime() -> &'static tokio::runtime::Runtime {
 
 /// Loads `path` through glycin's sandboxed loaders, scaled to fit
 /// `width` by `height`, into `picture`, unless its row moved on first.
-#[cfg(target_os = "linux")]
 fn load_photo(
     picture: &gtk::Picture,
     path: std::path::PathBuf,
@@ -1219,7 +1217,6 @@ fn load_photo(
 
 /// Loaders may ignore the requested scale and return the full image, tens
 /// of megabytes for a phone photo; shrink it to fit `width` by `height`.
-#[cfg(target_os = "linux")]
 fn fit_frame(frame: &glycin::Frame, width: u32, height: u32) -> gdk::Texture {
     let (frame_width, frame_height) = (frame.width(), frame.height());
     let fits = frame_width <= width && frame_height <= height;
@@ -1262,17 +1259,12 @@ fn fit_frame(frame: &glycin::Frame, width: u32, height: u32) -> gdk::Texture {
 
 /// Logs the first failure only: without glycin's loaders or bubblewrap,
 /// every photo fails the same way and keeps its thumbnail.
-#[cfg(target_os = "linux")]
 fn photo_error(error: &impl std::fmt::Display) {
     static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
         log::warn!("photo could not be loaded: {error}");
     }
 }
-
-/// Without glycin, photos keep their inline thumbnail.
-#[cfg(not(target_os = "linux"))]
-fn load_photo(_: &gtk::Picture, _: std::path::PathBuf, _: u32, _: u32, _: &DecodeToken) {}
 
 /// A shared place: the sender's map snapshot, name, address, and
 /// coordinates. Clicking opens the default maps app, else OpenStreetMap.

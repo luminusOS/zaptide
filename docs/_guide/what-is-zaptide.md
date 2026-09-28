@@ -44,8 +44,6 @@ ZapTide does not currently support:
   messages and GIFs do play in place.
 - Replying with an attachment (replying with text or a voice message
   works).
-- Colour emoji on Windows: Segoe UI Emoji is not a bitmap font, so emoji
-  stay monochrome there for now.
 
 When reporting [an issue](https://github.com/luminusOS/zaptide/issues), include
 what happened, what you expected, and when it happened. This helps match the

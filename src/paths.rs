@@ -116,7 +116,6 @@ impl AppDirs {
             let mut builder = std::fs::DirBuilder::new();
             builder.recursive(true);
             // Create new directories privately, even with a permissive umask.
-            #[cfg(unix)]
             {
                 use std::os::unix::fs::DirBuilderExt;
                 builder.mode(0o700);
@@ -128,16 +127,10 @@ impl AppDirs {
     }
 }
 
-#[cfg(unix)]
 fn restrict_directory(path: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
-}
-
-#[cfg(not(unix))]
-fn restrict_directory(_path: &Path) -> std::io::Result<()> {
-    Ok(())
 }
 
 #[cfg(test)]
@@ -152,7 +145,6 @@ mod tests {
         root
     }
 
-    #[cfg(unix)]
     #[test]
     fn ensure_restricts_base_directories() {
         use std::os::unix::fs::PermissionsExt;
@@ -169,7 +161,6 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    #[cfg(unix)]
     #[test]
     fn ensure_repairs_existing_directory_permissions_without_changing_data() {
         use std::os::unix::fs::PermissionsExt;

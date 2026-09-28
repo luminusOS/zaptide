@@ -4,14 +4,10 @@ use std::path::Path;
 
 use crate::audio;
 
-#[cfg(target_os = "linux")]
 use gst::prelude::*;
-#[cfg(target_os = "linux")]
 use gstreamer as gst;
-#[cfg(target_os = "linux")]
 use gtk4::gio::prelude::FileExt;
 
-#[cfg(target_os = "linux")]
 struct NativePlayback {
     message: String,
     path: std::path::PathBuf,
@@ -22,7 +18,6 @@ struct NativePlayback {
     pending_seek: Option<f32>,
 }
 
-#[cfg(target_os = "linux")]
 fn apply_rate(pipeline: &gst::Element, speed: f32) -> bool {
     let Some(position) = pipeline.query_position::<gst::ClockTime>() else {
         return false;
@@ -42,7 +37,6 @@ fn apply_rate(pipeline: &gst::Element, speed: f32) -> bool {
 #[derive(Default)]
 pub struct MediaService {
     player: audio::Player,
-    #[cfg(target_os = "linux")]
     native: Option<NativePlayback>,
     recorder: Option<audio::Recorder>,
 }
@@ -54,9 +48,7 @@ impl MediaService {
         if self.player.speed() == previous {
             return;
         }
-        #[cfg(target_os = "linux")]
         let speed = self.player.speed();
-        #[cfg(target_os = "linux")]
         if let Some(native) = &mut self.native {
             let position = native
                 .pipeline
@@ -102,7 +94,6 @@ impl MediaService {
     }
 
     pub fn playback_status(&self, message: &str) -> audio::Status {
-        #[cfg(target_os = "linux")]
         if let Some(native) = &self.native
             && native.message == message
         {
@@ -132,7 +123,6 @@ impl MediaService {
     }
 
     pub fn toggle_playback(&mut self, message: &str, path: &Path) -> Result<(), String> {
-        #[cfg(target_os = "linux")]
         {
             let speed = self.speed() as f64;
             if let Some(native) = &mut self.native
@@ -202,12 +192,9 @@ impl MediaService {
             });
             Ok(())
         }
-        #[cfg(not(target_os = "linux"))]
-        self.player.toggle(message, path)
     }
 
     pub fn seek(&mut self, message: &str, path: &Path, fraction: f32) -> Result<(), String> {
-        #[cfg(target_os = "linux")]
         {
             let speed = self.speed() as f64;
             if self
@@ -256,14 +243,10 @@ impl MediaService {
             }
             self.player.seek(message, path, fraction)
         }
-        #[cfg(not(target_os = "linux"))]
-        self.player.seek(message, path, fraction)
     }
 
     pub fn poll(&mut self) -> Result<(), String> {
-        #[cfg(target_os = "linux")]
         let speed = self.speed();
-        #[cfg(target_os = "linux")]
         if let Some(native) = &mut self.native
             && let Some(bus) = native.pipeline.bus()
         {
@@ -327,7 +310,6 @@ impl MediaService {
     }
 
     pub fn is_playing(&self) -> bool {
-        #[cfg(target_os = "linux")]
         if let Some(native) = &self.native {
             return !native.ended
                 && matches!(native.state, audio::State::Loading | audio::State::Playing);
@@ -340,12 +322,10 @@ impl MediaService {
     }
 
     pub fn stop_playback(&mut self) {
-        #[cfg(target_os = "linux")]
         self.stop_native();
         self.player.stop();
     }
 
-    #[cfg(target_os = "linux")]
     fn stop_native(&mut self) {
         if let Some(native) = self.native.take() {
             let _ = native.pipeline.set_state(gst::State::Null);
@@ -383,14 +363,13 @@ impl MediaService {
     }
 }
 
-#[cfg(target_os = "linux")]
 impl Drop for MediaService {
     fn drop(&mut self) {
         self.stop_native();
     }
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 

@@ -47,14 +47,13 @@ Development happens at **[github.com/luminusOS/zaptide](https://github.com/lumin
 - **WhatsApp formatting.** Bold, italic, strikethrough, code, lists, quotes,
   mentions, and link previews are supported. Links are clickable. Hebrew and
   Arabic RTL paragraphs keep logical word order by reordering font runs; this
-  is not a full Unicode Bidirectional Algorithm. Emoji use the bundled Noto
-  Color Emoji on macOS and Windows. On Linux, ZapTide prefers an installed
+  is not a full Unicode Bidirectional Algorithm. ZapTide prefers an installed
   Noto Color Emoji and falls back to the bundled copy. Emoji-only messages
   are larger.
 - **Screen-reader access.** AccessKit exposes the interface to desktop
   accessibility services. Custom buttons, chat rows, settings switches and
-  message text include readable labels. Windows NVDA navigation still needs
-  platform verification; keyboard and screen-reader support is not complete.
+  message text include readable labels. Keyboard and screen-reader support is
+  not complete.
   After Tab, the focused control is outlined and scrolled into view; using
   the mouse hides the outline again.
 - **Safer desktop opening.** Links open only web pages or email addresses.
@@ -94,7 +93,7 @@ Development happens at **[github.com/luminusOS/zaptide](https://github.com/lumin
   on click. Photos, stickers, GIFs, voice messages, audio, locations, contacts,
   polls, and link previews appear in the chat. Videos and documents open in
   their default desktop apps. Profile pictures and downloaded images support
-  Windows drive paths and filenames with spaces or non-ASCII characters.
+  filenames with spaces or non-ASCII characters.
   If an attachment has expired, ZapTide asks your
   phone to upload it again.
 - **Polls.** Use the checklist button beside the paperclip to create a poll with
@@ -136,14 +135,9 @@ Development happens at **[github.com/luminusOS/zaptide](https://github.com/lumin
   chats stay quiet until you unarchive them. GNOME drops notifications from apps
   without an installed desktop file, so a `cargo run` build notifies only after
   `packaging/applications/dev.luminusos.ZapTide.desktop` is copied to
-  `~/.local/share/applications/`. Windows notifications
-  identify ZapTide as the sender and show chat pictures as small circular icons;
-  installed and portable builds register this identity in the current user's registry.
-  On Linux,
-  clicking a notification opens the chat, and reading the chat here or on another
-  device dismisses its outstanding notifications. On macOS, notifications use
-  the installed ZapTide application's identity without an application chooser;
-  unregistered development builds skip notifications if that identity is unavailable.
+  `~/.local/share/applications/`. Clicking a notification opens the chat, and
+  reading the chat here or on another device dismisses its outstanding
+  notifications.
 - **Themes.** Light, dark, follow the system, or a local JSON palette. Zoom with
   Ctrl+plus and Ctrl+minus.
 - **Message bubbles.** Incoming messages align left, outgoing messages align
@@ -154,8 +148,7 @@ Development happens at **[github.com/luminusOS/zaptide](https://github.com/lumin
   selectable.
 - **Keyboard shortcuts.** `Ctrl+K` searches, `Alt+↑/↓` switches chats and
   keeps the active chat visible in the list, `Esc` cancels the current action,
-  `Ctrl+L` focuses the message input, and `Ctrl+/` lists all shortcuts (use
-  Command instead of Ctrl on macOS). The × at the left of the shortcut hints
+  `Ctrl+L` focuses the message input, and `Ctrl+/` lists all shortcuts. The × at the left of the shortcut hints
   hides the bar; restore it with **Show shortcut hints** in Settings.
 - **Local storage.** Messages, contacts and sticker metadata are stored in a
   SQLCipher-encrypted archive, unlocked automatically through your OS keyring.
@@ -186,9 +179,8 @@ release gates. Existing ZapFast packages are not ZapTide packages and do not sha
 
 ### Archive encryption
 
-The archive key is a random 256-bit secret in Secret Service on Linux, Keychain
-on macOS, or Windows Credential Manager. Linux needs a working Secret Service
-provider (for example GNOME Keyring or KeePassXC with Secret Service enabled).
+The archive key is a random 256-bit secret in Secret Service. ZapTide needs a
+working Secret Service provider (for example GNOME Keyring or KeePassXC with Secret Service enabled).
 If the keyring is locked or unavailable, unlock it and click Retry; ZapTide keeps
 its archive intact and waits before connecting. It never saves a replacement
 plaintext archive. Back up both the archive and its OS keyring key: copying only
@@ -300,10 +292,9 @@ ZapTide has its own XDG directories, keyring service, process identity, and sing
 protocol. It never opens, moves, copies, or deletes ZapFast, FastsApp, or FastWhatsApp data
 automatically. Link ZapTide as a separate companion device.
 
-On Linux and macOS, ZapTide restricts its configuration, state, and cache
-directories to the current user (`0700`), including existing installations.
-Startup stops if those directories cannot be created or secured, before opening
-logs or databases. Windows uses the permissions inherited from your user profile.
+ZapTide restricts its configuration, state, and cache directories to the
+current user (`0700`), including existing installations. Startup stops if those
+directories cannot be created or secured, before opening logs or databases.
 
 ### Local themes
 
@@ -416,7 +407,7 @@ and could get an account suspended. Use it at your own risk.
 
 ## Packaging maintenance
 
-Release packaging uses the [native-packages](https://rubygems.org/gems/native-packages) gem. macOS release builds automatically sign and notarize when the Apple CI credentials are configured. `native-packages.yaml` declares packages and downstream repositories; native recipes and installation assets live in `packaging/`; see [PACKAGING.md](PACKAGING.md) for local commands and CI behavior.
+Release packaging uses the [native-packages](https://rubygems.org/gems/native-packages) gem. `native-packages.yaml` declares packages and downstream repositories; native recipes and installation assets live in `packaging/`; see [PACKAGING.md](PACKAGING.md) for local commands and CI behavior.
 
 ## License
 

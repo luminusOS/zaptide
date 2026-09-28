@@ -69,8 +69,6 @@ mime_guess2 = "2"
 rodio = { version = "0.22", default-features = false, features = ["playback", "recording", "mp3", "mp4", "wav", "vorbis"] }
 opus = "0.4"
 ogg = "0.9"
-
-[target.'cfg(target_os = "linux")'.dependencies]
 gstreamer = "0.25"
 # Loads photos through GNOME's sandboxed image loaders (glycin-loaders).
 glycin = { version = "4", default-features = false, features = ["gdk4", "tokio"] }
@@ -78,16 +76,6 @@ notify = "8.2"
 zbus-secret-service-keyring-store = { version = "1.0.1", features = ["rt-tokio-crypto-rust"] }
 # Tray icon: StatusNotifierItem with its menu over com.canonical.dbusmenu.
 ksni = { version = "0.3", default-features = false, features = ["tokio", "blocking"] }
-
-[target.'cfg(target_os = "macos")'.dependencies]
-apple-native-keyring-store = { version = "1.0.2", features = ["keychain"] }
-
-[target.'cfg(windows)'.dependencies]
-windows-native-keyring-store = { version = "1.1", default-features = false }
-
-# The icon and version information Windows shows for the executable.
-[target.'cfg(windows)'.build-dependencies]
-winresource = "0.1"
 
 [dev-dependencies]
 tempfile = "3"

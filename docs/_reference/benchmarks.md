@@ -83,7 +83,6 @@ compared with one for ZapFast. Neither app had swapped memory in the samples.
 
 - **One Linux machine and one account.** Local history and caches differ
   between clients. Memory use changes with workload and session length.
-  These measurements do not cover macOS or Windows.
 - **WhatsApp Web together with its dedicated browser.** We did not measure
   an empty-browser baseline. The numbers do not establish the incremental
   cost of adding a WhatsApp tab to an already-open browser. Shared pages with

@@ -38,12 +38,7 @@ pub(super) fn key_for(path: &Path) -> Result<Zeroizing<[u8; 32]>> {
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>()
     );
-    #[cfg(target_os = "linux")]
     let store = zbus_secret_service_keyring_store::Store::new();
-    #[cfg(target_os = "macos")]
-    let store = apple_native_keyring_store::keychain::Store::new();
-    #[cfg(windows)]
-    let store = windows_native_keyring_store::Store::new();
     let store = store.context("Unlock your OS keyring and restart ZapTide")?;
     let entry = store
         .build(KEYRING_SERVICE, &identity, None)
@@ -123,7 +118,6 @@ fn keyed(path: &Path, key: &[u8; 32]) -> Result<Connection> {
 fn private_file(path: &Path) -> Result<()> {
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
-    #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
@@ -179,14 +173,12 @@ pub(super) fn open(path: &Path, key: &[u8; 32]) -> Result<Connection> {
         );
         drop(verified);
         drop(source);
-        // FlushFileBuffers on Windows requires a writable handle.
         fs::OpenOptions::new()
             .write(true)
             .open(&staging)?
             .sync_all()?;
         fs::rename(&staging, path)
             .context("Could not replace the archive with its encrypted copy")?;
-        #[cfg(unix)]
         if let Some(parent) = path.parent() {
             fs::File::open(parent)?.sync_all()?;
         }

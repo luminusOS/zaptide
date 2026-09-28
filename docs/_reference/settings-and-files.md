@@ -25,13 +25,6 @@ history to a new device, although ZapTide can request some older messages from
 the phone. Clearing the media cache makes ZapTide download attachments again.
 Expired attachments may still be available through the phone.
 
-On macOS, settings, state, and logs are under
-`~/Library/Application Support/dev.luminusos.zaptide`; caches are under
-`~/Library/Caches/dev.luminusos.zaptide`. On Windows, settings are under
-`%APPDATA%\luminusos\zaptide\config`, state and logs under
-`%LOCALAPPDATA%\luminusos\zaptide\data`, and caches under
-`%LOCALAPPDATA%\luminusos\zaptide\cache`.
-
 ZapTide never opens, moves, copies, or deletes ZapFast, FastsApp, or
 FastWhatsApp data automatically. Link it as a separate companion device.
 

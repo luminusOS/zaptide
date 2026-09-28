@@ -1,5 +1,5 @@
 title: ZapTide
-description: A fast, lightweight WhatsApp app for Linux, macOS, and Windows.
+description: A fast, lightweight WhatsApp app for Linux.
 lang: en-US
 timezone: Europe/Berlin
 url: https://luminusos.github.io
@@ -59,7 +59,7 @@ jekyll_vitepress:
     title: ZapTide
     description: >-
       Documentation for ZapTide, a native WhatsApp client for chats, voice
-      messages, attachments, and notifications on Linux, macOS, and Windows.
+      messages, attachments, and notifications on Linux.
     full: true
     details: >-
       Covers installation, phone linking, everyday use, settings, and the

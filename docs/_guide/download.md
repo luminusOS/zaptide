@@ -1,6 +1,6 @@
 ---
 title: Download
-description: Get ZapTide for Linux, macOS, or Windows, with install instructions for each.
+description: Get ZapTide for Linux, with install instructions.
 nav_order: 1
 ---
 
@@ -15,7 +15,7 @@ cd zaptide
 cargo build --release --locked
 ```
 
-Linux needs ALSA, libxkbcommon, Wayland, OpenGL development files, CMake, and
+ZapTide needs ALSA, libxkbcommon, Wayland, OpenGL development files, CMake, and
 a C/C++ toolchain. See [Getting Started]({{ site.baseurl }}/getting-started/) for distribution
 commands. Release packages will appear on the
 [GitHub releases page](https://github.com/luminusOS/zaptide/releases) after the

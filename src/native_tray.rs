@@ -30,7 +30,6 @@ pub fn unread_label(count: usize) -> Option<String> {
     }
 }
 
-#[cfg(target_os = "linux")]
 mod imp {
     use super::{TrayAction, TrayState, unread_label};
     use ksni::blocking::TrayMethods;
@@ -186,26 +185,6 @@ mod imp {
         pub fn update(&self, state: TrayState) {
             self.0.update(move |tray| tray.state = state);
         }
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-mod imp {
-    use super::{TrayAction, TrayState};
-
-    /// No tray outside Linux yet.
-    pub struct TrayHandle;
-
-    impl TrayHandle {
-        pub fn spawn(
-            _icon_dir: &std::path::Path,
-            _state: TrayState,
-            _actions: relm4::Sender<TrayAction>,
-        ) -> Option<Self> {
-            None
-        }
-
-        pub fn update(&self, _state: TrayState) {}
     }
 }
 

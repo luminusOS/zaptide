@@ -1,12 +1,12 @@
 ---
 layout: home
 title: ZapTide
-description: A fast, lightweight WhatsApp app for Linux, macOS, and Windows.
+description: A fast, lightweight WhatsApp app for Linux.
 permalink: /
 hero:
   name: ZapTide
   text: WhatsApp, native and fast
-  tagline: A lightweight WhatsApp app for Linux, macOS, and Windows. Chat, send voice messages, and share files.
+  tagline: A lightweight WhatsApp app for Linux. Chat, send voice messages, and share files.
   actions:
     - theme: brand
       text: Download

@@ -38,17 +38,15 @@ native-packages repositories
 native-packages status --offline
 ```
 
-For applications with configured AUR or Homebrew destinations, stage the
+For applications with configured AUR destinations, stage the
 recipes with `native-packages stage TARGET dist/packages/1.2.3/recipes`,
 inspect `native-packages diff TARGET`, run native package validation, and
 publish with `native-packages publish TARGET`. These destinations use ignored
 managed Git clones, recorded in this application's YAML configuration.
-AUR automation needs `PUBLISH_AUR=true`, `AUR_SSH_KEY` and `AUR_KNOWN_HOSTS`;
-Homebrew automation needs `PUBLISH_HOMEBREW=true` and
-`HOMEBREW_TAP_GITHUB_TOKEN`. Enable only configured destinations.
+AUR automation needs `PUBLISH_AUR=true`, `AUR_SSH_KEY` and `AUR_KNOWN_HOSTS`.
+Enable only configured destinations.
 
-The native macOS configuration, Windows and Flatpak build steps remain responsible
-for their native artifacts. Additional nFPM formats require suitable platform
+The Flatpak build steps remain responsible for their native artifacts. Additional nFPM formats require suitable platform
 inputs and dependencies; adding a format does not port the application.
 See the [shared CLI documentation](https://github.com/crmne/native-packages/tree/v0.6.0)
 for commands and supported formats.
@@ -56,49 +54,13 @@ for commands and supported formats.
 To upgrade the tool, change `tool.version` in `native-packages.yaml`, the matching immutable workflow reference, and any release-job gem installation
 pin together. Applications need no packaging Gemfile, lockfile or Ruby wrapper.
 
-## Automatic macOS notarization
-
-`packaging/macos/entitlements.plist` grants microphone access under the hardened
-runtime, and `Info.plist` supplies the permission prompt. `bundle.sh` embeds the
-entitlement in its initial signature so native-packages preserves it when signing
-with Developer ID. After notarization, `verify.sh` mounts the final DMG and checks
-its ticket, Gatekeeper acceptance, both architectures, and microphone metadata.
-
-The macOS release job builds the app first, then uses
-`native-packages.yaml` and `packaging/macos/dmg.rb` to package it.
-The shared gem signs its owned input copy, notarizes the DMG, staples and validates
-Apple's ticket, and only then records final checksums. Configure these repository
-secrets, which the job exposes as environment variables:
-
-- `APPLE_CERTIFICATE_P12`: base64 PKCS#12 Developer ID Application certificate and private key.
-- `APPLE_CERTIFICATE_PASSWORD`: the export password.
-- `APPLE_SIGNING_IDENTITY`: exact `Developer ID Application: Name (TEAMID)` identity.
-- `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD`: Apple email, Team ID and app-specific password.
-
-A complete set enables notarization automatically. An incomplete set fails;
-no values retain local builds without Developer ID signing. Application inputs
-and the user's normal keychains remain unchanged. See the shared
-[Apple setup and phase contract](https://github.com/crmne/native-packages/blob/v0.6.0/docs/apple-notarization.md).
-
-After preparing `dist/macos-input` on a Mac, test packaging without publishing:
-
-```sh
-native-packages build \
-  --version 1.2.3 --target macos-universal --defer-recipes --output dist/macos-packages-test
-```
-
-Secret configuration applies to future builds. Existing published DMGs retain
-their original signatures; this setup does not replace release assets.
-
 Linux releases build on Ubuntu 24.04 (glibc 2.39). DEB/RPM recipes declare
 runtime-loaded Wayland, X11 and EGL libraries as well as ALSA and its PulseAudio
 plugin. Packaging runs for an explicit published ZapTide version through manual
 dispatch or a release workflow call. Clean Ubuntu, Debian and Fedora containers
 install and remove each package, check GUI libraries loaded with `dlopen`, and
 verify desktop and theme assets. Run the same check locally with
-`bash packaging/test-install.sh ubuntu:24.04 /path/to/native-packages-output`. The macOS job selects `macos-universal`
-from the same configuration with `--defer-recipes`, leaving Linux inputs and AUR
-recipe generation to the Linux packaging job after release assets exist.
+`bash packaging/test-install.sh ubuntu:24.04 /path/to/native-packages-output`.
 
 ## Flatpak
 

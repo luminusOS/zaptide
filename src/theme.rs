@@ -6,7 +6,6 @@ use crate::color::Color;
 
 pub mod custom;
 pub(crate) mod presets;
-#[cfg(target_os = "linux")]
 mod watch;
 
 #[derive(Clone, Copy, Debug, PartialEq)]

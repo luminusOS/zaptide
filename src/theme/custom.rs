@@ -168,7 +168,6 @@ fn read_theme(directory: &Path, filename: &str) -> Result<CustomTheme, String> {
 struct Loaded {
     themes: Vec<CustomTheme>,
     problem: Option<String>,
-    #[cfg(target_os = "linux")]
     watch: Option<super::watch::ThemeWatch>,
 }
 
@@ -249,7 +248,6 @@ pub struct Catalog {
     receiver: Option<mpsc::Receiver<Loaded>>,
     pending: Option<Scan>,
     presets: bool,
-    #[cfg(target_os = "linux")]
     watch: Option<super::watch::ThemeWatch>,
 }
 
@@ -261,7 +259,6 @@ impl Catalog {
     }
 
     pub fn needs_reload(&self) -> bool {
-        #[cfg(target_os = "linux")]
         if let Some(watch) = &self.watch {
             return watch.take_changed();
         }
@@ -288,7 +285,6 @@ impl Catalog {
 
     fn scan(&mut self, scan: Scan) {
         let presets = self.presets;
-        #[cfg(target_os = "linux")]
         let needs_watch = presets && self.watch.is_none();
         let waker = scan.waker.clone();
         self.spawn(waker, move || {
@@ -321,7 +317,6 @@ impl Catalog {
                 }
                 loaded.themes.sort_by(|a, b| a.filename.cmp(&b.filename));
             }
-            #[cfg(target_os = "linux")]
             if needs_watch {
                 let watch = std::fs::create_dir_all(&scan.directory)
                     .map_err(notify::Error::io)
@@ -394,7 +389,6 @@ impl Catalog {
             Ok(loaded) => {
                 self.themes = loaded.themes;
                 self.problem = loaded.problem;
-                #[cfg(target_os = "linux")]
                 if loaded.watch.is_some() {
                     self.watch = loaded.watch;
                 }
@@ -494,7 +488,6 @@ mod custom_theme_tests {
         ] {
             assert!(read_theme(&dir, filename).is_err(), "{filename}");
         }
-        #[cfg(unix)]
         {
             std::os::unix::fs::symlink(root.join("outside.json"), dir.join("link.json")).unwrap();
             assert!(read_theme(&dir, "link.json").is_err());
