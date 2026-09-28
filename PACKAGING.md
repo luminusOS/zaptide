@@ -2,7 +2,7 @@
 
 [`native-packages.yaml`](native-packages.yaml) is the packaging configuration:
 it pins the shared CLI and nFPM versions and declares Linux amd64/arm64 inputs,
-DEB/RPM contents and dependencies.
+RPM contents and dependencies.
 Application assets stay in `packaging/`.
 
 ZapTide uses the `zaptide` binary and an isolated package identity. It does not
@@ -44,13 +44,13 @@ for commands and supported formats.
 To upgrade the tool, change `tool.version` in `native-packages.yaml`, the matching immutable workflow reference, and any release-job gem installation
 pin together. Applications need no packaging Gemfile, lockfile or Ruby wrapper.
 
-Linux releases build on Ubuntu 24.04 (glibc 2.39). DEB/RPM recipes declare
-runtime-loaded Wayland, X11 and EGL libraries as well as ALSA and its PulseAudio
-plugin. Packaging runs for an explicit published ZapTide version through manual
-dispatch or a release workflow call. Clean Ubuntu, Debian and Fedora containers
-install and remove each package, check GUI libraries loaded with `dlopen`, and
-verify desktop and theme assets. Run the same check locally with
-`bash packaging/test-install.sh ubuntu:24.04 /path/to/native-packages-output`.
+Linux releases build in a Fedora 45 container, the first with libadwaita 1.10.
+The RPM declares runtime-loaded Wayland, X11 and EGL libraries as well as ALSA
+and its PulseAudio plugin. Packaging runs for an explicit published ZapTide
+version through manual dispatch or a release workflow call. A clean Fedora
+container installs and removes the package, checks GUI libraries loaded with
+`dlopen`, and verifies desktop assets. Run the same check locally with
+`bash packaging/test-install.sh fedora:45 /path/to/native-packages-output`.
 
 ## Flatpak
 
@@ -144,7 +144,7 @@ sudo glib-compile-schemas /usr/share/glib-2.0/schemas/
 sudo install -Dm644 packaging/icons/zaptide.svg /usr/share/icons/hicolor/scalable/apps/dev.luminusos.ZapTide.svg
 ```
 
-For automated DEB/RPM packaging, use `native-packages` as described above.
+For automated RPM packaging, use `native-packages` as described above.
 
 ## Flatpak sandbox limitations
 
@@ -197,7 +197,7 @@ ZapFast upstream fixes can be imported via the process documented in `UPSTREAM.m
 | `packaging/build-metadata.sh` | Generates `.desktop`, metainfo, compiles schemas |
 | `packaging/check.sh` | Validates metadata, checks for forbidden dependencies |
 | `packaging/smoke-test.sh` | Builds and launches synthetic smoke session |
-| `packaging/test-install.sh` | Tests DEB/RPM installation in clean containers |
+| `packaging/test-install.sh` | Tests RPM installation in a clean Fedora container |
 | `scripts/check-native-ui-deps.sh` | Scans for forbidden UI frameworks (egui, webkit, etc.) |
 | `scripts/perf-native-ui.sh` | Performance measurement script |
 | `packaging/flatpak/flathub.sh` | Generates pinned Flathub checkout from release tag |

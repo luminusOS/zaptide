@@ -10,7 +10,7 @@ ZapTide keeps release asset definitions and nFPM configuration in
 
 Stable releases build the Linux artifacts first.
 The shared packaging workflow then verifies published checksums and attaches
-Linux DEB/RPM packages. PRs only validate packaging.
+Linux RPM packages. PRs only validate packaging.
 
 Native bundle contents remain application-specific.
 See the repository's [maintainer packaging guide](https://github.com/luminusOS/zaptide/blob/main/PACKAGING.md)

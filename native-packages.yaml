@@ -4,13 +4,10 @@ schema: 1
 tool:
   version: 0.6.0
   nfpm: 2.47.0
-# Ubuntu 24.04 and Debian 13 use ALSA's t64 package name.
 libraries:
   libgstreamer-1.0.so.0:
-    deb: libgstreamer1.0-0
     rpm: gstreamer1
   libasound.so.2:
-    deb: libasound2t64
     rpm: alsa-lib
 nfpm:
   name: zaptide
@@ -44,28 +41,6 @@ nfpm:
     file_info:
       mode: 420
   overrides:
-    deb:
-      depends:
-      - libc6 (>= 2.39)
-      - libgl1
-      - libegl1
-      - libxkbcommon0
-      - libxkbcommon-x11-0
-      - libwayland-client0
-      - libwayland-cursor0
-      - libwayland-egl1
-      - libx11-6
-      - libx11-xcb1
-      - libxcursor1
-      - libxi6
-      - libxrandr2
-      - libasound2t64
-      - libasound2-plugins
-      - libgstreamer1.0-0
-      - gstreamer1.0-plugins-base
-      - gstreamer1.0-plugins-good
-      - libgcc-s1
-      - libstdc++6
     rpm:
       depends:
       - glibc >= 2.39
@@ -102,7 +77,6 @@ targets:
     libc: glibc
     compiler_target: x86_64-unknown-linux-gnu
     formats:
-    - deb
     - rpm
     input:
       local: dist/zaptide-v@VERSION@-x86_64-unknown-linux-gnu.tar.gz
@@ -113,7 +87,6 @@ targets:
     libc: glibc
     compiler_target: aarch64-unknown-linux-gnu
     formats:
-    - deb
     - rpm
     input:
       local: dist/zaptide-v@VERSION@-aarch64-unknown-linux-gnu.tar.gz
