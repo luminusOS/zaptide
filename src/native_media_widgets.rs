@@ -63,12 +63,11 @@ pub fn build_media_widget_with_action(
     let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
     if let Content::Text { preview, .. } = &message.content {
         if let Some(preview) = preview {
-            root.add_css_class("card");
-            root.add_css_class("zaptide-media-card");
-            add_label(&root, preview.title.as_deref().unwrap_or(&preview.url));
-            if let Some(description) = &preview.description {
-                add_label(&root, description);
-            }
+            root.append(&link_card(
+                preview,
+                message.thumbnail.clone(),
+                &decode_token,
+            ));
         }
         return NativeMediaWidget {
             widget: root,
@@ -902,6 +901,73 @@ fn photo_error(error: &impl std::fmt::Display) {
 /// Without glycin, photos keep their inline thumbnail.
 #[cfg(not(target_os = "linux"))]
 fn load_photo(_: &gtk::Picture, _: std::path::PathBuf, _: u32, _: u32, _: &DecodeToken) {}
+
+/// Link preview as WhatsApp sends it: the sender's thumbnail, title,
+/// description, and site. Clicking it opens the link.
+fn link_card(
+    preview: &crate::model::LinkPreview,
+    thumbnail: Option<Vec<u8>>,
+    decode_token: &DecodeToken,
+) -> gtk::Box {
+    let card = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    card.add_css_class("card");
+    card.add_css_class("zaptide-media-card");
+    card.add_css_class("zaptide-link-card");
+    card.set_tooltip_text(Some(&preview.url));
+    if let Some(bytes) = thumbnail {
+        let image = gtk::Image::new();
+        image.set_pixel_size(72);
+        image.set_valign(gtk::Align::Start);
+        image.add_css_class("zaptide-link-thumbnail");
+        image.set_overflow(gtk::Overflow::Hidden);
+        image.set_visible(false);
+        card.append(&image);
+        decode_preview_async(&image, move || Some(bytes), decode_token);
+    }
+    let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    text.set_hexpand(true);
+    let line = |value: &str, lines: i32, classes: &[&str]| {
+        let label = gtk::Label::builder()
+            .label(value)
+            .xalign(0.0)
+            .wrap(true)
+            .wrap_mode(gtk::pango::WrapMode::WordChar)
+            .lines(lines)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .max_width_chars(44)
+            .css_classes(classes)
+            .build();
+        text.append(&label);
+    };
+    let host = url::Url::parse(&preview.url).ok().and_then(|url| {
+        url.host_str()
+            .map(|host| host.trim_start_matches("www.").to_owned())
+    });
+    line(
+        preview.title.as_deref().unwrap_or(&preview.url),
+        2,
+        &["heading"],
+    );
+    if let Some(description) = &preview.description {
+        line(description, 3, &["caption"]);
+    }
+    if let Some(host) = &host {
+        line(host, 1, &["caption", "dim-label"]);
+    }
+    card.append(&text);
+    let url = preview.url.clone();
+    let click = gtk::GestureClick::new();
+    click.connect_released(move |gesture, _, _, _| {
+        let window = gesture
+            .widget()
+            .and_then(|widget| widget.root())
+            .and_downcast::<gtk::Window>();
+        gtk::UriLauncher::new(&url).launch(window.as_ref(), gtk::gio::Cancellable::NONE, |_| {});
+    });
+    card.add_controller(click);
+    card.set_cursor_from_name(Some("pointer"));
+    card
+}
 
 fn add_label(parent: &gtk::Box, text: &str) {
     let label = gtk::Label::new(Some(text));

@@ -3885,6 +3885,8 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
          .zaptide-bubble.outgoing { background-color: @zaptide_bubble_out; color: @zaptide_bubble_out_text; }\n\
          .zaptide-message-item:focus-visible .zaptide-bubble { outline: 2px solid @accent_color; outline-offset: 2px; }\n\
          .zaptide-media-card { padding: 8px 12px; margin-top: 4px; background-color: color-mix(in srgb, currentColor 8%, transparent); }\n\
+         .zaptide-link-card:hover { background-color: color-mix(in srgb, currentColor 12%, transparent); }\n\
+         .zaptide-link-thumbnail { border-radius: 8px; }\n\
          .zaptide-sender-blue { color: @blue_3; }\n\
          .zaptide-sender-green { color: @green_4; }\n\
          .zaptide-sender-yellow { color: @yellow_5; }\n\
