@@ -1,18 +1,18 @@
 # Packaging
 
-ZapTide is distributed as a Flatpak. There are no native distribution packages.
+ZapTide ships as a Flatpak. Native distribution packages are not available.
 
-ZapTide needs libadwaita 1.10, which ships with GNOME 51. Linux release
-binaries build in a Fedora 45 container, the first with libadwaita 1.10.
+ZapTide needs libadwaita 1.10 (GNOME 51). Linux release binaries build in
+Fedora 45, the first Fedora version to include it.
 
 ## Flatpak
 
-`packaging/flatpak/dev.luminusos.ZapTide.yml` builds from the local checkout,
-fetching Cargo dependencies during the build. The adjacent bundle manifest
-reuses the Linux release binary. Both grant Wayland/X11, GPU, audio, network
-and keyring access; attachments chosen by the user use portals. No
-home-directory permission is granted. `--persist=.local/state` keeps the
-archive and session on Flatpak versions without `XDG_STATE_HOME`.
+`packaging/flatpak/dev.luminusos.ZapTide.yml` builds this checkout and fetches
+Cargo dependencies. The bundle manifest beside it packages the Linux release
+binary. Both grant Wayland/X11, GPU, audio, network and keyring access.
+User-selected attachments go through portals; neither manifest grants access
+to the home directory. `--persist=.local/state` keeps the archive and session
+on Flatpak versions without `XDG_STATE_HOME`.
 
 Build and install locally with Flatpak Builder (GNOME 51 runtime and SDK):
 
@@ -20,7 +20,7 @@ Build and install locally with Flatpak Builder (GNOME 51 runtime and SDK):
 flatpak-builder --user --install --force-clean --install-deps-from=flathub build-dir packaging/flatpak/dev.luminusos.ZapTide.yml
 ```
 
-To create a distributable bundle instead, export the build to a local repo:
+For a distributable bundle, export the build to a local repository:
 
 ```sh
 mkdir -p target/flatpak
@@ -28,7 +28,7 @@ flatpak-builder --user --force-clean --install-deps-from=flathub --repo=target/f
 flatpak build-bundle target/flatpak/repo target/flatpak/zaptide-dev.flatpak dev.luminusos.ZapTide
 ```
 
-To generate a pinned offline Flathub checkout, Python needs `aiohttp`,
+Generating a pinned offline Flathub checkout needs Python's `aiohttp`,
 `tomlkit` and `PyYAML`:
 
 ```sh
@@ -41,9 +41,9 @@ Flathub submission is a separate, manual step.
 prohibit AI agents from submitting or writing submission interactions and
 require disclosure of generated material.
 
-The release workflow builds the Linux binaries once, packages the x86_64 one
-as a Flatpak bundle with `dev.luminusos.ZapTide.bundle.yml`, and lists every
-file in `checksums.txt`.
+The release workflow builds Linux binaries once, packages the x86_64 binary
+with `dev.luminusos.ZapTide.bundle.yml`, and lists every file in
+`checksums.txt`.
 
 ## Build dependencies
 
