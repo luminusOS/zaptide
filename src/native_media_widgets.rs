@@ -101,6 +101,26 @@ pub fn build_media_widget_with_action(
             decode_token,
         };
     }
+    if let Content::Video {
+        media,
+        seconds,
+        gif,
+        ..
+    } = &message.content
+    {
+        append_video(
+            &root,
+            message,
+            media,
+            *seconds,
+            *gif,
+            std::rc::Rc::new(on_action),
+        );
+        return NativeMediaWidget {
+            widget: root,
+            decode_token,
+        };
+    }
     if let Content::Image { media, .. } = &message.content {
         append_photo(
             &root,
@@ -169,25 +189,6 @@ pub fn build_media_widget_with_action(
     }
     if !detail.is_empty() {
         add_label(&root, detail);
-    }
-
-    match playback_projection(message) {
-        PlaybackProjection::Native { looping } => {
-            if let Some(path) = message
-                .content
-                .media()
-                .and_then(|media| media.path.as_ref())
-            {
-                append_native_playback(&root, path, looping);
-            }
-        }
-        PlaybackProjection::Fallback => {
-            add_label(
-                &root,
-                "Preview unavailable for this media format. Open attachment to view it.",
-            );
-        }
-        PlaybackProjection::None => {}
     }
 
     if matches!(&message.content, Content::Image { .. }) && message.thumbnail.is_some() {
@@ -679,23 +680,21 @@ fn photo_size(width: Option<u32>, height: Option<u32>) -> (i32, i32) {
     (side(width), side(height))
 }
 
-/// A photo in its own rounded frame: the small inline thumbnail at once,
-/// the file itself once downloaded, and a full view on click.
-fn append_photo(
-    parent: &gtk::Box,
+/// A rounded frame of `width` by `height` showing the message thumbnail,
+/// with room for overlays such as play or download buttons.
+fn media_frame(
     message: &Message,
-    media: &crate::model::Media,
-    token: &DecodeToken,
-    on_action: std::rc::Rc<dyn Fn(NativeMediaAction)>,
-) {
-    let (width, height) = photo_size(media.width, media.height);
+    width: i32,
+    height: i32,
+    label: &str,
+) -> (gtk::Picture, gtk::Overlay) {
     let picture = gtk::Picture::builder()
         .content_fit(gtk::ContentFit::Cover)
         .can_shrink(true)
         .width_request(width)
         .height_request(height)
         .build();
-    picture.update_property(&[gtk::accessible::Property::Label("Photo")]);
+    picture.update_property(&[gtk::accessible::Property::Label(label)]);
     // A picture's natural size is its texture's, loaded at twice the frame
     // for dense screens; the clamp keeps the frame at its logical size.
     let clamp = adw::Clamp::builder()
@@ -718,6 +717,20 @@ fn append_photo(
     {
         picture.set_paintable(Some(&texture));
     }
+    (picture, frame)
+}
+
+/// A photo in its own rounded frame: the small inline thumbnail at once,
+/// the file itself once downloaded, and a full view on click.
+fn append_photo(
+    parent: &gtk::Box,
+    message: &Message,
+    media: &crate::model::Media,
+    token: &DecodeToken,
+    on_action: std::rc::Rc<dyn Fn(NativeMediaAction)>,
+) {
+    let (width, height) = photo_size(media.width, media.height);
+    let (picture, frame) = media_frame(message, width, height, "Photo");
     match attachment_action(message) {
         Some(NativeMediaAction::Open(path)) => {
             // Twice the frame, for high-density screens.
@@ -765,6 +778,154 @@ fn append_photo(
             parent.append(&frame);
         }
     }
+}
+
+/// A video as a framed thumbnail with a play button and its length. GIFs
+/// loop silently in place; other videos open in the viewer with sound.
+fn append_video(
+    parent: &gtk::Box,
+    message: &Message,
+    media: &crate::model::Media,
+    seconds: Option<u32>,
+    gif: bool,
+    on_action: std::rc::Rc<dyn Fn(NativeMediaAction)>,
+) {
+    let (width, height) = photo_size(media.width, media.height);
+    let (picture, frame) = media_frame(message, width, height, if gif { "GIF" } else { "Video" });
+    let length = if gif {
+        Some("GIF".to_owned())
+    } else {
+        seconds.map(crate::util::duration)
+    };
+    let action = attachment_action(message);
+    let badge = match (&action, length) {
+        (Some(NativeMediaAction::Download { .. }), Some(length)) => {
+            Some(format!("{length} · {}", crate::util::bytes(media.size)))
+        }
+        (Some(NativeMediaAction::Download { .. }), None) => Some(crate::util::bytes(media.size)),
+        (_, length) => length,
+    };
+    if let Some(badge) = badge {
+        frame.add_overlay(
+            &gtk::Label::builder()
+                .label(badge)
+                .halign(gtk::Align::Start)
+                .valign(gtk::Align::End)
+                .margin_start(8)
+                .margin_bottom(8)
+                .css_classes(["caption", "zaptide-media-badge"])
+                .build(),
+        );
+    }
+    let centered = |icon: &str, tooltip: &str| {
+        gtk::Button::builder()
+            .icon_name(icon)
+            .tooltip_text(tooltip)
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::Center)
+            .css_classes(["osd", "circular", "zaptide-play"])
+            .build()
+    };
+    match action {
+        Some(NativeMediaAction::Open(path)) => {
+            let projection = playback_projection(message);
+            if projection == (PlaybackProjection::Native { looping: true }) {
+                let clip = gtk::MediaFile::for_filename(&path);
+                clip.set_loop(true);
+                clip.set_muted(true);
+                clip.play();
+                picture.set_paintable(Some(&clip));
+                parent.append(&frame);
+                return;
+            }
+            // Only a cue: the whole frame is the button.
+            let play = gtk::Image::builder()
+                .icon_name("media-playback-start-symbolic")
+                .pixel_size(24)
+                .halign(gtk::Align::Center)
+                .valign(gtk::Align::Center)
+                .css_classes(["osd", "zaptide-play"])
+                .build();
+            frame.add_overlay(&play);
+            let playable = matches!(projection, PlaybackProjection::Native { .. });
+            let button = gtk::Button::builder()
+                .child(&frame)
+                .halign(gtk::Align::Start)
+                .tooltip_text(if playable { "Play video" } else { "Open video" })
+                .css_classes(["flat", "zaptide-photo-button"])
+                .build();
+            button.update_property(&[gtk::accessible::Property::Label("Play video")]);
+            let details = ViewerDetails::of(message);
+            button.connect_clicked(move |button| {
+                if playable {
+                    show_video(button, &path, &details, on_action.clone());
+                } else {
+                    on_action(NativeMediaAction::Open(path.clone()));
+                }
+            });
+            parent.append(&button);
+        }
+        Some(action @ NativeMediaAction::Download { .. }) => {
+            let button = centered("folder-download-symbolic", "Download video");
+            button.connect_clicked(move |_| on_action(action.clone()));
+            frame.add_overlay(&button);
+            parent.append(&frame);
+        }
+        None => {
+            frame.add_overlay(
+                &adw::Spinner::builder()
+                    .width_request(32)
+                    .height_request(32)
+                    .halign(gtk::Align::Center)
+                    .valign(gtk::Align::Center)
+                    .build(),
+            );
+            parent.append(&frame);
+        }
+    }
+}
+
+/// Plays `path` in the viewer with sound; stops when the viewer closes and
+/// offers another app when GStreamer cannot play it.
+fn show_video(
+    parent: &impl IsA<gtk::Widget>,
+    path: &std::path::Path,
+    details: &ViewerDetails,
+    on_action: std::rc::Rc<dyn Fn(NativeMediaAction)>,
+) {
+    let video = gtk::Video::builder()
+        .file(&gtk::gio::File::for_path(path))
+        .autoplay(true)
+        .hexpand(true)
+        .vexpand(true)
+        .build();
+    let failed = adw::StatusPage::builder()
+        .icon_name("video-x-generic-symbolic")
+        .title("Can't Play This Video")
+        .description("Open it with another app instead")
+        .build();
+    let stack = gtk::Stack::new();
+    stack.add_named(&video, Some("video"));
+    stack.add_named(&failed, Some("failed"));
+    if let Some(stream) = video.media_stream() {
+        let stack = stack.downgrade();
+        stream.connect_error_notify(move |stream| {
+            if stream.error().is_some()
+                && let Some(stack) = stack.upgrade()
+            {
+                stack.set_visible_child_name("failed");
+            }
+        });
+    }
+    let (open, target) = open_with_button(path, on_action);
+    let dialog = media_viewer(parent, details, &stack, &[open.upcast()]);
+    *target.borrow_mut() = dialog.downgrade();
+    dialog.connect_closed(move |_| {
+        if let Some(stream) = video.media_stream() {
+            stream.pause();
+        }
+    });
+    dialog.present(Some(parent));
 }
 
 /// Who sent a photo or video, when, and its caption, for the viewer.
@@ -1293,62 +1454,6 @@ fn playback_projection(message: &Message) -> PlaybackProjection {
     } else {
         PlaybackProjection::Fallback
     }
-}
-
-fn append_native_playback(parent: &gtk::Box, path: &std::path::Path, looping: bool) {
-    let video = gtk::Video::for_filename(Some(path));
-    video.set_autoplay(false);
-    video.set_loop(looping);
-    video.set_size_request(320, 180);
-    video.set_tooltip_text(Some("Media preview"));
-    if let Some(stream) = video.media_stream() {
-        stream.set_muted(true);
-    }
-
-    let fallback = gtk::Label::new(Some(
-        "This media format cannot be played here. Open attachment to view it.",
-    ));
-    fallback.set_xalign(0.0);
-    fallback.set_wrap(true);
-    fallback.set_visible(false);
-    let fallback_weak = fallback.downgrade();
-    let reveal_fallback = move || {
-        if let Some(label) = fallback_weak.upgrade() {
-            label.set_visible(true);
-        }
-    };
-    if let Some(stream) = video.media_stream() {
-        stream.connect_error_notify(move |stream| {
-            if stream.error().is_some() {
-                reveal_fallback();
-            }
-        });
-        if stream.error().is_some() {
-            fallback.set_visible(true);
-        }
-    }
-    parent.append(&video);
-    parent.append(&fallback);
-
-    let control = gtk::Button::with_label("Play preview");
-    control.set_tooltip_text(Some("Play or pause media preview"));
-    let video_weak = video.downgrade();
-    control.connect_clicked(move |button| {
-        let Some(video) = video_weak.upgrade() else {
-            return;
-        };
-        let Some(stream) = video.media_stream() else {
-            return;
-        };
-        let playing = !stream.is_playing();
-        stream.set_playing(playing);
-        button.set_label(if playing {
-            "Pause preview"
-        } else {
-            "Play preview"
-        });
-    });
-    parent.append(&control);
 }
 
 fn attachment_button_label(message: &Message) -> &'static str {
