@@ -51,7 +51,24 @@ jobs:
       - name: No duplicate GTK/GLib/libadwaita/Relm4 crates
         shell: bash
         run: |
-          if cargo tree -d | grep -qiE '(gtk|glib|libadwaita|relm|adw)'; then
-            cargo tree -d
-            exit 1
-          fi
+          python3 - <<'PY'
+          import collections
+          import json
+          import subprocess
+
+          metadata = json.loads(subprocess.check_output(
+              ["cargo", "metadata", "--locked", "--format-version", "1"]
+          ))
+          packages = collections.defaultdict(set)
+          for package in metadata["packages"]:
+              name = package["name"]
+              if any(name == root or name.startswith(root + "-") for root in (
+                  "gtk4", "gdk4", "glib", "gio", "libadwaita", "relm4"
+              )):
+                  packages[name].add(package["id"])
+          duplicates = {name: ids for name, ids in packages.items() if len(ids) > 1}
+          for name, ids in sorted(duplicates.items()):
+              print(f"Duplicate {name}: {', '.join(sorted(ids))}")
+          if duplicates:
+              raise SystemExit(1)
+          PY
