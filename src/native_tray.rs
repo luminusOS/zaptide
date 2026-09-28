@@ -4,6 +4,7 @@
 /// What the tray asks the application to do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrayAction {
+    /// Clicking the icon shows or hides the window.
     ToggleWindow,
     NewChat,
     ToggleNotifications,
@@ -16,7 +17,6 @@ pub enum TrayAction {
 /// Application state the tray reflects.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TrayState {
-    pub window_visible: bool,
     pub unread_chats: usize,
     pub notifications: bool,
 }
@@ -104,13 +104,7 @@ mod imp {
                 );
                 menu.push(MenuItem::Separator);
             }
-            let window = if self.state.window_visible {
-                "Hide ZapTide"
-            } else {
-                "Show ZapTide"
-            };
             menu.extend([
-                Self::item(window, "", TrayAction::ToggleWindow),
                 Self::item(
                     "New Chat…",
                     "chat-message-new-symbolic",

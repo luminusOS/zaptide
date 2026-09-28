@@ -4428,7 +4428,6 @@ impl NativeApplication {
         };
         let now = crate::util::now();
         let state = crate::native_tray::TrayState {
-            window_visible: self.window.is_visible(),
             unread_chats: self
                 .chat_snapshots
                 .iter()
