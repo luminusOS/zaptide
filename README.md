@@ -199,8 +199,6 @@ ZapTide needs Rust, a C/C++ toolchain, CMake and Perl (for bundled OpenSSL). `ru
 it also needs GUI development packages:
 
 ```sh
-# Debian and Ubuntu
-sudo apt install libxkbcommon-dev libwayland-dev libgl1-mesa-dev libasound2-dev libgstreamer1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good cmake perl
 # Arch
 sudo pacman -S libxkbcommon wayland mesa alsa-lib gstreamer gst-plugins-base gst-plugins-good cmake perl
 ```

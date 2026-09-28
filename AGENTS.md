@@ -103,8 +103,7 @@ protocol. These notes are for coding agents and new contributors.
   also uses `src/audio.rs` on a worker thread. `Recorder` reads the default
   microphone through rodio's `Microphone` on a thread, keeping a loudness per
   50 ms for the live bars. Linux needs ALSA and GStreamer headers to build
-  (`libasound2-dev` and `libgstreamer1.0-dev` on Debian, `alsa-lib` and
-  `gstreamer` on Arch). Audio controls live in each message bubble;
+  (`alsa-lib` and `gstreamer` on Arch). Audio controls live in each message bubble;
   `StartRecording/CancelRecording/SendRecording` drive the
   microphone from the composer (the send button is a microphone when there
   is nothing to send); `Command::SendVoice` normalizes
@@ -188,8 +187,8 @@ A release is not finished when the tag is pushed. Do these in order:
 
 - `gtk::EmojiChooser` renders emoji through the system's color emoji font.
   On Fedora, install `google-noto-emoji-color-fonts`; on Arch,
-  `noto-fonts-emoji`; on Debian/Ubuntu, `fonts-noto-color-emoji`. Without
-  the font, emoji fall back to monochrome glyphs or render as boxes.
+  `noto-fonts-emoji`. Without the font, emoji fall back to monochrome glyphs
+  or render as boxes.
 
 ## Definition of done
 

@@ -88,19 +88,19 @@ ZapTide needs libadwaita 1.10, which ships with GNOME 51.
 
 ## Build dependencies
 
-| Dependency | Fedora | Ubuntu/Debian | Arch | Notes |
-|------------|--------|---------------|------|-------|
-| Rust 1.75+ | `rust cargo` | `rustc cargo` | `rust` | Stable channel |
-| GTK 4.14+ | `gtk4-devel` | `libgtk-4-dev` | `gtk4` | |
-| libadwaita 1.10+ | `libadwaita-devel` | `libadwaita-1-dev` | `libadwaita` | GNOME 51 |
-| ALSA | `alsa-lib-devel` | `libasound2-dev` | `alsa-lib` | Required for audio |
-| GStreamer | `gstreamer1-devel` | `libgstreamer1.0-dev` | `gstreamer` | Linux audio playback; base and good plugins at runtime |
-| cmake | `cmake` | `cmake` | `cmake` | Builds libopus via opusic-sys |
-| libseccomp, fontconfig | `libseccomp-devel fontconfig-devel` | `libseccomp-dev libfontconfig-dev` | `libseccomp fontconfig` | glycin, which loads photos; needs `glycin-loaders` and `bubblewrap` at runtime |
-| gettext | `gettext` | `gettext` | `gettext` | Compiles i18n catalogs |
-| glib2-devel | `glib2-devel` | `libglib2.0-dev-bin` | `glib2` | Provides glib-compile-schemas |
-| desktop-file-utils | `desktop-file-utils` | `desktop-file-utils` | `desktop-file-utils` | desktop-file-validate |
-| appstream | `appstream` | `appstream` | `appstream` | appstreamcli for metainfo |
+| Dependency | Fedora | Arch | Notes |
+|------------|--------|------|-------|
+| Rust 1.75+ | `rust cargo` | `rust` | Stable channel |
+| GTK 4.14+ | `gtk4-devel` | `gtk4` | |
+| libadwaita 1.10+ | `libadwaita-devel` | `libadwaita` | GNOME 51 |
+| ALSA | `alsa-lib-devel` | `alsa-lib` | Required for audio |
+| GStreamer | `gstreamer1-devel` | `gstreamer` | Linux audio playback; base and good plugins at runtime |
+| cmake | `cmake` | `cmake` | Builds libopus via opusic-sys |
+| libseccomp, fontconfig | `libseccomp-devel fontconfig-devel` | `libseccomp fontconfig` | glycin, which loads photos; needs `glycin-loaders` and `bubblewrap` at runtime |
+| gettext | `gettext` | `gettext` | Compiles i18n catalogs |
+| glib2-devel | `glib2-devel` | `glib2` | Provides glib-compile-schemas |
+| desktop-file-utils | `desktop-file-utils` | `desktop-file-utils` | desktop-file-validate |
+| appstream | `appstream` | `appstream` | appstreamcli for metainfo |
 
 SQLCipher, OpenSSL, openh264, and libopus are bundled via their respective `-sys` crates and compiled from source. No system packages required beyond cmake for libopus.
 
@@ -112,12 +112,6 @@ SQLCipher, OpenSSL, openh264, and libopus are bundled via their respective `-sys
 
 ```sh
 sudo dnf install rust cargo gtk4-devel libadwaita-devel alsa-lib-devel gstreamer1-devel gstreamer1-plugins-base gstreamer1-plugins-good cmake gettext glib2-devel desktop-file-utils appstream
-```
-
-**Ubuntu/Debian:**
-
-```sh
-sudo apt install rustc cargo libgtk-4-dev libadwaita-1-dev libasound2-dev libgstreamer1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good cmake gettext libglib2.0-dev-bin desktop-file-utils appstream
 ```
 
 **Arch:**
