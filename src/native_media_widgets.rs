@@ -736,7 +736,10 @@ fn append_photo(
                 .css_classes(["flat", "zaptide-photo-button"])
                 .build();
             button.update_property(&[gtk::accessible::Property::Label("View photo")]);
-            button.connect_clicked(move |button| show_photo(button, &path, on_action.clone()));
+            let details = ViewerDetails::of(message);
+            button.connect_clicked(move |button| {
+                show_photo(button, &path, &details, on_action.clone());
+            });
             parent.append(&button);
         }
         Some(action @ NativeMediaAction::Download { .. }) => {
@@ -764,39 +767,221 @@ fn append_photo(
     }
 }
 
-/// Opens `path` in a dialog over the window, fitted to it.
+/// Who sent a photo or video, when, and its caption, for the viewer.
+#[derive(Clone)]
+struct ViewerDetails {
+    title: String,
+    subtitle: String,
+    caption: Option<String>,
+    thumbnail: Option<Vec<u8>>,
+}
+
+impl ViewerDetails {
+    fn of(message: &Message) -> Self {
+        let title = if message.from_me {
+            "You".to_owned()
+        } else {
+            message
+                .sender_name
+                .clone()
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| {
+                    crate::model::phone_of(&message.sender)
+                        .map(crate::util::phone)
+                        .unwrap_or_default()
+                })
+        };
+        let caption = match &message.content {
+            Content::Image { caption, .. } | Content::Video { caption, .. } => caption.clone(),
+            _ => None,
+        };
+        Self {
+            title,
+            subtitle: crate::util::clock(message.timestamp),
+            caption: caption.filter(|caption| !caption.is_empty()),
+            thumbnail: message.thumbnail.clone(),
+        }
+    }
+}
+
+/// A dark, near-full-window dialog around `content`, with the sender and
+/// time on top, the caption below, and `actions` in the header.
+fn media_viewer(
+    parent: &impl IsA<gtk::Widget>,
+    details: &ViewerDetails,
+    content: &impl IsA<gtk::Widget>,
+    actions: &[gtk::Widget],
+) -> adw::Dialog {
+    let header = adw::HeaderBar::builder()
+        .title_widget(&adw::WindowTitle::new(&details.title, &details.subtitle))
+        .build();
+    for action in actions {
+        header.pack_end(action);
+    }
+    let view = adw::ToolbarView::builder()
+        .content(content)
+        .top_bar_style(adw::ToolbarStyle::Raised)
+        .css_classes(["zaptide-viewer"])
+        .build();
+    view.add_top_bar(&header);
+    if let Some(caption) = &details.caption {
+        let label = gtk::Label::builder()
+            .label(caption)
+            .wrap(true)
+            .wrap_mode(gtk::pango::WrapMode::WordChar)
+            .max_width_chars(80)
+            .justify(gtk::Justification::Center)
+            .selectable(true)
+            .margin_top(10)
+            .margin_bottom(10)
+            .margin_start(16)
+            .margin_end(16)
+            .build();
+        view.add_bottom_bar(&label);
+        view.set_bottom_bar_style(adw::ToolbarStyle::Raised);
+    }
+    // Most of the window, as a photo viewer would take.
+    let (width, height) = parent
+        .as_ref()
+        .root()
+        .map_or((900, 700), |root| (root.width(), root.height()));
+    adw::Dialog::builder()
+        .title(&details.title)
+        .content_width((width * 9 / 10).max(360))
+        .content_height((height * 9 / 10).max(360))
+        .child(&view)
+        .build()
+}
+
+/// A header button that closes `dialog` after opening the file elsewhere.
+fn open_with_button(
+    path: &std::path::Path,
+    on_action: std::rc::Rc<dyn Fn(NativeMediaAction)>,
+) -> (
+    gtk::Button,
+    std::rc::Rc<std::cell::RefCell<glib::WeakRef<adw::Dialog>>>,
+) {
+    let button = gtk::Button::builder()
+        .icon_name("external-link-symbolic")
+        .tooltip_text("Open With Another App")
+        .build();
+    let dialog: std::rc::Rc<std::cell::RefCell<glib::WeakRef<adw::Dialog>>> =
+        std::rc::Rc::default();
+    let (path, target) = (path.to_path_buf(), dialog.clone());
+    button.connect_clicked(move |_| {
+        on_action(NativeMediaAction::Open(path.clone()));
+        if let Some(dialog) = target.borrow().upgrade() {
+            dialog.close();
+        }
+    });
+    (button, dialog)
+}
+
+/// Opens `path` in the viewer: fitted to the window, or at its real size
+/// with double-click or the zoom button, and dragged around when larger.
 fn show_photo(
     parent: &impl IsA<gtk::Widget>,
     path: &std::path::Path,
+    details: &ViewerDetails,
     on_action: std::rc::Rc<dyn Fn(NativeMediaAction)>,
 ) {
     let picture = gtk::Picture::builder()
         .content_fit(gtk::ContentFit::Contain)
         .can_shrink(true)
+        .hexpand(true)
         .vexpand(true)
         .build();
     picture.update_property(&[gtk::accessible::Property::Label("Photo")]);
-    let open = gtk::Button::with_label("Open With…");
-    let header = adw::HeaderBar::new();
-    header.pack_start(&open);
-    let view = adw::ToolbarView::new();
-    view.add_top_bar(&header);
-    view.set_content(Some(&picture));
-    let dialog = adw::Dialog::builder()
-        .title("Photo")
-        .content_width(900)
-        .content_height(700)
-        .child(&view)
+    // The sender's thumbnail shows at once, until the file itself loads.
+    if let Some(texture) = details
+        .thumbnail
+        .as_deref()
+        .and_then(|bytes| gdk::Texture::from_bytes(&glib::Bytes::from(bytes)).ok())
+    {
+        picture.set_paintable(Some(&texture));
+    }
+    let scroller = gtk::ScrolledWindow::builder()
+        .child(&picture)
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vscrollbar_policy(gtk::PolicyType::Never)
+        .build();
+    let zoom = gtk::ToggleButton::builder()
+        .icon_name("zoom-original-symbolic")
+        .tooltip_text("Actual Size")
         .build();
     {
-        let (path, dialog) = (path.to_path_buf(), dialog.downgrade());
-        open.connect_clicked(move |_| {
-            on_action(NativeMediaAction::Open(path.clone()));
-            if let Some(dialog) = dialog.upgrade() {
-                dialog.close();
+        let (picture, scroller) = (picture.clone(), scroller.clone());
+        zoom.connect_toggled(move |zoom| {
+            let actual = zoom.is_active();
+            picture.set_can_shrink(!actual);
+            let policy = if actual {
+                gtk::PolicyType::Automatic
+            } else {
+                gtk::PolicyType::Never
+            };
+            scroller.set_policy(policy, policy);
+            zoom.set_icon_name(if actual {
+                "zoom-fit-best-symbolic"
+            } else {
+                "zoom-original-symbolic"
+            });
+            zoom.set_tooltip_text(Some(if actual {
+                "Fit to Window"
+            } else {
+                "Actual Size"
+            }));
+        });
+    }
+    let double_click = gtk::GestureClick::new();
+    {
+        let zoom = zoom.clone();
+        double_click.connect_pressed(move |_, presses, _, _| {
+            if presses == 2 {
+                zoom.set_active(!zoom.is_active());
             }
         });
     }
+    scroller.add_controller(double_click);
+    let pan = gtk::GestureDrag::new();
+    let origin = std::rc::Rc::new(std::cell::Cell::new((0.0, 0.0)));
+    {
+        let (scroller, origin) = (scroller.clone(), origin.clone());
+        pan.connect_drag_begin(move |_, _, _| {
+            origin.set((
+                scroller.hadjustment().value(),
+                scroller.vadjustment().value(),
+            ));
+        });
+    }
+    {
+        let scroller = scroller.clone();
+        pan.connect_drag_update(move |_, x, y| {
+            let (h, v) = origin.get();
+            scroller.hadjustment().set_value(h - x);
+            scroller.vadjustment().set_value(v - y);
+        });
+    }
+    scroller.add_controller(pan);
+    let copy = gtk::Button::builder()
+        .icon_name("edit-copy-symbolic")
+        .tooltip_text("Copy Image")
+        .build();
+    {
+        let picture = picture.clone();
+        copy.connect_clicked(move |button| {
+            if let Some(texture) = picture.paintable().and_downcast::<gdk::Texture>() {
+                button.clipboard().set_texture(&texture);
+            }
+        });
+    }
+    let (open, target) = open_with_button(path, on_action);
+    let dialog = media_viewer(
+        parent,
+        details,
+        &scroller,
+        &[open.upcast(), copy.upcast(), zoom.upcast()],
+    );
+    *target.borrow_mut() = dialog.downgrade();
     // Full size up to a large screen; the view fits it to the dialog.
     load_photo(
         &picture,
