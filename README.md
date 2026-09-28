@@ -32,19 +32,22 @@ after they expire on your phone.
 
 ## Install
 
-There is no stable release yet. Build and install the Flatpak from this checkout
-with `flatpak-builder` and a Flathub remote:
+Download a release from [GitHub Releases](https://github.com/luminusOS/zaptide/releases).
+There is no stable release yet. The release workflow publishes a Flatpak bundle
+for x86_64; an AppImage will be another option when it is available.
+
+With a Flathub remote configured, install the downloaded `.flatpak` bundle:
 
 ```sh
-flatpak-builder --user --install --force-clean --install-deps-from=flathub build-dir packaging/flatpak/dev.luminusos.ZapTide.yml
+flatpak install --user ./zaptide-vX.Y.Z-x86_64.flatpak
 ```
 
-Or install from source after setting up the dependencies in
-[PACKAGING.md](PACKAGING.md#build-dependencies):
+When the AppImage is available, save it as `zaptide.AppImage`, make it
+executable and run it:
 
 ```sh
-cargo install --path .
-zaptide
+chmod +x ./zaptide.AppImage
+./zaptide.AppImage
 ```
 
 On first launch, use WhatsApp's **Linked devices** menu to scan the QR code or
@@ -65,7 +68,7 @@ FastWhatsApp; link it as a separate companion device.
 
 ## Development
 
-See [PACKAGING.md](PACKAGING.md) for build and Flatpak details and
+See [PACKAGING.md](PACKAGING.md) for build dependencies and Flatpak packaging, and
 [AGENTS.md](AGENTS.md) for architecture and contribution rules. ZapTide is a
 [ZapFast](https://github.com/crmne/zapfast) fork with a native GTK interface.
 
