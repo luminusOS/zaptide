@@ -32,9 +32,8 @@ after they expire on your phone.
 
 ## Install
 
-Download a release from [GitHub Releases](https://github.com/luminusOS/zaptide/releases).
-There is no stable release yet. The release workflow publishes a Flatpak bundle
-for x86_64; an AppImage will be another option when it is available.
+Download the x86_64 Flatpak bundle or AppImage from
+[GitHub Releases](https://github.com/luminusOS/zaptide/releases).
 
 With a Flathub remote configured, install the downloaded `.flatpak` bundle:
 
@@ -42,8 +41,7 @@ With a Flathub remote configured, install the downloaded `.flatpak` bundle:
 flatpak install --user ./zaptide-vX.Y.Z-x86_64.flatpak
 ```
 
-When the AppImage is available, save it as `zaptide.AppImage`, make it
-executable and run it:
+Save the downloaded AppImage as `zaptide.AppImage`, make it executable and run it:
 
 ```sh
 chmod +x ./zaptide.AppImage

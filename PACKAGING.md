@@ -1,6 +1,7 @@
 # Packaging
 
-ZapTide ships as a Flatpak. Native distribution packages are not available.
+ZapTide releases include a Flatpak bundle and an x86_64 AppImage. Native
+distribution packages are not available.
 
 ZapTide needs libadwaita 1.10 (GNOME 51). Linux release binaries build in
 Fedora 45, the first Fedora version to include it.
@@ -44,6 +45,20 @@ require disclosure of generated material.
 The release workflow builds Linux binaries once, packages the x86_64 binary
 with `dev.luminusos.ZapTide.bundle.yml`, and lists every file in
 `checksums.txt`.
+
+## AppImage
+
+The x86_64 AppImage uses the Fedora 45 release build environment. It bundles
+the GTK and libadwaita libraries linked by ZapTide. To build it locally,
+install `cargo-appimage` 2.4.0 and `appimagetool`, then run:
+
+```sh
+APPIMAGE_EXTRACT_AND_RUN=1 cargo appimage --locked
+```
+
+The result is `target/appimage/zaptide.AppImage` (or under `CARGO_TARGET_DIR`
+when set). Media playback and image loading also need GStreamer plugins,
+glycin loaders and bubblewrap on the host.
 
 ## Build dependencies
 

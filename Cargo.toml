@@ -1,6 +1,6 @@
 [package]
 name = "zaptide"
-version = "0.14.0"
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT"
@@ -9,6 +9,28 @@ homepage = "https://github.com/luminusOS/zaptide"
 repository = "https://github.com/luminusOS/zaptide"
 keywords = ["whatsapp", "chat", "gtk", "messaging"]
 categories = ["gui"]
+
+[package.metadata.appimage]
+icon = "packaging/icons/zaptide.svg"
+desktop_entry = "packaging/applications/dev.luminusos.ZapTide.desktop"
+auto_link = true
+auto_link_exclude_list = [
+  "ld-linux*.so*",
+  "libanl.so*",
+  "libBrokenLocale.so*",
+  "libc.so*",
+  "libdl.so*",
+  "libgcc_s.so*",
+  "libm.so*",
+  "libmvec.so*",
+  "libnsl.so*",
+  "libnss_*.so*",
+  "libpthread.so*",
+  "libresolv.so*",
+  "librt.so*",
+  "libstdc++.so*",
+  "libutil.so*",
+]
 
 [lib]
 name = "zaptide"

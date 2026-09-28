@@ -2,7 +2,7 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
+    tags: ["v[0-9]*"]
 
 permissions:
   contents: write
@@ -14,8 +14,37 @@ env:
   ZAPTIDE_GIPHY_KEY: ${{ secrets.ZAPTIDE_GIPHY_KEY }}
 
 jobs:
+  version:
+    name: Check release version
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Match tag, manifest and lockfile
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          import tomllib
+          from pathlib import Path
+
+          tag = os.environ["TAG"]
+          assert re.fullmatch(r"v\d+\.\d+\.\d+(?:-rc\d+)?", tag), f"Invalid release tag: {tag}"
+          version = tag[1:].split("-", 1)[0]
+          manifest = tomllib.loads(Path("Cargo.toml").read_text())
+          lock = tomllib.loads(Path("Cargo.lock").read_text())
+          assert manifest["package"]["version"] == version, "Tag does not match Cargo.toml"
+          assert any(p["name"] == "zaptide" and p["version"] == version for p in lock["package"]), "Cargo.lock does not match"
+          PY
+
+  ci:
+    needs: version
+    uses: ./.github/workflows/ci.yml
+
   build:
     name: build (${{ matrix.target }})
+    needs: ci
     runs-on: ${{ matrix.os }}
     # Linux builds need libadwaita 1.10 (GNOME 51), which Ubuntu does not
     # package yet.
@@ -97,21 +126,38 @@ jobs:
           path: "*.flatpak"
           if-no-files-found: error
 
+  appimage:
+    name: AppImage bundle
+    needs: ci
+    uses: ./.github/workflows/release-appimage.yml
+
   publish:
     name: GitHub release
-    needs: [build, flatpak]
+    needs: [build, flatpak, appimage]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v7
         with:
           path: dist
           merge-multiple: true
-      - name: Checksums
+      - name: Verify release assets
+        shell: bash
         run: |
-          cd dist
-          sha256sum * > checksums.txt
+          set -euo pipefail
+          test -s "dist/zaptide-${GITHUB_REF_NAME}-x86_64.flatpak"
+          test -s "dist/zaptide-${GITHUB_REF_NAME#v}-x86_64.AppImage"
+          test -s "dist/zaptide-${GITHUB_REF_NAME}-x86_64-unknown-linux-gnu.tar.gz"
+          test -s "dist/zaptide-${GITHUB_REF_NAME}-aarch64-unknown-linux-gnu.tar.gz"
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum *.flatpak *.AppImage *.tar.gz > checksums.txt
       - uses: softprops/action-gh-release@v2
         with:
-          files: dist/*
+          files: |
+            dist/*.flatpak
+            dist/*.AppImage
+            dist/*.tar.gz
+            dist/checksums.txt
+          fail_on_unmatched_files: true
           generate_release_notes: true
-
+          prerelease: ${{ contains(github.ref_name, '-') }}

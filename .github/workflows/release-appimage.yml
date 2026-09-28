@@ -1,0 +1,54 @@
+name: Release AppImage
+
+on:
+  workflow_call:
+
+jobs:
+  appimage:
+    name: Build AppImage
+    runs-on: ubuntu-24.04
+    container: registry.fedoraproject.org/fedora:45
+    timeout-minutes: 90
+    steps:
+      - name: System dependencies
+        run: >-
+          dnf install -y --setopt=install_weak_deps=False
+          awk curl file gcc gcc-c++ git gtk4-devel libadwaita-devel
+          alsa-lib-devel gstreamer1-devel cmake libseccomp-devel
+          fontconfig-devel perl make patchelf
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: appimage
+      - name: Install AppImage tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo install cargo-appimage --version 2.4.0 --locked
+          mkdir -p /usr/local/share/appimagetool
+          curl -fL "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage" -o /usr/local/bin/appimagetool-bin
+          curl -fL "https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-x86_64" -o /usr/local/share/appimagetool/runtime-x86_64
+          chmod +x /usr/local/bin/appimagetool-bin /usr/local/share/appimagetool/runtime-x86_64
+          cat > /usr/local/bin/appimagetool <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          exec /usr/local/bin/appimagetool-bin --runtime-file /usr/local/share/appimagetool/runtime-x86_64 "$@"
+          EOF
+          chmod +x /usr/local/bin/appimagetool
+      - name: Build AppImage
+        shell: bash
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: |
+          set -euo pipefail
+          cargo appimage --locked
+          mkdir -p dist
+          cp "${CARGO_TARGET_DIR:-target}/appimage/zaptide.AppImage" "dist/zaptide-${GITHUB_REF_NAME#v}-x86_64.AppImage"
+          chmod +x "dist/zaptide-${GITHUB_REF_NAME#v}-x86_64.AppImage"
+          test -s "dist/zaptide-${GITHUB_REF_NAME#v}-x86_64.AppImage"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: appimage
+          path: dist/*.AppImage
+          if-no-files-found: error
