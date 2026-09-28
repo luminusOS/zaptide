@@ -170,7 +170,7 @@ A release is not finished when the tag is pushed. Do these in order:
 1. Bump `version` in `Cargo.toml` and update `Cargo.lock` with a build. Run
    the full checks, commit, and push before tagging so the binaries report
    the right version.
-2. Tag `vX.Y.Z` and push the tag. Wait for every platform build, artifact,
+2. Tag `vX.Y.Z` and push the tag. Wait for every build, artifact,
    and `checksums.txt`.
 3. Replace the generated GitHub notes with written release notes. Start with
    a short summary, group user-visible changes under headings such as `New`
@@ -183,13 +183,6 @@ A release is not finished when the tag is pushed. Do these in order:
    and the Changelog link; do not add older versions to it. Never point the
    download page at files that do not exist yet. Set `release_asset_prefix` to
    `zaptide` and `release_app_name` to `ZapTide` only once those assets exist.
-5. Update the AUR packages from the templates in `packaging/arch/`. The shared
-   packaging workflow generates versions, hashes and `.SRCINFO` after the
-   release exists, and publishes when `PUBLISH_AUR` and the required secrets
-   are configured. Otherwise use `native-packages` to build, stage,
-   review and publish the generated recipes; see `PACKAGING.md`. Validate
-   native builds with `makepkg -f`. A recipe-only `zaptide-git` change does
-    not require an application release.
 
 ## Platform dependencies
 

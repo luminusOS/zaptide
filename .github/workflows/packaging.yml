@@ -21,11 +21,6 @@ on:
       publish:
         type: boolean
         default: true
-    secrets:
-      AUR_SSH_KEY:
-        required: false
-      AUR_KNOWN_HOSTS:
-        required: false
 
 permissions:
   contents: read

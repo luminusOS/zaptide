@@ -2,8 +2,8 @@
 
 [`native-packages.yaml`](native-packages.yaml) is the packaging configuration:
 it pins the shared CLI and nFPM versions and declares Linux amd64/arm64 inputs,
-DEB/RPM contents, dependencies, recipe templates and downstream repositories.
-Application assets and native recipes stay in `packaging/`.
+DEB/RPM contents and dependencies.
+Application assets stay in `packaging/`.
 
 ZapTide uses the `zaptide` binary and an isolated package identity. It does not
 provide, conflict with, replace, or migrate ZapFast or FastsApp packages. The
@@ -18,17 +18,15 @@ native-packages build --release v1.2.3 --target linux-amd64 --target linux-arm64
 ```
 
 Replace `v1.2.3` with an existing stable application release. Local use also
-requires nFPM 2.47.0, `bsdtar` and `readelf`; AUR generation needs `makepkg`
-or Docker. CI installs its tooling. To package local release archives, put
-every configured input and recipe asset under `dist/`, then run
+requires nFPM 2.47.0, `bsdtar` and `readelf`. CI installs its tooling. To
+package local release archives, put every configured input under `dist/`, then run
 `native-packages build --version 1.2.3 --target linux-amd64 --target linux-arm64`. Outputs go to
 `dist/packages/1.2.3`; use `--output` for a fresh destination when rebuilding.
 
 Stable tags run the existing native build jobs first. After binaries and
 `checksums.txt` are published, the shared workflow verifies their hashes,
 builds the configured packages, and attaches them to the GitHub release.
-Configured recipes are attached as an archive. Package checksums are separate
-from the original binary checksums. PR validation never publishes.
+Package checksums are separate from the original binary checksums. PR validation never publishes.
 
 Review or publish an existing build with the same installed CLI:
 
@@ -37,14 +35,6 @@ native-packages publish --from dist/packages/1.2.3 --to github
 native-packages repositories
 native-packages status --offline
 ```
-
-For applications with configured AUR destinations, stage the
-recipes with `native-packages stage TARGET dist/packages/1.2.3/recipes`,
-inspect `native-packages diff TARGET`, run native package validation, and
-publish with `native-packages publish TARGET`. These destinations use ignored
-managed Git clones, recorded in this application's YAML configuration.
-AUR automation needs `PUBLISH_AUR=true`, `AUR_SSH_KEY` and `AUR_KNOWN_HOSTS`.
-Enable only configured destinations.
 
 The Flatpak build steps remain responsible for their native artifacts. Additional nFPM formats require suitable platform
 inputs and dependencies; adding a format does not port the application.

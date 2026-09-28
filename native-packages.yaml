@@ -133,45 +133,4 @@ assets:
     url: https://github.com/luminusOS/zaptide/archive/refs/tags/v@VERSION@.tar.gz
     checksummed: false
     local: dist/zaptide-@VERSION@.tar.gz
-templates:
-  arch/zaptide/PKGBUILD: packaging/arch/zaptide/PKGBUILD.in
-  arch/zaptide/zaptide.install: packaging/arch/zaptide.install
-  arch/zaptide-bin/PKGBUILD: packaging/arch/zaptide-bin/PKGBUILD.in
-  arch/zaptide-bin/zaptide-bin.install: packaging/arch/zaptide.install
-  arch/zaptide-git/PKGBUILD: packaging/arch/zaptide-git/PKGBUILD.in
-  arch/zaptide-git/zaptide-git.install: packaging/arch/zaptide.install
-repositories:
-  aur-source:
-    group: aur
-    url: https://aur.archlinux.org/zaptide.git
-    push_url: ssh://aur@aur.archlinux.org/zaptide.git
-    branch: master
-    package_path: "."
-    files:
-      arch/zaptide: "."
-    version_file: ".SRCINFO"
-    version_pattern: "^\\s*pkgver = (\\S+)"
-    publish: push
-  aur-bin:
-    group: aur
-    url: https://aur.archlinux.org/zaptide-bin.git
-    push_url: ssh://aur@aur.archlinux.org/zaptide-bin.git
-    branch: master
-    package_path: "."
-    files:
-      arch/zaptide-bin: "."
-    version_file: ".SRCINFO"
-    version_pattern: "^\\s*pkgver = (\\S+)"
-    publish: push
-  aur-git:
-    group: aur
-    url: https://aur.archlinux.org/zaptide-git.git
-    push_url: ssh://aur@aur.archlinux.org/zaptide-git.git
-    branch: master
-    package_path: "."
-    files:
-      arch/zaptide-git: "."
-    version_file: ".SRCINFO"
-    version_pattern: "^\\s*pkgver = (\\S+)"
-    publish: push
 version_file: Cargo.toml
