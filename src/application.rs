@@ -969,6 +969,12 @@ pub enum Input {
     ConfirmDelete(bool),
     UnlinkConfirmed,
     ShowChatInfo,
+    ShowNewChat,
+    /// Opens the chat with a contact picked in New Chat, creating it if new.
+    StartChat {
+        id: String,
+        name: String,
+    },
     PairWithPhone(String),
     TogglePhoneLinking,
     FlushChats,
@@ -1130,7 +1136,7 @@ impl SimpleComponent for NativeApplication {
                                 pack_start = &gtk::Button {
                                     set_icon_name: "chat-message-new-symbolic",
                                     set_tooltip_text: Some("New chat"),
-                                    set_action_name: Some("win.new-contact"),
+                                    set_action_name: Some("win.new-chat"),
                                 },
                                 pack_end = &gtk::MenuButton {
                                     set_icon_name: "open-menu-symbolic",
@@ -1913,7 +1919,7 @@ impl SimpleComponent for NativeApplication {
         link_menu.append(Some("_Quit"), Some("win.quit"));
         let primary_menu = gtk::gio::Menu::new();
         let section = gtk::gio::Menu::new();
-        section.append(Some("_New Chat"), Some("win.new-contact"));
+        section.append(Some("_New Chat"), Some("win.new-chat"));
         section.append(Some("_Unlink This Computer"), Some("win.unlink"));
         primary_menu.append_section(None, &section);
         let section = gtk::gio::Menu::new();
@@ -2334,11 +2340,17 @@ impl NativeApplication {
                         NativeEvent::ChatUpdated(chat) => {
                             self.apply_chat_changes(vec![ChatChange::Update(*chat)])
                         }
+                        // An empty list clears contacts on logout; otherwise
+                        // the backend sends the full set or single updates.
                         NativeEvent::Contacts(contacts) => {
-                            self.contacts = contacts
-                                .into_iter()
-                                .map(|contact| (contact.id.clone(), contact))
-                                .collect();
+                            if contacts.is_empty() {
+                                self.contacts.clear();
+                            }
+                            self.contacts.extend(
+                                contacts
+                                    .into_iter()
+                                    .map(|contact| (contact.id.clone(), contact)),
+                            );
                         }
                         NativeEvent::Messages {
                             chat,
@@ -2857,6 +2869,18 @@ impl NativeApplication {
                         self.avatars.get(&chat.id).map(std::path::PathBuf::as_path),
                     );
                 }
+            }
+            Input::ShowNewChat => {
+                show_new_chat_dialog(&self.window, &sender, new_chat_contacts(&self.contacts))
+            }
+            Input::StartChat { id, name } => {
+                if !self.chat_snapshots.iter().any(|chat| chat.id == id) {
+                    self.apply_chat_changes(vec![ChatChange::Update(crate::model::Chat::new(
+                        id.clone(),
+                        name,
+                    ))]);
+                }
+                sender.input(Input::OpenChatId(id));
             }
             Input::TogglePhoneLinking => self.phone_linking = !self.phone_linking,
             Input::FlushChats => {
@@ -6310,11 +6334,7 @@ fn install_window_actions(
     add("chat-archive", input(|| Input::ToggleSelectedArchive));
     add("copy-transcript", input(|| Input::CopyTranscript));
     add("quit", input(|| Input::Quit));
-    let (parent, dialog_sender) = (window.clone(), sender.clone());
-    add(
-        "new-contact",
-        Box::new(move || show_new_contact_dialog(&parent, &dialog_sender)),
-    );
+    add("new-chat", input(|| Input::ShowNewChat));
     let (parent, dialog_sender) = (window.clone(), sender.clone());
     add(
         "unlink",
@@ -6371,6 +6391,132 @@ fn show_poll_dialog(parent: &adw::ApplicationWindow, sender: &ComponentSender<Na
         close_dialog.close();
     });
     dialog.present();
+}
+
+/// Contacts offered in New Chat as (id, name, formatted phone): people with
+/// a phone number, named ones first, then bare numbers.
+fn new_chat_contacts(
+    contacts: &std::collections::HashMap<String, crate::model::Contact>,
+) -> Vec<(String, String, String)> {
+    let mut rows: Vec<_> = contacts
+        .values()
+        .filter_map(|contact| {
+            let phone = crate::util::phone(crate::model::phone_of(&contact.id)?);
+            let name = contact.display_name().unwrap_or(&phone).to_owned();
+            Some((contact.id.clone(), name, phone))
+        })
+        .collect();
+    rows.sort_by_cached_key(|(_, name, phone)| (name == phone, name.to_lowercase()));
+    rows
+}
+
+/// Picks a contact to message, or adds a number through New Contact.
+fn show_new_chat_dialog(
+    parent: &adw::ApplicationWindow,
+    sender: &ComponentSender<NativeApplication>,
+    contacts: Vec<(String, String, String)>,
+) {
+    let dialog = adw::Dialog::builder()
+        .title("New Chat")
+        .content_width(400)
+        .content_height(560)
+        .build();
+    let search = gtk::SearchEntry::builder()
+        .placeholder_text("Search contacts")
+        .margin_start(12)
+        .margin_end(12)
+        .margin_bottom(6)
+        .build();
+    let content = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(18)
+        .margin_top(6)
+        .margin_bottom(12)
+        .margin_start(12)
+        .margin_end(12)
+        .build();
+
+    let actions = gtk::ListBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .css_classes(["boxed-list"])
+        .build();
+    let add = adw::ActionRow::builder()
+        .title("New Contact")
+        .subtitle("Message a phone number")
+        .activatable(true)
+        .build();
+    add.add_prefix(&gtk::Image::from_icon_name("contact-new-symbolic"));
+    add.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
+    let (close, window, input) = (dialog.clone(), parent.clone(), sender.clone());
+    add.connect_activated(move |_| {
+        close.close();
+        show_new_contact_dialog(&window, &input);
+    });
+    actions.append(&add);
+    content.append(&actions);
+
+    let list = gtk::ListBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .css_classes(["boxed-list"])
+        .build();
+    let placeholder = gtk::Label::builder()
+        .label(if contacts.is_empty() {
+            "Contacts from your phone appear here once they sync."
+        } else {
+            "No contacts match this search."
+        })
+        .wrap(true)
+        .margin_top(18)
+        .margin_bottom(18)
+        .margin_start(12)
+        .margin_end(12)
+        .css_classes(["dim-label"])
+        .build();
+    list.set_placeholder(Some(&placeholder));
+    let rows = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    for (id, name, phone) in contacts {
+        let row = adw::ActionRow::builder()
+            .title(&name)
+            .title_lines(1)
+            .activatable(true)
+            .build();
+        if name != phone {
+            row.set_subtitle(&phone);
+        }
+        row.add_prefix(&adw::Avatar::new(32, Some(&name), true));
+        let digits: String = phone.chars().filter(char::is_ascii_digit).collect();
+        rows.borrow_mut()
+            .push((row.clone(), format!("{} {digits}", name.to_lowercase())));
+        let (close, input) = (dialog.clone(), sender.clone());
+        row.connect_activated(move |_| {
+            input.input(Input::StartChat {
+                id: id.clone(),
+                name: name.clone(),
+            });
+            close.close();
+        });
+        list.append(&row);
+    }
+    search.connect_search_changed(move |entry| {
+        let needle = entry.text().trim().to_lowercase();
+        for (row, key) in rows.borrow().iter() {
+            row.set_visible(needle.is_empty() || key.contains(&needle));
+        }
+    });
+    content.append(&list);
+
+    let scroll = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vexpand(true)
+        .child(&content)
+        .build();
+    let view = adw::ToolbarView::new();
+    view.add_top_bar(&adw::HeaderBar::new());
+    view.add_top_bar(&search);
+    view.set_content(Some(&scroll));
+    dialog.set_child(Some(&view));
+    dialog.set_focus(Some(&search));
+    dialog.present(Some(parent));
 }
 
 fn show_new_contact_dialog(
@@ -7173,6 +7319,30 @@ mod tests {
             forwarded: false,
             thumbnail: None,
         }
+    }
+
+    #[test]
+    fn new_chat_lists_named_contacts_then_bare_numbers() {
+        let contact = |id: &str, name: Option<&str>| crate::model::Contact {
+            id: id.into(),
+            full_name: name.map(Into::into),
+            push_name: None,
+        };
+        let contacts = [
+            contact("5511999990001@s.whatsapp.net", None),
+            contact("5511999990002@s.whatsapp.net", Some("bruna")),
+            contact("5511999990003@s.whatsapp.net", Some("Ana")),
+            contact("123456@lid", Some("Hidden")),
+            contact("120363@g.us", Some("Group")),
+        ]
+        .into_iter()
+        .map(|contact| (contact.id.clone(), contact))
+        .collect();
+        let names: Vec<_> = new_chat_contacts(&contacts)
+            .into_iter()
+            .map(|(_, name, _)| name)
+            .collect();
+        assert_eq!(names, ["Ana", "bruna", "+55 119 999 900 01"]);
     }
 
     #[test]
