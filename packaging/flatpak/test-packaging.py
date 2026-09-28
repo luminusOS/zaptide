@@ -29,6 +29,13 @@ class FlatpakPackaging(unittest.TestCase):
         self.assertEqual(meta.findtext("id"), APP_ID)
         self.assertEqual(meta.findtext("launchable"), f"{APP_ID}.desktop")
 
+    def test_local_build_fetches_cargo_dependencies(self):
+        manifest = yaml.safe_load((HERE / f"{APP_ID}.yml").read_text())
+        self.assertIn("--share=network", manifest["build-options"]["build-args"])
+        module = manifest["modules"][0]
+        self.assertEqual(module["build-commands"][0], "cargo build --release --locked")
+        self.assertNotIn("cargo-sources.json", module["sources"])
+
     def test_generation_uses_the_requested_revisions_lockfile(self):
         revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
         lock = subprocess.check_output(["git", "show", f"{revision}:Cargo.lock"], cwd=ROOT)
@@ -47,6 +54,10 @@ pathlib.Path(sys.argv[sys.argv.index("-o") + 1]).write_text(json.dumps({"lock_sh
             manifest = yaml.safe_load((output / f"{APP_ID}.yml").read_text())
             self.assertEqual(manifest["modules"][0]["sources"][0]["commit"], revision)
             self.assertEqual(manifest["modules"][0]["sources"][0]["type"], "git")
+            self.assertNotIn("build-args", manifest["build-options"])
+            self.assertEqual(manifest["modules"][0]["build-commands"][0],
+                             "cargo --offline build --release --locked")
+            self.assertIn("cargo-sources.json", manifest["modules"][0]["sources"])
             self.assertTrue((output / f"{APP_ID}.metainfo.xml").is_file())
 
 

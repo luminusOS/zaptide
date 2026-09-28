@@ -54,14 +54,29 @@ container installs and removes the package, checks GUI libraries loaded with
 
 ## Flatpak
 
-`packaging/flatpak/dev.luminusos.ZapTide.yml` builds from source, with offline Cargo
-sources generated from the selected revision's lockfile. The adjacent bundle
+`packaging/flatpak/dev.luminusos.ZapTide.yml` builds from the local checkout,
+fetching Cargo dependencies during the build. The adjacent bundle
 manifest reuses the Linux release binary, as in Spotifast. Both grant Wayland/X11,
 GPU, audio, network and keyring access; attachments chosen by the user use
 portals. No home-directory permission is granted. `--persist=.local/state` keeps
 the archive and session on Flatpak versions without `XDG_STATE_HOME`.
 
-Generate a pinned Flathub checkout (Python needs `aiohttp`, `tomlkit` and `PyYAML`):
+Build and install locally with Flatpak Builder (GNOME 51 runtime and SDK):
+
+```sh
+flatpak-builder --user --install --force-clean --install-deps-from=flathub build-dir packaging/flatpak/dev.luminusos.ZapTide.yml
+```
+
+To create a distributable bundle instead, export the build to a local repo:
+
+```sh
+mkdir -p target/flatpak
+flatpak-builder --user --force-clean --install-deps-from=flathub --repo=target/flatpak/repo target/flatpak/build packaging/flatpak/dev.luminusos.ZapTide.yml
+flatpak build-bundle target/flatpak/repo target/flatpak/zaptide-dev.flatpak dev.luminusos.ZapTide
+```
+
+To generate a pinned offline Flathub checkout, Python needs `aiohttp`,
+`tomlkit` and `PyYAML`:
 
 ```sh
 packaging/flatpak/flathub.sh vX.Y.Z /path/to/flathub-checkout

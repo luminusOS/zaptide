@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prepare an immutable source manifest and its offline Cargo dependencies.
+# Prepare an immutable offline source manifest and its Cargo dependencies.
 # Usage: flathub.sh vX.Y.Z /path/to/flathub-checkout
 set -euo pipefail
 revision=${1:?Supply a tag or commit}
@@ -31,9 +31,12 @@ here, out = map(Path, sys.argv[1:3])
 commit = sys.argv[3]
 version = tomllib.loads(Path(sys.argv[4]).read_text())["package"]["version"]
 manifest = yaml.safe_load((here / "dev.luminusos.ZapTide.yml").read_text())
+manifest["build-options"].pop("build-args")
+manifest["modules"][0]["build-commands"][0] = "cargo --offline build --release --locked"
 manifest["modules"][0]["sources"][0] = {
     "type": "git", "url": "https://github.com/luminusOS/zaptide.git", "commit": commit
 }
+manifest["modules"][0]["sources"].append("cargo-sources.json")
 (out / "dev.luminusos.ZapTide.yml").write_text(yaml.safe_dump(manifest, sort_keys=False))
 meta = ET.parse(here / "dev.luminusos.ZapTide.metainfo.xml")
 releases = meta.getroot().find("releases")

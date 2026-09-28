@@ -169,6 +169,13 @@ ZapTide has no stable release yet. Build it from source.
 Native and Flatpak packaging will be published after the GTK/libadwaita migration passes its
 release gates. Existing ZapFast packages are not ZapTide packages and do not share application data.
 
+To build and install the current checkout as a Flatpak (requires `flatpak-builder`
+and a Flathub remote):
+
+```sh
+flatpak-builder --user --install --force-clean --install-deps-from=flathub build-dir packaging/flatpak/dev.luminusos.ZapTide.yml
+```
+
 ### Archive encryption
 
 The archive key is a random 256-bit secret in Secret Service. ZapTide needs a

@@ -20,14 +20,12 @@ jobs:
       options: --privileged
     steps:
       - uses: actions/checkout@v7
-      - name: Generate offline Cargo sources
+      - name: Check Flatpak manifests
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          python3 -m venv /tmp/flatpak-generator
-          /tmp/flatpak-generator/bin/pip install aiohttp tomlkit PyYAML
-          PATH="/tmp/flatpak-generator/bin:$PATH" python3 packaging/flatpak/test-packaging.py
-          PATH="/tmp/flatpak-generator/bin:$PATH" packaging/flatpak/flathub.sh HEAD /tmp/zaptide-flathub
-          cp /tmp/zaptide-flathub/cargo-sources.json packaging/flatpak/
+          python3 -m venv /tmp/flatpak-tests
+          /tmp/flatpak-tests/bin/pip install PyYAML
+          /tmp/flatpak-tests/bin/python packaging/flatpak/test-packaging.py
       - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
           manifest-path: packaging/flatpak/dev.luminusos.ZapTide.yml

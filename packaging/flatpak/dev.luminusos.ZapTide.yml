@@ -1,9 +1,8 @@
-# ZapTide as a Flatpak, built from source: the manifest Flathub builds
-# from. The copy in the Flathub repository names a tag and its commit in
-# the source below and carries cargo-sources.json next to it; flathub.sh
-# writes both. For a local build, this one takes the checkout as it is:
+# ZapTide as a Flatpak, built from the local checkout. flathub.sh generates
+# a pinned, offline variant for Flathub from a release revision.
+# To build and install locally:
 #
-#   flatpak-builder --user --install --force-clean build-dir \
+#   flatpak-builder --user --install --force-clean --install-deps-from=flathub build-dir \
 #       packaging/flatpak/dev.luminusos.ZapTide.yml
 #
 # The release workflow does not build from source twice: it packages the
@@ -35,14 +34,15 @@ finish-args:
   - --persist=.local/state
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin
+  build-args:
+    - --share=network
   env:
     CARGO_HOME: /run/build/zaptide/cargo
 modules:
   - name: zaptide
     buildsystem: simple
     build-commands:
-      - cargo --offline fetch --manifest-path Cargo.toml --verbose
-      - cargo --offline build --release --locked
+      - cargo build --release --locked
       - install -Dm755 target/release/zaptide /app/bin/zaptide
       - install -Dm644 packaging/applications/dev.luminusos.ZapTide.desktop /app/share/applications/dev.luminusos.ZapTide.desktop
       - sed -i 's/^Icon=zaptide$/Icon=dev.luminusos.ZapTide/' /app/share/applications/dev.luminusos.ZapTide.desktop
@@ -57,6 +57,3 @@ modules:
       - type: file
         path: dev.luminusos.ZapTide.metainfo.xml
         dest: packaging/flatpak
-      # Every crate the lockfile names, for the offline build; flathub.sh
-      # writes it with flatpak-cargo-generator.
-      - cargo-sources.json
