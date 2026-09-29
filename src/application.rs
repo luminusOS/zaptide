@@ -1517,6 +1517,7 @@ impl SimpleComponent for NativeApplication {
                                         },
                                         append = &gtk::Image {
                                             set_icon_name: Some("media-record-symbolic"),
+                                            update_property: &[gtk::accessible::Property::Label("Recording")],
                                             add_css_class: "error",
                                             #[watch]
                                             set_opacity: model.recording_blink(),
@@ -1532,6 +1533,7 @@ impl SimpleComponent for NativeApplication {
                                             #[wrap(Some)]
                                             set_child = &paper_plane_icon() -> gtk::DrawingArea {},
                                             set_tooltip_text: Some("Send voice message"),
+                                            update_property: &[gtk::accessible::Property::Label("Send voice message")],
                                             add_css_class: "suggested-action",
                                             add_css_class: "circular",
                                             #[watch]
@@ -6721,7 +6723,10 @@ fn show_poll_dialog(parent: &adw::ApplicationWindow, sender: &ComponentSender<Na
         .content_width(420)
         .content_height(560)
         .build();
-    let question = adw::EntryRow::builder().title("Question").build();
+    let question = adw::EntryRow::builder()
+        .title("Question")
+        .activates_default(true)
+        .build();
     let options_list = gtk::ListBox::builder()
         .selection_mode(gtk::SelectionMode::None)
         .css_classes(["boxed-list"])
@@ -6786,7 +6791,7 @@ fn show_poll_dialog(parent: &adw::ApplicationWindow, sender: &ComponentSender<Na
             let Some(list) = list.upgrade() else {
                 return;
             };
-            let row = adw::EntryRow::new();
+            let row = adw::EntryRow::builder().activates_default(true).build();
             let remove = gtk::Button::builder()
                 .icon_name("list-remove-symbolic")
                 .tooltip_text("Remove option")
@@ -6864,6 +6869,7 @@ fn show_poll_dialog(parent: &adw::ApplicationWindow, sender: &ComponentSender<Na
     view.add_top_bar(&header);
     view.set_content(Some(&page));
     dialog.set_child(Some(&view));
+    dialog.set_default_widget(Some(&create));
     dialog.set_focus(Some(&question));
     dialog.present(Some(parent));
 }
