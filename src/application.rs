@@ -6729,22 +6729,34 @@ fn show_poll_dialog(parent: &adw::ApplicationWindow, sender: &ComponentSender<Na
         .build();
     let options: Rc<RefCell<Vec<(adw::EntryRow, gtk::Button)>>> = Rc::default();
 
+    // Closures below hold widgets weakly and `options` is emptied when the
+    // dialog closes, so no reference cycle keeps the dialog alive.
     let draft = {
-        let (question, options, multiple) = (question.clone(), options.clone(), multiple.clone());
+        let (question, options, multiple) =
+            (question.downgrade(), options.clone(), multiple.downgrade());
         move || crate::model::PollDraft {
-            question: question.text().into(),
+            question: question
+                .upgrade()
+                .map_or_else(String::new, |question| question.text().into()),
             options: options
                 .borrow()
                 .iter()
                 .map(|(row, _)| row.text().into())
                 .collect(),
-            multiple: multiple.is_active(),
+            multiple: multiple.upgrade().is_some_and(|multiple| multiple.is_active()),
         }
     };
     let refresh: Rc<dyn Fn()> = {
-        let (draft, options, create, add) =
-            (draft.clone(), options.clone(), create.clone(), add.clone());
+        let (draft, options, create, add) = (
+            draft.clone(),
+            options.clone(),
+            create.downgrade(),
+            add.downgrade(),
+        );
         Rc::new(move || {
+            let (Some(create), Some(add)) = (create.upgrade(), add.upgrade()) else {
+                return;
+            };
             let rows = options.borrow();
             for (index, (row, remove)) in rows.iter().enumerate() {
                 row.set_title(&format!("Option {}", index + 1));
@@ -6757,8 +6769,11 @@ fn show_poll_dialog(parent: &adw::ApplicationWindow, sender: &ComponentSender<Na
         })
     };
     let add_option: Rc<dyn Fn()> = {
-        let (list, options, refresh) = (options_list.clone(), options.clone(), refresh.clone());
+        let (list, options, refresh) = (options_list.downgrade(), options.clone(), refresh.clone());
         Rc::new(move || {
+            let Some(list) = list.upgrade() else {
+                return;
+            };
             let row = adw::EntryRow::new();
             let remove = gtk::Button::builder()
                 .icon_name("list-remove-symbolic")
@@ -6769,11 +6784,18 @@ fn show_poll_dialog(parent: &adw::ApplicationWindow, sender: &ComponentSender<Na
             row.add_suffix(&remove);
             let refresh_on_edit = refresh.clone();
             row.connect_changed(move |_| refresh_on_edit());
-            let (list_ref, options_ref, refresh_ref, target) =
-                (list.clone(), options.clone(), refresh.clone(), row.clone());
+            let (list_ref, options_ref, refresh_ref, target) = (
+                list.downgrade(),
+                options.clone(),
+                refresh.clone(),
+                row.downgrade(),
+            );
             remove.connect_clicked(move |_| {
+                let (Some(list), Some(target)) = (list_ref.upgrade(), target.upgrade()) else {
+                    return;
+                };
                 options_ref.borrow_mut().retain(|(row, _)| row != &target);
-                list_ref.remove(&target);
+                list.remove(&target);
                 refresh_ref();
             });
             let position = options.borrow().len() as i32;
@@ -6804,17 +6826,22 @@ fn show_poll_dialog(parent: &adw::ApplicationWindow, sender: &ComponentSender<Na
     page.add(&group);
 
     let cancel = gtk::Button::with_label("Cancel");
-    let close = dialog.clone();
+    let close = dialog.downgrade();
     cancel.connect_clicked(move |_| {
-        close.close();
-    });
-    let (close, sender) = (dialog.clone(), sender.clone());
-    create.connect_clicked(move |_| {
-        if let Ok(draft) = draft().validated() {
-            sender.input(Input::CreatePoll(draft));
+        if let Some(close) = close.upgrade() {
             close.close();
         }
     });
+    let (close, sender) = (dialog.downgrade(), sender.clone());
+    create.connect_clicked(move |_| {
+        if let Ok(draft) = draft().validated() {
+            sender.input(Input::CreatePoll(draft));
+            if let Some(close) = close.upgrade() {
+                close.close();
+            }
+        }
+    });
+    dialog.connect_closed(move |_| options.borrow_mut().clear());
     let header = adw::HeaderBar::builder()
         .show_start_title_buttons(false)
         .show_end_title_buttons(false)
