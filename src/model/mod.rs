@@ -253,12 +253,58 @@ pub enum Content {
         #[serde(default)]
         state: PollState,
     },
+    /// Quick-reply buttons under a message body.
+    Buttons {
+        text: String,
+        #[serde(default)]
+        footer: Option<String>,
+        #[serde(default)]
+        buttons: Vec<QuickReply>,
+    },
+    /// Single-select list opened from one button.
+    List {
+        title: String,
+        #[serde(default)]
+        description: Option<String>,
+        button: String,
+        #[serde(default)]
+        footer: Option<String>,
+        #[serde(default)]
+        sections: Vec<ListSection>,
+    },
     /// "This message was deleted."
     Revoked,
     /// Unsupported content with a user-facing description.
     Unsupported {
         what: String,
     },
+}
+
+/// First non-blank line of `text`, trimmed.
+fn first_line(text: &str) -> Option<&str> {
+    text.lines().map(str::trim).find(|line| !line.is_empty())
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct QuickReply {
+    pub id: String,
+    pub label: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ListSection {
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub rows: Vec<ListRow>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ListRow {
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 /// Poll information safe to send to the interface; encryption keys stay in the worker.
@@ -365,9 +411,64 @@ impl Content {
             },
             Self::Contact { display_name, .. } => format!("Contact: {display_name}"),
             Self::Poll { question, .. } => format!("Poll: {question}"),
+            Self::Buttons { text, buttons, .. } => first_line(text)
+                .or_else(|| buttons.first().map(|button| button.label.as_str()))
+                .unwrap_or("Buttons")
+                .to_owned(),
+            Self::List {
+                title,
+                description,
+                ..
+            } => match first_line(title).or_else(|| description.as_deref().and_then(first_line)) {
+                Some(line) => format!("List: {line}"),
+                None => "List".to_owned(),
+            },
             Self::Revoked => "This message was deleted".to_owned(),
             Self::Unsupported { what } => format!("Unsupported message ({what})"),
         }
+    }
+
+    /// Every line of a buttons or list message, for copying: body, footer,
+    /// and each button label or list row.
+    pub fn interactive_lines(&self) -> Option<String> {
+        let mut lines = Vec::new();
+        match self {
+            Self::Buttons {
+                text,
+                footer,
+                buttons,
+            } => {
+                lines.push(text.trim().to_owned());
+                lines.extend(footer.clone());
+                lines.extend(buttons.iter().map(|button| format!("[{}]", button.label)));
+            }
+            Self::List {
+                title,
+                description,
+                button,
+                footer,
+                sections,
+            } => {
+                lines.push(title.trim().to_owned());
+                lines.extend(description.clone());
+                for section in sections {
+                    lines.extend(section.title.clone());
+                    for row in &section.rows {
+                        lines.push(match &row.description {
+                            Some(detail) => format!("- {} ({detail})", row.title),
+                            None => format!("- {}", row.title),
+                        });
+                    }
+                }
+                lines.extend(footer.clone());
+                if !button.is_empty() {
+                    lines.push(format!("[{button}]"));
+                }
+            }
+            _ => return None,
+        }
+        lines.retain(|line| !line.trim().is_empty());
+        Some(lines.join("\n"))
     }
 
     pub fn media(&self) -> Option<&Media> {
@@ -643,5 +744,45 @@ mod tests {
         let json = serde_json::to_string(&content).expect("serializes");
         let back: Content = serde_json::from_str(&json).expect("parses");
         assert_eq!(back, content);
+    }
+    #[test]
+    fn interactive_content_summarises_and_copies_every_line() {
+        let buttons = Content::Buttons {
+            text: "\n Pick one\nsecond".into(),
+            footer: Some("Footer".into()),
+            buttons: vec![QuickReply {
+                id: "a".into(),
+                label: "Yes".into(),
+            }],
+        };
+        assert_eq!(buttons.summary(), "Pick one");
+        assert_eq!(
+            buttons.interactive_lines().as_deref(),
+            Some("Pick one\nsecond\nFooter\n[Yes]")
+        );
+        let list = Content::List {
+            title: String::new(),
+            description: Some("Today".into()),
+            button: "Open".into(),
+            footer: None,
+            sections: vec![ListSection {
+                title: Some("Drinks".into()),
+                rows: vec![ListRow {
+                    id: "t".into(),
+                    title: "Tea".into(),
+                    description: Some("hot".into()),
+                }],
+            }],
+        };
+        assert_eq!(list.summary(), "List: Today");
+        assert_eq!(
+            list.interactive_lines().as_deref(),
+            Some("Today\nDrinks\n- Tea (hot)\n[Open]")
+        );
+        assert_eq!(Content::text("x").interactive_lines(), None);
+        // Saved rows keep decoding without the optional fields.
+        let old: Content =
+            serde_json::from_str(r#"{"kind":"buttons","text":"t"}"#).expect("parses");
+        assert!(matches!(old, Content::Buttons { buttons, .. } if buttons.is_empty()));
     }
 }

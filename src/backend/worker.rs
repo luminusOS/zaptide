@@ -3624,7 +3624,11 @@ impl Worker {
         };
         if matches!(
             source.content,
-            Content::Revoked | Content::Unsupported { .. } | Content::Poll { .. }
+            Content::Revoked
+                | Content::Unsupported { .. }
+                | Content::Poll { .. }
+                | Content::Buttons { .. }
+                | Content::List { .. }
         ) {
             self.emit(Event::Error("This message cannot be forwarded".to_owned()));
             return;
@@ -5315,6 +5319,12 @@ fn context_of(base: &wa::Message) -> Option<&wa::ContextInfo> {
     {
         return poll.context_info.as_option();
     }
+    if let Some(buttons) = base.buttons_message.as_option() {
+        return buttons.context_info.as_option();
+    }
+    if let Some(list) = base.list_message.as_option() {
+        return list.context_info.as_option();
+    }
     None
 }
 
@@ -5506,6 +5516,12 @@ fn classify(base: &wa::Message) -> Option<Content> {
             what: what.to_owned(),
         })
     };
+    if let Some(buttons) = base.buttons_message.as_option() {
+        return buttons_content(buttons).or_else(|| unsupported("interactive message"));
+    }
+    if let Some(list) = base.list_message.as_option() {
+        return list_content(list).or_else(|| unsupported("list"));
+    }
     if base.album_message.is_set() {
         return None;
     }
@@ -5519,8 +5535,6 @@ fn classify(base: &wa::Message) -> Option<Content> {
         return unsupported("sticker pack");
     }
     if base.interactive_message.is_set()
-        || base.buttons_message.is_set()
-        || base.list_message.is_set()
         || base.template_message.is_set()
         || base.buttons_response_message.is_set()
         || base.list_response_message.is_set()
@@ -5570,6 +5584,104 @@ fn classify(base: &wa::Message) -> Option<Content> {
         return None;
     }
     unsupported("message")
+}
+
+/// Most buttons, list rows and characters per string kept from a sender, so
+/// one crafted message cannot build thousands of widgets.
+const MAX_INTERACTIVE_ITEMS: usize = 100;
+const MAX_INTERACTIVE_BUTTONS: usize = 10;
+const MAX_INTERACTIVE_CHARS: usize = 1_000;
+
+fn interactive_text(text: &Option<String>) -> Option<String> {
+    non_empty(text).map(|text| {
+        if text.chars().count() <= MAX_INTERACTIVE_CHARS {
+            return text;
+        }
+        let mut clipped: String = text.chars().take(MAX_INTERACTIVE_CHARS).collect();
+        clipped.push('…');
+        clipped
+    })
+}
+
+/// Ids go back to the sender unchanged when answering, so one that is too
+/// long to trust is dropped with its button or row rather than clipped.
+fn interactive_id(id: &Option<String>) -> Option<String> {
+    non_empty(id).filter(|id| id.chars().count() <= 256)
+}
+
+/// Quick-reply buttons that carry an id and a label. Native-flow buttons
+/// cannot be answered with a button reply and are dropped; `None` when
+/// nothing is left to show.
+fn buttons_content(message: &wa::message::ButtonsMessage) -> Option<Content> {
+    use wa::message::buttons_message::button::Type;
+    let mut text = interactive_text(&message.content_text);
+    if text.is_none()
+        && let Some(wa::__buffa::oneof::message::buttons_message::Header::Text(header)) =
+            &message.header
+    {
+        text = interactive_text(&Some(header.clone()));
+    }
+    let buttons: Vec<_> = message
+        .buttons
+        .iter()
+        .filter(|button| {
+            button.r#type != Some(Type::NATIVE_FLOW) && !button.native_flow_info.is_set()
+        })
+        .filter_map(|button| {
+            let id = interactive_id(&button.button_id)?;
+            let label = button
+                .button_text
+                .as_option()
+                .and_then(|text| interactive_text(&text.display_text))?;
+            Some(crate::model::QuickReply { id, label })
+        })
+        .take(MAX_INTERACTIVE_BUTTONS)
+        .collect();
+    (text.is_some() || !buttons.is_empty()).then(|| Content::Buttons {
+        text: text.unwrap_or_default(),
+        footer: interactive_text(&message.footer_text),
+        buttons,
+    })
+}
+
+/// Single-select list; product lists and lists without answerable rows are
+/// not shown as lists.
+fn list_content(message: &wa::message::ListMessage) -> Option<Content> {
+    use wa::message::list_message::ListType;
+    if message.list_type == Some(ListType::PRODUCT_LIST) || message.product_list_info.is_set() {
+        return None;
+    }
+    let mut budget = MAX_INTERACTIVE_ITEMS;
+    let sections: Vec<_> = message
+        .sections
+        .iter()
+        .filter_map(|section| {
+            let rows: Vec<_> = section
+                .rows
+                .iter()
+                .filter_map(|row| {
+                    Some(crate::model::ListRow {
+                        id: interactive_id(&row.row_id)?,
+                        title: interactive_text(&row.title)?,
+                        description: interactive_text(&row.description),
+                    })
+                })
+                .take(budget)
+                .collect();
+            budget -= rows.len();
+            (!rows.is_empty()).then(|| crate::model::ListSection {
+                title: interactive_text(&section.title),
+                rows,
+            })
+        })
+        .collect();
+    (!sections.is_empty()).then(|| Content::List {
+        title: interactive_text(&message.title).unwrap_or_default(),
+        description: interactive_text(&message.description),
+        button: interactive_text(&message.button_text).unwrap_or_default(),
+        footer: interactive_text(&message.footer_text),
+        sections,
+    })
 }
 
 /// Uploaded attachment protobuf and archive content.
@@ -6284,6 +6396,143 @@ mod tests {
         );
         assert_eq!(extension_for("audio/ogg; codecs=opus", None), "ogg");
         assert_eq!(extension_for("application/x-unknown", None), "x-unknown");
+    }
+
+    #[test]
+    fn classification_reads_quick_reply_buttons_and_lists() {
+        use whatsapp_rust::prelude::MessageField;
+        let buttons = wa::Message {
+            buttons_message: MessageField::some(wa::message::ButtonsMessage {
+                content_text: Some("Pick one".into()),
+                footer_text: Some("Footer".into()),
+                buttons: vec![
+                    wa::message::buttons_message::Button {
+                        button_id: Some("a".into()),
+                        button_text: MessageField::some(
+                            wa::message::buttons_message::button::ButtonText {
+                                display_text: Some("Yes".into()),
+                            },
+                        ),
+                        ..Default::default()
+                    },
+                    // No id or label: nothing to answer with, so it is dropped.
+                    wa::message::buttons_message::Button::default(),
+                ],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            classify(&buttons),
+            Some(Content::Buttons {
+                text: "Pick one".into(),
+                footer: Some("Footer".into()),
+                buttons: vec![crate::model::QuickReply {
+                    id: "a".into(),
+                    label: "Yes".into()
+                }],
+            })
+        );
+        let list = wa::Message {
+            list_message: MessageField::some(wa::message::ListMessage {
+                title: Some("Menu".into()),
+                button_text: Some("Open".into()),
+                sections: vec![wa::message::list_message::Section {
+                    title: Some("Drinks".into()),
+                    rows: vec![wa::message::list_message::Row {
+                        title: Some("Tea".into()),
+                        row_id: Some("t".into()),
+                        ..Default::default()
+                    }],
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let Some(Content::List {
+            title,
+            button,
+            sections,
+            ..
+        }) = classify(&list)
+        else {
+            panic!("list expected");
+        };
+        assert_eq!((title.as_str(), button.as_str()), ("Menu", "Open"));
+        assert_eq!(sections[0].rows[0].id, "t");
+        // Native-flow buttons, product lists and empty lists are not answerable.
+        let native = wa::Message {
+            buttons_message: MessageField::some(wa::message::ButtonsMessage {
+                buttons: vec![wa::message::buttons_message::Button {
+                    button_id: Some("x".into()),
+                    r#type: Some(wa::message::buttons_message::button::Type::NATIVE_FLOW),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(matches!(
+            classify(&native),
+            Some(Content::Unsupported { .. })
+        ));
+        let product = wa::Message {
+            list_message: MessageField::some(wa::message::ListMessage {
+                list_type: Some(wa::message::list_message::ListType::PRODUCT_LIST),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(matches!(
+            classify(&product),
+            Some(Content::Unsupported { .. })
+        ));
+    }
+
+    #[test]
+    fn interactive_messages_are_capped() {
+        use whatsapp_rust::prelude::MessageField;
+        let button = |index: usize| wa::message::buttons_message::Button {
+            button_id: Some(format!("b{index}")),
+            button_text: MessageField::some(wa::message::buttons_message::button::ButtonText {
+                display_text: Some("é".repeat(1_500)),
+            }),
+            ..Default::default()
+        };
+        let buttons = wa::Message {
+            buttons_message: MessageField::some(wa::message::ButtonsMessage {
+                buttons: (0..15).map(button).collect(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let Some(Content::Buttons { buttons, .. }) = classify(&buttons) else {
+            panic!("buttons expected");
+        };
+        assert_eq!(buttons.len(), MAX_INTERACTIVE_BUTTONS);
+        assert_eq!(buttons[0].label.chars().count(), MAX_INTERACTIVE_CHARS + 1);
+        assert!(buttons[0].label.ends_with('…'));
+        let row = |index: usize| wa::message::list_message::Row {
+            title: Some(format!("r{index}")),
+            row_id: Some(format!("id{index}")),
+            ..Default::default()
+        };
+        let section = |start: usize| wa::message::list_message::Section {
+            rows: (start..start + 80).map(row).collect(),
+            ..Default::default()
+        };
+        let list = wa::Message {
+            list_message: MessageField::some(wa::message::ListMessage {
+                sections: vec![section(0), section(80)],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let Some(Content::List { sections, .. }) = classify(&list) else {
+            panic!("list expected");
+        };
+        let rows: usize = sections.iter().map(|section| section.rows.len()).sum();
+        assert_eq!(rows, MAX_INTERACTIVE_ITEMS);
     }
 
     #[test]

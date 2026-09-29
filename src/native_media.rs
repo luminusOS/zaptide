@@ -113,6 +113,20 @@ pub enum NativeMediaContent {
         question: String,
         options: Vec<PollOptionPresentation>,
     },
+    /// Quick-reply labels under the message text.
+    Buttons {
+        text: String,
+        footer: Option<String>,
+        labels: Vec<String>,
+    },
+    /// List heading with the button label and its sections.
+    List {
+        title: String,
+        description: Option<String>,
+        button: String,
+        footer: Option<String>,
+        sections: Vec<ListSectionPresentation>,
+    },
     VideoPlaceholder,
     UnsupportedPlaceholder,
     Other,
@@ -125,12 +139,21 @@ impl fmt::Debug for NativeMediaContent {
             Self::Contact { .. } => "Contact",
             Self::Location { .. } => "Location",
             Self::Poll { .. } => "Poll",
+            Self::Buttons { .. } => "Buttons",
+            Self::List { .. } => "List",
             Self::VideoPlaceholder => "VideoPlaceholder",
             Self::UnsupportedPlaceholder => "UnsupportedPlaceholder",
             Self::Other => "Other",
         };
         formatter.write_str(name)
     }
+}
+
+/// One list section: optional heading and its rows as (title, detail).
+#[derive(Clone, Eq, PartialEq)]
+pub struct ListSectionPresentation {
+    pub title: Option<String>,
+    pub rows: Vec<(String, Option<String>)>,
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -240,6 +263,38 @@ pub fn project_content(message: &Message) -> NativeMessageContent {
                     text: text.clone(),
                     votes: state.counts.get(index).copied().unwrap_or(0),
                     selected: state.selected.contains(&index),
+                })
+                .collect(),
+        },
+        Content::Buttons {
+            text,
+            footer,
+            buttons,
+        } => NativeMediaContent::Buttons {
+            text: text.clone(),
+            footer: footer.clone(),
+            labels: buttons.iter().map(|button| button.label.clone()).collect(),
+        },
+        Content::List {
+            title,
+            description,
+            button,
+            footer,
+            sections,
+        } => NativeMediaContent::List {
+            title: title.clone(),
+            description: description.clone(),
+            button: button.clone(),
+            footer: footer.clone(),
+            sections: sections
+                .iter()
+                .map(|section| ListSectionPresentation {
+                    title: section.title.clone(),
+                    rows: section
+                        .rows
+                        .iter()
+                        .map(|row| (row.title.clone(), row.description.clone()))
+                        .collect(),
                 })
                 .collect(),
         },

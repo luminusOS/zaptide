@@ -177,6 +177,61 @@ pub fn build_media_widget_with_action(
             }
             ("Poll", "")
         }
+        NativeMediaContent::Buttons {
+            text,
+            footer,
+            labels,
+        } => {
+            if !text.is_empty() {
+                add_label(&root, text);
+            }
+            if let Some(footer) = footer {
+                let label = add_label(&root, footer);
+                label.add_css_class("dim-label");
+                label.add_css_class("caption");
+            }
+            for label in labels {
+                root.append(&disabled_reply_button(label));
+            }
+            ("", "")
+        }
+        NativeMediaContent::List {
+            title,
+            description,
+            button,
+            footer,
+            sections,
+        } => {
+            if !title.is_empty() {
+                add_label(&root, title).add_css_class("heading");
+            }
+            if let Some(description) = description {
+                add_label(&root, description);
+            }
+            for section in sections {
+                if let Some(heading) = &section.title {
+                    let label = add_label(&root, heading);
+                    label.add_css_class("caption-heading");
+                }
+                for (row, detail) in &section.rows {
+                    add_label(&root, &format!("• {row}"));
+                    if let Some(detail) = detail {
+                        let label = add_label(&root, detail);
+                        label.set_margin_start(12);
+                        label.add_css_class("dim-label");
+                        label.add_css_class("caption");
+                    }
+                }
+            }
+            if let Some(footer) = footer {
+                let label = add_label(&root, footer);
+                label.add_css_class("dim-label");
+                label.add_css_class("caption");
+            }
+            let label = if button.is_empty() { "Choose" } else { button };
+            root.append(&disabled_reply_button(label));
+            ("", "")
+        }
         NativeMediaContent::VideoPlaceholder => ("Video", "Video preview unavailable"),
         NativeMediaContent::UnsupportedPlaceholder => (
             "Unsupported message",
@@ -1611,12 +1666,31 @@ fn link_card(
     })
 }
 
-fn add_label(parent: &gtk::Box, text: &str) {
+fn add_label(parent: &gtk::Box, text: &str) -> gtk::Label {
     let label = gtk::Label::new(Some(text));
     label.set_xalign(0.0);
     label.set_wrap(true);
+    label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
     label.set_max_width_chars(52);
     parent.append(&label);
+    label
+}
+
+/// Button placeholder for an interactive message. Answering is not
+/// available yet, so it says so instead of only looking dimmed.
+fn disabled_reply_button(text: &str) -> gtk::Button {
+    let label = gtk::Label::new(Some(text));
+    label.set_wrap(true);
+    label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    label.set_max_width_chars(40);
+    label.set_justify(gtk::Justification::Center);
+    let button = gtk::Button::new();
+    button.set_child(Some(&label));
+    button.set_sensitive(false);
+    let hint = "Replying from ZapTide is not available yet";
+    button.set_tooltip_text(Some(hint));
+    button.update_property(&[gtk::accessible::Property::Description(hint)]);
+    button
 }
 
 /// Choose only known local formats for GTK/GStreamer playback. The media

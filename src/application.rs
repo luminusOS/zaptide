@@ -4376,7 +4376,9 @@ fn transcript_row(message: &crate::model::Message) -> crate::native_transcript::
 fn transcript_text(message: &crate::model::Message) -> String {
     match &message.content {
         crate::model::Content::Text { text, .. } => text.clone(),
-        _ => message.summary(),
+        content => content
+            .interactive_lines()
+            .unwrap_or_else(|| message.summary()),
     }
 }
 
@@ -7503,13 +7505,13 @@ fn animate_sticker_on_hover(button: &gtk::Button, path: &std::path::Path) {
 /// Text a message shows, if any: its body or a media caption.
 fn message_text(message: &crate::model::Message) -> Option<String> {
     let text = match &message.content {
-        crate::model::Content::Text { text, .. } => Some(text),
+        crate::model::Content::Text { text, .. } => Some(text.clone()),
         crate::model::Content::Image { caption, .. }
         | crate::model::Content::Video { caption, .. }
-        | crate::model::Content::Document { caption, .. } => caption.as_ref(),
-        _ => None,
+        | crate::model::Content::Document { caption, .. } => caption.clone(),
+        content => content.interactive_lines(),
     };
-    text.filter(|text| !text.trim().is_empty()).cloned()
+    text.filter(|text| !text.trim().is_empty())
 }
 
 /// WhatsApp-style quick reactions above the message menu. Picking the
