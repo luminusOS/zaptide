@@ -7796,10 +7796,11 @@ fn show_chat_info_dialog(
     settings.add(&property(
         "Notifications",
         match chat.muted_until {
-            Some(0) => "Muted".to_owned(),
-            Some(until) if until > now => {
+            // Muting from the app stores `i64::MAX`, which has no date.
+            Some(until) if until > now && !crate::util::moment_stamp(until).is_empty() => {
                 format!("Muted until {}", crate::util::moment_stamp(until))
             }
+            _ if chat.muted(now) => "Muted".to_owned(),
             _ => "On".to_owned(),
         }
         .as_str(),
