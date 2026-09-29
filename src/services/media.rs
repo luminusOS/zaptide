@@ -358,6 +358,13 @@ impl MediaService {
             .map_or_else(Vec::new, audio::Recorder::levels)
     }
 
+    /// Newest `count` microphone readings; empty when not recording.
+    pub fn recent_recording_levels(&self, count: usize) -> Vec<f32> {
+        self.recorder
+            .as_ref()
+            .map_or_else(Vec::new, |recorder| recorder.recent_levels(count))
+    }
+
     pub fn finish_recording(&mut self) -> Option<Result<Vec<f32>, String>> {
         self.recorder.take().map(audio::Recorder::finish)
     }

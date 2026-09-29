@@ -3537,7 +3537,7 @@ impl NativeApplication {
             Input::Recording(intent) => {
                 self.recording_action(intent);
                 self.recording_meter
-                    .set_levels(&self.media.recording_levels());
+                    .set_levels(&self.media.recent_recording_levels(crate::voice::BARS));
                 self.schedule_voice_poll(&sender);
             }
             Input::PollVoice => {
@@ -3554,8 +3554,10 @@ impl NativeApplication {
                     self.update_audio_row(&id);
                 }
                 self.refresh_selected_voice();
-                self.recording_meter
-                    .set_levels(&self.media.recording_levels());
+                if self.media.is_recording() {
+                    self.recording_meter
+                        .set_levels(&self.media.recent_recording_levels(crate::voice::BARS));
+                }
                 self.schedule_voice_poll(&sender);
             }
             Input::SendText(text) => {
@@ -7054,7 +7056,6 @@ fn show_new_contact_dialog(
     dialog.present();
 }
 
-/// Picks the chat to forward the selected message to.
 /// Searchable participant list; picking one inserts the mention.
 fn show_mention_dialog(
     parent: &adw::ApplicationWindow,
@@ -7165,6 +7166,7 @@ fn cached_avatar(
     })
 }
 
+/// Picks the chat to forward the selected message to.
 fn show_forward_dialog(
     parent: &adw::ApplicationWindow,
     sender: &ComponentSender<NativeApplication>,

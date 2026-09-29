@@ -835,6 +835,12 @@ impl Recorder {
             .clone()
     }
 
+    /// The newest `count` readings, without copying the whole recording.
+    pub fn recent_levels(&self, count: usize) -> Vec<f32> {
+        let levels = self.levels.lock().unwrap_or_else(|p| p.into_inner());
+        levels[levels.len().saturating_sub(count)..].to_vec()
+    }
+
     /// Error that stopped recording early.
     pub fn failure(&self) -> Option<String> {
         match self
