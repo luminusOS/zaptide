@@ -3308,7 +3308,8 @@ impl NativeApplication {
                 self.composer
                     .stage_attachment_caption(&chat, self.draft.clone());
                 for path in &paths {
-                    self.document_attachments.remove(&(chat.clone(), path.clone()));
+                    self.document_attachments
+                        .remove(&(chat.clone(), path.clone()));
                 }
                 self.pending_attachments
                     .entry(chat)
@@ -3381,23 +3382,26 @@ impl NativeApplication {
                 } else {
                     ("Send files as documents", None)
                 };
-                let request =
-                    self.portals
-                        .open_files(Some(&self.window), title, filter.as_ref(), move |result| {
-                            if let Some(id) = callback_request_id.get() {
-                                requests.borrow_mut().remove(&id);
-                            }
-                            let paths = result
-                                .unwrap_or_default()
-                                .into_iter()
-                                .filter_map(|file| file.path())
-                                .collect();
-                            input.input(Input::AttachmentsPicked {
-                                chat,
-                                paths,
-                                documents: !gallery,
-                            });
+                let request = self.portals.open_files(
+                    Some(&self.window),
+                    title,
+                    filter.as_ref(),
+                    move |result| {
+                        if let Some(id) = callback_request_id.get() {
+                            requests.borrow_mut().remove(&id);
+                        }
+                        let paths = result
+                            .unwrap_or_default()
+                            .into_iter()
+                            .filter_map(|file| file.path())
+                            .collect();
+                        input.input(Input::AttachmentsPicked {
+                            chat,
+                            paths,
+                            documents: !gallery,
                         });
+                    },
+                );
                 if let Some(id) = request {
                     request_id.set(Some(id));
                     self.portal_requests.borrow_mut().insert(id);
@@ -6766,7 +6770,9 @@ fn show_poll_dialog(parent: &adw::ApplicationWindow, sender: &ComponentSender<Na
                 .iter()
                 .map(|(row, _)| row.text().into())
                 .collect(),
-            multiple: multiple.upgrade().is_some_and(|multiple| multiple.is_active()),
+            multiple: multiple
+                .upgrade()
+                .is_some_and(|multiple| multiple.is_active()),
         }
     };
     let refresh: Rc<dyn Fn()> = {
@@ -7186,7 +7192,10 @@ fn show_mention_dialog(
 fn cached_texture(path: &std::path::Path) -> Option<gtk::gdk::Texture> {
     AVATAR_TEXTURES.with_borrow_mut(|cache| {
         if !cache.contains_key(path) {
-            cache.insert(path.to_path_buf(), gtk::gdk::Texture::from_filename(path).ok()?);
+            cache.insert(
+                path.to_path_buf(),
+                gtk::gdk::Texture::from_filename(path).ok()?,
+            );
         }
         cache.get(path).cloned()
     })
@@ -7942,7 +7951,12 @@ fn attach_tile(icon: &str, label: &str, tone: &str) -> gtk::Box {
         .css_classes(["zaptide-attach-icon", tone])
         .build();
     tile.append(&image);
-    tile.append(&gtk::Label::builder().label(label).css_classes(["caption"]).build());
+    tile.append(
+        &gtk::Label::builder()
+            .label(label)
+            .css_classes(["caption"])
+            .build(),
+    );
     tile
 }
 

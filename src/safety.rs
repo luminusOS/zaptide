@@ -21,9 +21,11 @@ pub const CHAT_SCHEME: &str = "zaptide-chat:";
 fn whatsapp_number(url: &url::Url) -> Option<String> {
     let digits = match (url.scheme(), url.host_str()?) {
         ("http" | "https", "wa.me") => url.path().trim_matches('/').to_owned(),
-        ("http" | "https", "api.whatsapp.com" | "web.whatsapp.com") | ("whatsapp", "send") => {
-            url.query_pairs().find(|(key, _)| key == "phone")?.1.into_owned()
-        }
+        ("http" | "https", "api.whatsapp.com" | "web.whatsapp.com") | ("whatsapp", "send") => url
+            .query_pairs()
+            .find(|(key, _)| key == "phone")?
+            .1
+            .into_owned(),
         _ => return None,
     };
     let digits: String = digits.chars().filter(char::is_ascii_digit).collect();
@@ -47,7 +49,8 @@ fn phone_at(rest: &str) -> Option<(usize, String)> {
                 index += 1;
             }
             let group = &rest[start..index];
-            if digits.len() + group.len() > 15 || (groups > 0 && group.len() <= 2 && digits.len() >= 10)
+            if digits.len() + group.len() > 15
+                || (groups > 0 && group.len() <= 2 && digits.len() >= 10)
             {
                 break;
             }
@@ -68,9 +71,8 @@ fn phone_at(rest: &str) -> Option<(usize, String)> {
             break;
         }
     }
-    let valid = rest.starts_with('+')
-        && (8..=15).contains(&digits.len())
-        && !(groups > 1 && first > 3);
+    let valid =
+        rest.starts_with('+') && (8..=15).contains(&digits.len()) && !(groups > 1 && first > 3);
     valid.then_some((end, digits))
 }
 
@@ -78,7 +80,11 @@ fn phone_at(rest: &str) -> Option<(usize, String)> {
 fn link_at(rest: &str) -> Option<(usize, String, Option<&'static str>)> {
     if rest.starts_with('+') {
         let (len, digits) = phone_at(rest)?;
-        return Some((len, format!("{CHAT_SCHEME}{digits}"), Some("Message on WhatsApp")));
+        return Some((
+            len,
+            format!("{CHAT_SCHEME}{digits}"),
+            Some("Message on WhatsApp"),
+        ));
     }
     if !["http://", "https://", "www.", "whatsapp://"]
         .iter()
@@ -92,7 +98,9 @@ fn link_at(rest: &str) -> Option<(usize, String, Option<&'static str>)> {
     let mut link = word;
     loop {
         let trimmed = link.trim_end_matches(['.', ',', ';', ':', '!', '?', ']', '"', '\'']);
-        let trimmed = if trimmed.ends_with(')') && trimmed.matches(')').count() > trimmed.matches('(').count() {
+        let trimmed = if trimmed.ends_with(')')
+            && trimmed.matches(')').count() > trimmed.matches('(').count()
+        {
             &trimmed[..trimmed.len() - 1]
         } else {
             trimmed
@@ -105,11 +113,19 @@ fn link_at(rest: &str) -> Option<(usize, String, Option<&'static str>)> {
     let len = link.len();
     if link.starts_with("whatsapp://") {
         let digits = whatsapp_number(&url::Url::parse(link).ok()?)?;
-        return Some((len, format!("{CHAT_SCHEME}{digits}"), Some("Message on WhatsApp")));
+        return Some((
+            len,
+            format!("{CHAT_SCHEME}{digits}"),
+            Some("Message on WhatsApp"),
+        ));
     }
     let url = preview_url(link)?;
     match whatsapp_number(&url::Url::parse(&url).ok()?) {
-        Some(digits) => Some((len, format!("{CHAT_SCHEME}{digits}"), Some("Message on WhatsApp"))),
+        Some(digits) => Some((
+            len,
+            format!("{CHAT_SCHEME}{digits}"),
+            Some("Message on WhatsApp"),
+        )),
         None => Some((len, url, None)),
     }
 }
@@ -184,9 +200,7 @@ mod tests {
     #[test]
     fn phone_numbers_and_whatsapp_links_open_a_chat() {
         let chat = |digits: &str, shown: &str| {
-            format!(
-                "<a href=\"zaptide-chat:{digits}\" title=\"Message on WhatsApp\">{shown}</a>"
-            )
+            format!("<a href=\"zaptide-chat:{digits}\" title=\"Message on WhatsApp\">{shown}</a>")
         };
         assert_eq!(
             linkify_markup("call +55 (11) 91234-5678."),
@@ -218,6 +232,9 @@ mod tests {
             format!("{} 2025", chat("5511912345678", "+5511912345678"))
         );
         // Too short to be a number, and bare digits are left alone.
-        assert_eq!(linkify_markup("+123 and 11912345678"), "+123 and 11912345678");
+        assert_eq!(
+            linkify_markup("+123 and 11912345678"),
+            "+123 and 11912345678"
+        );
     }
 }
