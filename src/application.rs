@@ -1013,11 +1013,7 @@ pub enum Input {
     ForwardSelected(String),
     DeleteSelected(bool),
     VoteOption(usize),
-    CreatePoll {
-        question: String,
-        first: String,
-        second: String,
-    },
+    CreatePoll(crate::model::PollDraft),
     Recording(crate::native_voice::RecordingIntent),
     PollVoice,
     ShowStickerPicker,
@@ -3494,11 +3490,7 @@ impl NativeApplication {
                 self.poll_choice = choice;
                 self.vote_selected();
             }
-            Input::CreatePoll {
-                question,
-                first,
-                second,
-            } => self.create_poll(question, first, second),
+            Input::CreatePoll(draft) => self.create_poll(draft),
             Input::Recording(intent) => {
                 self.recording_action(intent);
                 self.recording_meter
@@ -5336,14 +5328,9 @@ impl NativeApplication {
         }
     }
 
-    fn create_poll(&mut self, question: String, first: String, second: String) {
+    fn create_poll(&mut self, draft: crate::model::PollDraft) {
         let Some(chat) = self.active_chat.clone() else {
             return;
-        };
-        let draft = crate::model::PollDraft {
-            question,
-            options: vec![first, second],
-            multiple: false,
         };
         let Ok(draft) = draft.validated() else {
             self.status = "Enter a question and two different poll options".into();
@@ -6635,55 +6622,129 @@ fn install_window_actions(
     );
 }
 
+/// New Poll: a question, 2–12 answers added or removed in place, and a
+/// multiple-answer switch. Create stays disabled until the draft is valid.
 fn show_poll_dialog(parent: &adw::ApplicationWindow, sender: &ComponentSender<NativeApplication>) {
-    let dialog = gtk::Window::builder()
-        .title("Create poll")
-        .transient_for(parent)
-        .modal(true)
-        .default_width(360)
+    use std::{cell::RefCell, rc::Rc};
+    const MAX_OPTIONS: usize = 12;
+    let dialog = adw::Dialog::builder()
+        .title("New Poll")
+        .content_width(420)
+        .content_height(560)
         .build();
-    let content = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(8)
-        .margin_top(18)
-        .margin_bottom(18)
-        .margin_start(18)
-        .margin_end(18)
+    let question = adw::EntryRow::builder().title("Question").build();
+    let options_list = gtk::ListBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .css_classes(["boxed-list"])
         .build();
-    let question = gtk::Entry::builder().placeholder_text("Question").build();
-    let first = gtk::Entry::builder()
-        .placeholder_text("First option")
+    let add = adw::ButtonRow::builder()
+        .title("Add Option")
+        .start_icon_name("list-add-symbolic")
         .build();
-    let second = gtk::Entry::builder()
-        .placeholder_text("Second option")
+    options_list.append(&add);
+    let multiple = adw::SwitchRow::builder()
+        .title("Allow Multiple Answers")
         .build();
-    let buttons = gtk::Box::builder()
-        .spacing(8)
-        .halign(gtk::Align::End)
+    let create = gtk::Button::builder()
+        .label("Create")
+        .css_classes(["suggested-action"])
+        .sensitive(false)
         .build();
+    let options: Rc<RefCell<Vec<(adw::EntryRow, gtk::Button)>>> = Rc::default();
+
+    let draft = {
+        let (question, options, multiple) = (question.clone(), options.clone(), multiple.clone());
+        move || crate::model::PollDraft {
+            question: question.text().into(),
+            options: options.borrow().iter().map(|(row, _)| row.text().into()).collect(),
+            multiple: multiple.is_active(),
+        }
+    };
+    let refresh: Rc<dyn Fn()> = {
+        let (draft, options, create, add) = (draft.clone(), options.clone(), create.clone(), add.clone());
+        Rc::new(move || {
+            let rows = options.borrow();
+            for (index, (row, remove)) in rows.iter().enumerate() {
+                row.set_title(&format!("Option {}", index + 1));
+                remove.set_visible(rows.len() > 2);
+            }
+            add.set_visible(rows.len() < MAX_OPTIONS);
+            let valid = draft().validated();
+            create.set_sensitive(valid.is_ok());
+            create.set_tooltip_text(valid.err());
+        })
+    };
+    let add_option: Rc<dyn Fn()> = {
+        let (list, options, refresh) = (options_list.clone(), options.clone(), refresh.clone());
+        Rc::new(move || {
+            let row = adw::EntryRow::new();
+            let remove = gtk::Button::builder()
+                .icon_name("list-remove-symbolic")
+                .tooltip_text("Remove option")
+                .valign(gtk::Align::Center)
+                .css_classes(["flat", "circular"])
+                .build();
+            row.add_suffix(&remove);
+            let refresh_on_edit = refresh.clone();
+            row.connect_changed(move |_| refresh_on_edit());
+            let (list_ref, options_ref, refresh_ref, target) =
+                (list.clone(), options.clone(), refresh.clone(), row.clone());
+            remove.connect_clicked(move |_| {
+                options_ref.borrow_mut().retain(|(row, _)| row != &target);
+                list_ref.remove(&target);
+                refresh_ref();
+            });
+            let position = options.borrow().len() as i32;
+            list.insert(&row, position);
+            options.borrow_mut().push((row.clone(), remove));
+            refresh();
+            row.grab_focus();
+        })
+    };
+    add_option();
+    add_option();
+    let add_clicked = add_option.clone();
+    add.connect_activated(move |_| add_clicked());
+    let refresh_question = refresh.clone();
+    question.connect_changed(move |_| refresh_question());
+    let refresh_multiple = refresh.clone();
+    multiple.connect_active_notify(move |_| refresh_multiple());
+
+    let page = adw::PreferencesPage::new();
+    let group = adw::PreferencesGroup::new();
+    group.add(&question);
+    page.add(&group);
+    let group = adw::PreferencesGroup::builder().title("Options").build();
+    group.add(&options_list);
+    page.add(&group);
+    let group = adw::PreferencesGroup::new();
+    group.add(&multiple);
+    page.add(&group);
+
     let cancel = gtk::Button::with_label("Cancel");
-    let create = gtk::Button::with_label("Create");
-    create.add_css_class("suggested-action");
-    buttons.append(&cancel);
-    buttons.append(&create);
-    content.append(&question);
-    content.append(&first);
-    content.append(&second);
-    content.append(&buttons);
-    dialog.set_child(Some(&content));
-    let close_dialog = dialog.clone();
-    cancel.connect_clicked(move |_| close_dialog.close());
-    let sender = sender.clone();
-    let close_dialog = dialog.clone();
-    create.connect_clicked(move |_| {
-        sender.input(Input::CreatePoll {
-            question: question.text().to_string(),
-            first: first.text().to_string(),
-            second: second.text().to_string(),
-        });
-        close_dialog.close();
+    let close = dialog.clone();
+    cancel.connect_clicked(move |_| {
+        close.close();
     });
-    dialog.present();
+    let (close, sender) = (dialog.clone(), sender.clone());
+    create.connect_clicked(move |_| {
+        if let Ok(draft) = draft().validated() {
+            sender.input(Input::CreatePoll(draft));
+            close.close();
+        }
+    });
+    let header = adw::HeaderBar::builder()
+        .show_start_title_buttons(false)
+        .show_end_title_buttons(false)
+        .build();
+    header.pack_start(&cancel);
+    header.pack_end(&create);
+    let view = adw::ToolbarView::new();
+    view.add_top_bar(&header);
+    view.set_content(Some(&page));
+    dialog.set_child(Some(&view));
+    dialog.set_focus(Some(&question));
+    dialog.present(Some(parent));
 }
 
 /// Contacts offered in New Chat as (id, name, formatted phone): only people
