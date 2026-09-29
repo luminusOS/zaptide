@@ -2500,6 +2500,10 @@ impl NativeApplication {
                                     .into_iter()
                                     .map(|contact| (contact.id.clone(), contact)),
                             );
+                            if !self.message_ids.is_empty() {
+                                self.sync_transcript();
+                                self.rebuild_message_rows();
+                            }
                         }
                         NativeEvent::Messages {
                             chat,
@@ -4238,13 +4242,14 @@ fn mention_labels(
 
 fn message_row(
     message: crate::model::Message,
+    contacts: &std::collections::HashMap<String, crate::model::Contact>,
     pointer_sender: ComponentSender<NativeApplication>,
     prefix: &str,
     avatar: Option<std::path::PathBuf>,
-    show_sender: bool,
-    show_timestamp: bool,
+    boundaries: (bool, bool),
     audio_registry: AudioRegistry,
 ) -> MessageRow {
+    let (show_sender, show_timestamp) = boundaries;
     const SENDER_CLASSES: [&str; 6] = [
         "zaptide-sender-blue",
         "zaptide-sender-green",
@@ -4292,9 +4297,10 @@ fn message_row(
     }
     let reactions = reaction_summary(&message.reactions);
     footer.push(clock.clone());
+    let mentions = mention_labels(&message, contacts);
     let accessible_label = format!(
         "{prefix}{sender}: {}{}{} · {clock}{delivery}",
-        transcript_text(&message),
+        crate::safety::display_mentions(&transcript_text(&message), &mentions),
         if quote.is_empty() {
             String::new()
         } else {
@@ -4311,7 +4317,7 @@ fn message_row(
         avatar,
         quote,
         body,
-        mentions: Vec::new(),
+        mentions,
         footer: footer.join(" · "),
         accessible_label,
         show_sender,
@@ -4426,7 +4432,10 @@ fn reaction_summary(reactions: &[crate::model::Reaction]) -> String {
     format!("\n{summary}")
 }
 
-fn transcript_row(message: &crate::model::Message) -> crate::native_transcript::TranscriptRow {
+fn transcript_row(
+    message: &crate::model::Message,
+    contacts: &std::collections::HashMap<String, crate::model::Contact>,
+) -> crate::native_transcript::TranscriptRow {
     let sender = if message.from_me {
         "You".to_owned()
     } else {
@@ -4437,7 +4446,10 @@ fn transcript_row(message: &crate::model::Message) -> crate::native_transcript::
             "[{}] {sender}: ",
             crate::util::copy_stamp(message.timestamp)
         ),
-        text: transcript_text(message),
+        text: crate::safety::display_mentions(
+            &transcript_text(message),
+            &mention_labels(message, contacts),
+        ),
     }
 }
 
@@ -6151,7 +6163,7 @@ impl NativeApplication {
             .message_ids
             .iter()
             .filter_map(|id| self.message_snapshots.get(id))
-            .map(transcript_row)
+            .map(|message| transcript_row(message, &self.contacts))
             .collect();
         self.transcript = rows;
         if self
@@ -6198,14 +6210,13 @@ impl NativeApplication {
                     .flatten();
                 let mut row = message_row(
                     message,
+                    &self.contacts,
                     self.pointer_sender.clone(),
                     &prefixes[index],
                     avatar,
-                    show_sender,
-                    show_timestamp,
+                    (show_sender, show_timestamp),
                     self.audio_registry.clone(),
                 );
-                row.mentions = mention_labels(&row.message, &self.contacts);
                 row.audio = audio;
                 row
             })
@@ -8391,6 +8402,29 @@ mod tests {
         };
 
         assert_eq!(transcript_text(&message), "first line\nsecond line");
+    }
+
+    #[test]
+    fn copied_transcript_uses_the_name_shown_for_mentions() {
+        let mut message = crate::archive::tests::message("group@g.us", "M", 10, false);
+        message.content = crate::model::Content::text("hi @15581, not a@15581.com");
+        message.mentions.push(crate::model::MentionRef {
+            user: "15581".into(),
+            id: "5511912345678@s.whatsapp.net".into(),
+            name: None,
+        });
+        let contacts = std::collections::HashMap::from([(
+            "5511912345678@s.whatsapp.net".into(),
+            crate::model::Contact {
+                id: "5511912345678@s.whatsapp.net".into(),
+                full_name: Some("Ana".into()),
+                push_name: None,
+            },
+        )]);
+        assert_eq!(
+            transcript_row(&message, &contacts).text,
+            "hi @Ana, not a@15581.com"
+        );
     }
 
     #[test]

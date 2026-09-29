@@ -36,6 +36,8 @@ pub struct Archive {
 }
 
 pub type Result<T> = std::result::Result<T, rusqlite::Error>;
+type PendingQuotedMessage = (String, String, String, Vec<u8>);
+type FailedQuotedMessage = (String, Vec<u8>);
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS chats (
@@ -283,6 +285,13 @@ impl Archive {
                 ))?;
             }
         }
+        connection.execute_batch(
+            "CREATE INDEX IF NOT EXISTS messages_quoted_status ON messages(status, from_me)
+             WHERE quoted IS NOT NULL AND raw IS NOT NULL;
+             CREATE INDEX IF NOT EXISTS messages_answer_parent ON messages(
+                 chat, (CASE WHEN json_valid(quoted) THEN json_extract(quoted, '$.id') END), status)
+             WHERE from_me = 1 AND quoted IS NOT NULL AND raw IS NOT NULL;",
+        )?;
         Ok(Self { connection })
     }
 
@@ -669,6 +678,15 @@ impl Archive {
             .optional()?;
         let status = match existing {
             Some(rank)
+                if rank == status_rank(Delivery::Failed)
+                    && matches!(
+                        message.status,
+                        Delivery::Sent | Delivery::Delivered | Delivery::Read | Delivery::Played
+                    ) =>
+            {
+                status_rank(message.status)
+            }
+            Some(rank)
                 if message.status != Delivery::Failed && rank > status_rank(message.status) =>
             {
                 rank
@@ -736,9 +754,8 @@ impl Archive {
         {
             return std::borrow::Cow::Borrowed(content);
         }
-        let same_kind = |stored: &Content| {
-            std::mem::discriminant(stored) == std::mem::discriminant(content)
-        };
+        let same_kind =
+            |stored: &Content| std::mem::discriminant(stored) == std::mem::discriminant(content);
         let stored = self
             .connection
             .query_row(
@@ -915,6 +932,91 @@ impl Archive {
             .connection
             .prepare("SELECT chat, id, raw FROM messages WHERE raw IS NOT NULL")?;
         let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+        rows.collect()
+    }
+
+    /// Pending quoted replies used to recover interrupted interactive sends.
+    pub fn pending_quoted_messages(&self) -> Result<Vec<PendingQuotedMessage>> {
+        let mut statement = self.connection.prepare(
+            "SELECT chat, id, quoted, raw FROM messages WHERE status = ?1 AND from_me = 1 AND quoted IS NOT NULL AND raw IS NOT NULL"
+        )?;
+        let rows = statement.query_map(params![status_rank(Delivery::Pending)], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Vec<u8>>(3)?,
+            ))
+        })?;
+        Ok(rows
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .filter_map(|(chat, id, quoted, raw)| {
+                let quoted = serde_json::from_str::<crate::model::Quoted>(&quoted)
+                    .ok()?
+                    .id;
+                Some((chat, id, quoted, raw))
+            })
+            .collect())
+    }
+
+    /// Failed quoted replies: used only to clear an earlier attempt when retrying.
+    pub fn failed_quoted_messages(
+        &self,
+        chat: &str,
+        quoted_id: &str,
+    ) -> Result<Vec<FailedQuotedMessage>> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, raw FROM messages WHERE chat = ?1 AND status = ?2 AND from_me = 1 AND quoted IS NOT NULL AND raw IS NOT NULL
+             AND (CASE WHEN json_valid(quoted) THEN json_extract(quoted, '$.id') END) = ?3"
+        )?;
+        let rows = statement.query_map(
+            params![chat, status_rank(Delivery::Failed), quoted_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        rows.collect()
+    }
+
+    /// Accepted responses whose completion callback may have been lost on exit.
+    pub fn confirmed_quoted_messages(&self) -> Result<Vec<(String, String, Vec<u8>)>> {
+        let mut statement = self.connection.prepare(
+            "SELECT m.chat, parent.id, m.raw FROM messages m
+             JOIN messages parent ON parent.chat = m.chat AND parent.id =
+                 (CASE WHEN json_valid(m.quoted) THEN json_extract(m.quoted, '$.id') END)
+             WHERE m.from_me = 1 AND m.status BETWEEN ?1 AND ?2
+                 AND m.quoted IS NOT NULL AND m.raw IS NOT NULL
+                 AND (CASE WHEN json_valid(parent.content) THEN json_extract(parent.content, '$.kind') END) IN ('buttons', 'list')
+                 AND (CASE WHEN json_valid(parent.content) THEN json_extract(parent.content, '$.answered') END) IS NULL"
+        )?;
+        let rows = statement.query_map(
+            params![status_rank(Delivery::Sent), status_rank(Delivery::Played)],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                ))
+            },
+        )?;
+        rows.collect()
+    }
+
+    /// Accepted responses to a parent that may arrive after the response.
+    pub fn confirmed_answers_for(&self, chat: &str, parent: &str) -> Result<Vec<Vec<u8>>> {
+        let mut statement = self.connection.prepare(
+            "SELECT raw FROM messages WHERE chat = ?1 AND from_me = 1
+             AND status BETWEEN ?3 AND ?4 AND quoted IS NOT NULL AND raw IS NOT NULL
+             AND (CASE WHEN json_valid(quoted) THEN json_extract(quoted, '$.id') END) = ?2",
+        )?;
+        let rows = statement.query_map(
+            params![
+                chat,
+                parent,
+                status_rank(Delivery::Sent),
+                status_rank(Delivery::Played)
+            ],
+            |row| row.get(0),
+        )?;
         rows.collect()
     }
 
@@ -1341,18 +1443,49 @@ pub(crate) mod tests {
             .unwrap();
         // History replay and re-derive decode the message with no answer.
         archive.insert_message(&row, None).unwrap();
-        assert_eq!(archive.message(chat, "M1").unwrap().unwrap().content, buttons(Some("b")));
+        assert_eq!(
+            archive.message(chat, "M1").unwrap().unwrap().content,
+            buttons(Some("b"))
+        );
         archive
             .set_derived(chat, "M1", &buttons(None), &[], None, false)
             .unwrap();
-        assert_eq!(archive.message(chat, "M1").unwrap().unwrap().content, buttons(Some("b")));
+        assert_eq!(
+            archive.message(chat, "M1").unwrap().unwrap().content,
+            buttons(Some("b"))
+        );
         // An answer to a button the sender removed is not carried over.
         let mut edited = buttons(None);
         if let Content::Buttons { buttons, .. } = &mut edited {
             buttons.retain(|button| button.id == "a");
         }
-        archive.set_derived(chat, "M1", &edited, &[], None, false).unwrap();
-        assert_eq!(archive.message(chat, "M1").unwrap().unwrap().content, edited);
+        archive
+            .set_derived(chat, "M1", &edited, &[], None, false)
+            .unwrap();
+        assert_eq!(
+            archive.message(chat, "M1").unwrap().unwrap().content,
+            edited
+        );
+    }
+
+    #[test]
+    fn server_echo_replaces_a_failed_local_answer_and_its_raw_body() {
+        let archive = Archive::in_memory().unwrap();
+        let chat = "fixture@s.whatsapp.net";
+        archive.ensure_chat(chat, "Fixture").unwrap();
+        let mut row = message(chat, "REPLY", 10, true);
+        row.status = Delivery::Failed;
+        archive.insert_message(&row, Some(b"local")).unwrap();
+        row.status = Delivery::Sent;
+        row.content = Content::text("Server reply");
+        archive.insert_message(&row, Some(b"server")).unwrap();
+        let stored = archive.message(chat, "REPLY").unwrap().unwrap();
+        assert_eq!(stored.status, Delivery::Sent);
+        assert_eq!(stored.content, Content::text("Server reply"));
+        assert_eq!(
+            archive.raw(chat, "REPLY").unwrap().as_deref(),
+            Some(&b"server"[..])
+        );
     }
 
     #[test]
@@ -1380,13 +1513,23 @@ pub(crate) mod tests {
         let mut row = message(chat, "L1", 10, false);
         row.content = list(None);
         archive.insert_message(&row, None).unwrap();
-        archive.set_content(chat, "L1", &list(Some("t")), false).unwrap();
+        archive
+            .set_content(chat, "L1", &list(Some("t")), false)
+            .unwrap();
         archive.insert_message(&row, None).unwrap();
-        assert_eq!(archive.message(chat, "L1").unwrap().unwrap().content, list(Some("t")));
+        assert_eq!(
+            archive.message(chat, "L1").unwrap().unwrap().content,
+            list(Some("t"))
+        );
         // An answer naming a row that no longer exists is dropped.
-        archive.set_content(chat, "L1", &list(Some("gone")), false).unwrap();
+        archive
+            .set_content(chat, "L1", &list(Some("gone")), false)
+            .unwrap();
         archive.insert_message(&row, None).unwrap();
-        assert_eq!(archive.message(chat, "L1").unwrap().unwrap().content, list(None));
+        assert_eq!(
+            archive.message(chat, "L1").unwrap().unwrap().content,
+            list(None)
+        );
     }
 
     #[test]

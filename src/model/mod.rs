@@ -426,9 +426,7 @@ impl Content {
                 .unwrap_or("Buttons")
                 .to_owned(),
             Self::List {
-                title,
-                description,
-                ..
+                title, description, ..
             } => match first_line(title).or_else(|| description.as_deref().and_then(first_line)) {
                 Some(line) => format!("List: {line}"),
                 None => "List".to_owned(),

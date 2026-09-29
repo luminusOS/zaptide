@@ -365,7 +365,9 @@ pub async fn run(
         poll_sending: HashSet::new(),
     };
     worker.load_state();
+    worker.recover_interrupted_answers();
     worker.backfill();
+    worker.reconcile_confirmed_answers();
     worker.relocate_media();
     worker.start_bot().await;
     let mut tick = tokio::time::interval(Duration::from_secs(5));
@@ -751,7 +753,7 @@ impl Worker {
 
     fn backfill(&mut self) {
         // Bump to re-derive stored rows after `classify` or `thumbnail_of` change.
-        const VERSION: &str = "3";
+        const VERSION: &str = "4";
         if self.archive.meta("derived").ok().flatten().as_deref() == Some(VERSION) {
             return;
         }
@@ -2189,6 +2191,21 @@ impl Worker {
             log::warn!("could not store a message: {error}");
             return;
         }
+        if message.from_me
+            && matches!(
+                message.status,
+                Delivery::Sent | Delivery::Delivered | Delivery::Read | Delivery::Played
+            )
+            && let (Some(quoted), Some(raw)) = (message.quoted.as_ref(), raw.as_deref())
+        {
+            self.confirm_answer(&chat, &quoted.id, raw);
+        }
+        if matches!(
+            message.content,
+            Content::Buttons { .. } | Content::List { .. }
+        ) {
+            self.confirm_answers_for(&chat, &message.id);
+        }
         let unread = is_new
             && !message.from_me
             && self
@@ -2299,29 +2316,40 @@ impl Worker {
     /// Infers canonical mention ids from `@user` tokens.
     fn mention_tokens(&self, text: &str) -> Vec<MentionRef> {
         let mut found = Vec::new();
-        let mut rest = text;
-        while let Some(at) = rest.find('@') {
-            let after = &rest[at + 1..];
+        let mut seen = HashSet::new();
+        let mut offset = 0;
+        while found.len() < 128 {
+            let Some(at) = text[offset..].find('@').map(|at| at + offset) else {
+                break;
+            };
+            let after = &text[at + 1..];
             let digits = after
                 .char_indices()
                 .find(|(_, c)| !c.is_ascii_digit())
                 .map_or(after.len(), |(index, _)| index);
             let user = &after[..digits];
-            if digits >= 5 {
+            let boundary_before = at == 0
+                || text[..at]
+                    .chars()
+                    .next_back()
+                    .is_some_and(|c| c.is_whitespace() || matches!(c, '(' | '[' | '"' | '\''));
+            let boundary_after = after[digits..]
+                .chars()
+                .next()
+                .is_none_or(|c| !crate::safety::mention_token_char(c));
+            if digits >= 5 && boundary_before && boundary_after && seen.insert(user.to_owned()) {
                 let id = match self.lid_to_pn.get(user) {
                     Some(pn) => format!("{pn}@s.whatsapp.net"),
                     None => format!("{user}@s.whatsapp.net"),
                 };
                 let id = self.canonical_str(&id);
-                if !found.iter().any(|known: &MentionRef| known.user == user) {
-                    found.push(MentionRef {
-                        user: user.to_owned(),
-                        id,
-                        name: None,
-                    });
-                }
+                found.push(MentionRef {
+                    user: user.to_owned(),
+                    id,
+                    name: None,
+                });
             }
-            rest = after;
+            offset = at + 1;
         }
         found
     }
@@ -2578,6 +2606,17 @@ impl Worker {
                 }
                 if let Err(error) = self.archive.insert_message(&row, Some(&raw)) {
                     log::warn!("could not store a history message: {error}");
+                } else if row.from_me
+                    && matches!(
+                        row.status,
+                        Delivery::Sent | Delivery::Delivered | Delivery::Read | Delivery::Played
+                    )
+                    && let Some(quoted) = row.quoted.as_ref()
+                {
+                    self.confirm_answer(&id, &quoted.id, &raw);
+                }
+                if matches!(row.content, Content::Buttons { .. } | Content::List { .. }) {
+                    self.confirm_answers_for(&id, &row.id);
                 }
                 if matches!(row.content, Content::Poll { .. }) {
                     if poll_history_received {
@@ -2834,9 +2873,7 @@ impl Worker {
                 message,
                 button,
             } => self.answer_choice(chat, message, button),
-            Command::AnswerListRow { chat, message, row } => {
-                self.answer_choice(chat, message, row)
-            }
+            Command::AnswerListRow { chat, message, row } => self.answer_choice(chat, message, row),
             Command::Forward {
                 from_chat,
                 message,
@@ -3404,22 +3441,61 @@ impl Worker {
                     });
                     return;
                 }
+                // Server-confirmed echo wins over a late transport error.
+                if error.is_some()
+                    && self.answer_sends.contains_key(&id)
+                    && self
+                        .archive
+                        .message(&chat, &id)
+                        .ok()
+                        .flatten()
+                        .is_some_and(|row| {
+                            matches!(
+                                row.status,
+                                Delivery::Sent
+                                    | Delivery::Delivered
+                                    | Delivery::Read
+                                    | Delivery::Played
+                            )
+                        })
+                {
+                    self.answer_sends.remove(&id);
+                    return;
+                }
                 let status = match &error {
                     Some(_) => Delivery::Failed,
                     None => Delivery::Sent,
                 };
-                let _ = self
-                    .archive
-                    .set_status(&chat, &id, status, crate::util::now());
-                self.emit_message(&chat, &id);
-                self.emit_chat(&chat);
                 if let Some((chat, original)) = self.answer_sends.remove(&id) {
-                    // Not a composer send: reopen the buttons after a failure
-                    // and never complete the composer's pending send.
                     if error.is_some() {
-                        self.reopen_answer(&chat, &original);
+                        let _ = self.archive.delete_message(&chat, &id);
+                        self.emit(Event::MessageDeleted {
+                            chat: chat.clone(),
+                            id: id.clone(),
+                        });
+                    } else if let Ok(Some(parent)) = self.archive.message(&chat, &original)
+                        && let Some(choice) = answer_choice_id(&self.archive, &chat, &id)
+                        && parent.content.choice(&choice).is_some()
+                        && let Some(marked) = parent.content.with_answer(Some(choice))
+                        && let Ok(true) =
+                            self.archive
+                                .set_content(&chat, &original, &marked, parent.edited)
+                    {
+                        self.emit_message(&chat, &original);
                     }
+                    let _ = self
+                        .archive
+                        .set_status(&chat, &id, status, crate::util::now());
+                    if error.is_none() {
+                        self.emit_message(&chat, &id);
+                    }
+                    self.emit_chat(&chat);
                 } else {
+                    let _ = self
+                        .archive
+                        .set_status(&chat, &id, status, crate::util::now());
+                    self.emit_message(&chat, &id);
+                    self.emit_chat(&chat);
                     self.emit(Event::Sent {
                         chat: chat.clone(),
                         success: error.is_none(),
@@ -3612,17 +3688,21 @@ impl Worker {
         let original = self.archive.message(&chat, &message_id).ok().flatten();
         let picked = original.as_ref().and_then(|original| {
             let content = &original.content;
-            if original.from_me || content.answer().is_some() {
+            if original.from_me
+                || content.answer().is_some()
+                || self
+                    .answer_sends
+                    .values()
+                    .any(|(pending_chat, pending_id)| {
+                        pending_chat == &chat && pending_id == &message_id
+                    })
+            {
                 return None;
             }
             let (label, description) = content.choice(&choice)?;
-            Some((
-                label.to_owned(),
-                description.map(str::to_owned),
-                content.with_answer(Some(choice.clone()))?,
-            ))
+            Some((label.to_owned(), description.map(str::to_owned)))
         });
-        let (Some(original), Some((label, description, marked))) = (original, picked) else {
+        let (Some(original), Some((label, description))) = (original, picked) else {
             // A second click on an answered message is ignored; anything else
             // (revoked, edited away, from me) is worth telling the user.
             let already_answered = self
@@ -3631,16 +3711,47 @@ impl Worker {
                 .ok()
                 .flatten()
                 .is_some_and(|row| row.content.answer().is_some());
-            if !already_answered {
+            let pending = self
+                .answer_sends
+                .values()
+                .any(|(pending_chat, pending_id)| {
+                    pending_chat == &chat && pending_id == &message_id
+                });
+            if !already_answered && !pending {
                 self.emit(Event::Error("This reply is no longer available".to_owned()));
             }
             self.emit_message(&chat, &message_id);
             return;
         };
+        // Interrupted sends remain visible as failed until retry. Remove only
+        // attempts that quote this question and carry this exact choice.
+        if let Ok(failed) = self.archive.failed_quoted_messages(&chat, &message_id) {
+            for (id, raw) in failed {
+                let sent_choice = wa::Message::decode_from_slice(&raw)
+                    .ok()
+                    .and_then(|raw| response_choice_id(raw.get_base_message()));
+                if sent_choice.as_deref() == Some(&choice)
+                    && let Ok(true) = self.archive.delete_message(&chat, &id)
+                {
+                    self.emit(Event::MessageDeleted {
+                        chat: chat.clone(),
+                        id,
+                    });
+                }
+            }
+        }
         let (context, quoted_row) = self.quote_context(&chat, Some(&message_id));
+        let (wire_label, wire_description) = self
+            .archive
+            .raw(&chat, &message_id)
+            .ok()
+            .flatten()
+            .and_then(|raw| wa::Message::decode_from_slice(&raw).ok())
+            .and_then(|raw| full_choice(raw.get_base_message(), &choice))
+            .unwrap_or((label.clone(), description));
         let mut message = match &original.content {
-            Content::List { .. } => list_response(&choice, &label, description, context.clone()),
-            _ => buttons_response(&choice, &label, context.clone()),
+            Content::List { .. } => list_response(&choice, &wire_label, wire_description, context),
+            _ => buttons_response(&choice, &wire_label, context),
         };
         let expiration = self.apply_ephemeral(&chat, &mut message);
         let id = client.generate_message_id();
@@ -3662,18 +3773,9 @@ impl Worker {
             forwarded: false,
             thumbnail: None,
         };
-        let mut archived = outgoing_text(label, context, &[]);
-        self.apply_ephemeral(&chat, &mut archived);
-        self.store_message(row, Some(archived.encode_to_vec()), None);
+        self.store_message(row, Some(message.encode_to_vec()), None);
         self.answer_sends
             .insert(id.clone(), (chat.clone(), message_id.clone()));
-        match self
-            .archive
-            .set_content(&chat, &message_id, &marked, original.edited)
-        {
-            Ok(true) => self.emit_message(&chat, &message_id),
-            other => log::warn!("answer not recorded on the message: {other:?}"),
-        }
         tokio::spawn(send_outgoing(
             OutgoingSession {
                 client,
@@ -3689,7 +3791,7 @@ impl Worker {
         ));
     }
 
-    /// Clears the recorded answer after its send failed, so it can be retried.
+    /// Clears an answer recorded by an older version after an interrupted send.
     fn reopen_answer(&mut self, chat: &str, message_id: &str) {
         let Ok(Some(original)) = self.archive.message(chat, message_id) else {
             return;
@@ -3706,6 +3808,66 @@ impl Worker {
             .set_content(chat, message_id, &reopened, original.edited)
         {
             self.emit_message(chat, message_id);
+        }
+    }
+
+    fn recover_interrupted_answers(&mut self) {
+        let Ok(rows) = self.archive.pending_quoted_messages() else {
+            return;
+        };
+        for (chat, id, quoted, raw) in rows {
+            let Some(parent) = self.archive.message(&chat, &quoted).ok().flatten() else {
+                continue;
+            };
+            let response = wa::Message::decode_from_slice(&raw).ok();
+            let choice = response
+                .as_ref()
+                .and_then(|message| response_choice_id(message.get_base_message()));
+            if choice.is_none()
+                || !matches!(
+                    parent.content,
+                    Content::Buttons { .. } | Content::List { .. }
+                )
+            {
+                continue;
+            }
+            self.reopen_answer(&chat, &quoted);
+            let _ = self
+                .archive
+                .set_status(&chat, &id, Delivery::Failed, crate::util::now());
+        }
+    }
+
+    fn confirm_answer(&self, chat: &str, original: &str, raw: &[u8]) {
+        let choice = wa::Message::decode_from_slice(raw)
+            .ok()
+            .and_then(|message| response_choice_id(message.get_base_message()));
+        let parent = self.archive.message(chat, original).ok().flatten();
+        if let (Some(choice), Some(parent)) = (choice, parent)
+            && parent.content.answer().is_none()
+            && parent.content.choice(&choice).is_some()
+            && let Some(marked) = parent.content.with_answer(Some(choice))
+            && let Ok(true) = self
+                .archive
+                .set_content(chat, original, &marked, parent.edited)
+        {
+            self.emit_message(chat, original);
+        }
+    }
+
+    fn reconcile_confirmed_answers(&self) {
+        if let Ok(rows) = self.archive.confirmed_quoted_messages() {
+            for (chat, original, raw) in rows {
+                self.confirm_answer(&chat, &original, &raw);
+            }
+        }
+    }
+
+    fn confirm_answers_for(&self, chat: &str, original: &str) {
+        if let Ok(rows) = self.archive.confirmed_answers_for(chat, original) {
+            for raw in rows {
+                self.confirm_answer(chat, original, &raw);
+            }
         }
     }
 
@@ -5459,13 +5621,9 @@ fn outgoing_text(
 }
 
 /// Wire message answering a quick-reply button.
-fn buttons_response(
-    button_id: &str,
-    label: &str,
-    context: Option<wa::ContextInfo>,
-) -> wa::Message {
-    use whatsapp_rust::prelude::MessageField;
+fn buttons_response(button_id: &str, label: &str, context: Option<wa::ContextInfo>) -> wa::Message {
     use wa::__buffa::oneof::message::buttons_response_message::Response;
+    use whatsapp_rust::prelude::MessageField;
     wa::Message {
         buttons_response_message: MessageField::some(wa::message::ButtonsResponseMessage {
             selected_button_id: Some(button_id.to_owned()),
@@ -5499,6 +5657,42 @@ fn list_response(
         }),
         ..Default::default()
     }
+}
+
+fn response_choice_id(base: &wa::Message) -> Option<String> {
+    base.buttons_response_message
+        .as_option()
+        .and_then(|response| response.selected_button_id.clone())
+        .or_else(|| {
+            base.list_response_message
+                .as_option()
+                .and_then(|response| response.single_select_reply.as_option())
+                .and_then(|reply| reply.selected_row_id.clone())
+        })
+}
+
+fn answer_choice_id(archive: &Archive, chat: &str, id: &str) -> Option<String> {
+    let raw = archive.raw(chat, id).ok().flatten()?;
+    let message = wa::Message::decode_from_slice(&raw).ok()?;
+    response_choice_id(message.get_base_message())
+}
+
+fn full_choice(base: &wa::Message, id: &str) -> Option<(String, Option<String>)> {
+    if let Some(buttons) = base.buttons_message.as_option() {
+        return buttons
+            .buttons
+            .iter()
+            .find(|button| button.button_id.as_deref() == Some(id))
+            .and_then(|button| button.button_text.as_option()?.display_text.clone())
+            .map(|label| (label, None));
+    }
+    base.list_message
+        .as_option()?
+        .sections
+        .iter()
+        .flat_map(|section| &section.rows)
+        .find(|row| row.row_id.as_deref() == Some(id))
+        .and_then(|row| Some((row.title.clone()?, row.description.clone())))
 }
 
 /// Extracts quote and mention context from a message.
@@ -5550,6 +5744,12 @@ fn context_of(base: &wa::Message) -> Option<&wa::ContextInfo> {
     }
     if let Some(list) = base.list_message.as_option() {
         return list.context_info.as_option();
+    }
+    if let Some(response) = base.buttons_response_message.as_option() {
+        return response.context_info.as_option();
+    }
+    if let Some(response) = base.list_response_message.as_option() {
+        return response.context_info.as_option();
     }
     None
 }
@@ -5748,6 +5948,22 @@ fn classify(base: &wa::Message) -> Option<Content> {
     if let Some(list) = base.list_message.as_option() {
         return list_content(list).or_else(|| unsupported("list"));
     }
+    if let Some(response) = base.buttons_response_message.as_option() {
+        use wa::__buffa::oneof::message::buttons_response_message::Response;
+        return Some(Content::text(match &response.response {
+            Some(Response::SelectedDisplayText(text)) if !text.is_empty() => text.clone(),
+            _ => "Button reply".to_owned(),
+        }));
+    }
+    if let Some(response) = base.list_response_message.as_option() {
+        return Some(Content::text(
+            response
+                .title
+                .as_deref()
+                .filter(|title| !title.is_empty())
+                .unwrap_or("List reply"),
+        ));
+    }
     if base.album_message.is_set() {
         return None;
     }
@@ -5762,8 +5978,6 @@ fn classify(base: &wa::Message) -> Option<Content> {
     }
     if base.interactive_message.is_set()
         || base.template_message.is_set()
-        || base.buttons_response_message.is_set()
-        || base.list_response_message.is_set()
         || base.interactive_response_message.is_set()
         || base.template_button_reply_message.is_set()
     {
@@ -6308,7 +6522,11 @@ async fn file_outbound(
             .into_iter()
             .filter_map(|id| {
                 let user = id.split('@').next()?.to_owned();
-                (!user.is_empty()).then_some(MentionRef { user, id, name: None })
+                (!user.is_empty()).then_some(MentionRef {
+                    user,
+                    id,
+                    name: None,
+                })
             })
             .collect(),
         forwarded: false,
@@ -6743,12 +6961,66 @@ mod tests {
             &response.response,
             Some(Response::SelectedDisplayText(text)) if text == "Yes"
         ));
-        assert!(!buttons_response("a", "Yes", None)
-            .buttons_response_message
-            .as_option()
-            .expect("set")
-            .context_info
-            .is_set());
+        assert!(
+            !buttons_response("a", "Yes", None)
+                .buttons_response_message
+                .as_option()
+                .expect("set")
+                .context_info
+                .is_set()
+        );
+    }
+
+    #[test]
+    fn received_interactive_answers_keep_their_text_and_quote() {
+        let context = wa::ContextInfo {
+            stanza_id: Some("ORIGINAL".into()),
+            ..Default::default()
+        };
+        for message in [
+            buttons_response("a", "Yes", Some(context.clone())),
+            list_response("t", "Tea", Some("hot".into()), Some(context.clone())),
+        ] {
+            assert!(matches!(classify(&message), Some(Content::Text { .. })));
+            assert_eq!(
+                context_of(&message).and_then(|context| context.stanza_id.as_deref()),
+                Some("ORIGINAL")
+            );
+        }
+        assert_eq!(
+            classify(&buttons_response("a", "Yes", None)),
+            Some(Content::text("Yes"))
+        );
+        assert_eq!(
+            classify(&list_response("t", "Tea", None, None)),
+            Some(Content::text("Tea"))
+        );
+    }
+
+    #[test]
+    fn reply_uses_full_sender_label_even_when_display_is_clipped() {
+        use whatsapp_rust::prelude::MessageField;
+        let full = "A".repeat(MAX_INTERACTIVE_CHARS + 20);
+        let raw = wa::Message {
+            buttons_message: MessageField::some(wa::message::ButtonsMessage {
+                buttons: vec![wa::message::buttons_message::Button {
+                    button_id: Some("a".into()),
+                    button_text: MessageField::some(
+                        wa::message::buttons_message::button::ButtonText {
+                            display_text: Some(full.clone()),
+                        },
+                    ),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let Some(Content::Buttons { buttons, .. }) = classify(&raw) else {
+            panic!("buttons expected")
+        };
+        assert_ne!(buttons[0].label, full);
+        assert_eq!(full_choice(&raw, "a"), Some((full, None)));
     }
 
     #[test]
@@ -7004,7 +7276,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_failed_button_answer_reopens_the_buttons_and_never_completes_the_composer() {
+    async fn button_answer_marks_only_on_success_and_removes_failed_reply() {
         use crate::model::QuickReply;
         const PEER: &str = "fixture@s.whatsapp.net";
         let (mut worker, events, _, _) = receipt_tests::worker();
@@ -7019,15 +7291,26 @@ mod tests {
             answered: answered.map(str::to_owned),
         };
         let mut original = crate::archive::tests::message(PEER, "BUTTONS", 10, false);
-        original.content = buttons(Some("a"));
+        original.content = buttons(None);
         worker.archive.insert_message(&original, None).unwrap();
         let mut answer = crate::archive::tests::message(PEER, "ANSWER", 11, true);
         answer.content = Content::text("Yes");
-        worker.archive.insert_message(&answer, None).unwrap();
+        answer.quoted = Some(Quoted {
+            id: "BUTTONS".into(),
+            sender: PEER.into(),
+            sender_name: None,
+            summary: "Pick".into(),
+            mentions: Vec::new(),
+        });
+        let response = buttons_response("a", "Yes", None);
+        worker
+            .archive
+            .insert_message(&answer, Some(&response.encode_to_vec()))
+            .unwrap();
 
-        let sent = |error: Option<&str>| Command::Sent {
+        let sent = |id: &str, error: Option<&str>| Command::Sent {
             chat: PEER.into(),
-            id: "ANSWER".into(),
+            id: id.into(),
             session_generation: 0,
             error: error.map(str::to_owned),
         };
@@ -7035,23 +7318,271 @@ mod tests {
         worker
             .answer_sends
             .insert("ANSWER".into(), (PEER.into(), "BUTTONS".into()));
-        worker.handle_command(sent(None)).await;
+        worker.handle_command(sent("ANSWER", None)).await;
         assert!(worker.answer_sends.is_empty());
         assert_eq!(
-            worker.archive.message(PEER, "BUTTONS").unwrap().unwrap().content,
+            worker
+                .archive
+                .message(PEER, "BUTTONS")
+                .unwrap()
+                .unwrap()
+                .content,
             buttons(Some("a"))
         );
-        // Failure reopens them so the user can try again.
+        // A new attempt fails: remove only the failed answer, retaining the
+        // previously acknowledged selection on the original message.
+        worker
+            .archive
+            .set_content(PEER, "BUTTONS", &buttons(None), false)
+            .unwrap();
+        let mut failed = answer.clone();
+        failed.id = "ANSWER2".into();
+        worker
+            .archive
+            .insert_message(&failed, Some(&response.encode_to_vec()))
+            .unwrap();
         worker
             .answer_sends
-            .insert("ANSWER".into(), (PEER.into(), "BUTTONS".into()));
-        worker.handle_command(sent(Some("offline"))).await;
+            .insert("ANSWER2".into(), (PEER.into(), "BUTTONS".into()));
+        worker
+            .handle_command(sent("ANSWER2", Some("offline")))
+            .await;
         assert_eq!(
-            worker.archive.message(PEER, "BUTTONS").unwrap().unwrap().content,
+            worker
+                .archive
+                .message(PEER, "BUTTONS")
+                .unwrap()
+                .unwrap()
+                .content,
             buttons(None)
         );
+        assert!(worker.archive.message(PEER, "ANSWER2").unwrap().is_none());
         // Neither result reaches the composer's pending-send bookkeeping.
-        assert!(!events.try_iter().any(|event| matches!(event, Event::Sent { .. })));
+        assert!(
+            !events
+                .try_iter()
+                .any(|event| matches!(event, Event::Sent { .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn interrupted_answer_is_recovered_without_deleting_other_quoted_messages() {
+        use crate::model::QuickReply;
+        const PEER: &str = "fixture@s.whatsapp.net";
+        let (mut worker, _, _, _) = receipt_tests::worker();
+        worker.archive.ensure_chat(PEER, "Fixture").unwrap();
+        let mut parent = crate::archive::tests::message(PEER, "PARENT", 10, false);
+        parent.content = Content::Buttons {
+            text: "Pick".into(),
+            footer: None,
+            buttons: vec![QuickReply {
+                id: "a".into(),
+                label: "Yes".into(),
+            }],
+            answered: Some("a".into()),
+        };
+        worker.archive.insert_message(&parent, None).unwrap();
+        let mut answer = crate::archive::tests::message(PEER, "REPLY", 11, true);
+        answer.content = Content::text("Yes");
+        answer.quoted = Some(Quoted {
+            id: "PARENT".into(),
+            sender: PEER.into(),
+            sender_name: None,
+            summary: "Pick".into(),
+            mentions: vec![],
+        });
+        let response = buttons_response("a", "Yes", None);
+        worker
+            .archive
+            .insert_message(&answer, Some(&response.encode_to_vec()))
+            .unwrap();
+        let mut ordinary = answer.clone();
+        ordinary.id = "NORMAL".into();
+        ordinary.content = Content::text("Yes");
+        worker
+            .archive
+            .insert_message(
+                &ordinary,
+                Some(&outgoing_text("Yes".into(), None, &[]).encode_to_vec()),
+            )
+            .unwrap();
+        worker.recover_interrupted_answers();
+        assert_eq!(
+            worker
+                .archive
+                .message(PEER, "PARENT")
+                .unwrap()
+                .unwrap()
+                .content
+                .answer(),
+            None
+        );
+        assert_eq!(
+            worker
+                .archive
+                .message(PEER, "REPLY")
+                .unwrap()
+                .unwrap()
+                .status,
+            Delivery::Failed
+        );
+        assert!(worker.archive.message(PEER, "NORMAL").unwrap().is_some());
+        assert_eq!(
+            worker
+                .archive
+                .message(PEER, "NORMAL")
+                .unwrap()
+                .unwrap()
+                .status,
+            Delivery::Pending
+        );
+        // A server echo of the same id is stronger evidence than the local
+        // interrupted-send state and restores the selection.
+        answer.status = Delivery::Sent;
+        worker.store_message(answer, Some(response.encode_to_vec()), None);
+        assert_eq!(
+            worker
+                .archive
+                .message(PEER, "PARENT")
+                .unwrap()
+                .unwrap()
+                .content
+                .answer(),
+            Some("a")
+        );
+        assert_eq!(
+            worker
+                .archive
+                .message(PEER, "REPLY")
+                .unwrap()
+                .unwrap()
+                .status,
+            Delivery::Sent
+        );
+        worker
+            .answer_sends
+            .insert("REPLY".into(), (PEER.into(), "PARENT".into()));
+        worker
+            .handle_command(Command::Sent {
+                chat: PEER.into(),
+                id: "REPLY".into(),
+                session_generation: worker.session_generation,
+                error: Some("late error".into()),
+            })
+            .await;
+        assert_eq!(
+            worker
+                .archive
+                .message(PEER, "REPLY")
+                .unwrap()
+                .unwrap()
+                .status,
+            Delivery::Sent
+        );
+        let reopened = worker
+            .archive
+            .message(PEER, "PARENT")
+            .unwrap()
+            .unwrap()
+            .content
+            .with_answer(None)
+            .unwrap();
+        worker
+            .archive
+            .set_content(PEER, "PARENT", &reopened, false)
+            .unwrap();
+        worker.reconcile_confirmed_answers();
+        assert_eq!(
+            worker
+                .archive
+                .message(PEER, "PARENT")
+                .unwrap()
+                .unwrap()
+                .content
+                .answer(),
+            Some("a")
+        );
+    }
+
+    #[test]
+    fn confirmed_answer_is_reconciled_when_question_arrives_later() {
+        use crate::model::QuickReply;
+        const PEER: &str = "fixture@s.whatsapp.net";
+        let (mut worker, _, _, _) = receipt_tests::worker();
+        let mut answer = crate::archive::tests::message(PEER, "REPLY", 11, true);
+        answer.status = Delivery::Sent;
+        answer.content = Content::text("Yes");
+        answer.quoted = Some(Quoted {
+            id: "PARENT".into(),
+            sender: PEER.into(),
+            sender_name: None,
+            summary: "Pick".into(),
+            mentions: vec![],
+        });
+        worker.store_message(
+            answer,
+            Some(buttons_response("a", "Yes", None).encode_to_vec()),
+            None,
+        );
+        let mut parent = crate::archive::tests::message(PEER, "PARENT", 10, false);
+        parent.content = Content::Buttons {
+            text: "Pick".into(),
+            footer: None,
+            buttons: vec![QuickReply {
+                id: "a".into(),
+                label: "Yes".into(),
+            }],
+            answered: None,
+        };
+        worker.store_message(parent, None, None);
+        assert_eq!(
+            worker
+                .archive
+                .message(PEER, "PARENT")
+                .unwrap()
+                .unwrap()
+                .content
+                .answer(),
+            Some("a")
+        );
+    }
+
+    #[test]
+    fn version_three_archive_rederives_unsupported_buttons() {
+        use whatsapp_rust::prelude::MessageField;
+        const PEER: &str = "fixture@s.whatsapp.net";
+        let (mut worker, _, _, _) = receipt_tests::worker();
+        worker.archive.ensure_chat(PEER, "Fixture").unwrap();
+        let raw = wa::Message {
+            buttons_message: MessageField::some(wa::message::ButtonsMessage {
+                content_text: Some("Pick".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut row = crate::archive::tests::message(PEER, "OLD", 10, false);
+        row.content = Content::Unsupported {
+            what: "interactive message".into(),
+        };
+        worker
+            .archive
+            .insert_message(&row, Some(&raw.encode_to_vec()))
+            .unwrap();
+        worker.archive.set_meta("derived", "3").unwrap();
+        worker.backfill();
+        assert!(matches!(
+            worker
+                .archive
+                .message(PEER, "OLD")
+                .unwrap()
+                .unwrap()
+                .content,
+            Content::Buttons { .. }
+        ));
+        assert_eq!(
+            worker.archive.meta("derived").unwrap().as_deref(),
+            Some("4")
+        );
     }
 
     #[test]
@@ -7068,6 +7599,12 @@ mod tests {
         assert_eq!(message.mentions[0].id, "5511912345678@s.whatsapp.net");
         // Nobody has spoken yet, so there is no WhatsApp name to show.
         assert_eq!(message.mentions[0].name, None);
+        for text in ["a@15581.com", "@15581_foo", "@15581abc", "@@15581"] {
+            let mut invalid = crate::archive::tests::message("group@g.us", "M2", 11, false);
+            invalid.content = Content::text(text);
+            worker.polish(&mut invalid);
+            assert!(invalid.mentions.is_empty(), "unexpected mention for {text}");
+        }
         // Once they have, the name they go by is attached for the tooltip,
         // found under the phone id even though the text carries the LID.
         worker.contacts.insert(

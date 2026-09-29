@@ -20,6 +20,9 @@ stored locally in an encrypted archive.
 
 - Chat, search and send text, replies, reactions, polls, voice notes, stickers
   and attachments. Older messages load from the archive or your phone.
+- Read and answer quick-reply buttons and single-select lists when a sender
+  delivers them. Mentioned contacts show their saved names in messages and
+  copied transcripts; unknown contacts can show their WhatsApp name on hover.
 - Get desktop notifications, see typing and delivery status, and keep chat
   read state, mute settings and locks in sync with your phone.
 - Use light, dark or custom themes. Navigate with keyboard shortcuts and use

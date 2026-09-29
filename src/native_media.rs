@@ -362,7 +362,10 @@ pub(crate) fn safe_file_name(file_name: &str) -> String {
 #[derive(Clone, Eq, PartialEq)]
 pub enum NativeMediaAction {
     Open(PathBuf),
-    Download { chat: String, message: String },
+    Download {
+        chat: String,
+        message: String,
+    },
     /// Reply to an interactive message with one of its quick-reply buttons.
     AnswerButton {
         chat: String,

@@ -153,18 +153,12 @@ pub const MENTION_SCHEME: &str = "zaptide-mention:";
 /// mention: a chat link when the phone is known, bold otherwise.
 fn mention_at(rest: &str, mentions: &[MentionLabel]) -> Option<(usize, String)> {
     use gtk4::glib::markup_escape_text as esc;
-    let token = rest.strip_prefix('@')?;
-    let end = token
-        .find(|c: char| !c.is_ascii_alphanumeric())
-        .unwrap_or(token.len());
-    let mention = mentions
-        .iter()
-        .find(|mention| !mention.user.is_empty() && mention.user == token[..end])?;
-    let shown = format!("@{}", mention.label);
-    let title = mention
-        .hint
-        .as_deref()
-        .map_or_else(|| "Message on WhatsApp".into(), esc);
+    let (end, mention) = mention_match(rest, mentions)?;
+    let shown = format!("@{}", visible_mention_label(&mention.label));
+    let title = mention.hint.as_deref().map_or_else(
+        || "Message on WhatsApp".into(),
+        |hint| esc(&hint.chars().filter(|c| !c.is_control()).collect::<String>()),
+    );
     let markup = match (&mention.phone, &mention.hint) {
         (Some(phone), _) => format!(
             "<a href=\"{CHAT_SCHEME}{}\" title=\"{title}\">{}</a>",
@@ -177,7 +171,53 @@ fn mention_at(rest: &str, mentions: &[MentionLabel]) -> Option<(usize, String)> 
         ),
         (None, None) => format!("<b>{}</b>", esc(&shown)),
     };
-    Some((1 + end, markup))
+    Some((end, markup))
+}
+
+fn visible_mention_label(label: &str) -> String {
+    label.chars().filter(|c| !c.is_control()).collect()
+}
+
+/// Conservatively keep Unicode marks and symbols next to a token from
+/// becoming a link to only its numeric prefix.
+pub(crate) fn mention_token_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_' || (!c.is_ascii() && !c.is_whitespace())
+}
+
+fn mention_match<'a>(
+    rest: &str,
+    mentions: &'a [MentionLabel],
+) -> Option<(usize, &'a MentionLabel)> {
+    let token = rest.strip_prefix('@')?;
+    let end = token
+        .find(|c: char| !mention_token_char(c))
+        .unwrap_or(token.len());
+    let mention = mentions
+        .iter()
+        .find(|mention| !mention.user.is_empty() && mention.user == token[..end])?;
+    Some((1 + end, mention))
+}
+
+/// Visible mention names as plain text for accessibility and transcript copy.
+pub fn display_mentions(text: &str, mentions: &[MentionLabel]) -> String {
+    let mut out = String::with_capacity(text.len());
+    let (mut index, mut boundary) = (0, true);
+    while let Some(c) = text[index..].chars().next() {
+        if let Some((len, mention)) = boundary
+            .then(|| mention_match(&text[index..], mentions))
+            .flatten()
+        {
+            out.push('@');
+            out.push_str(&visible_mention_label(&mention.label));
+            index += len;
+            boundary = false;
+        } else {
+            out.push(c);
+            boundary = c.is_whitespace() || matches!(c, '(' | '[' | '"' | '\'');
+            index += c.len_utf8();
+        }
+    }
+    out
 }
 
 /// Pango markup for message text with web addresses, WhatsApp links and
@@ -280,6 +320,35 @@ mod tests {
         );
         // No mentions known: text is unchanged apart from escaping.
         assert_eq!(linkify_markup_with_mentions("@15581", &[]), "@15581");
+        assert_eq!(
+            linkify_markup_with_mentions("@15581_foo @15581abc @15581é @15581\u{0301}", &mentions),
+            "@15581_foo @15581abc @15581é @15581\u{0301}"
+        );
+        assert_eq!(
+            super::display_mentions("hi @15581, a@15581.com @15581_foo", &mentions),
+            "hi @Ana <b>, a@15581.com @15581_foo"
+        );
+        let unsafe_hint = [MentionLabel {
+            user: "77777".into(),
+            label: "77777".into(),
+            phone: None,
+            hint: Some("~Bia\u{8}\" <friend>".into()),
+        }];
+        assert_eq!(
+            linkify_markup_with_mentions("@77777", &unsafe_hint),
+            "<a href=\"zaptide-mention:\" title=\"~Bia&quot; &lt;friend&gt;\">@77777</a>"
+        );
+        let bad_label = [MentionLabel {
+            user: "77777".into(),
+            label: "A\u{8}na".into(),
+            phone: None,
+            hint: None,
+        }];
+        assert_eq!(
+            linkify_markup_with_mentions("@77777", &bad_label),
+            "<b>@Ana</b>"
+        );
+        assert_eq!(super::display_mentions("@77777", &bad_label), "@Ana");
     }
 
     #[test]

@@ -338,7 +338,9 @@ pub fn build_media_widget_with_action(
             } else {
                 let reason = match answered {
                     Some(chosen) => format!("Already answered: {chosen}"),
-                    None if message.from_me => "Only the recipient can choose from this list".into(),
+                    None if message.from_me => {
+                        "Only the recipient can choose from this list".into()
+                    }
                     None => "This list can no longer be answered".into(),
                 };
                 picker.set_tooltip_text(Some(&reason));
@@ -1811,43 +1813,75 @@ fn show_list_choices(
         .content_width(380)
         .content_height(480)
         .build();
+    if !title.is_empty() {
+        dialog.set_tooltip_text(Some(title));
+    }
     let page = adw::PreferencesPage::new();
     let on_pick = std::rc::Rc::new(on_pick);
     let fired = std::rc::Rc::new(std::cell::Cell::new(false));
-    for (heading, rows) in sections {
-        let group = adw::PreferencesGroup::new();
-        if let Some(heading) = heading {
-            group.set_title(&gtk::glib::markup_escape_text(heading));
+    let sections = sections.to_vec();
+    let (mut section_index, mut row_index) = (0, 0);
+    let mut group: Option<adw::PreferencesGroup> = None;
+    let weak_dialog = dialog.downgrade();
+    let pending_page = page.clone();
+    gtk::glib::idle_add_local(move || {
+        if weak_dialog.upgrade().is_none() {
+            return gtk::glib::ControlFlow::Break;
         }
-        for (id, row_title, detail) in rows {
-            // Sender text: markup off before any text is set.
-            let row = adw::ActionRow::builder()
-                .use_markup(false)
-                .title_lines(2)
-                .activatable(true)
-                .build();
-            row.set_title(row_title);
-            if let Some(detail) = detail {
-                row.set_subtitle(detail);
-                row.set_subtitle_lines(3);
+        let mut added = 0;
+        while added < 12 && section_index < sections.len() {
+            let (heading, rows) = &sections[section_index];
+            if group.is_none() {
+                let next = adw::PreferencesGroup::new();
+                if let Some(heading) = heading {
+                    next.set_title(&gtk::glib::markup_escape_text(heading));
+                    next.set_tooltip_text(Some(heading));
+                }
+                pending_page.add(&next);
+                group = Some(next);
             }
-            let (id, on_pick, dialog) = (id.clone(), on_pick.clone(), dialog.downgrade());
-            let fired = fired.clone();
-            row.connect_activated(move |_| {
-                // The dialog closes with an animation; a second pick during
-                // it must not send a second answer.
-                if fired.replace(true) {
-                    return;
+            if let Some((id, row_title, detail)) = rows.get(row_index) {
+                // Sender text: markup off before any text is set.
+                let row = adw::ActionRow::builder()
+                    .use_markup(false)
+                    .title_lines(2)
+                    .activatable(true)
+                    .build();
+                row.set_title(row_title);
+                if let Some(detail) = detail {
+                    row.set_subtitle(detail);
+                    row.set_subtitle_lines(3);
                 }
-                on_pick(id.clone());
-                if let Some(dialog) = dialog.upgrade() {
-                    dialog.close();
+                let (id, on_pick, dialog) = (id.clone(), on_pick.clone(), weak_dialog.clone());
+                let fired = fired.clone();
+                row.connect_activated(move |_| {
+                    // The dialog closes with an animation; a second pick during
+                    // it must not send a second answer.
+                    if fired.replace(true) {
+                        return;
+                    }
+                    on_pick(id.clone());
+                    if let Some(dialog) = dialog.upgrade() {
+                        dialog.close();
+                    }
+                });
+                if let Some(group) = &group {
+                    group.add(&row);
                 }
-            });
-            group.add(&row);
+                row_index += 1;
+                added += 1;
+            } else {
+                group = None;
+                section_index += 1;
+                row_index = 0;
+            }
         }
-        page.add(&group);
-    }
+        if section_index < sections.len() {
+            gtk::glib::ControlFlow::Continue
+        } else {
+            gtk::glib::ControlFlow::Break
+        }
+    });
     let view = adw::ToolbarView::new();
     view.add_top_bar(&adw::HeaderBar::new());
     view.set_content(Some(&page));
