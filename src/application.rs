@@ -3238,31 +3238,17 @@ impl NativeApplication {
                 if participants.is_empty() {
                     return;
                 }
-                let dialog = gtk::Window::builder()
-                    .title("Mention participant")
-                    .transient_for(&self.window)
-                    .modal(true)
-                    .default_width(320)
-                    .build();
-                let list = gtk::Box::new(gtk::Orientation::Vertical, 6);
-                for (index, participant) in participants.into_iter().enumerate() {
-                    let button =
-                        gtk::Button::with_label(&self.participant_label(&participant, index));
-                    let input_sender = sender.clone();
-                    let close = dialog.clone();
-                    button.connect_clicked(move |_| {
-                        input_sender.input(Input::InsertMentionId(participant.clone()));
-                        close.close();
-                    });
-                    list.append(&button);
-                }
-                let scroller = gtk::ScrolledWindow::builder()
-                    .min_content_height(240)
-                    .max_content_height(420)
-                    .child(&list)
-                    .build();
-                dialog.set_child(Some(&scroller));
-                dialog.present();
+                let mut people: Vec<_> = participants
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, id)| {
+                        let name = self.participant_label(&id, index);
+                        let phone = crate::model::phone_of(&id).map(crate::util::phone);
+                        (id, name, phone)
+                    })
+                    .collect();
+                people.sort_by_cached_key(|(_, name, _)| name.to_lowercase());
+                show_mention_dialog(&self.window, &sender, people, &self.avatars);
             }
             Input::InsertMentionId(participant) => {
                 let known = self
@@ -6936,6 +6922,113 @@ fn show_new_contact_dialog(
 }
 
 /// Picks the chat to forward the selected message to.
+/// Searchable participant list; picking one inserts the mention.
+fn show_mention_dialog(
+    parent: &adw::ApplicationWindow,
+    sender: &ComponentSender<NativeApplication>,
+    people: Vec<(String, String, Option<String>)>,
+    avatars: &std::collections::HashMap<String, std::path::PathBuf>,
+) {
+    let dialog = adw::Dialog::builder()
+        .title("Mention")
+        .content_width(380)
+        .content_height(520)
+        .build();
+    let search = gtk::SearchEntry::builder()
+        .placeholder_text("Search participants")
+        .margin_start(12)
+        .margin_end(12)
+        .margin_bottom(6)
+        .build();
+    let list = gtk::ListBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .css_classes(["boxed-list"])
+        .margin_top(6)
+        .margin_bottom(12)
+        .margin_start(12)
+        .margin_end(12)
+        .valign(gtk::Align::Start)
+        .build();
+    list.set_placeholder(Some(
+        &gtk::Label::builder()
+            .label("No participants match this search.")
+            .margin_top(18)
+            .margin_bottom(18)
+            .css_classes(["dim-label"])
+            .build(),
+    ));
+    let rows = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    for (id, name, phone) in people {
+        let row = adw::ActionRow::builder()
+            .title(&name)
+            .use_markup(false)
+            .title_lines(1)
+            .activatable(true)
+            .build();
+        let digits = phone.as_deref().unwrap_or_default().replace(|c: char| !c.is_ascii_digit(), "");
+        if let Some(phone) = phone.filter(|phone| phone != &name) {
+            row.set_subtitle(&phone);
+        }
+        let avatar = adw::Avatar::new(32, Some(&name), true);
+        avatar.set_custom_image(cached_avatar(avatars, &id).as_ref());
+        row.add_prefix(&avatar);
+        rows.borrow_mut()
+            .push((row.clone(), format!("{} {digits}", name.to_lowercase())));
+        let (close, input) = (dialog.clone(), sender.clone());
+        row.connect_activated(move |_| {
+            input.input(Input::InsertMentionId(id.clone()));
+            close.close();
+        });
+        list.append(&row);
+    }
+    search.connect_search_changed(move |entry| {
+        let needle = entry.text().trim().to_lowercase();
+        for (row, key) in rows.borrow().iter() {
+            row.set_visible(needle.is_empty() || key.contains(&needle));
+        }
+    });
+    // Enter picks the first visible match.
+    let first = list.clone();
+    search.connect_activate(move |_| {
+        let mut child = first.first_child();
+        while let Some(widget) = child {
+            if widget.is_visible()
+                && let Some(row) = widget.downcast_ref::<adw::ActionRow>()
+            {
+                adw::prelude::ActionRowExt::activate(row);
+                break;
+            }
+            child = widget.next_sibling();
+        }
+    });
+    let scroll = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vexpand(true)
+        .child(&list)
+        .build();
+    let view = adw::ToolbarView::new();
+    view.add_top_bar(&adw::HeaderBar::new());
+    view.add_top_bar(&search);
+    view.set_content(Some(&scroll));
+    dialog.set_child(Some(&view));
+    dialog.set_focus(Some(&search));
+    dialog.present(Some(parent));
+}
+
+/// Saved photo for a chat or participant, decoded once per path.
+fn cached_avatar(
+    avatars: &std::collections::HashMap<String, std::path::PathBuf>,
+    id: &str,
+) -> Option<gtk::gdk::Texture> {
+    let path = avatars.get(id)?;
+    AVATAR_TEXTURES.with_borrow_mut(|cache| {
+        if !cache.contains_key(path) {
+            cache.insert(path.clone(), gtk::gdk::Texture::from_filename(path).ok()?);
+        }
+        cache.get(path).cloned()
+    })
+}
+
 fn show_forward_dialog(
     parent: &adw::ApplicationWindow,
     sender: &ComponentSender<NativeApplication>,
@@ -7022,15 +7115,7 @@ fn show_forward_dialog(
             .activatable(true)
             .build();
         let avatar = adw::Avatar::new(32, Some(&chat.name), true);
-        let image = avatars.get(&chat.id).and_then(|path| {
-            AVATAR_TEXTURES.with_borrow_mut(|cache| {
-                if !cache.contains_key(path) {
-                    cache.insert(path.clone(), gtk::gdk::Texture::from_filename(path).ok()?);
-                }
-                cache.get(path).cloned()
-            })
-        });
-        avatar.set_custom_image(image.as_ref());
+        avatar.set_custom_image(cached_avatar(avatars, &chat.id).as_ref());
         row.add_prefix(&avatar);
         rows.borrow_mut()
             .push((row.clone(), forward_search_key(&chat)));
