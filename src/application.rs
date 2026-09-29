@@ -879,6 +879,7 @@ pub struct NativeApplication {
     audio_errors: std::collections::HashMap<(String, String), String>,
     audio_registry: AudioRegistry,
     voice_send_pending: bool,
+    recording_meter: crate::native_media_widgets::RecordingMeter,
     message_target: Option<String>,
     /// Unread count when the chat was opened, until the first page pins it
     /// to `unread_marker`, so live arrivals never move the "Unread" line.
@@ -1480,21 +1481,34 @@ impl SimpleComponent for NativeApplication {
                                         set_margin_end: 12,
                                         set_margin_top: 6,
                                         set_spacing: 6,
+                                        set_valign: gtk::Align::Center,
                                         #[watch]
                                         set_visible: model.recording_active(),
-                                        append = &gtk::Label {
-                                            set_hexpand: true,
-                                            set_xalign: 0.0,
-                                            #[watch]
-                                            set_label: &model.recording_status(),
-                                        },
                                         append = &gtk::Button {
-                                            set_label: "Cancel",
+                                            set_icon_name: "user-trash-symbolic",
+                                            set_tooltip_text: Some("Discard recording"),
+                                            add_css_class: "flat",
+                                            add_css_class: "circular",
                                             connect_clicked => Input::Recording(crate::native_voice::RecordingIntent::Cancel),
                                         },
+                                        append = &gtk::Image {
+                                            set_icon_name: Some("media-record-symbolic"),
+                                            add_css_class: "error",
+                                            #[watch]
+                                            set_opacity: model.recording_blink(),
+                                        },
+                                        append = &gtk::Label {
+                                            add_css_class: "numeric",
+                                            #[watch]
+                                            set_label: &model.recording_time(),
+                                        },
+                                        #[local_ref]
+                                        recording_meter_area -> gtk::DrawingArea {},
                                         append = &gtk::Button {
-                                            set_label: "Send Voice",
+                                            set_icon_name: "paper-plane-symbolic",
+                                            set_tooltip_text: Some("Send voice message"),
                                             add_css_class: "suggested-action",
+                                            add_css_class: "circular",
                                             #[watch]
                                             set_sensitive: model.pending_send.is_none() && !model.voice_send_pending,
                                             connect_clicked => Input::Recording(crate::native_voice::RecordingIntent::Send),
@@ -1884,6 +1898,7 @@ impl SimpleComponent for NativeApplication {
             audio_errors: Default::default(),
             audio_registry: Default::default(),
             voice_send_pending: false,
+            recording_meter: Default::default(),
             message_target: None,
             opened_unread: 0,
             unread_marker: None,
@@ -1971,6 +1986,7 @@ impl SimpleComponent for NativeApplication {
         root.connect_visible_notify(move |_| {
             visibility_sender.input(Input::WindowVisibilityChanged)
         });
+        let recording_meter_area = &model.recording_meter.area.clone();
         let widgets = view_output!();
         model.chat_search = Some(widgets.chat_search.clone());
         model.unread_filter = Some(widgets.unread_filter.clone());
@@ -3435,6 +3451,8 @@ impl NativeApplication {
             } => self.create_poll(question, first, second),
             Input::Recording(intent) => {
                 self.recording_action(intent);
+                self.recording_meter
+                    .set_levels(&self.media.recording_levels());
                 self.schedule_voice_poll(&sender);
             }
             Input::PollVoice => {
@@ -3451,6 +3469,8 @@ impl NativeApplication {
                     self.update_audio_row(&id);
                 }
                 self.refresh_selected_voice();
+                self.recording_meter
+                    .set_levels(&self.media.recording_levels());
                 self.schedule_voice_poll(&sender);
             }
             Input::SendText(text) => {
@@ -4819,22 +4839,19 @@ impl NativeApplication {
         self.media.is_recording()
     }
 
-    fn recording_status(&self) -> String {
-        let Some(elapsed) = self.media.recording_elapsed() else {
-            return String::new();
-        };
-        let levels = self.media.recording_levels();
-        let projection =
-            crate::native_voice::project_recording(crate::native_voice::VoiceRecordingInput {
-                recording: true,
-                elapsed,
-                levels: &levels,
-            });
-        format!(
-            "Recording {} · {} waveform bars",
-            projection.time,
-            projection.waveform.len()
-        )
+    fn recording_time(&self) -> String {
+        self.media
+            .recording_elapsed()
+            .map(|elapsed| crate::util::duration(elapsed.as_secs().min(u64::from(u32::MAX)) as u32))
+            .unwrap_or_default()
+    }
+
+    /// Opacity of the record dot; it pulses once a second.
+    fn recording_blink(&self) -> f64 {
+        match self.media.recording_elapsed() {
+            Some(elapsed) if elapsed.subsec_millis() >= 500 => 0.3,
+            _ => 1.0,
+        }
     }
 
     fn can_send_voice(&self) -> bool {

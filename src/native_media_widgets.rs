@@ -227,6 +227,78 @@ pub fn build_media_widget_with_action(
     }
 }
 
+/// Live microphone meter: the most recent loudness readings as scrolling bars.
+#[derive(Clone)]
+pub struct RecordingMeter {
+    pub area: gtk::DrawingArea,
+    bars: std::rc::Rc<std::cell::RefCell<Vec<f32>>>,
+}
+
+impl RecordingMeter {
+    /// Readings kept on screen; the recorder produces one every 50 ms.
+    const VISIBLE: usize = 48;
+
+    pub fn new() -> Self {
+        let bars = std::rc::Rc::new(std::cell::RefCell::new(Vec::<f32>::new()));
+        let area = gtk::DrawingArea::builder()
+            .content_height(28)
+            .hexpand(true)
+            .build();
+        area.update_property(&[gtk::accessible::Property::Label("Microphone level")]);
+        let paint = bars.clone();
+        area.set_draw_func(move |area, cr, width, height| {
+            let levels = paint.borrow();
+            let color = area.color();
+            let step = width as f64 / Self::VISIBLE as f64;
+            // Right-align so new readings enter from the right edge.
+            let offset = Self::VISIBLE - levels.len();
+            for (index, level) in levels.iter().enumerate() {
+                let h = (f64::from(*level) * (height - 4) as f64).max(3.0);
+                cr.set_source_rgba(
+                    color.red() as f64,
+                    color.green() as f64,
+                    color.blue() as f64,
+                    0.9,
+                );
+                cr.rectangle(
+                    (offset + index) as f64 * step,
+                    (height as f64 - h) / 2.0,
+                    (step - 2.0).max(1.0),
+                    h,
+                );
+                let _ = cr.fill();
+            }
+        });
+        Self { area, bars }
+    }
+
+    pub fn set_levels(&self, levels: &[f32]) {
+        let recent = &levels[levels.len().saturating_sub(Self::VISIBLE)..];
+        let peak = recent
+            .iter()
+            .copied()
+            .filter(|level| level.is_finite())
+            .fold(0.02_f32, f32::max);
+        *self.bars.borrow_mut() = recent
+            .iter()
+            .map(|level| {
+                if level.is_finite() {
+                    (level / peak).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        self.area.queue_draw();
+    }
+}
+
+impl Default for RecordingMeter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Row-local GTK controls. Updating these avoids stealing focus during playback.
 #[derive(Clone)]
 pub struct AudioControls {
