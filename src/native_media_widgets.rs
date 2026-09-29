@@ -199,7 +199,7 @@ pub fn build_media_widget_with_action(
                 _ => Vec::new(),
             };
             // Only messages from others can be answered, and only once.
-            let open = answered.is_none() && !message.from_me;
+            let open = message.content.answer().is_none() && !message.from_me;
             for (index, label) in labels.iter().enumerate() {
                 let chosen = *answered == Some(index);
                 // A text marker as well as the style: an insensitive
@@ -215,6 +215,14 @@ pub fn build_media_widget_with_action(
                     button.update_property(&[gtk::accessible::Property::Description(
                         "Selected reply",
                     )]);
+                } else if !open {
+                    let reason = if message.from_me {
+                        "Only the recipient can choose from these buttons"
+                    } else {
+                        "Already answered"
+                    };
+                    button.set_tooltip_text(Some(reason));
+                    button.update_property(&[gtk::accessible::Property::Description(reason)]);
                 }
                 if let (true, Some(id)) = (open, ids.get(index)) {
                     let (chat, message_id, button_id) =
@@ -241,6 +249,7 @@ pub fn build_media_widget_with_action(
             button,
             footer,
             sections,
+            answered,
         } => {
             if !title.is_empty() {
                 add_label(&root, title).add_css_class("heading");
@@ -248,13 +257,33 @@ pub fn build_media_widget_with_action(
             if let Some(description) = description {
                 add_label(&root, description);
             }
+            // Row ids come from the message itself, in the projection's order.
+            let ids: Vec<&str> = match &message.content {
+                Content::List { sections, .. } => sections
+                    .iter()
+                    .flat_map(|section| &section.rows)
+                    .map(|row| row.id.as_str())
+                    .collect(),
+                _ => Vec::new(),
+            };
+            let chosen_id = match &message.content {
+                Content::List { answered, .. } => answered.as_deref(),
+                _ => None,
+            };
+            let mut index = 0;
             for section in sections {
                 if let Some(heading) = &section.title {
                     let label = add_label(&root, heading);
                     label.add_css_class("caption-heading");
                 }
                 for (row, detail) in &section.rows {
-                    add_label(&root, &format!("• {row}"));
+                    let mark = if chosen_id.is_some() && ids.get(index).copied() == chosen_id {
+                        "✓"
+                    } else {
+                        "•"
+                    };
+                    index += 1;
+                    add_label(&root, &format!("{mark} {row}"));
                     if let Some(detail) = detail {
                         let label = add_label(&root, detail);
                         label.set_margin_start(12);
@@ -269,7 +298,53 @@ pub fn build_media_widget_with_action(
                 label.add_css_class("caption");
             }
             let label = if button.is_empty() { "Choose" } else { button };
-            root.append(&disabled_reply_button(label));
+            // From the message itself: the projection's `answered` is `None`
+            // for an answer naming a row that no longer exists.
+            let open = message.content.answer().is_none() && !message.from_me;
+            let picker = reply_button(label);
+            picker.set_sensitive(open);
+            if open {
+                let choices: Vec<ListChoiceSection> = match &message.content {
+                    Content::List { sections, .. } => sections
+                        .iter()
+                        .map(|section| {
+                            (
+                                section.title.clone(),
+                                section
+                                    .rows
+                                    .iter()
+                                    .map(|row| {
+                                        (row.id.clone(), row.title.clone(), row.description.clone())
+                                    })
+                                    .collect(),
+                            )
+                        })
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                let (chat, message_id) = (message.chat.clone(), message.id.clone());
+                let (heading, on_action) = (title.clone(), on_action.clone());
+                picker.connect_clicked(move |button| {
+                    let (chat, message_id, on_action) =
+                        (chat.clone(), message_id.clone(), on_action.clone());
+                    show_list_choices(button, &heading, &choices, move |row| {
+                        on_action(NativeMediaAction::AnswerListRow {
+                            chat: chat.clone(),
+                            message: message_id.clone(),
+                            row,
+                        });
+                    });
+                });
+            } else {
+                let reason = match answered {
+                    Some(chosen) => format!("Already answered: {chosen}"),
+                    None if message.from_me => "Only the recipient can choose from this list".into(),
+                    None => "This list can no longer be answered".into(),
+                };
+                picker.set_tooltip_text(Some(&reason));
+                picker.update_property(&[gtk::accessible::Property::Description(&reason)]);
+            }
+            root.append(&picker);
             ("", "")
         }
         NativeMediaContent::VideoPlaceholder => ("Video", "Video preview unavailable"),
@@ -935,7 +1010,8 @@ fn append_photo(
             frame.add_overlay(&button);
             parent.append(&frame);
         }
-        Some(NativeMediaAction::AnswerButton { .. }) | None => {
+        Some(NativeMediaAction::AnswerButton { .. } | NativeMediaAction::AnswerListRow { .. })
+        | None => {
             let spinner = adw::Spinner::builder()
                 .width_request(32)
                 .height_request(32)
@@ -1039,7 +1115,8 @@ fn append_video(
             frame.add_overlay(&button);
             parent.append(&frame);
         }
-        Some(NativeMediaAction::AnswerButton { .. }) | None => {
+        Some(NativeMediaAction::AnswerButton { .. } | NativeMediaAction::AnswerListRow { .. })
+        | None => {
             frame.add_overlay(
                 &adw::Spinner::builder()
                     .width_request(32)
@@ -1208,7 +1285,8 @@ fn document_card(
             download.connect_clicked(move |_| on_action(action.clone()));
             actions.append(&download);
         }
-        Some(NativeMediaAction::AnswerButton { .. }) | None => actions.append(
+        Some(NativeMediaAction::AnswerButton { .. } | NativeMediaAction::AnswerListRow { .. })
+        | None => actions.append(
             &adw::Spinner::builder()
                 .width_request(24)
                 .height_request(24)
@@ -1716,6 +1794,67 @@ fn add_label(parent: &gtk::Box, text: &str) -> gtk::Label {
     label
 }
 
+/// One list section for the chooser: optional heading and rows as (id, title, detail).
+type ListChoiceSection = (Option<String>, Vec<(String, String, Option<String>)>);
+
+/// Dialog listing a message's rows; picking one calls `on_pick` with its id
+/// and closes. The dialog is held weakly by its own rows.
+fn show_list_choices(
+    anchor: &gtk::Button,
+    title: &str,
+    sections: &[ListChoiceSection],
+    on_pick: impl Fn(String) + 'static,
+) {
+    use adw::prelude::*;
+    let dialog = adw::Dialog::builder()
+        .title(if title.is_empty() { "Choose" } else { title })
+        .content_width(380)
+        .content_height(480)
+        .build();
+    let page = adw::PreferencesPage::new();
+    let on_pick = std::rc::Rc::new(on_pick);
+    let fired = std::rc::Rc::new(std::cell::Cell::new(false));
+    for (heading, rows) in sections {
+        let group = adw::PreferencesGroup::new();
+        if let Some(heading) = heading {
+            group.set_title(&gtk::glib::markup_escape_text(heading));
+        }
+        for (id, row_title, detail) in rows {
+            // Sender text: markup off before any text is set.
+            let row = adw::ActionRow::builder()
+                .use_markup(false)
+                .title_lines(2)
+                .activatable(true)
+                .build();
+            row.set_title(row_title);
+            if let Some(detail) = detail {
+                row.set_subtitle(detail);
+                row.set_subtitle_lines(3);
+            }
+            let (id, on_pick, dialog) = (id.clone(), on_pick.clone(), dialog.downgrade());
+            let fired = fired.clone();
+            row.connect_activated(move |_| {
+                // The dialog closes with an animation; a second pick during
+                // it must not send a second answer.
+                if fired.replace(true) {
+                    return;
+                }
+                on_pick(id.clone());
+                if let Some(dialog) = dialog.upgrade() {
+                    dialog.close();
+                }
+            });
+            group.add(&row);
+        }
+        page.add(&group);
+    }
+    let view = adw::ToolbarView::new();
+    view.add_top_bar(&adw::HeaderBar::new());
+    view.set_content(Some(&page));
+    dialog.set_child(Some(&view));
+    dialog.present(Some(anchor));
+}
+
 /// Button with a wrapping label for an interactive message.
 fn reply_button(text: &str) -> gtk::Button {
     let label = gtk::Label::new(Some(text));
@@ -1725,17 +1864,6 @@ fn reply_button(text: &str) -> gtk::Button {
     label.set_justify(gtk::Justification::Center);
     let button = gtk::Button::new();
     button.set_child(Some(&label));
-    button
-}
-
-/// Button placeholder for an interactive message. Answering is not
-/// available yet, so it says so instead of only looking dimmed.
-fn disabled_reply_button(text: &str) -> gtk::Button {
-    let button = reply_button(text);
-    button.set_sensitive(false);
-    let hint = "Replying from ZapTide is not available yet";
-    button.set_tooltip_text(Some(hint));
-    button.update_property(&[gtk::accessible::Property::Description(hint)]);
     button
 }
 

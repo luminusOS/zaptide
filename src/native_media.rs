@@ -128,6 +128,8 @@ pub enum NativeMediaContent {
         button: String,
         footer: Option<String>,
         sections: Vec<ListSectionPresentation>,
+        /// Title of the row already chosen.
+        answered: Option<String>,
     },
     VideoPlaceholder,
     UnsupportedPlaceholder,
@@ -287,6 +289,7 @@ pub fn project_content(message: &Message) -> NativeMessageContent {
             button,
             footer,
             sections,
+            answered,
         } => NativeMediaContent::List {
             title: title.clone(),
             description: description.clone(),
@@ -303,6 +306,10 @@ pub fn project_content(message: &Message) -> NativeMessageContent {
                         .collect(),
                 })
                 .collect(),
+            answered: answered
+                .as_deref()
+                .and_then(|id| message.content.choice(id))
+                .map(|(title, _)| title.to_owned()),
         },
         Content::Video { .. } => NativeMediaContent::VideoPlaceholder,
         Content::Unsupported { .. } => NativeMediaContent::UnsupportedPlaceholder,
@@ -362,6 +369,12 @@ pub enum NativeMediaAction {
         message: String,
         button: String,
     },
+    /// Reply to a list message with one of its rows.
+    AnswerListRow {
+        chat: String,
+        message: String,
+        row: String,
+    },
 }
 
 impl fmt::Debug for NativeMediaAction {
@@ -370,6 +383,7 @@ impl fmt::Debug for NativeMediaAction {
             Self::Open(_) => formatter.write_str("Open(..)"),
             Self::Download { .. } => formatter.write_str("Download { .. }"),
             Self::AnswerButton { .. } => formatter.write_str("AnswerButton { .. }"),
+            Self::AnswerListRow { .. } => formatter.write_str("AnswerListRow { .. }"),
         }
     }
 }
@@ -677,6 +691,11 @@ mod tests {
                 message: "private-message-id".into(),
                 button: "private-button-id".into(),
             },
+            NativeMediaAction::AnswerListRow {
+                chat: "private-chat-id".into(),
+                message: "private-message-id".into(),
+                row: "private-row-id".into(),
+            },
         ];
 
         let debug = format!("{actions:?}");
@@ -684,6 +703,8 @@ mod tests {
         assert!(debug.contains("Download { .. }"));
         assert!(debug.contains("AnswerButton { .. }"));
         assert!(!debug.contains("private-button-id"));
+        assert!(debug.contains("AnswerListRow { .. }"));
+        assert!(!debug.contains("private-row-id"));
         for secret in [
             "/private/user/photo.jpg",
             "private-chat-id",

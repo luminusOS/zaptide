@@ -3485,6 +3485,13 @@ impl NativeApplication {
                         self.status = "Backend unavailable".into();
                     }
                 }
+                crate::native_media::NativeMediaAction::AnswerListRow { chat, message, row } => {
+                    if let Some(backend) = &self.backend {
+                        backend.send(crate::backend::Command::AnswerListRow { chat, message, row });
+                    } else {
+                        self.status = "Backend unavailable".into();
+                    }
+                }
                 crate::native_media::NativeMediaAction::Open(path) => {
                     if let Some(id) = self
                         .message_snapshots

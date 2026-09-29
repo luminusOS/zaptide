@@ -2735,6 +2735,7 @@ impl Worker {
             | Command::SendImage { chat, .. }
             | Command::SendSticker { chat, .. }
             | Command::AnswerButton { chat, .. }
+            | Command::AnswerListRow { chat, .. }
             | Command::CreatePoll { chat, .. } => Some(chat),
             Command::Forward { to_chat, .. } => Some(to_chat),
             _ => None,
@@ -2830,7 +2831,10 @@ impl Worker {
                 chat,
                 message,
                 button,
-            } => self.answer_button(chat, message, button),
+            } => self.answer_choice(chat, message, button),
+            Command::AnswerListRow { chat, message, row } => {
+                self.answer_choice(chat, message, row)
+            }
             Command::Forward {
                 from_chat,
                 message,
@@ -3411,7 +3415,7 @@ impl Worker {
                     // Not a composer send: reopen the buttons after a failure
                     // and never complete the composer's pending send.
                     if error.is_some() {
-                        self.reopen_buttons(&chat, &original);
+                        self.reopen_answer(&chat, &original);
                     }
                 } else {
                     self.emit(Event::Sent {
@@ -3591,36 +3595,32 @@ impl Worker {
         ));
     }
 
-    /// Answers a quick-reply button message. The wire message is a
-    /// `ButtonsResponseMessage`; the local row and its archived body are a
-    /// plain reply quoting the buttons, which is what the user sees.
-    fn answer_button(&mut self, chat: ChatId, message_id: String, button_id: String) {
-        // Every early exit rebuilds the row, so a button the interface
-        // disabled on click comes back to match the stored state.
+    /// Answers a buttons or list message with one of its choices. The wire
+    /// message is a `ButtonsResponseMessage` or `ListResponseMessage`; the
+    /// local row and its archived body are a plain reply quoting the
+    /// original, which is what the user sees.
+    fn answer_choice(&mut self, chat: ChatId, message_id: String, choice: String) {
+        // Every early exit rebuilds the row, so a control the interface
+        // left enabled matches the stored state again.
         let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&chat)) else {
             self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
             self.emit_message(&chat, &message_id);
             return;
         };
         let original = self.archive.message(&chat, &message_id).ok().flatten();
-        let answerable = original.as_ref().and_then(|original| match &original.content {
-            Content::Buttons {
-                text,
-                footer,
-                buttons,
-                answered: None,
-            } if !original.from_me => {
-                let label = buttons
-                    .iter()
-                    .find(|button| button.id == button_id)?
-                    .label
-                    .clone();
-                Some((text.clone(), footer.clone(), buttons.clone(), label))
+        let picked = original.as_ref().and_then(|original| {
+            let content = &original.content;
+            if original.from_me || content.answer().is_some() {
+                return None;
             }
-            _ => None,
+            let (label, description) = content.choice(&choice)?;
+            Some((
+                label.to_owned(),
+                description.map(str::to_owned),
+                content.with_answer(Some(choice.clone()))?,
+            ))
         });
-        let (Some(original), Some((text, footer, buttons, label))) = (original, answerable)
-        else {
+        let (Some(original), Some((label, description, marked))) = (original, picked) else {
             // A second click on an answered message is ignored; anything else
             // (revoked, edited away, from me) is worth telling the user.
             let already_answered = self
@@ -3628,9 +3628,7 @@ impl Worker {
                 .message(&chat, &message_id)
                 .ok()
                 .flatten()
-                .is_some_and(|row| {
-                    matches!(row.content, Content::Buttons { answered: Some(_), .. })
-                });
+                .is_some_and(|row| row.content.answer().is_some());
             if !already_answered {
                 self.emit(Event::Error("This reply is no longer available".to_owned()));
             }
@@ -3638,7 +3636,10 @@ impl Worker {
             return;
         };
         let (context, quoted_row) = self.quote_context(&chat, Some(&message_id));
-        let mut message = buttons_response(&button_id, &label, context.clone());
+        let mut message = match &original.content {
+            Content::List { .. } => list_response(&choice, &label, description, context.clone()),
+            _ => buttons_response(&choice, &label, context.clone()),
+        };
         let expiration = self.apply_ephemeral(&chat, &mut message);
         let id = client.generate_message_id();
         let row = Message {
@@ -3664,18 +3665,12 @@ impl Worker {
         self.store_message(row, Some(archived.encode_to_vec()), None);
         self.answer_sends
             .insert(id.clone(), (chat.clone(), message_id.clone()));
-        let marked = Content::Buttons {
-            text,
-            footer,
-            buttons,
-            answered: Some(button_id),
-        };
         match self
             .archive
             .set_content(&chat, &message_id, &marked, original.edited)
         {
             Ok(true) => self.emit_message(&chat, &message_id),
-            other => log::warn!("button answer not recorded on the message: {other:?}"),
+            other => log::warn!("answer not recorded on the message: {other:?}"),
         }
         tokio::spawn(send_outgoing(
             OutgoingSession {
@@ -3693,24 +3688,16 @@ impl Worker {
     }
 
     /// Clears the recorded answer after its send failed, so it can be retried.
-    fn reopen_buttons(&mut self, chat: &str, message_id: &str) {
+    fn reopen_answer(&mut self, chat: &str, message_id: &str) {
         let Ok(Some(original)) = self.archive.message(chat, message_id) else {
             return;
         };
-        let Content::Buttons {
-            text,
-            footer,
-            buttons,
-            answered: Some(_),
-        } = original.content
+        let Some(reopened) = original
+            .content
+            .answer()
+            .and_then(|_| original.content.with_answer(None))
         else {
             return;
-        };
-        let reopened = Content::Buttons {
-            text,
-            footer,
-            buttons,
-            answered: None,
         };
         if let Ok(true) = self
             .archive
@@ -5442,6 +5429,30 @@ fn buttons_response(
     }
 }
 
+/// Wire message answering a list row.
+fn list_response(
+    row_id: &str,
+    title: &str,
+    description: Option<String>,
+    context: Option<wa::ContextInfo>,
+) -> wa::Message {
+    use whatsapp_rust::prelude::MessageField;
+    wa::Message {
+        list_response_message: MessageField::some(wa::message::ListResponseMessage {
+            title: Some(title.to_owned()),
+            list_type: Some(wa::message::list_response_message::ListType::SINGLE_SELECT),
+            single_select_reply: MessageField::some(
+                wa::message::list_response_message::SingleSelectReply {
+                    selected_row_id: Some(row_id.to_owned()),
+                },
+            ),
+            context_info: context.map_or_else(MessageField::none, MessageField::some),
+            description,
+        }),
+        ..Default::default()
+    }
+}
+
 /// Extracts quote and mention context from a message.
 fn context_of(base: &wa::Message) -> Option<&wa::ContextInfo> {
     if let Some(text) = base.extended_text_message.as_option() {
@@ -5788,6 +5799,7 @@ fn buttons_content(message: &wa::message::ButtonsMessage) -> Option<Content> {
     {
         text = interactive_text(&Some(header.clone()));
     }
+    let mut seen = HashSet::new();
     let buttons: Vec<_> = message
         .buttons
         .iter()
@@ -5795,7 +5807,8 @@ fn buttons_content(message: &wa::message::ButtonsMessage) -> Option<Content> {
             button.r#type != Some(Type::NATIVE_FLOW) && !button.native_flow_info.is_set()
         })
         .filter_map(|button| {
-            let id = interactive_id(&button.button_id)?;
+            // A repeated id could not say which button was chosen.
+            let id = interactive_id(&button.button_id).filter(|id| seen.insert(id.clone()))?;
             let label = button
                 .button_text
                 .as_option()
@@ -5820,6 +5833,7 @@ fn list_content(message: &wa::message::ListMessage) -> Option<Content> {
         return None;
     }
     let mut budget = MAX_INTERACTIVE_ITEMS;
+    let mut seen = HashSet::new();
     let sections: Vec<_> = message
         .sections
         .iter()
@@ -5829,7 +5843,8 @@ fn list_content(message: &wa::message::ListMessage) -> Option<Content> {
                 .iter()
                 .filter_map(|row| {
                     Some(crate::model::ListRow {
-                        id: interactive_id(&row.row_id)?,
+                        // A repeated id could not say which row was chosen.
+                        id: interactive_id(&row.row_id).filter(|id| seen.insert(id.clone()))?,
                         title: interactive_text(&row.title)?,
                         description: interactive_text(&row.description),
                     })
@@ -5849,6 +5864,7 @@ fn list_content(message: &wa::message::ListMessage) -> Option<Content> {
         button: interactive_text(&message.button_text).unwrap_or_default(),
         footer: interactive_text(&message.footer_text),
         sections,
+        answered: None,
     })
 }
 
@@ -6685,6 +6701,83 @@ mod tests {
             .expect("set")
             .context_info
             .is_set());
+    }
+
+    #[test]
+    fn repeated_button_and_row_ids_keep_only_the_first() {
+        use whatsapp_rust::prelude::MessageField;
+        let row = |title: &str| wa::message::list_message::Row {
+            title: Some(title.into()),
+            row_id: Some("same".into()),
+            ..Default::default()
+        };
+        let list = wa::Message {
+            list_message: MessageField::some(wa::message::ListMessage {
+                sections: vec![
+                    wa::message::list_message::Section {
+                        rows: vec![row("First")],
+                        ..Default::default()
+                    },
+                    wa::message::list_message::Section {
+                        rows: vec![row("Second")],
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let Some(Content::List { sections, .. }) = classify(&list) else {
+            panic!("list expected");
+        };
+        // The second section had only the repeated id, so it is gone.
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0].rows[0].title, "First");
+        let button = |label: &str| wa::message::buttons_message::Button {
+            button_id: Some("same".into()),
+            button_text: MessageField::some(wa::message::buttons_message::button::ButtonText {
+                display_text: Some(label.into()),
+            }),
+            ..Default::default()
+        };
+        let buttons = wa::Message {
+            buttons_message: MessageField::some(wa::message::ButtonsMessage {
+                buttons: vec![button("One"), button("Two")],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let Some(Content::Buttons { buttons, .. }) = classify(&buttons) else {
+            panic!("buttons expected");
+        };
+        assert_eq!(buttons.len(), 1);
+        assert_eq!(buttons[0].label, "One");
+    }
+
+    #[test]
+    fn list_answers_carry_the_row_id_title_and_quote() {
+        let context = wa::ContextInfo {
+            stanza_id: Some("ORIGINAL".into()),
+            ..Default::default()
+        };
+        let message = list_response("t", "Tea", Some("hot".into()), Some(context));
+        let response = message.list_response_message.as_option().expect("set");
+        assert_eq!(response.title.as_deref(), Some("Tea"));
+        assert_eq!(response.description.as_deref(), Some("hot"));
+        assert_eq!(
+            response
+                .single_select_reply
+                .as_option()
+                .and_then(|reply| reply.selected_row_id.as_deref()),
+            Some("t")
+        );
+        assert_eq!(
+            response
+                .context_info
+                .as_option()
+                .and_then(|context| context.stanza_id.as_deref()),
+            Some("ORIGINAL")
+        );
     }
 
     #[test]

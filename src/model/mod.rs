@@ -274,6 +274,9 @@ pub enum Content {
         footer: Option<String>,
         #[serde(default)]
         sections: Vec<ListSection>,
+        /// Id of the row already chosen from this device.
+        #[serde(default)]
+        answered: Option<String>,
     },
     /// "This message was deleted."
     Revoked,
@@ -431,6 +434,40 @@ impl Content {
         }
     }
 
+    /// Id of the button or list row already answered from this device.
+    pub fn answer(&self) -> Option<&str> {
+        match self {
+            Self::Buttons { answered, .. } | Self::List { answered, .. } => answered.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// The same buttons or list with the answer replaced; `None` for other content.
+    pub fn with_answer(&self, answer: Option<String>) -> Option<Self> {
+        let mut content = self.clone();
+        match &mut content {
+            Self::Buttons { answered, .. } | Self::List { answered, .. } => *answered = answer,
+            _ => return None,
+        }
+        Some(content)
+    }
+
+    /// Label and optional description of a button or list row by id.
+    pub fn choice(&self, id: &str) -> Option<(&str, Option<&str>)> {
+        match self {
+            Self::Buttons { buttons, .. } => buttons
+                .iter()
+                .find(|button| button.id == id)
+                .map(|button| (button.label.as_str(), None)),
+            Self::List { sections, .. } => sections
+                .iter()
+                .flat_map(|section| &section.rows)
+                .find(|row| row.id == id)
+                .map(|row| (row.title.as_str(), row.description.as_deref())),
+            _ => None,
+        }
+    }
+
     /// Every line of a buttons or list message, for copying: body, footer,
     /// and each button label or list row.
     pub fn interactive_lines(&self) -> Option<String> {
@@ -452,6 +489,7 @@ impl Content {
                 button,
                 footer,
                 sections,
+                ..
             } => {
                 lines.push(title.trim().to_owned());
                 lines.extend(description.clone());
@@ -778,6 +816,7 @@ mod tests {
                     description: Some("hot".into()),
                 }],
             }],
+            answered: None,
         };
         assert_eq!(list.summary(), "List: Today");
         assert_eq!(
@@ -785,6 +824,15 @@ mod tests {
             Some("Today\nDrinks\n- Tea (hot)\n[Open]")
         );
         assert_eq!(Content::text("x").interactive_lines(), None);
+        // Answer helpers.
+        assert_eq!(buttons.choice("a"), Some(("Yes", None)));
+        assert_eq!(list.choice("t"), Some(("Tea", Some("hot"))));
+        assert_eq!(list.choice("a"), None);
+        assert_eq!(Content::text("x").choice("a"), None);
+        let answered = list.with_answer(Some("t".into())).expect("list");
+        assert_eq!(answered.answer(), Some("t"));
+        assert_eq!(answered.with_answer(None).expect("list").answer(), None);
+        assert_eq!(Content::text("x").with_answer(Some("t".into())), None);
         // Saved rows keep decoding without the optional fields.
         let old: Content =
             serde_json::from_str(r#"{"kind":"buttons","text":"t"}"#).expect("parses");

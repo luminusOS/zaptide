@@ -723,22 +723,21 @@ impl Archive {
         Ok(())
     }
 
-    /// A buttons message decoded again (history replay, re-derive) has no
-    /// record of the answer sent from here; keep the one already stored.
+    /// A buttons or list message decoded again (history replay, re-derive)
+    /// has no record of the answer sent from here; keep the one already stored.
     fn keep_answer<'a>(
         &self,
         chat: &str,
         id: &str,
         content: &'a Content,
     ) -> std::borrow::Cow<'a, Content> {
-        let Content::Buttons {
-            text,
-            footer,
-            buttons,
-            answered: None,
-        } = content
-        else {
+        if !matches!(content, Content::Buttons { .. } | Content::List { .. })
+            || content.answer().is_some()
+        {
             return std::borrow::Cow::Borrowed(content);
+        }
+        let same_kind = |stored: &Content| {
+            std::mem::discriminant(stored) == std::mem::discriminant(content)
         };
         let stored = self
             .connection
@@ -751,20 +750,13 @@ impl Archive {
             .ok()
             .flatten()
             .and_then(|json| serde_json::from_str::<Content>(&json).ok());
-        match stored {
-            Some(Content::Buttons {
-                answered: Some(answered),
-                ..
-            }) if buttons.iter().any(|button| button.id == answered) => {
-                std::borrow::Cow::Owned(Content::Buttons {
-                    text: text.clone(),
-                    footer: footer.clone(),
-                    buttons: buttons.clone(),
-                    answered: Some(answered),
-                })
-            }
-            _ => std::borrow::Cow::Borrowed(content),
-        }
+        stored
+            .as_ref()
+            .filter(|stored| same_kind(stored))
+            .and_then(Content::answer)
+            .filter(|answer| content.choice(answer).is_some())
+            .and_then(|answer| content.with_answer(Some(answer.to_owned())))
+            .map_or(std::borrow::Cow::Borrowed(content), std::borrow::Cow::Owned)
     }
 
     /// History rows often omit reactions. Keep any already stored when the
@@ -1361,6 +1353,40 @@ pub(crate) mod tests {
         }
         archive.set_derived(chat, "M1", &edited, &[], None, false).unwrap();
         assert_eq!(archive.message(chat, "M1").unwrap().unwrap().content, edited);
+    }
+
+    #[test]
+    fn a_list_answer_survives_the_message_being_stored_again() {
+        use crate::model::{ListRow, ListSection};
+        let root = tempfile::tempdir().unwrap();
+        let archive = Archive::open_with_key(&root.path().join("fixture.db"), &[4; 32]).unwrap();
+        let chat = "1@s.whatsapp.net";
+        archive.ensure_chat(chat, "Fixture").unwrap();
+        let list = |answered: Option<&str>| Content::List {
+            title: "Menu".into(),
+            description: None,
+            button: "Open".into(),
+            footer: None,
+            sections: vec![ListSection {
+                title: None,
+                rows: vec![ListRow {
+                    id: "t".into(),
+                    title: "Tea".into(),
+                    description: None,
+                }],
+            }],
+            answered: answered.map(str::to_owned),
+        };
+        let mut row = message(chat, "L1", 10, false);
+        row.content = list(None);
+        archive.insert_message(&row, None).unwrap();
+        archive.set_content(chat, "L1", &list(Some("t")), false).unwrap();
+        archive.insert_message(&row, None).unwrap();
+        assert_eq!(archive.message(chat, "L1").unwrap().unwrap().content, list(Some("t")));
+        // An answer naming a row that no longer exists is dropped.
+        archive.set_content(chat, "L1", &list(Some("gone")), false).unwrap();
+        archive.insert_message(&row, None).unwrap();
+        assert_eq!(archive.message(chat, "L1").unwrap().unwrap().content, list(None));
     }
 
     #[test]

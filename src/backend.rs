@@ -206,6 +206,12 @@ pub enum Command {
         message: String,
         button: String,
     },
+    /// Answers a list message with one of its rows.
+    AnswerListRow {
+        chat: ChatId,
+        message: String,
+        row: String,
+    },
     /// Forwards an archived message to another chat.
     Forward {
         from_chat: ChatId,
