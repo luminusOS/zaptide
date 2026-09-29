@@ -7103,6 +7103,8 @@ fn show_mention_dialog(
             .build(),
     ));
     let rows = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    // Photos are decoded in small idle batches so a large group opens at once.
+    let mut photos = Vec::new();
     for (id, name, phone) in people {
         let row = adw::ActionRow::builder()
             .title(&name)
@@ -7118,14 +7120,18 @@ fn show_mention_dialog(
             row.set_subtitle(&phone);
         }
         let avatar = adw::Avatar::new(32, Some(&name), true);
-        avatar.set_custom_image(cached_avatar(avatars, &id).as_ref());
+        if let Some(path) = avatars.get(&id) {
+            photos.push((avatar.downgrade(), path.clone()));
+        }
         row.add_prefix(&avatar);
         rows.borrow_mut()
             .push((row.clone(), format!("{} {digits}", name.to_lowercase())));
-        let (close, input) = (dialog.clone(), sender.clone());
+        let (close, input) = (dialog.downgrade(), sender.clone());
         row.connect_activated(move |_| {
             input.input(Input::InsertMentionId(id.clone()));
-            close.close();
+            if let Some(close) = close.upgrade() {
+                close.close();
+            }
         });
         list.append(&row);
     }
@@ -7161,6 +7167,28 @@ fn show_mention_dialog(
     dialog.set_child(Some(&view));
     dialog.set_focus(Some(&search));
     dialog.present(Some(parent));
+    photos.reverse();
+    gtk::glib::idle_add_local(move || {
+        for _ in 0..8 {
+            let Some((avatar, path)) = photos.pop() else {
+                return gtk::glib::ControlFlow::Break;
+            };
+            if let Some(avatar) = avatar.upgrade() {
+                avatar.set_custom_image(cached_texture(&path).as_ref());
+            }
+        }
+        gtk::glib::ControlFlow::Continue
+    });
+}
+
+/// Saved photo for a path, decoded once.
+fn cached_texture(path: &std::path::Path) -> Option<gtk::gdk::Texture> {
+    AVATAR_TEXTURES.with_borrow_mut(|cache| {
+        if !cache.contains_key(path) {
+            cache.insert(path.to_path_buf(), gtk::gdk::Texture::from_filename(path).ok()?);
+        }
+        cache.get(path).cloned()
+    })
 }
 
 /// Saved photo for a chat or participant, decoded once per path.
@@ -7168,13 +7196,7 @@ fn cached_avatar(
     avatars: &std::collections::HashMap<String, std::path::PathBuf>,
     id: &str,
 ) -> Option<gtk::gdk::Texture> {
-    let path = avatars.get(id)?;
-    AVATAR_TEXTURES.with_borrow_mut(|cache| {
-        if !cache.contains_key(path) {
-            cache.insert(path.clone(), gtk::gdk::Texture::from_filename(path).ok()?);
-        }
-        cache.get(path).cloned()
-    })
+    cached_texture(avatars.get(id)?)
 }
 
 /// Picks the chat to forward the selected message to.
