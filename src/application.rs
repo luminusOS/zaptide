@@ -5889,13 +5889,23 @@ impl NativeApplication {
             }
             self.status = "Message sent".into();
         } else {
-            // Put the cleared text back unless the user already typed something new.
+            // Put the cleared text back; if the user already typed something
+            // new, keep the failed text ahead of it instead of dropping it.
+            let merge = |typed: &str| match (pending.text.is_empty(), typed.is_empty()) {
+                (true, _) => typed.to_owned(),
+                (false, true) => pending.text.clone(),
+                (false, false) => format!("{}\n{typed}", pending.text),
+            };
             if self.active_chat.as_deref() == Some(&chat) {
-                if self.draft.is_empty() {
-                    self.composer_buffer.set_text(&pending.text);
+                if !pending.text.is_empty() {
+                    let merged = merge(&self.draft);
+                    self.composer_buffer.set_text(&merged);
                 }
-            } else if self.drafts.get(&chat).is_none_or(String::is_empty) {
-                self.drafts.insert(chat.clone(), pending.text.clone());
+            } else {
+                let merged = merge(self.drafts.get(&chat).map_or("", String::as_str));
+                if !merged.is_empty() {
+                    self.drafts.insert(chat.clone(), merged);
+                }
             }
             if !pending.failed_attachments.is_empty() {
                 self.pending_attachments
