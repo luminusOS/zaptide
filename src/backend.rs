@@ -406,6 +406,16 @@ pub enum Command {
         session_generation: u64,
         avatar_generation: u64,
     },
+    /// Fetches a contact's About text for the info dialog.
+    ContactAbout {
+        id: String,
+    },
+    /// Internal contact About-text result.
+    ContactAboutFetched {
+        session_generation: u64,
+        id: String,
+        about: Option<String>,
+    },
     /// Internal account about-text result.
     MeInfo {
         session_generation: u64,
@@ -521,6 +531,10 @@ pub enum Event {
         chat: ChatId,
         sender: String,
         composing: bool,
+    },
+    ContactAbout {
+        id: String,
+        about: Option<String>,
     },
     Presence {
         id: String,

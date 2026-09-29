@@ -3141,6 +3141,43 @@ impl Worker {
                 }
                 self.emit_stickers();
             }
+            Command::ContactAbout { id } => {
+                let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&id)) else {
+                    return;
+                };
+                let commands = self.commands.clone();
+                let session_generation = self.session_generation;
+                tokio::spawn(async move {
+                    let about = match client
+                        .contacts()
+                        .get_user_info(std::slice::from_ref(&jid))
+                        .await
+                    {
+                        Ok(info) => info
+                            .get(&jid)
+                            .and_then(|info| info.status.clone())
+                            .filter(|about| !about.is_empty()),
+                        Err(error) => {
+                            log::debug!("contact info not fetched: {error}");
+                            None
+                        }
+                    };
+                    let _ = commands.send(Command::ContactAboutFetched {
+                        session_generation,
+                        id,
+                        about,
+                    });
+                });
+            }
+            Command::ContactAboutFetched {
+                session_generation,
+                id,
+                about,
+            } => {
+                if session_generation == self.session_generation {
+                    self.emit(Event::ContactAbout { id, about });
+                }
+            }
             Command::MeInfo {
                 session_generation,
                 about,

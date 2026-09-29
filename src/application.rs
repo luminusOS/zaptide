@@ -97,6 +97,10 @@ enum NativeEvent {
         id: String,
         name: Option<String>,
     },
+    ContactAbout {
+        id: String,
+        about: Option<String>,
+    },
     Info(String),
     Error(String),
     Typing {
@@ -894,6 +898,8 @@ pub struct NativeApplication {
     audio_registry: AudioRegistry,
     voice_send_pending: bool,
     recording_meter: crate::native_media_widgets::RecordingMeter,
+    /// About row of the open contact-info dialog, filled when the fetch returns.
+    info_about: Option<(String, adw::ActionRow)>,
     message_target: Option<String>,
     /// Unread count when the chat was opened, until the first page pins it
     /// to `unread_marker`, so live arrivals never move the "Unread" line.
@@ -1914,6 +1920,7 @@ impl SimpleComponent for NativeApplication {
             audio_registry: Default::default(),
             voice_send_pending: false,
             recording_meter: Default::default(),
+            info_about: None,
             message_target: None,
             opened_unread: 0,
             unread_marker: None,
@@ -2339,6 +2346,9 @@ impl NativeApplication {
                         Event::ContactReady { id, name } => {
                             events.push(NativeEvent::ContactReady { id, name })
                         }
+                        Event::ContactAbout { id, about } => {
+                            events.push(NativeEvent::ContactAbout { id, about })
+                        }
                         Event::Info(message) => events.push(NativeEvent::Info(message)),
                         Event::MessageDeleted { chat, id } => {
                             events.push(NativeEvent::MessageDeleted { chat, id })
@@ -2646,6 +2656,15 @@ impl NativeApplication {
                         NativeEvent::ReceiptsPrivacy { disabled } => {
                             self.account_receipts_off = disabled
                         }
+                        NativeEvent::ContactAbout { id, about } => {
+                            if let Some((chat, row)) = &self.info_about
+                                && chat == &id
+                                && let Some(about) = about
+                            {
+                                row.set_subtitle(&about);
+                                row.set_visible(true);
+                            }
+                        }
                         NativeEvent::ContactReady { id, name } => {
                             let display_name = name
                                 .filter(|name| !name.trim().is_empty())
@@ -2898,12 +2917,21 @@ impl NativeApplication {
                     .as_ref()
                     .and_then(|id| self.chat_snapshots.iter().find(|chat| &chat.id == id))
                 {
-                    show_chat_info_dialog(
+                    self.info_about = show_chat_info_dialog(
                         &self.window,
                         chat,
                         &self.contacts,
                         self.avatars.get(&chat.id).map(std::path::PathBuf::as_path),
+                        self.presence.get(&chat.id).copied(),
+                        &self.chat_snapshots,
                     );
+                    if self.info_about.is_some()
+                        && let Some(backend) = &self.backend
+                    {
+                        backend.send(crate::backend::Command::ContactAbout {
+                            id: chat.id.clone(),
+                        });
+                    }
                 }
             }
             Input::ShowNewChat => {
@@ -7366,7 +7394,9 @@ fn show_chat_info_dialog(
     chat: &crate::model::Chat,
     contacts: &std::collections::HashMap<String, crate::model::Contact>,
     avatar: Option<&std::path::Path>,
-) {
+    presence: Option<(bool, Option<i64>)>,
+    chats: &[crate::model::Chat],
+) -> Option<(String, adw::ActionRow)> {
     let name_of = |id: &str| {
         sender_label(
             contacts
@@ -7434,23 +7464,85 @@ fn show_chat_info_dialog(
         row.add_suffix(&copy);
         group.add(&row);
     }
-    if let Some(push) = contacts
-        .get(&chat.id)
-        .and_then(|contact| contact.push_name.as_deref())
-        .filter(|push| !push.is_empty() && *push != chat.name)
+    let contact = contacts.get(&chat.id);
+    let property = |title: &str, value: &str| {
+        adw::ActionRow::builder()
+            .title(title)
+            .use_markup(false)
+            .subtitle(value)
+            .subtitle_selectable(true)
+            .css_classes(["property"])
+            .build()
+    };
+    if let Some(saved) = contact
+        .and_then(|contact| contact.full_name.as_deref())
+        .filter(|saved| !saved.is_empty())
     {
-        group.add(
-            &adw::ActionRow::builder()
-                .title("Name on WhatsApp")
-                .use_markup(false)
-                .subtitle(format!("~{push}"))
-                .css_classes(["property"])
-                .build(),
-        );
+        group.add(&property("Saved as", saved));
+    }
+    if let Some(push) = contact
+        .and_then(|contact| contact.push_name.as_deref())
+        .filter(|push| !push.is_empty())
+    {
+        group.add(&property("Name on WhatsApp", &format!("~{push}")));
+    }
+    let about = property("About", "");
+    about.set_visible(false);
+    if chat.phone().is_some() {
+        group.add(&about);
+    }
+    match presence {
+        Some((true, _)) => group.add(&property("Status", "Online")),
+        Some((false, Some(at))) => group.add(&property(
+            "Last seen",
+            &crate::util::moment_stamp(at),
+        )),
+        _ => {}
     }
     if chat.phone().is_some() {
         page.add(&group);
     }
+
+    let settings = adw::PreferencesGroup::new();
+    let now = crate::util::now();
+    settings.add(&property(
+        "Notifications",
+        match chat.muted_until {
+            Some(0) => "Muted".to_owned(),
+            Some(until) if until > now => {
+                format!("Muted until {}", crate::util::moment_stamp(until))
+            }
+            _ => "On".to_owned(),
+        }
+        .as_str(),
+    ));
+    if let Some(seconds) = chat.ephemeral_expiration.filter(|seconds| *seconds > 0) {
+        let label = match seconds {
+            86_400 => "24 hours".to_owned(),
+            604_800 => "7 days".to_owned(),
+            7_776_000 => "90 days".to_owned(),
+            other => format!("{other} seconds"),
+        };
+        settings.add(&property("Disappearing messages", &label));
+    }
+    let flags: Vec<&str> = [(chat.pinned, "Pinned"), (chat.archived, "Archived")]
+        .into_iter()
+        .filter_map(|(on, label)| on.then_some(label))
+        .collect();
+    if !flags.is_empty() {
+        settings.add(&property("Chat", &flags.join(" · ")));
+    }
+    if !chat.is_group() {
+        let shared: Vec<&str> = chats
+            .iter()
+            .filter(|other| other.is_group() && other.participants.contains(&chat.id))
+            .map(|other| other.name.as_str())
+            .collect();
+        if !shared.is_empty() {
+            settings.add(&property("Groups in common", &shared.join("\n")));
+        }
+    }
+    page.add(&settings);
 
     if chat.is_group() && !chat.participants.is_empty() {
         let group = adw::PreferencesGroup::builder()
@@ -7488,10 +7580,11 @@ fn show_chat_info_dialog(
             "Contact Info"
         })
         .content_width(400)
-        .content_height(if chat.is_group() { 600 } else { 380 })
+        .content_height(if chat.is_group() { 600 } else { 560 })
         .child(&view)
         .build();
     dialog.present(Some(parent));
+    chat.phone().map(|_| (chat.id.clone(), about))
 }
 
 /// "Send Image", "Send 3 Files": images when every item is one.
