@@ -2905,11 +2905,12 @@ impl Worker {
             Command::SendFiles {
                 chat,
                 paths,
+                documents,
                 caption,
                 quoting,
                 mentions,
             } => {
-                self.send_files(chat, paths, caption, quoting, mentions);
+                self.send_files(chat, paths, documents, caption, quoting, mentions);
             }
             Command::SendImage {
                 chat,
@@ -4506,6 +4507,7 @@ impl Worker {
         &mut self,
         chat: ChatId,
         paths: Vec<PathBuf>,
+        documents: std::collections::HashSet<PathBuf>,
         caption: Option<String>,
         quoting: Option<String>,
         mentions: Vec<String>,
@@ -4553,8 +4555,11 @@ impl Worker {
                     let file_name = path
                         .file_name()
                         .map(|name| name.to_string_lossy().into_owned());
-                    let prepared =
-                        prepare_media(&client, bytes, &mime, file_name.as_deref(), false).await?;
+                    let prepared = if documents.contains(&path) {
+                        prepare_document(&client, bytes, &mime, file_name.as_deref()).await?
+                    } else {
+                        prepare_media(&client, bytes, &mime, file_name.as_deref(), false).await?
+                    };
                     file_outbound(
                         FileOutboundContext {
                             client: &client,
@@ -5777,6 +5782,18 @@ async fn prepare_media(
             file_name: file_name.map(str::to_owned),
         });
     }
+    prepare_document(client, bytes, mime, file_name).await
+}
+
+/// Uploads any file as a document, keeping its name and original bytes.
+async fn prepare_document(
+    client: &Client,
+    bytes: Vec<u8>,
+    mime: &str,
+    file_name: Option<&str>,
+) -> Result<Prepared, String> {
+    let size = bytes.len() as u64;
+    let mime_owned = mime.to_owned();
     let upload = client
         .upload(bytes.clone(), MediaType::Document, UploadOptions::default())
         .await
@@ -7053,6 +7070,7 @@ mod receipt_tests {
         worker.send_files(
             PEER.into(),
             paths.clone(),
+            Default::default(),
             Some("caption".into()),
             None,
             Vec::new(),

@@ -281,10 +281,12 @@ pub enum Command {
         chat: ChatId,
         id: String,
     },
-    /// Sends files with the caption on the first.
+    /// Sends files with the caption on the first. Paths in `documents` go
+    /// as documents even when they are images, videos, or audio.
     SendFiles {
         chat: ChatId,
         paths: Vec<PathBuf>,
+        documents: std::collections::HashSet<PathBuf>,
         caption: Option<String>,
         quoting: Option<String>,
         mentions: Vec<String>,

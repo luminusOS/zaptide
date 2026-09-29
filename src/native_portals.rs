@@ -129,9 +129,11 @@ impl NativePortals {
         &self,
         parent: Option<&impl IsA<gtk::Window>>,
         title: &str,
+        filter: Option<&gtk::FileFilter>,
         complete: impl FnOnce(Result<Vec<gio::File>, PortalError>) + 'static,
     ) -> Option<RequestId> {
         let dialog = gtk::FileDialog::builder().title(title).build();
+        dialog.set_default_filter(filter);
         let (id, cancellable) = self.requests.borrow_mut().start()?;
         let requests = self.requests.clone();
         dialog.open_multiple(parent, Some(&cancellable), move |result| {

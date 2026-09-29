@@ -922,6 +922,9 @@ pub struct NativeApplication {
     sticker_picker: Option<(gtk::Popover, gtk::Stack)>,
     pending_composer_request: Option<crate::native_composer::ComposerRequest>,
     pending_attachments: std::collections::HashMap<String, Vec<std::path::PathBuf>>,
+    /// Staged paths picked through Files, sent as documents. The last pick of
+    /// a path wins, so it survives a failed send and re-queue.
+    document_attachments: std::collections::HashSet<std::path::PathBuf>,
     pending_clipboard_images: std::collections::HashMap<String, ClipboardPixels>,
     pending_send: Option<PendingSend>,
     pending_edit: Option<(String, String, String)>,
@@ -982,10 +985,15 @@ pub enum Input {
     CancelReply,
     CancelEdit,
     DraftChanged(String),
-    PickAttachments,
+    /// Gallery picks images and videos sent as media; Files sends anything
+    /// as a document.
+    PickAttachments {
+        gallery: bool,
+    },
     AttachmentsPicked {
         chat: String,
         paths: Vec<std::path::PathBuf>,
+        documents: bool,
     },
     ClearAttachments,
     SendText(String),
@@ -1619,37 +1627,42 @@ impl SimpleComponent for NativeApplication {
                                             set_popover = &gtk::Popover {
                                                 add_css_class: "menu",
                                                 #[wrap(Some)]
-                                                set_child = &gtk::Box {
-                                                    set_orientation: gtk::Orientation::Vertical,
-                                                    set_spacing: 2,
-                                                    append = &gtk::Button {
-                                                        set_child: Some(&attach_menu_row("document-open-symbolic", "Files…")),
+                                                set_child = &gtk::Grid {
+                                                    set_column_spacing: 4,
+                                                    set_row_spacing: 4,
+                                                    set_column_homogeneous: true,
+                                                    attach[0, 0, 1, 1] = &gtk::Button {
+                                                        set_child: Some(&attach_tile("image-x-generic-symbolic", "Gallery", "gallery")),
+                                                        set_tooltip_text: Some("Send photos and videos"),
                                                         add_css_class: "flat",
+                                                        add_css_class: "zaptide-attach-tile",
                                                         #[watch]
                                                         set_sensitive: model.can_attach(),
-                                                        connect_clicked[sender, attach_popover] => move |_| { attach_popover.popdown(); sender.input(Input::PickAttachments) },
+                                                        connect_clicked[sender, attach_popover] => move |_| { attach_popover.popdown(); sender.input(Input::PickAttachments { gallery: true }) },
                                                     },
-                                                    append = &gtk::Button {
-                                                        set_child: Some(&attach_menu_row("image-x-generic-symbolic", "Paste Image")),
+                                                    attach[1, 0, 1, 1] = &gtk::Button {
+                                                        set_child: Some(&attach_tile("text-x-generic-symbolic", "Files", "files")),
+                                                        set_tooltip_text: Some("Send any file as a document"),
                                                         add_css_class: "flat",
+                                                        add_css_class: "zaptide-attach-tile",
                                                         #[watch]
                                                         set_sensitive: model.can_attach(),
-                                                        connect_clicked[sender, attach_popover] => move |_| { attach_popover.popdown(); sender.input(Input::PasteClipboardImage) },
+                                                        connect_clicked[sender, attach_popover] => move |_| { attach_popover.popdown(); sender.input(Input::PickAttachments { gallery: false }) },
                                                     },
-                                                    append = &gtk::Separator {
-                                                        set_margin_top: 4,
-                                                        set_margin_bottom: 4,
-                                                    },
-                                                    append = &gtk::Button {
-                                                        set_child: Some(&attach_menu_row("view-list-bullet-symbolic", "Poll…")),
+                                                    attach[0, 1, 1, 1] = &gtk::Button {
+                                                        set_child: Some(&attach_tile("view-list-bullet-symbolic", "Poll", "poll")),
+                                                        set_tooltip_text: Some("Create a poll"),
                                                         add_css_class: "flat",
+                                                        add_css_class: "zaptide-attach-tile",
                                                         #[watch]
                                                         set_sensitive: model.can_attach(),
                                                         connect_clicked[sender, attach_popover, dialog_parent] => move |_| { attach_popover.popdown(); show_poll_dialog(&dialog_parent, &sender) },
                                                     },
-                                                    append = &gtk::Button {
-                                                        set_child: Some(&attach_menu_row("avatar-default-symbolic", "Mention…")),
+                                                    attach[1, 1, 1, 1] = &gtk::Button {
+                                                        set_child: Some(&attach_tile("avatar-default-symbolic", "Mention", "mention")),
+                                                        set_tooltip_text: Some("Mention a participant"),
                                                         add_css_class: "flat",
+                                                        add_css_class: "zaptide-attach-tile",
                                                         #[watch]
                                                         set_sensitive: model.active_chat.as_deref().and_then(|id| model.chat_snapshots.iter().find(|chat| chat.id == id)).is_some_and(|chat| !chat.participants.is_empty()),
                                                         connect_clicked[sender, attach_popover] => move |_| { attach_popover.popdown(); sender.input(Input::InsertMention) },
@@ -1949,6 +1962,7 @@ impl SimpleComponent for NativeApplication {
             sticker_picker: None,
             pending_composer_request: None,
             pending_attachments: std::collections::HashMap::new(),
+            document_attachments: std::collections::HashSet::new(),
             pending_clipboard_images: std::collections::HashMap::new(),
             pending_send: None,
             pending_edit: None,
@@ -2438,6 +2452,7 @@ impl NativeApplication {
                                 self.played_voice.clear();
                                 self.avatar_requests.clear();
                                 self.pending_attachments.clear();
+                                self.document_attachments.clear();
                                 self.pending_clipboard_images.clear();
                                 self.selected_voice = None;
                                 self.selected_voice_message = None;
@@ -3289,6 +3304,9 @@ impl NativeApplication {
                 }
                 self.composer
                     .stage_attachment_caption(&chat, self.draft.clone());
+                for path in &paths {
+                    self.document_attachments.remove(path);
+                }
                 self.pending_attachments
                     .entry(chat)
                     .or_default()
@@ -3335,7 +3353,7 @@ impl NativeApplication {
                 self.status = error;
                 self.toast("Clipboard or portal action failed");
             }
-            Input::PickAttachments => {
+            Input::PickAttachments { gallery } => {
                 let Some(chat) = self.active_chat.clone().filter(|_| self.can_attach()) else {
                     return;
                 };
@@ -3351,9 +3369,18 @@ impl NativeApplication {
                 let requests = self.portal_requests.clone();
                 let request_id = std::rc::Rc::new(std::cell::Cell::new(None));
                 let callback_request_id = request_id.clone();
+                let (title, filter) = if gallery {
+                    let filter = gtk::FileFilter::new();
+                    filter.set_name(Some("Photos and videos"));
+                    filter.add_mime_type("image/*");
+                    filter.add_mime_type("video/*");
+                    ("Gallery", Some(filter))
+                } else {
+                    ("Send files as documents", None)
+                };
                 let request =
                     self.portals
-                        .open_files(Some(&self.window), "Attach files", move |result| {
+                        .open_files(Some(&self.window), title, filter.as_ref(), move |result| {
                             if let Some(id) = callback_request_id.get() {
                                 requests.borrow_mut().remove(&id);
                             }
@@ -3362,14 +3389,22 @@ impl NativeApplication {
                                 .into_iter()
                                 .filter_map(|file| file.path())
                                 .collect();
-                            input.input(Input::AttachmentsPicked { chat, paths });
+                            input.input(Input::AttachmentsPicked {
+                                chat,
+                                paths,
+                                documents: !gallery,
+                            });
                         });
                 if let Some(id) = request {
                     request_id.set(Some(id));
                     self.portal_requests.borrow_mut().insert(id);
                 }
             }
-            Input::AttachmentsPicked { chat, paths } => {
+            Input::AttachmentsPicked {
+                chat,
+                paths,
+                documents,
+            } => {
                 if paths.is_empty() {
                     return;
                 }
@@ -3379,6 +3414,13 @@ impl NativeApplication {
                 }
                 self.composer
                     .stage_attachment_caption(&chat, self.composer.draft(&chat).to_owned());
+                for path in &paths {
+                    if documents {
+                        self.document_attachments.insert(path.clone());
+                    } else {
+                        self.document_attachments.remove(path);
+                    }
+                }
                 self.pending_attachments
                     .entry(chat)
                     .or_default()
@@ -3596,6 +3638,12 @@ impl NativeApplication {
                         backend.send(crate::backend::Command::SendFiles {
                             chat,
                             paths: pending.attachments.clone(),
+                            documents: pending
+                                .attachments
+                                .iter()
+                                .filter(|path| self.document_attachments.contains(*path))
+                                .cloned()
+                                .collect(),
                             caption: caption(&self.draft),
                             quoting: quote,
                             mentions: mentions.clone(),
@@ -3873,6 +3921,12 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
          .zaptide-unread-pill.muted { color: @window_fg_color; background-color: alpha(currentColor, 0.18); }\n\
          .zaptide-composer { border-radius: 18px; background-color: color-mix(in srgb, currentColor 8%, transparent); }\n\
          .zaptide-composer textview, .zaptide-composer text { background: none; }\n\
+         .zaptide-attach-tile { padding: 10px 6px 8px; border-radius: 12px; min-width: 72px; }\n\
+         .zaptide-attach-icon { min-width: 44px; min-height: 44px; border-radius: 9999px; color: white; }\n\
+         .zaptide-attach-icon.gallery { background-color: #9141ac; }\n\
+         .zaptide-attach-icon.files { background-color: #3584e4; }\n\
+         .zaptide-attach-icon.poll { background-color: #e66100; }\n\
+         .zaptide-attach-icon.mention { background-color: #26a269; }\n\
          .zaptide-qr { border-radius: 12px; }\n\
          .zaptide-document { padding: 10px 10px 10px 12px; }\n\
          .zaptide-pair-code { padding: 16px 16px 16px 28px; }\n\
@@ -7798,12 +7852,21 @@ fn show_chat_info_dialog(
     chat.phone().map(|_| (chat.id.clone(), about))
 }
 
-/// Icon and label for one row of the attach popover.
-fn attach_menu_row(icon: &str, label: &str) -> gtk::Box {
-    let row = gtk::Box::builder().spacing(12).build();
-    row.append(&gtk::Image::from_icon_name(icon));
-    row.append(&gtk::Label::builder().label(label).xalign(0.0).build());
-    row
+/// Colored round icon over a caption for one tile of the attach grid.
+fn attach_tile(icon: &str, label: &str, tone: &str) -> gtk::Box {
+    let tile = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(6)
+        .build();
+    let image = gtk::Image::builder()
+        .icon_name(icon)
+        .pixel_size(20)
+        .halign(gtk::Align::Center)
+        .css_classes(["zaptide-attach-icon", tone])
+        .build();
+    tile.append(&image);
+    tile.append(&gtk::Label::builder().label(label).css_classes(["caption"]).build());
+    tile
 }
 
 /// "Send Image", "Send 3 Files": images when every item is one.
