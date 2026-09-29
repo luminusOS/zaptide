@@ -924,7 +924,7 @@ pub struct NativeApplication {
     pending_attachments: std::collections::HashMap<String, Vec<std::path::PathBuf>>,
     /// Staged paths picked through Files, sent as documents. The last pick of
     /// a path wins, so it survives a failed send and re-queue.
-    document_attachments: std::collections::HashSet<std::path::PathBuf>,
+    document_attachments: std::collections::HashSet<(String, std::path::PathBuf)>,
     pending_clipboard_images: std::collections::HashMap<String, ClipboardPixels>,
     pending_send: Option<PendingSend>,
     pending_edit: Option<(String, String, String)>,
@@ -3307,7 +3307,7 @@ impl NativeApplication {
                 self.composer
                     .stage_attachment_caption(&chat, self.draft.clone());
                 for path in &paths {
-                    self.document_attachments.remove(path);
+                    self.document_attachments.remove(&(chat.clone(), path.clone()));
                 }
                 self.pending_attachments
                     .entry(chat)
@@ -3417,10 +3417,11 @@ impl NativeApplication {
                 self.composer
                     .stage_attachment_caption(&chat, self.composer.draft(&chat).to_owned());
                 for path in &paths {
+                    let key = (chat.clone(), path.clone());
                     if documents {
-                        self.document_attachments.insert(path.clone());
+                        self.document_attachments.insert(key);
                     } else {
-                        self.document_attachments.remove(path);
+                        self.document_attachments.remove(&key);
                     }
                 }
                 self.pending_attachments
@@ -3639,15 +3640,19 @@ impl NativeApplication {
                     if let Some(pending) = &self.pending_send
                         && !pending.attachments.is_empty()
                     {
+                        let documents = pending
+                            .attachments
+                            .iter()
+                            .filter(|path| {
+                                self.document_attachments
+                                    .contains(&(chat.clone(), (*path).clone()))
+                            })
+                            .cloned()
+                            .collect();
                         backend.send(crate::backend::Command::SendFiles {
                             chat,
                             paths: pending.attachments.clone(),
-                            documents: pending
-                                .attachments
-                                .iter()
-                                .filter(|path| self.document_attachments.contains(*path))
-                                .cloned()
-                                .collect(),
+                            documents,
                             caption: caption(&self.draft),
                             quoting: quote,
                             mentions: mentions.clone(),
