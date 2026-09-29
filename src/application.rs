@@ -2950,6 +2950,7 @@ impl NativeApplication {
                         self.avatars.get(&chat.id).map(std::path::PathBuf::as_path),
                         self.presence.get(&chat.id).copied(),
                         &self.chat_snapshots,
+                        &self.avatars,
                     );
                     if self.info_about.is_some()
                         && let Some(backend) = &self.backend
@@ -7718,6 +7719,7 @@ fn show_chat_info_dialog(
     avatar: Option<&std::path::Path>,
     presence: Option<(bool, Option<i64>)>,
     chats: &[crate::model::Chat],
+    avatars: &std::collections::HashMap<String, std::path::PathBuf>,
 ) -> Option<(String, adw::ActionRow)> {
     let name_of = |id: &str| {
         sender_label(
@@ -7875,7 +7877,9 @@ fn show_chat_info_dialog(
                     .title_lines(1)
                     .build();
                 row.set_subtitle(&format!("{} participants", other.participants.len()));
-                row.add_prefix(&adw::Avatar::new(32, Some(&other.name), true));
+                let photo = adw::Avatar::new(32, Some(&other.name), true);
+                photo.set_custom_image(cached_avatar(avatars, &other.id).as_ref());
+                row.add_prefix(&photo);
                 group.add(&row);
             }
             page.add(&group);
