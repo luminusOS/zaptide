@@ -3939,6 +3939,29 @@ impl Worker {
         for mention in &mut message.mentions {
             mention.id = self.canonical_str(&mention.id);
         }
+        // Senders may omit the mention list; recover it from `@user` tokens,
+        // as is done for quotes, so the names still show.
+        if message.mentions.is_empty() {
+            let text = match &message.content {
+                Content::Text { text, .. } => Some(text.as_str()),
+                Content::Image { caption, .. }
+                | Content::Video { caption, .. }
+                | Content::Document { caption, .. } => caption.as_deref(),
+                _ => None,
+            };
+            if let Some(text) = text {
+                // Only tokens that map to someone we know: a number typed
+                // after `@` that is not a person stays plain text.
+                message.mentions = self
+                    .mention_tokens(text)
+                    .into_iter()
+                    .filter(|mention| {
+                        self.lid_to_pn.contains_key(&mention.user)
+                            || self.contact_name(&mention.id).is_some()
+                    })
+                    .collect();
+            }
+        }
     }
 
     fn load_chat(&mut self, chat: ChatId, before: Option<super::PageKey>) {
@@ -7004,6 +7027,30 @@ mod tests {
         );
         // Neither result reaches the composer's pending-send bookkeeping.
         assert!(!events.try_iter().any(|event| matches!(event, Event::Sent { .. })));
+    }
+
+    #[test]
+    fn mentions_missing_from_the_message_are_recovered_for_known_people_only() {
+        let (mut worker, _, _, _) = receipt_tests::worker();
+        worker
+            .lid_to_pn
+            .insert("15581".to_owned(), "5511912345678".to_owned());
+        let mut message = crate::archive::tests::message("group@g.us", "M1", 10, false);
+        message.content = Content::text("oi @15581 e @99999");
+        worker.polish(&mut message);
+        assert_eq!(message.mentions.len(), 1);
+        assert_eq!(message.mentions[0].user, "15581");
+        assert_eq!(message.mentions[0].id, "5511912345678@s.whatsapp.net");
+        // A list the sender did provide is left alone.
+        let mut listed = crate::archive::tests::message("group@g.us", "M2", 11, false);
+        listed.content = Content::text("oi @15581");
+        listed.mentions = vec![MentionRef {
+            user: "77777".into(),
+            id: "77777@s.whatsapp.net".into(),
+        }];
+        worker.polish(&mut listed);
+        assert_eq!(listed.mentions.len(), 1);
+        assert_eq!(listed.mentions[0].user, "77777");
     }
 
     #[tokio::test]
