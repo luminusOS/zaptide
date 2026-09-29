@@ -1,7 +1,7 @@
 # Packaging
 
-ZapTide releases include a Flatpak bundle and an x86_64 AppImage. Native
-distribution packages are not available.
+ZapTide releases include Flatpak bundles and AppImages for x86_64 and aarch64.
+Native distribution packages are not available.
 
 ZapTide needs libadwaita 1.10 (GNOME 51). Linux release binaries build in
 Fedora 45, the first Fedora version to include it.
@@ -42,13 +42,13 @@ Flathub submission is a separate, manual step.
 prohibit AI agents from submitting or writing submission interactions and
 require disclosure of generated material.
 
-The release workflow builds Linux binaries once, packages the x86_64 binary
-with `dev.luminusos.ZapTide.bundle.yml`, and lists every file in
+The release workflow builds a native binary for each architecture, packages
+both with `dev.luminusos.ZapTide.bundle.yml`, and lists every file in
 `checksums.txt`.
 
 ## AppImage
 
-The x86_64 AppImage uses the Fedora 45 release build environment. It bundles
+Both AppImages use the Fedora 45 release build environment. Each bundles
 the GTK and libadwaita libraries linked by ZapTide. To build it locally,
 install `cargo-appimage` 2.4.0 and `appimagetool`, then run:
 

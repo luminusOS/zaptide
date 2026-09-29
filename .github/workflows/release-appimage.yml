@@ -5,10 +5,18 @@ on:
 
 jobs:
   appimage:
-    name: Build AppImage
-    runs-on: ubuntu-24.04
+    name: Build AppImage (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
     container: registry.fedoraproject.org/fedora:45
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            arch: x86_64
+          - os: ubuntu-24.04-arm
+            arch: aarch64
     steps:
       - name: System dependencies
         run: >-
@@ -20,20 +28,20 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          key: appimage
+          key: appimage-${{ matrix.arch }}
       - name: Install AppImage tooling
         shell: bash
         run: |
           set -euo pipefail
           cargo install cargo-appimage --version 2.4.0 --locked
           mkdir -p /usr/local/share/appimagetool
-          curl -fL "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage" -o /usr/local/bin/appimagetool-bin
-          curl -fL "https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-x86_64" -o /usr/local/share/appimagetool/runtime-x86_64
-          chmod +x /usr/local/bin/appimagetool-bin /usr/local/share/appimagetool/runtime-x86_64
+          curl -fL "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-${{ matrix.arch }}.AppImage" -o /usr/local/bin/appimagetool-bin
+          curl -fL "https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-${{ matrix.arch }}" -o /usr/local/share/appimagetool/runtime
+          chmod +x /usr/local/bin/appimagetool-bin /usr/local/share/appimagetool/runtime
           cat > /usr/local/bin/appimagetool <<'EOF'
           #!/usr/bin/env bash
           set -euo pipefail
-          exec /usr/local/bin/appimagetool-bin --runtime-file /usr/local/share/appimagetool/runtime-x86_64 "$@"
+          exec /usr/local/bin/appimagetool-bin --runtime-file /usr/local/share/appimagetool/runtime "$@"
           EOF
           chmod +x /usr/local/bin/appimagetool
       - name: Build AppImage
@@ -44,11 +52,11 @@ jobs:
           set -euo pipefail
           cargo appimage --locked
           mkdir -p dist
-          cp "${CARGO_TARGET_DIR:-target}/appimage/zaptide.AppImage" "dist/zaptide-${GITHUB_REF_NAME#v}-x86_64.AppImage"
-          chmod +x "dist/zaptide-${GITHUB_REF_NAME#v}-x86_64.AppImage"
-          test -s "dist/zaptide-${GITHUB_REF_NAME#v}-x86_64.AppImage"
+          cp "${CARGO_TARGET_DIR:-target}/appimage/zaptide.AppImage" "dist/zaptide-${GITHUB_REF_NAME}-${{ matrix.arch }}.AppImage"
+          chmod +x "dist/zaptide-${GITHUB_REF_NAME}-${{ matrix.arch }}.AppImage"
+          test -s "dist/zaptide-${GITHUB_REF_NAME}-${{ matrix.arch }}.AppImage"
       - uses: actions/upload-artifact@v7
         with:
-          name: appimage
+          name: appimage-${{ matrix.arch }}
           path: dist/*.AppImage
           if-no-files-found: error

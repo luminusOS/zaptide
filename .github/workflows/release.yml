@@ -43,7 +43,7 @@ jobs:
     uses: ./.github/workflows/ci.yml
 
   build:
-    name: build (${{ matrix.target }})
+    name: Linux archive (${{ matrix.arch }})
     needs: ci
     runs-on: ${{ matrix.os }}
     # Linux builds need libadwaita 1.10 (GNOME 51), which Ubuntu does not
@@ -56,11 +56,13 @@ jobs:
           - os: ubuntu-24.04
             container: registry.fedoraproject.org/fedora:45
             target: x86_64-unknown-linux-gnu
+            arch: x86_64
           # A native arm64 runner, so the GUI's system libraries need no
           # cross-compilation sysroot.
           - os: ubuntu-24.04-arm
             container: registry.fedoraproject.org/fedora:45
             target: aarch64-unknown-linux-gnu
+            arch: aarch64
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -80,7 +82,7 @@ jobs:
       - name: Package
         shell: bash
         run: |
-          name="zaptide-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          name="zaptide-${GITHUB_REF_NAME}-${{ matrix.arch }}-linux-gnu"
           mkdir -p "dist/$name"
           cp "target/${{ matrix.target }}/release/zaptide" README.md LICENSE "dist/$name/"
           # Desktop integration for package builds and hand-installs.
@@ -90,7 +92,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.target }}
+          name: linux-${{ matrix.arch }}-archive
           path: dist/*.tar.gz
           if-no-files-found: error
 
@@ -98,31 +100,39 @@ jobs:
   # sandbox packaging/flatpak describes, so nothing compiles twice. Flathub
   # builds from source on its own machines, from the manifest beside it.
   flatpak:
-    name: Flatpak bundle
+    name: Flatpak bundle (${{ matrix.arch }})
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     container:
       image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08
       options: --privileged
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            arch: x86_64
+          - os: ubuntu-24.04-arm
+            arch: aarch64
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v7
         with:
-          name: x86_64-unknown-linux-gnu
+          name: linux-${{ matrix.arch }}-archive
           path: dist
       - name: Unpack the Linux build
         run: |
-          tar xzf dist/zaptide-${GITHUB_REF_NAME}-x86_64-unknown-linux-gnu.tar.gz -C packaging/flatpak
-          mv packaging/flatpak/zaptide-${GITHUB_REF_NAME}-x86_64-unknown-linux-gnu packaging/flatpak/built
+          tar xzf "dist/zaptide-${GITHUB_REF_NAME}-${{ matrix.arch }}-linux-gnu.tar.gz" -C packaging/flatpak
+          mv "packaging/flatpak/zaptide-${GITHUB_REF_NAME}-${{ matrix.arch }}-linux-gnu" packaging/flatpak/built
       - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
           manifest-path: packaging/flatpak/dev.luminusos.ZapTide.bundle.yml
-          bundle: zaptide-${{ github.ref_name }}-x86_64.flatpak
+          bundle: zaptide-${{ github.ref_name }}-${{ matrix.arch }}.flatpak
           cache: false
           upload-artifact: false
       - uses: actions/upload-artifact@v7
         with:
-          name: flatpak
+          name: flatpak-${{ matrix.arch }}
           path: "*.flatpak"
           if-no-files-found: error
 
@@ -144,10 +154,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -s "dist/zaptide-${GITHUB_REF_NAME}-x86_64.flatpak"
-          test -s "dist/zaptide-${GITHUB_REF_NAME#v}-x86_64.AppImage"
-          test -s "dist/zaptide-${GITHUB_REF_NAME}-x86_64-unknown-linux-gnu.tar.gz"
-          test -s "dist/zaptide-${GITHUB_REF_NAME}-aarch64-unknown-linux-gnu.tar.gz"
+          for arch in x86_64 aarch64; do
+            test -s "dist/zaptide-${GITHUB_REF_NAME}-${arch}.flatpak"
+            test -s "dist/zaptide-${GITHUB_REF_NAME}-${arch}.AppImage"
+            test -s "dist/zaptide-${GITHUB_REF_NAME}-${arch}-linux-gnu.tar.gz"
+          done
       - name: Checksums
         working-directory: dist
         run: sha256sum *.flatpak *.AppImage *.tar.gz > checksums.txt
