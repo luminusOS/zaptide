@@ -501,6 +501,20 @@ impl RelmListItem for MessageRow {
         row.append(&trailing_space);
         root.append(&row);
         let menu_target: MenuTarget = std::rc::Rc::default();
+        let link_target = menu_target.clone();
+        body.connect_activate_link(move |_, uri| {
+            let (Some(phone), Some((_, sender))) = (
+                crate::safety::chat_link_number(uri),
+                link_target.borrow().clone(),
+            ) else {
+                return gtk::glib::Propagation::Proceed;
+            };
+            sender.input(Input::NewContact {
+                phone: phone.to_owned(),
+                name: None,
+            });
+            gtk::glib::Propagation::Stop
+        });
         let context_click = gtk::GestureClick::new();
         context_click.set_button(gtk::gdk::BUTTON_SECONDARY);
         context_click.set_propagation_phase(gtk::PropagationPhase::Capture);
@@ -2978,8 +2992,14 @@ impl NativeApplication {
                     self.toast("Enter valid phone number with country code");
                     return;
                 };
+                let name = name.filter(|name| !name.trim().is_empty());
+                // A phone number in a message: an existing chat needs no lookup.
+                let id = format!("{digits}@s.whatsapp.net");
+                if name.is_none() && self.chat_snapshots.iter().any(|chat| chat.id == id) {
+                    sender.input(Input::OpenChatId(id));
+                    return;
+                }
                 if let Some(backend) = &self.backend {
-                    let name = name.filter(|name| !name.trim().is_empty());
                     backend.send(crate::backend::Command::NewContact {
                         phone: digits,
                         first_name: name.clone(),
