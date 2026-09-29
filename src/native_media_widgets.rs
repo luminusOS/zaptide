@@ -227,68 +227,104 @@ pub fn build_media_widget_with_action(
     }
 }
 
-/// Live microphone meter: the most recent loudness readings as scrolling bars.
+/// Draws voice-message bars (0-100) across the area; with `progress`, the played
+/// part is brighter and a dot marks the position. Shared by playback and recording.
+fn draw_waveform(
+    area: &gtk::DrawingArea,
+    cr: &gtk::cairo::Context,
+    width: i32,
+    height: i32,
+    bars: &[u8],
+    progress: Option<f32>,
+) {
+    let n = bars.len();
+    if n == 0 || width <= 0 {
+        return;
+    }
+    let color = area.color();
+    // Leave room for the progress dot at both ends.
+    let dot = 5.0;
+    let bar_width = (width as f64 - 2.0 * dot) / n as f64;
+    let played = progress.map_or(1.0, |p| p.clamp(0.0, 1.0));
+    for (index, value) in bars.iter().enumerate() {
+        let h = (f64::from(*value.min(&100)) / 100.0 * (height - 4) as f64).max(3.0);
+        cr.set_source_rgba(
+            color.red() as f64,
+            color.green() as f64,
+            color.blue() as f64,
+            if (index as f32) < played * n as f32 {
+                0.9
+            } else {
+                0.35
+            },
+        );
+        cr.rectangle(
+            dot + index as f64 * bar_width,
+            (height as f64 - h) / 2.0,
+            (bar_width - 2.0).max(1.0),
+            h,
+        );
+        let _ = cr.fill();
+    }
+    if progress.is_some() {
+        cr.set_source_rgba(
+            color.red() as f64,
+            color.green() as f64,
+            color.blue() as f64,
+            1.0,
+        );
+        cr.arc(
+            dot + f64::from(played) * (width as f64 - 2.0 * dot),
+            height as f64 / 2.0,
+            dot,
+            0.0,
+            std::f64::consts::TAU,
+        );
+        let _ = cr.fill();
+    }
+}
+
+/// Live microphone meter: the most recent loudness readings, drawn like a
+/// voice-message waveform so both look the same.
 #[derive(Clone)]
 pub struct RecordingMeter {
     pub area: gtk::DrawingArea,
-    bars: std::rc::Rc<std::cell::RefCell<Vec<f32>>>,
+    bars: std::rc::Rc<std::cell::RefCell<Vec<u8>>>,
 }
 
 impl RecordingMeter {
-    /// Readings kept on screen; the recorder produces one every 50 ms.
-    const VISIBLE: usize = 48;
-
     pub fn new() -> Self {
-        let bars = std::rc::Rc::new(std::cell::RefCell::new(Vec::<f32>::new()));
+        let bars = std::rc::Rc::new(std::cell::RefCell::new(vec![0; crate::voice::BARS]));
         let area = gtk::DrawingArea::builder()
-            .content_height(28)
+            .content_width(160)
+            .content_height(32)
             .hexpand(true)
             .build();
         area.update_property(&[gtk::accessible::Property::Label("Microphone level")]);
         let paint = bars.clone();
         area.set_draw_func(move |area, cr, width, height| {
-            let levels = paint.borrow();
-            let color = area.color();
-            let step = width as f64 / Self::VISIBLE as f64;
-            // Right-align so new readings enter from the right edge.
-            let offset = Self::VISIBLE - levels.len();
-            for (index, level) in levels.iter().enumerate() {
-                let h = (f64::from(*level) * (height - 4) as f64).max(3.0);
-                cr.set_source_rgba(
-                    color.red() as f64,
-                    color.green() as f64,
-                    color.blue() as f64,
-                    0.9,
-                );
-                cr.rectangle(
-                    (offset + index) as f64 * step,
-                    (height as f64 - h) / 2.0,
-                    (step - 2.0).max(1.0),
-                    h,
-                );
-                let _ = cr.fill();
-            }
+            draw_waveform(area, cr, width, height, &paint.borrow(), None);
         });
         Self { area, bars }
     }
 
+    /// Shows the latest readings, entering from the right of the message-sized row.
     pub fn set_levels(&self, levels: &[f32]) {
-        let recent = &levels[levels.len().saturating_sub(Self::VISIBLE)..];
+        let recent = &levels[levels.len().saturating_sub(crate::voice::BARS)..];
         let peak = recent
             .iter()
             .copied()
             .filter(|level| level.is_finite())
             .fold(0.02_f32, f32::max);
-        *self.bars.borrow_mut() = recent
-            .iter()
-            .map(|level| {
-                if level.is_finite() {
-                    (level / peak).clamp(0.0, 1.0)
-                } else {
-                    0.0
-                }
-            })
-            .collect();
+        let mut bars = vec![0; crate::voice::BARS - recent.len()];
+        bars.extend(recent.iter().map(|level| {
+            if level.is_finite() {
+                ((level / peak).clamp(0.0, 1.0) * 100.0).round() as u8
+            } else {
+                0
+            }
+        }));
+        *self.bars.borrow_mut() = bars;
         self.area.queue_draw();
     }
 }
@@ -351,49 +387,7 @@ impl AudioControls {
         let paint = bars.clone();
         waveform.set_draw_func(move |area, cr, width, height| {
             let values = paint.borrow();
-            let n = values.0.len();
-            if n == 0 || width <= 0 {
-                return;
-            }
-            let color = area.color();
-            // Leave room for the progress dot at both ends.
-            let dot = 5.0;
-            let bar_width = (width as f64 - 2.0 * dot) / n as f64;
-            for (index, value) in values.0.iter().enumerate() {
-                let h = (f64::from(*value.min(&100)) / 100.0 * (height - 4) as f64).max(3.0);
-                cr.set_source_rgba(
-                    color.red() as f64,
-                    color.green() as f64,
-                    color.blue() as f64,
-                    if (index as f32) < values.1 * n as f32 {
-                        0.9
-                    } else {
-                        0.35
-                    },
-                );
-                cr.rectangle(
-                    dot + index as f64 * bar_width,
-                    (height as f64 - h) / 2.0,
-                    (bar_width - 2.0).max(1.0),
-                    h,
-                );
-                let _ = cr.fill();
-            }
-            let played = f64::from(values.1.clamp(0.0, 1.0));
-            cr.set_source_rgba(
-                color.red() as f64,
-                color.green() as f64,
-                color.blue() as f64,
-                1.0,
-            );
-            cr.arc(
-                dot + played * (width as f64 - 2.0 * dot),
-                height as f64 / 2.0,
-                dot,
-                0.0,
-                std::f64::consts::TAU,
-            );
-            let _ = cr.fill();
+            draw_waveform(area, cr, width, height, &values.0, Some(values.1));
         });
         overlay.set_child(Some(&waveform));
         overlay.add_overlay(&seek);
