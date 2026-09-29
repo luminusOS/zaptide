@@ -1519,7 +1519,8 @@ impl SimpleComponent for NativeApplication {
                                         #[local_ref]
                                         recording_meter_area -> gtk::DrawingArea {},
                                         append = &gtk::Button {
-                                            set_icon_name: "paper-plane-symbolic",
+                                            #[wrap(Some)]
+                                            set_child = &paper_plane_icon() -> gtk::DrawingArea {},
                                             set_tooltip_text: Some("Send voice message"),
                                             add_css_class: "suggested-action",
                                             add_css_class: "circular",
