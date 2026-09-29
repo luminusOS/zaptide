@@ -510,6 +510,10 @@ impl RelmListItem for MessageRow {
         let menu_target: MenuTarget = std::rc::Rc::default();
         let link_target = menu_target.clone();
         body.connect_activate_link(move |_, uri| {
+            // A mention with no chat to open only carries a tooltip.
+            if uri == crate::safety::MENTION_SCHEME {
+                return gtk::glib::Propagation::Stop;
+            }
             let (Some(phone), Some((_, sender))) = (
                 crate::safety::chat_link_number(uri),
                 link_target.borrow().clone(),
@@ -4208,16 +4212,25 @@ fn mention_labels(
         .iter()
         .map(|mention| {
             let phone = crate::model::phone_of(&mention.id);
-            let label = contacts
+            // A saved name is the label; otherwise the number, with the name
+            // the person goes by on WhatsApp on hover.
+            let saved = contacts
                 .get(&mention.id)
-                .and_then(crate::model::Contact::display_name)
+                .and_then(|contact| contact.full_name.as_deref())
+                .filter(|name| !name.is_empty());
+            let label = saved
                 .map(str::to_owned)
                 .or_else(|| phone.map(crate::util::phone))
                 .unwrap_or_else(|| mention.user.clone());
+            let hint = match (saved, &mention.name) {
+                (None, Some(name)) => Some(format!("~{name}")),
+                _ => None,
+            };
             crate::safety::MentionLabel {
                 user: mention.user.clone(),
                 label,
                 phone: phone.map(str::to_owned),
+                hint,
             }
         })
         .collect()

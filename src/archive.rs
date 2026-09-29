@@ -1661,6 +1661,7 @@ pub(crate) mod tests {
         expected.mentions.push(crate::model::MentionRef {
             user: "@someone".into(),
             id: chat.into(),
+            name: None,
         });
         expected.forwarded = true;
         expected.thumbnail = Some(vec![1, 2, 3]);

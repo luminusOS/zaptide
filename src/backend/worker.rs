@@ -1821,6 +1821,7 @@ impl Worker {
                 Some(MentionRef {
                     user,
                     id: self.canonical_str(jid),
+                    name: None,
                 })
             })
             .collect()
@@ -2316,6 +2317,7 @@ impl Worker {
                     found.push(MentionRef {
                         user: user.to_owned(),
                         id,
+                        name: None,
                     });
                 }
             }
@@ -3962,6 +3964,29 @@ impl Worker {
                     .collect();
             }
         }
+        for mention in &mut message.mentions {
+            mention.name = self.whatsapp_name(mention);
+        }
+    }
+
+    /// The name a mentioned person goes by on WhatsApp (their push name),
+    /// looked up under every id they may have been seen with.
+    fn whatsapp_name(&self, mention: &MentionRef) -> Option<String> {
+        let known = self.lid_to_pn.get(&mention.user);
+        [
+            Some(mention.id.clone()),
+            Some(format!("{}@lid", mention.user)),
+            known.map(|pn| format!("{pn}@s.whatsapp.net")),
+        ]
+        .into_iter()
+        .flatten()
+        .find_map(|id| {
+            self.contacts
+                .get(&id)?
+                .push_name
+                .clone()
+                .filter(|name| !name.is_empty())
+        })
     }
 
     fn load_chat(&mut self, chat: ChatId, before: Option<super::PageKey>) {
@@ -6283,7 +6308,7 @@ async fn file_outbound(
             .into_iter()
             .filter_map(|id| {
                 let user = id.split('@').next()?.to_owned();
-                (!user.is_empty()).then_some(MentionRef { user, id })
+                (!user.is_empty()).then_some(MentionRef { user, id, name: None })
             })
             .collect(),
         forwarded: false,
@@ -7041,12 +7066,29 @@ mod tests {
         assert_eq!(message.mentions.len(), 1);
         assert_eq!(message.mentions[0].user, "15581");
         assert_eq!(message.mentions[0].id, "5511912345678@s.whatsapp.net");
+        // Nobody has spoken yet, so there is no WhatsApp name to show.
+        assert_eq!(message.mentions[0].name, None);
+        // Once they have, the name they go by is attached for the tooltip,
+        // found under the phone id even though the text carries the LID.
+        worker.contacts.insert(
+            "5511912345678@s.whatsapp.net".to_owned(),
+            Contact {
+                id: "5511912345678@s.whatsapp.net".to_owned(),
+                full_name: None,
+                push_name: Some("Bia".to_owned()),
+            },
+        );
+        let mut again = crate::archive::tests::message("group@g.us", "M3", 12, false);
+        again.content = Content::text("oi @15581");
+        worker.polish(&mut again);
+        assert_eq!(again.mentions[0].name.as_deref(), Some("Bia"));
         // A list the sender did provide is left alone.
         let mut listed = crate::archive::tests::message("group@g.us", "M2", 11, false);
         listed.content = Content::text("oi @15581");
         listed.mentions = vec![MentionRef {
             user: "77777".into(),
             id: "77777@s.whatsapp.net".into(),
+            name: None,
         }];
         worker.polish(&mut listed);
         assert_eq!(listed.mentions.len(), 1);
@@ -7363,6 +7405,7 @@ mod tests {
         let mention = MentionRef {
             user: "3".into(),
             id: "3@s.whatsapp.net".into(),
+            name: None,
         };
 
         let forwarded = forwarded_row(

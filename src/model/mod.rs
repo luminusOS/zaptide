@@ -166,6 +166,10 @@ pub struct Message {
 pub struct MentionRef {
     pub user: String,
     pub id: String,
+    /// Name the person goes by on WhatsApp, when known. Filled in when a
+    /// message is shown; never stored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// Link metadata attached by WhatsApp.

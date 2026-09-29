@@ -142,7 +142,12 @@ pub struct MentionLabel {
     pub user: String,
     pub label: String,
     pub phone: Option<String>,
+    /// Shown on hover: who this is on WhatsApp when the label is not a name.
+    pub hint: Option<String>,
 }
+
+/// Scheme of a mention link with no destination, kept only for its tooltip.
+pub const MENTION_SCHEME: &str = "zaptide-mention:";
 
 /// Markup for the `@user` token at the start of `rest` when it names a known
 /// mention: a chat link when the phone is known, bold otherwise.
@@ -156,13 +161,21 @@ fn mention_at(rest: &str, mentions: &[MentionLabel]) -> Option<(usize, String)> 
         .iter()
         .find(|mention| !mention.user.is_empty() && mention.user == token[..end])?;
     let shown = format!("@{}", mention.label);
-    let markup = match &mention.phone {
-        Some(phone) => format!(
-            "<a href=\"{CHAT_SCHEME}{}\" title=\"Message on WhatsApp\">{}</a>",
+    let title = mention
+        .hint
+        .as_deref()
+        .map_or_else(|| "Message on WhatsApp".into(), esc);
+    let markup = match (&mention.phone, &mention.hint) {
+        (Some(phone), _) => format!(
+            "<a href=\"{CHAT_SCHEME}{}\" title=\"{title}\">{}</a>",
             esc(phone),
             esc(&shown)
         ),
-        None => format!("<b>{}</b>", esc(&shown)),
+        (None, Some(_)) => format!(
+            "<a href=\"{MENTION_SCHEME}\" title=\"{title}\">{}</a>",
+            esc(&shown)
+        ),
+        (None, None) => format!("<b>{}</b>", esc(&shown)),
     };
     Some((1 + end, markup))
 }
@@ -240,17 +253,30 @@ mod tests {
                 user: "15581".into(),
                 label: "Ana <b>".into(),
                 phone: Some("5511912345678".into()),
+                hint: None,
             },
             MentionLabel {
                 user: "99999".into(),
                 label: "99999".into(),
                 phone: None,
+                hint: None,
+            },
+            MentionLabel {
+                user: "42424".into(),
+                label: "42424".into(),
+                phone: None,
+                hint: Some("~Bia \"B\" <x>".into()),
             },
         ];
         assert_eq!(
             linkify_markup_with_mentions("hi @15581, and @99999! @12345 a@15581.com", &mentions),
             "hi <a href=\"zaptide-chat:5511912345678\" title=\"Message on WhatsApp\">@Ana &lt;b&gt;</a>, \
              and <b>@99999</b>! @12345 a@15581.com"
+        );
+        // The WhatsApp name shows on hover, escaped, for someone with no saved name.
+        assert_eq!(
+            linkify_markup_with_mentions("@42424", &mentions),
+            "<a href=\"zaptide-mention:\" title=\"~Bia &quot;B&quot; &lt;x&gt;\">@42424</a>"
         );
         // No mentions known: text is unchanged apart from escaping.
         assert_eq!(linkify_markup_with_mentions("@15581", &[]), "@15581");
