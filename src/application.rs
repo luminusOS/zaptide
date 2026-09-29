@@ -3598,6 +3598,9 @@ impl NativeApplication {
                         });
                         self.status = "Sending message".into();
                     }
+                    // The pending row shows the message now; a failure restores it.
+                    self.draft.clear();
+                    self.composer_buffer.set_text("");
                 } else {
                     self.status = "Backend unavailable. Draft kept.".into();
                 }
@@ -5810,6 +5813,14 @@ impl NativeApplication {
             }
             self.status = "Message sent".into();
         } else {
+            // Put the cleared text back unless the user already typed something new.
+            if self.active_chat.as_deref() == Some(&chat) {
+                if self.draft.is_empty() {
+                    self.composer_buffer.set_text(&pending.text);
+                }
+            } else if self.drafts.get(&chat).is_none_or(String::is_empty) {
+                self.drafts.insert(chat.clone(), pending.text.clone());
+            }
             if !pending.failed_attachments.is_empty() {
                 self.pending_attachments
                     .entry(chat.clone())
