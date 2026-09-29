@@ -7466,13 +7466,15 @@ fn show_chat_info_dialog(
     }
     let contact = contacts.get(&chat.id);
     let property = |title: &str, value: &str| {
-        adw::ActionRow::builder()
+        let row = adw::ActionRow::builder()
             .title(title)
             .use_markup(false)
-            .subtitle(value)
             .subtitle_selectable(true)
             .css_classes(["property"])
-            .build()
+            .build();
+        // Set after `use-markup` is off: names such as "DNC&G" are not markup.
+        row.set_subtitle(value);
+        row
     };
     if let Some(saved) = contact
         .and_then(|contact| contact.full_name.as_deref())
