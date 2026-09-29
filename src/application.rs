@@ -619,7 +619,9 @@ impl RelmListItem for MessageRow {
             .set_css_classes(&["heading", self.sender_class]);
         widgets.quote.set_label(&self.quote);
         widgets.quote.set_visible(!self.quote.is_empty());
-        widgets.body.set_label(&self.body);
+        widgets
+            .body
+            .set_markup(&crate::safety::linkify_markup(&self.body));
         widgets.body.set_visible(!self.body.is_empty());
         widgets
             .body
