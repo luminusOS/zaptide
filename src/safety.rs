@@ -31,18 +31,47 @@ fn whatsapp_number(url: &url::Url) -> Option<String> {
 }
 
 /// Length of a `+<country code> ...` phone number at the start of `rest`, and its digits.
+///
+/// Digits come in groups joined by at most two separator characters. A group
+/// that would pass 15 digits, or a lone 1–2 digit group after 10 digits (a
+/// count or year following the number), ends the number; and a first group of
+/// more than three digits followed by more groups is a date, not a country code.
 fn phone_at(rest: &str) -> Option<(usize, String)> {
-    let mut digits = String::new();
-    let mut end = 0;
-    for (index, c) in rest.char_indices().skip(1) {
-        if c.is_ascii_digit() {
-            digits.push(c);
-            end = index + 1;
-        } else if !matches!(c, ' ' | '-' | '(' | ')' | '.') {
+    let bytes = rest.as_bytes();
+    let (mut digits, mut end, mut groups, mut first) = (String::new(), 0, 0, 0);
+    let (mut index, mut separators) = (1, 0);
+    while index < bytes.len() {
+        if bytes[index].is_ascii_digit() {
+            let start = index;
+            while bytes.get(index).is_some_and(u8::is_ascii_digit) {
+                index += 1;
+            }
+            let group = &rest[start..index];
+            if digits.len() + group.len() > 15 || (groups > 0 && group.len() <= 2 && digits.len() >= 10)
+            {
+                break;
+            }
+            digits.push_str(group);
+            end = index;
+            groups += 1;
+            if groups == 1 {
+                first = group.len();
+            }
+            separators = 0;
+        } else if matches!(bytes[index], b' ' | b'-' | b'(' | b')' | b'.') {
+            separators += 1;
+            if separators > 2 {
+                break;
+            }
+            index += 1;
+        } else {
             break;
         }
     }
-    (rest.starts_with('+') && (8..=15).contains(&digits.len())).then_some((end, digits))
+    let valid = rest.starts_with('+')
+        && (8..=15).contains(&digits.len())
+        && !(groups > 1 && first > 3);
+    valid.then_some((end, digits))
 }
 
 /// Link at the start of `rest`: its byte length, target, and optional tooltip.
@@ -58,10 +87,22 @@ fn link_at(rest: &str) -> Option<(usize, String, Option<&'static str>)> {
         return None;
     }
     let word = rest.split(char::is_whitespace).next()?;
-    let len = word
-        .trim_end_matches(['.', ',', ';', ':', '!', '?', ')', ']', '"', '\''])
-        .len();
-    let link = &rest[..len];
+    // Trailing punctuation is not part of the link; a `)` is only when
+    // unmatched, so `.../Foo_(bar)` keeps its own parenthesis.
+    let mut link = word;
+    loop {
+        let trimmed = link.trim_end_matches(['.', ',', ';', ':', '!', '?', ']', '"', '\'']);
+        let trimmed = if trimmed.ends_with(')') && trimmed.matches(')').count() > trimmed.matches('(').count() {
+            &trimmed[..trimmed.len() - 1]
+        } else {
+            trimmed
+        };
+        if trimmed.len() == link.len() {
+            break;
+        }
+        link = trimmed;
+    }
+    let len = link.len();
     if link.starts_with("whatsapp://") {
         let digits = whatsapp_number(&url::Url::parse(link).ok()?)?;
         return Some((len, format!("{CHAT_SCHEME}{digits}"), Some("Message on WhatsApp")));
@@ -83,6 +124,12 @@ pub fn chat_link_number(uri: &str) -> Option<&str> {
 /// message text can never inject markup.
 pub fn linkify_markup(text: &str) -> String {
     use gtk4::glib::markup_escape_text as esc;
+    // Pango rejects the character references GLib emits for control characters.
+    let text: String = text
+        .chars()
+        .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
+        .collect();
+    let text = text.as_str();
     let mut out = String::with_capacity(text.len());
     let (mut plain, mut index, mut boundary) = (0, 0, true);
     while let Some(c) = text[index..].chars().next() {
@@ -126,6 +173,15 @@ mod tests {
     }
 
     #[test]
+    fn keeps_balanced_parentheses_and_drops_control_characters() {
+        assert_eq!(
+            linkify_markup("https://en.wikipedia.org/wiki/Foo_(bar)."),
+            "<a href=\"https://en.wikipedia.org/wiki/Foo_(bar)\">https://en.wikipedia.org/wiki/Foo_(bar)</a>."
+        );
+        assert_eq!(linkify_markup("a\u{8}b\nc"), "ab\nc");
+    }
+
+    #[test]
     fn phone_numbers_and_whatsapp_links_open_a_chat() {
         let chat = |digits: &str, shown: &str| {
             format!(
@@ -150,6 +206,16 @@ mod tests {
                 "5511912345678",
                 "https://api.whatsapp.com/send?phone=5511912345678"
             )
+        );
+        // A count or year after a number, and dates, are not part of it.
+        assert_eq!(
+            linkify_markup("+55 11 91234-5678 3 people"),
+            format!("{} 3 people", chat("5511912345678", "+55 11 91234-5678"))
+        );
+        assert_eq!(linkify_markup("on +2024-01-15"), "on +2024-01-15");
+        assert_eq!(
+            linkify_markup("+5511912345678 2025"),
+            format!("{} 2025", chat("5511912345678", "+5511912345678"))
         );
         // Too short to be a number, and bare digits are left alone.
         assert_eq!(linkify_markup("+123 and 11912345678"), "+123 and 11912345678");
