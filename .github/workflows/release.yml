@@ -128,6 +128,7 @@ jobs:
         with:
           manifest-path: packaging/flatpak/dev.luminusos.ZapTide.bundle.yml
           bundle: zaptide-${{ github.ref_name }}-${{ matrix.arch }}.flatpak
+          arch: ${{ matrix.arch }}
           cache: false
           upload-artifact: false
       - uses: actions/upload-artifact@v7
