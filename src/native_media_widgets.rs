@@ -156,6 +156,7 @@ pub fn build_media_widget_with_action(
             decode_token,
         };
     }
+    let on_action = std::rc::Rc::new(on_action);
     root.add_css_class("card");
     root.add_css_class("zaptide-media-card");
 
@@ -181,6 +182,7 @@ pub fn build_media_widget_with_action(
             text,
             footer,
             labels,
+            answered,
         } => {
             if !text.is_empty() {
                 add_label(&root, text);
@@ -190,8 +192,46 @@ pub fn build_media_widget_with_action(
                 label.add_css_class("dim-label");
                 label.add_css_class("caption");
             }
-            for label in labels {
-                root.append(&disabled_reply_button(label));
+            let ids: Vec<&str> = match &message.content {
+                Content::Buttons { buttons, .. } => {
+                    buttons.iter().map(|button| button.id.as_str()).collect()
+                }
+                _ => Vec::new(),
+            };
+            // Only messages from others can be answered, and only once.
+            let open = answered.is_none() && !message.from_me;
+            for (index, label) in labels.iter().enumerate() {
+                let chosen = *answered == Some(index);
+                // A text marker as well as the style: an insensitive
+                // accent button is faint, and styles are not announced.
+                let button = reply_button(&if chosen {
+                    format!("✓ {label}")
+                } else {
+                    label.clone()
+                });
+                button.set_sensitive(open && ids.get(index).is_some());
+                if chosen {
+                    button.add_css_class("suggested-action");
+                    button.update_property(&[gtk::accessible::Property::Description(
+                        "Selected reply",
+                    )]);
+                }
+                if let (true, Some(id)) = (open, ids.get(index)) {
+                    let (chat, message_id, button_id) =
+                        (message.chat.clone(), message.id.clone(), (*id).to_owned());
+                    let on_action = on_action.clone();
+                    // The button stays enabled until the stored state changes:
+                    // the worker ignores a second click, and a failed one
+                    // leaves the row exactly as it was.
+                    button.connect_clicked(move |_| {
+                        on_action(NativeMediaAction::AnswerButton {
+                            chat: chat.clone(),
+                            message: message_id.clone(),
+                            button: button_id.clone(),
+                        });
+                    });
+                }
+                root.append(&button);
             }
             ("", "")
         }
@@ -895,7 +935,7 @@ fn append_photo(
             frame.add_overlay(&button);
             parent.append(&frame);
         }
-        None => {
+        Some(NativeMediaAction::AnswerButton { .. }) | None => {
             let spinner = adw::Spinner::builder()
                 .width_request(32)
                 .height_request(32)
@@ -999,7 +1039,7 @@ fn append_video(
             frame.add_overlay(&button);
             parent.append(&frame);
         }
-        None => {
+        Some(NativeMediaAction::AnswerButton { .. }) | None => {
             frame.add_overlay(
                 &adw::Spinner::builder()
                     .width_request(32)
@@ -1168,7 +1208,7 @@ fn document_card(
             download.connect_clicked(move |_| on_action(action.clone()));
             actions.append(&download);
         }
-        None => actions.append(
+        Some(NativeMediaAction::AnswerButton { .. }) | None => actions.append(
             &adw::Spinner::builder()
                 .width_request(24)
                 .height_request(24)
@@ -1676,9 +1716,8 @@ fn add_label(parent: &gtk::Box, text: &str) -> gtk::Label {
     label
 }
 
-/// Button placeholder for an interactive message. Answering is not
-/// available yet, so it says so instead of only looking dimmed.
-fn disabled_reply_button(text: &str) -> gtk::Button {
+/// Button with a wrapping label for an interactive message.
+fn reply_button(text: &str) -> gtk::Button {
     let label = gtk::Label::new(Some(text));
     label.set_wrap(true);
     label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
@@ -1686,6 +1725,13 @@ fn disabled_reply_button(text: &str) -> gtk::Button {
     label.set_justify(gtk::Justification::Center);
     let button = gtk::Button::new();
     button.set_child(Some(&label));
+    button
+}
+
+/// Button placeholder for an interactive message. Answering is not
+/// available yet, so it says so instead of only looking dimmed.
+fn disabled_reply_button(text: &str) -> gtk::Button {
+    let button = reply_button(text);
     button.set_sensitive(false);
     let hint = "Replying from ZapTide is not available yet";
     button.set_tooltip_text(Some(hint));

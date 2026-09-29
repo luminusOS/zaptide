@@ -361,6 +361,7 @@ pub async fn run(
         read_sync: ReadSync::default(),
         poll_decrypting: 0,
         poll_history: Default::default(),
+        answer_sends: HashMap::new(),
         poll_sending: HashSet::new(),
     };
     worker.load_state();
@@ -428,6 +429,8 @@ struct Worker {
     read_sync: ReadSync,
     poll_decrypting: usize,
     poll_history: poll_history::Requests,
+    /// Answer message id to (chat, buttons message id), until the send ends.
+    answer_sends: HashMap<String, (ChatId, String)>,
     poll_sending: HashSet<(ChatId, String)>,
     dirs: AppDirs,
     events: std::sync::mpsc::Sender<Event>,
@@ -1595,6 +1598,8 @@ impl Worker {
         self.session_generation_shared
             .store(self.session_generation, Ordering::Release);
         self.avatar_generation_shared.fetch_add(1, Ordering::AcqRel);
+        // The archive is cleared on logout, so pending answers have nothing to reopen.
+        self.answer_sends.clear();
         self.stop_bot().await;
         let (wa_sender, wa_events) = mpsc::unbounded_channel();
         self.wa_sender = wa_sender;
@@ -2729,6 +2734,7 @@ impl Worker {
             | Command::SendFiles { chat, .. }
             | Command::SendImage { chat, .. }
             | Command::SendSticker { chat, .. }
+            | Command::AnswerButton { chat, .. }
             | Command::CreatePoll { chat, .. } => Some(chat),
             Command::Forward { to_chat, .. } => Some(to_chat),
             _ => None,
@@ -2820,6 +2826,11 @@ impl Worker {
                 quoting,
                 mentions,
             } => self.send_text(chat, text, quoting, mentions),
+            Command::AnswerButton {
+                chat,
+                message,
+                button,
+            } => self.answer_button(chat, message, button),
             Command::Forward {
                 from_chat,
                 message,
@@ -3396,10 +3407,18 @@ impl Worker {
                     .set_status(&chat, &id, status, crate::util::now());
                 self.emit_message(&chat, &id);
                 self.emit_chat(&chat);
-                self.emit(Event::Sent {
-                    chat: chat.clone(),
-                    success: error.is_none(),
-                });
+                if let Some((chat, original)) = self.answer_sends.remove(&id) {
+                    // Not a composer send: reopen the buttons after a failure
+                    // and never complete the composer's pending send.
+                    if error.is_some() {
+                        self.reopen_buttons(&chat, &original);
+                    }
+                } else {
+                    self.emit(Event::Sent {
+                        chat: chat.clone(),
+                        success: error.is_none(),
+                    });
+                }
                 if let Some(error) = error {
                     self.emit(Event::Error(format!("Message not sent: {error}")));
                 }
@@ -3570,6 +3589,135 @@ impl Worker {
             message,
             expiration,
         ));
+    }
+
+    /// Answers a quick-reply button message. The wire message is a
+    /// `ButtonsResponseMessage`; the local row and its archived body are a
+    /// plain reply quoting the buttons, which is what the user sees.
+    fn answer_button(&mut self, chat: ChatId, message_id: String, button_id: String) {
+        // Every early exit rebuilds the row, so a button the interface
+        // disabled on click comes back to match the stored state.
+        let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&chat)) else {
+            self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
+            self.emit_message(&chat, &message_id);
+            return;
+        };
+        let original = self.archive.message(&chat, &message_id).ok().flatten();
+        let answerable = original.as_ref().and_then(|original| match &original.content {
+            Content::Buttons {
+                text,
+                footer,
+                buttons,
+                answered: None,
+            } if !original.from_me => {
+                let label = buttons
+                    .iter()
+                    .find(|button| button.id == button_id)?
+                    .label
+                    .clone();
+                Some((text.clone(), footer.clone(), buttons.clone(), label))
+            }
+            _ => None,
+        });
+        let (Some(original), Some((text, footer, buttons, label))) = (original, answerable)
+        else {
+            // A second click on an answered message is ignored; anything else
+            // (revoked, edited away, from me) is worth telling the user.
+            let already_answered = self
+                .archive
+                .message(&chat, &message_id)
+                .ok()
+                .flatten()
+                .is_some_and(|row| {
+                    matches!(row.content, Content::Buttons { answered: Some(_), .. })
+                });
+            if !already_answered {
+                self.emit(Event::Error("This reply is no longer available".to_owned()));
+            }
+            self.emit_message(&chat, &message_id);
+            return;
+        };
+        let (context, quoted_row) = self.quote_context(&chat, Some(&message_id));
+        let mut message = buttons_response(&button_id, &label, context.clone());
+        let expiration = self.apply_ephemeral(&chat, &mut message);
+        let id = client.generate_message_id();
+        let row = Message {
+            id: id.clone(),
+            chat: chat.clone(),
+            sender: self.me(),
+            sender_name: None,
+            from_me: true,
+            timestamp: crate::util::now(),
+            content: Content::text(label.clone()),
+            status: Delivery::Pending,
+            delivered_at: None,
+            read_at: None,
+            quoted: quoted_row,
+            reactions: Vec::new(),
+            edited: false,
+            mentions: Vec::new(),
+            forwarded: false,
+            thumbnail: None,
+        };
+        let mut archived = outgoing_text(label, context, &[]);
+        self.apply_ephemeral(&chat, &mut archived);
+        self.store_message(row, Some(archived.encode_to_vec()), None);
+        self.answer_sends
+            .insert(id.clone(), (chat.clone(), message_id.clone()));
+        let marked = Content::Buttons {
+            text,
+            footer,
+            buttons,
+            answered: Some(button_id),
+        };
+        match self
+            .archive
+            .set_content(&chat, &message_id, &marked, original.edited)
+        {
+            Ok(true) => self.emit_message(&chat, &message_id),
+            other => log::warn!("button answer not recorded on the message: {other:?}"),
+        }
+        tokio::spawn(send_outgoing(
+            OutgoingSession {
+                client,
+                commands: self.commands.clone(),
+                generation: self.session_generation,
+                generation_shared: self.session_generation_shared.clone(),
+            },
+            chat,
+            jid,
+            id,
+            message,
+            expiration,
+        ));
+    }
+
+    /// Clears the recorded answer after its send failed, so it can be retried.
+    fn reopen_buttons(&mut self, chat: &str, message_id: &str) {
+        let Ok(Some(original)) = self.archive.message(chat, message_id) else {
+            return;
+        };
+        let Content::Buttons {
+            text,
+            footer,
+            buttons,
+            answered: Some(_),
+        } = original.content
+        else {
+            return;
+        };
+        let reopened = Content::Buttons {
+            text,
+            footer,
+            buttons,
+            answered: None,
+        };
+        if let Ok(true) = self
+            .archive
+            .set_content(chat, message_id, &reopened, original.edited)
+        {
+            self.emit_message(chat, message_id);
+        }
     }
 
     /// Builds protocol context and archive metadata for an available quoted message.
@@ -5275,6 +5423,25 @@ fn outgoing_text(
     }
 }
 
+/// Wire message answering a quick-reply button.
+fn buttons_response(
+    button_id: &str,
+    label: &str,
+    context: Option<wa::ContextInfo>,
+) -> wa::Message {
+    use whatsapp_rust::prelude::MessageField;
+    use wa::__buffa::oneof::message::buttons_response_message::Response;
+    wa::Message {
+        buttons_response_message: MessageField::some(wa::message::ButtonsResponseMessage {
+            selected_button_id: Some(button_id.to_owned()),
+            context_info: context.map_or_else(MessageField::none, MessageField::some),
+            r#type: Some(wa::message::buttons_response_message::Type::DISPLAY_TEXT),
+            response: Some(Response::SelectedDisplayText(label.to_owned())),
+        }),
+        ..Default::default()
+    }
+}
+
 /// Extracts quote and mention context from a message.
 fn context_of(base: &wa::Message) -> Option<&wa::ContextInfo> {
     if let Some(text) = base.extended_text_message.as_option() {
@@ -5641,6 +5808,7 @@ fn buttons_content(message: &wa::message::ButtonsMessage) -> Option<Content> {
         text: text.unwrap_or_default(),
         footer: interactive_text(&message.footer_text),
         buttons,
+        answered: None,
     })
 }
 
@@ -6431,6 +6599,7 @@ mod tests {
                     id: "a".into(),
                     label: "Yes".into()
                 }],
+                answered: None,
             })
         );
         let list = wa::Message {
@@ -6487,6 +6656,35 @@ mod tests {
             classify(&product),
             Some(Content::Unsupported { .. })
         ));
+    }
+
+    #[test]
+    fn button_answers_carry_the_id_label_and_quote() {
+        use wa::__buffa::oneof::message::buttons_response_message::Response;
+        let context = wa::ContextInfo {
+            stanza_id: Some("ORIGINAL".into()),
+            ..Default::default()
+        };
+        let message = buttons_response("a", "Yes", Some(context));
+        let response = message.buttons_response_message.as_option().expect("set");
+        assert_eq!(response.selected_button_id.as_deref(), Some("a"));
+        assert_eq!(
+            response
+                .context_info
+                .as_option()
+                .and_then(|context| context.stanza_id.as_deref()),
+            Some("ORIGINAL")
+        );
+        assert!(matches!(
+            &response.response,
+            Some(Response::SelectedDisplayText(text)) if text == "Yes"
+        ));
+        assert!(!buttons_response("a", "Yes", None)
+            .buttons_response_message
+            .as_option()
+            .expect("set")
+            .context_info
+            .is_set());
     }
 
     #[test]
@@ -6662,6 +6860,57 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn a_failed_button_answer_reopens_the_buttons_and_never_completes_the_composer() {
+        use crate::model::QuickReply;
+        const PEER: &str = "fixture@s.whatsapp.net";
+        let (mut worker, events, _, _) = receipt_tests::worker();
+        worker.archive.ensure_chat(PEER, "Fixture").unwrap();
+        let buttons = |answered: Option<&str>| Content::Buttons {
+            text: "Pick".into(),
+            footer: None,
+            buttons: vec![QuickReply {
+                id: "a".into(),
+                label: "Yes".into(),
+            }],
+            answered: answered.map(str::to_owned),
+        };
+        let mut original = crate::archive::tests::message(PEER, "BUTTONS", 10, false);
+        original.content = buttons(Some("a"));
+        worker.archive.insert_message(&original, None).unwrap();
+        let mut answer = crate::archive::tests::message(PEER, "ANSWER", 11, true);
+        answer.content = Content::text("Yes");
+        worker.archive.insert_message(&answer, None).unwrap();
+
+        let sent = |error: Option<&str>| Command::Sent {
+            chat: PEER.into(),
+            id: "ANSWER".into(),
+            session_generation: 0,
+            error: error.map(str::to_owned),
+        };
+        // Success keeps the answer recorded.
+        worker
+            .answer_sends
+            .insert("ANSWER".into(), (PEER.into(), "BUTTONS".into()));
+        worker.handle_command(sent(None)).await;
+        assert!(worker.answer_sends.is_empty());
+        assert_eq!(
+            worker.archive.message(PEER, "BUTTONS").unwrap().unwrap().content,
+            buttons(Some("a"))
+        );
+        // Failure reopens them so the user can try again.
+        worker
+            .answer_sends
+            .insert("ANSWER".into(), (PEER.into(), "BUTTONS".into()));
+        worker.handle_command(sent(Some("offline"))).await;
+        assert_eq!(
+            worker.archive.message(PEER, "BUTTONS").unwrap().unwrap().content,
+            buttons(None)
+        );
+        // Neither result reaches the composer's pending-send bookkeeping.
+        assert!(!events.try_iter().any(|event| matches!(event, Event::Sent { .. })));
     }
 
     #[tokio::test]
@@ -7122,6 +7371,7 @@ mod receipt_tests {
             read_sync: ReadSync::default(),
             poll_decrypting: 0,
             poll_history: Default::default(),
+            answer_sends: HashMap::new(),
             poll_sending: HashSet::new(),
         };
         (worker, events_rx, inbox, test_wa_events)

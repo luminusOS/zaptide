@@ -200,6 +200,12 @@ pub enum Command {
         quoting: Option<String>,
         mentions: Vec<String>,
     },
+    /// Answers a quick-reply button message with one of its buttons.
+    AnswerButton {
+        chat: ChatId,
+        message: String,
+        button: String,
+    },
     /// Forwards an archived message to another chat.
     Forward {
         from_chat: ChatId,

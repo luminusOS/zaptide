@@ -3470,6 +3470,21 @@ impl NativeApplication {
                 crate::native_media::NativeMediaAction::Download { message, .. } => {
                     self.activate_attachment(&message)
                 }
+                crate::native_media::NativeMediaAction::AnswerButton {
+                    chat,
+                    message,
+                    button,
+                } => {
+                    if let Some(backend) = &self.backend {
+                        backend.send(crate::backend::Command::AnswerButton {
+                            chat,
+                            message,
+                            button,
+                        });
+                    } else {
+                        self.status = "Backend unavailable".into();
+                    }
+                }
                 crate::native_media::NativeMediaAction::Open(path) => {
                     if let Some(id) = self
                         .message_snapshots

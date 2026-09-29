@@ -260,6 +260,9 @@ pub enum Content {
         footer: Option<String>,
         #[serde(default)]
         buttons: Vec<QuickReply>,
+        /// Id of the button already answered from this device.
+        #[serde(default)]
+        answered: Option<String>,
     },
     /// Single-select list opened from one button.
     List {
@@ -437,6 +440,7 @@ impl Content {
                 text,
                 footer,
                 buttons,
+                ..
             } => {
                 lines.push(text.trim().to_owned());
                 lines.extend(footer.clone());
@@ -754,6 +758,7 @@ mod tests {
                 id: "a".into(),
                 label: "Yes".into(),
             }],
+            answered: None,
         };
         assert_eq!(buttons.summary(), "Pick one");
         assert_eq!(

@@ -118,6 +118,8 @@ pub enum NativeMediaContent {
         text: String,
         footer: Option<String>,
         labels: Vec<String>,
+        /// Index of the button already answered.
+        answered: Option<usize>,
     },
     /// List heading with the button label and its sections.
     List {
@@ -270,10 +272,14 @@ pub fn project_content(message: &Message) -> NativeMessageContent {
             text,
             footer,
             buttons,
+            answered,
         } => NativeMediaContent::Buttons {
             text: text.clone(),
             footer: footer.clone(),
             labels: buttons.iter().map(|button| button.label.clone()).collect(),
+            answered: answered
+                .as_ref()
+                .and_then(|id| buttons.iter().position(|button| &button.id == id)),
         },
         Content::List {
             title,
@@ -350,6 +356,12 @@ pub(crate) fn safe_file_name(file_name: &str) -> String {
 pub enum NativeMediaAction {
     Open(PathBuf),
     Download { chat: String, message: String },
+    /// Reply to an interactive message with one of its quick-reply buttons.
+    AnswerButton {
+        chat: String,
+        message: String,
+        button: String,
+    },
 }
 
 impl fmt::Debug for NativeMediaAction {
@@ -357,6 +369,7 @@ impl fmt::Debug for NativeMediaAction {
         match self {
             Self::Open(_) => formatter.write_str("Open(..)"),
             Self::Download { .. } => formatter.write_str("Download { .. }"),
+            Self::AnswerButton { .. } => formatter.write_str("AnswerButton { .. }"),
         }
     }
 }
@@ -659,11 +672,18 @@ mod tests {
                 chat: "private-chat-id".into(),
                 message: "private-message-id".into(),
             },
+            NativeMediaAction::AnswerButton {
+                chat: "private-chat-id".into(),
+                message: "private-message-id".into(),
+                button: "private-button-id".into(),
+            },
         ];
 
         let debug = format!("{actions:?}");
         assert!(debug.contains("Open(..)"));
         assert!(debug.contains("Download { .. }"));
+        assert!(debug.contains("AnswerButton { .. }"));
+        assert!(!debug.contains("private-button-id"));
         for secret in [
             "/private/user/photo.jpg",
             "private-chat-id",

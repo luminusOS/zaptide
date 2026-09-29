@@ -676,6 +676,7 @@ impl Archive {
             _ => status_rank(message.status),
         };
         let reactions = self.merged_reactions(message)?;
+        let content = self.keep_answer(&message.chat, &message.id, &message.content);
         self.connection.execute(
             "INSERT INTO messages (chat, id, sender, sender_name, from_me, timestamp, content, status, quoted, reactions, edited, raw, thumbnail, mentions, forwarded, delivered_at, read_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
@@ -699,7 +700,7 @@ impl Archive {
                 message.sender_name,
                 message.from_me,
                 message.timestamp,
-                serde_json::to_string(&message.content).unwrap_or_default(),
+                serde_json::to_string(&content).unwrap_or_default(),
                 status,
                 message
                     .quoted
@@ -720,6 +721,50 @@ impl Archive {
             params![message.chat, message.timestamp],
         )?;
         Ok(())
+    }
+
+    /// A buttons message decoded again (history replay, re-derive) has no
+    /// record of the answer sent from here; keep the one already stored.
+    fn keep_answer<'a>(
+        &self,
+        chat: &str,
+        id: &str,
+        content: &'a Content,
+    ) -> std::borrow::Cow<'a, Content> {
+        let Content::Buttons {
+            text,
+            footer,
+            buttons,
+            answered: None,
+        } = content
+        else {
+            return std::borrow::Cow::Borrowed(content);
+        };
+        let stored = self
+            .connection
+            .query_row(
+                "SELECT content FROM messages WHERE chat = ?1 AND id = ?2",
+                params![chat, id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .ok()
+            .flatten()
+            .and_then(|json| serde_json::from_str::<Content>(&json).ok());
+        match stored {
+            Some(Content::Buttons {
+                answered: Some(answered),
+                ..
+            }) if buttons.iter().any(|button| button.id == answered) => {
+                std::borrow::Cow::Owned(Content::Buttons {
+                    text: text.clone(),
+                    footer: footer.clone(),
+                    buttons: buttons.clone(),
+                    answered: Some(answered),
+                })
+            }
+            _ => std::borrow::Cow::Borrowed(content),
+        }
     }
 
     /// History rows often omit reactions. Keep any already stored when the
@@ -891,13 +936,14 @@ impl Archive {
         thumbnail: Option<&[u8]>,
         forwarded: bool,
     ) -> Result<()> {
+        let content = self.keep_answer(chat, id, content);
         self.connection.execute(
             "UPDATE messages SET content = ?3, mentions = ?4, thumbnail = COALESCE(?5, thumbnail), forwarded = ?6
              WHERE chat = ?1 AND id = ?2",
             params![
                 chat,
                 id,
-                serde_json::to_string(content).unwrap_or_default(),
+                serde_json::to_string(&content).unwrap_or_default(),
                 serde_json::to_string(mentions).unwrap_or_default(),
                 thumbnail,
                 forwarded
@@ -1271,6 +1317,50 @@ pub(crate) mod tests {
             archive.chat(chat).expect("chat").expect("exists").name,
             "Rust Berlin"
         );
+    }
+
+    #[test]
+    fn a_button_answer_survives_the_message_being_stored_again() {
+        use crate::model::QuickReply;
+        let root = tempfile::tempdir().unwrap();
+        let archive = Archive::open_with_key(&root.path().join("fixture.db"), &[3; 32]).unwrap();
+        let chat = "1@s.whatsapp.net";
+        archive.ensure_chat(chat, "Fixture").unwrap();
+        let buttons = |answered: Option<&str>| Content::Buttons {
+            text: "Pick".into(),
+            footer: None,
+            buttons: vec![
+                QuickReply {
+                    id: "a".into(),
+                    label: "Yes".into(),
+                },
+                QuickReply {
+                    id: "b".into(),
+                    label: "No".into(),
+                },
+            ],
+            answered: answered.map(str::to_owned),
+        };
+        let mut row = message(chat, "M1", 10, false);
+        row.content = buttons(None);
+        archive.insert_message(&row, None).unwrap();
+        archive
+            .set_content(chat, "M1", &buttons(Some("b")), false)
+            .unwrap();
+        // History replay and re-derive decode the message with no answer.
+        archive.insert_message(&row, None).unwrap();
+        assert_eq!(archive.message(chat, "M1").unwrap().unwrap().content, buttons(Some("b")));
+        archive
+            .set_derived(chat, "M1", &buttons(None), &[], None, false)
+            .unwrap();
+        assert_eq!(archive.message(chat, "M1").unwrap().unwrap().content, buttons(Some("b")));
+        // An answer to a button the sender removed is not carried over.
+        let mut edited = buttons(None);
+        if let Content::Buttons { buttons, .. } = &mut edited {
+            buttons.retain(|button| button.id == "a");
+        }
+        archive.set_derived(chat, "M1", &edited, &[], None, false).unwrap();
+        assert_eq!(archive.message(chat, "M1").unwrap().unwrap().content, edited);
     }
 
     #[test]
