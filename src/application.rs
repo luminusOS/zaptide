@@ -7538,17 +7538,31 @@ fn show_chat_info_dialog(
     if !flags.is_empty() {
         settings.add(&property("Chat", &flags.join(" · ")));
     }
+    page.add(&settings);
+
     if !chat.is_group() {
-        let shared: Vec<&str> = chats
+        let mut shared: Vec<&crate::model::Chat> = chats
             .iter()
             .filter(|other| other.is_group() && other.participants.contains(&chat.id))
-            .map(|other| other.name.as_str())
             .collect();
         if !shared.is_empty() {
-            settings.add(&property("Groups in common", &shared.join("\n")));
+            shared.sort_by_cached_key(|other| other.name.to_lowercase());
+            let group = adw::PreferencesGroup::builder()
+                .title(format!("Groups in common ({})", shared.len()))
+                .build();
+            for other in shared {
+                let row = adw::ActionRow::builder()
+                    .title(&other.name)
+                    .use_markup(false)
+                    .title_lines(1)
+                    .build();
+                row.set_subtitle(&format!("{} participants", other.participants.len()));
+                row.add_prefix(&adw::Avatar::new(32, Some(&other.name), true));
+                group.add(&row);
+            }
+            page.add(&group);
         }
     }
-    page.add(&settings);
 
     if chat.is_group() && !chat.participants.is_empty() {
         let group = adw::PreferencesGroup::builder()
