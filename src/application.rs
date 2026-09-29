@@ -4720,7 +4720,11 @@ impl NativeApplication {
     }
 
     fn selected_chat(&self) -> Option<&crate::model::Chat> {
-        self.chat_projection.selected_chat()
+        // The projection refreshes on a throttled flush and hides filtered-out
+        // chats, so it can still name the previous chat right after opening one.
+        self.active_chat
+            .as_ref()
+            .and_then(|id| self.chat_snapshots.iter().find(|chat| &chat.id == id))
     }
 
     fn show_message_menu(
