@@ -1577,11 +1577,19 @@ impl SimpleComponent for NativeApplication {
                                             #[watch]
                                             set_paintable: model.active_chat.as_ref().and_then(|chat| model.pending_clipboard_images.get(chat)).map(|image| &image.preview),
                                         },
+                                        append = &gtk::Image {
+                                            set_icon_name: Some("mail-attachment-symbolic"),
+                                            #[watch]
+                                            set_visible: model.pending_attachment_names().len() == model.pending_attachment_count(),
+                                        },
                                         append = &gtk::Label {
                                             set_hexpand: true,
                                             set_xalign: 0.0,
+                                            set_ellipsize: gtk::pango::EllipsizeMode::Middle,
                                             #[watch]
-                                            set_label: &attachment_summary(model.pending_attachment_count()),
+                                            set_label: &attachment_summary(&model.pending_attachment_names(), model.pending_attachment_count()),
+                                            #[watch]
+                                            set_tooltip_text: Some(&model.pending_attachment_names().join("\n")).filter(|names| !names.is_empty()).map(String::as_str),
                                         },
                                         append = &gtk::Button {
                                             set_icon_name: "window-close-symbolic",
@@ -1627,6 +1635,10 @@ impl SimpleComponent for NativeApplication {
                                                         #[watch]
                                                         set_sensitive: model.can_attach(),
                                                         connect_clicked[sender, attach_popover] => move |_| { attach_popover.popdown(); sender.input(Input::PasteClipboardImage) },
+                                                    },
+                                                    append = &gtk::Separator {
+                                                        set_margin_top: 4,
+                                                        set_margin_bottom: 4,
                                                     },
                                                     append = &gtk::Button {
                                                         set_child: Some(&attach_menu_row("view-list-bullet-symbolic", "Poll…")),
@@ -3281,7 +3293,10 @@ impl NativeApplication {
                     .entry(chat)
                     .or_default()
                     .extend(paths);
-                self.status = attachment_summary(self.pending_attachment_count());
+                self.status = attachment_summary(
+                    &self.pending_attachment_names(),
+                    self.pending_attachment_count(),
+                );
                 self.show_attachment_preview(&sender);
             }
             Input::ClipboardImageReady { chat, pixels } => {
@@ -5944,6 +5959,22 @@ impl NativeApplication {
         self.status = "This chat is no longer available.".into();
     }
 
+    /// File names of the files staged for the open chat.
+    fn pending_attachment_names(&self) -> Vec<String> {
+        self.active_chat
+            .as_ref()
+            .and_then(|chat| self.pending_attachments.get(chat))
+            .into_iter()
+            .flatten()
+            .map(|path| {
+                path.file_name().map_or_else(
+                    || path.display().to_string(),
+                    |name| name.to_string_lossy().into_owned(),
+                )
+            })
+            .collect()
+    }
+
     fn pending_attachment_count(&self) -> usize {
         let files = self
             .active_chat
@@ -6504,11 +6535,17 @@ fn is_edit_completion(pending: Option<&(String, String, String)>, chat: &str, id
     pending.is_some_and(|(pending_chat, pending_id, _)| pending_chat == chat && pending_id == id)
 }
 
-fn attachment_summary(count: usize) -> String {
-    format!(
-        "{count} attachment{} ready",
-        if count == 1 { "" } else { "s" }
-    )
+/// "photo.jpg", "photo.jpg and 2 more", or "2 attachments ready" when only
+/// a clipboard image has no file name.
+fn attachment_summary(names: &[String], count: usize) -> String {
+    match names {
+        [] => format!(
+            "{count} attachment{} ready",
+            if count == 1 { "" } else { "s" }
+        ),
+        [name] if count == 1 => name.clone(),
+        [name, ..] => format!("{name} and {} more", count - 1),
+    }
 }
 
 fn caption(text: &str) -> Option<String> {
@@ -6642,12 +6679,17 @@ fn show_poll_dialog(parent: &adw::ApplicationWindow, sender: &ComponentSender<Na
         let (question, options, multiple) = (question.clone(), options.clone(), multiple.clone());
         move || crate::model::PollDraft {
             question: question.text().into(),
-            options: options.borrow().iter().map(|(row, _)| row.text().into()).collect(),
+            options: options
+                .borrow()
+                .iter()
+                .map(|(row, _)| row.text().into())
+                .collect(),
             multiple: multiple.is_active(),
         }
     };
     let refresh: Rc<dyn Fn()> = {
-        let (draft, options, create, add) = (draft.clone(), options.clone(), create.clone(), add.clone());
+        let (draft, options, create, add) =
+            (draft.clone(), options.clone(), create.clone(), add.clone());
         Rc::new(move || {
             let rows = options.borrow();
             for (index, (row, remove)) in rows.iter().enumerate() {
@@ -6965,7 +7007,10 @@ fn show_mention_dialog(
             .title_lines(1)
             .activatable(true)
             .build();
-        let digits = phone.as_deref().unwrap_or_default().replace(|c: char| !c.is_ascii_digit(), "");
+        let digits = phone
+            .as_deref()
+            .unwrap_or_default()
+            .replace(|c: char| !c.is_ascii_digit(), "");
         if let Some(phone) = phone.filter(|phone| phone != &name) {
             row.set_subtitle(&phone);
         }
@@ -7646,10 +7691,9 @@ fn show_chat_info_dialog(
     }
     match presence {
         Some((true, _)) => group.add(&property("Status", "Online")),
-        Some((false, Some(at))) => group.add(&property(
-            "Last seen",
-            &crate::util::moment_stamp(at),
-        )),
+        Some((false, Some(at))) => {
+            group.add(&property("Last seen", &crate::util::moment_stamp(at)))
+        }
         _ => {}
     }
     if chat.phone().is_some() {
@@ -7951,6 +7995,16 @@ pub fn run(dirs: AppDirs) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn attachment_summary_names_staged_files() {
+        let names = ["a.jpg".to_owned(), "b.pdf".to_owned()];
+        assert_eq!(attachment_summary(&names[..1], 1), "a.jpg");
+        assert_eq!(attachment_summary(&names, 2), "a.jpg and 1 more");
+        // A clipboard image counts but has no file name.
+        assert_eq!(attachment_summary(&names[..1], 2), "a.jpg and 1 more");
+        assert_eq!(attachment_summary(&[], 1), "1 attachment ready");
+    }
 
     fn grouping_message(
         id: &str,
