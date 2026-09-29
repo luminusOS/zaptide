@@ -1617,29 +1617,30 @@ impl SimpleComponent for NativeApplication {
                                                 #[wrap(Some)]
                                                 set_child = &gtk::Box {
                                                     set_orientation: gtk::Orientation::Vertical,
+                                                    set_spacing: 2,
                                                     append = &gtk::Button {
-                                                        set_label: "Files…",
+                                                        set_child: Some(&attach_menu_row("document-open-symbolic", "Files…")),
                                                         add_css_class: "flat",
                                                         #[watch]
                                                         set_sensitive: model.can_attach(),
                                                         connect_clicked[sender, attach_popover] => move |_| { attach_popover.popdown(); sender.input(Input::PickAttachments) },
                                                     },
                                                     append = &gtk::Button {
-                                                        set_label: "Paste Image",
+                                                        set_child: Some(&attach_menu_row("image-x-generic-symbolic", "Paste Image")),
                                                         add_css_class: "flat",
                                                         #[watch]
                                                         set_sensitive: model.can_attach(),
                                                         connect_clicked[sender, attach_popover] => move |_| { attach_popover.popdown(); sender.input(Input::PasteClipboardImage) },
                                                     },
                                                     append = &gtk::Button {
-                                                        set_label: "Poll…",
+                                                        set_child: Some(&attach_menu_row("view-list-bullet-symbolic", "Poll…")),
                                                         add_css_class: "flat",
                                                         #[watch]
                                                         set_sensitive: model.can_attach(),
                                                         connect_clicked[sender, attach_popover, dialog_parent] => move |_| { attach_popover.popdown(); show_poll_dialog(&dialog_parent, &sender) },
                                                     },
                                                     append = &gtk::Button {
-                                                        set_label: "Mention…",
+                                                        set_child: Some(&attach_menu_row("avatar-default-symbolic", "Mention…")),
                                                         add_css_class: "flat",
                                                         #[watch]
                                                         set_sensitive: model.active_chat.as_deref().and_then(|id| model.chat_snapshots.iter().find(|chat| chat.id == id)).is_some_and(|chat| !chat.participants.is_empty()),
@@ -7605,6 +7606,14 @@ fn show_chat_info_dialog(
         .build();
     dialog.present(Some(parent));
     chat.phone().map(|_| (chat.id.clone(), about))
+}
+
+/// Icon and label for one row of the attach popover.
+fn attach_menu_row(icon: &str, label: &str) -> gtk::Box {
+    let row = gtk::Box::builder().spacing(12).build();
+    row.append(&gtk::Image::from_icon_name(icon));
+    row.append(&gtk::Label::builder().label(label).xalign(0.0).build());
+    row
 }
 
 /// "Send Image", "Send 3 Files": images when every item is one.
