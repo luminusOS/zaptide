@@ -327,6 +327,8 @@ struct MessageRow {
     quote: String,
     /// Selectable text: the message body, or a caption.
     body: String,
+    /// People mentioned in `body`, shown by name.
+    mentions: Vec<crate::safety::MentionLabel>,
     footer: String,
     accessible_label: String,
     show_sender: bool,
@@ -342,6 +344,7 @@ impl MessageRow {
     fn renders_like(&self, other: &Self) -> bool {
         self.message == other.message
             && self.audio == other.audio
+            && self.mentions == other.mentions
             && self.separator == other.separator
             && self.avatar == other.avatar
             && self.show_sender == other.show_sender
@@ -639,7 +642,10 @@ impl RelmListItem for MessageRow {
         widgets.quote.set_visible(!self.quote.is_empty());
         widgets
             .body
-            .set_markup(&crate::safety::linkify_markup(&self.body));
+            .set_markup(&crate::safety::linkify_markup_with_mentions(
+                &self.body,
+                &self.mentions,
+            ));
         widgets.body.set_visible(!self.body.is_empty());
         widgets
             .body
@@ -4191,6 +4197,32 @@ fn set_delivery_ticks(area: &gtk::DrawingArea, glyph: &str) {
     area.queue_draw();
 }
 
+/// Names for the people a message mentions: the saved or WhatsApp name, else
+/// the formatted phone, else the raw token.
+fn mention_labels(
+    message: &crate::model::Message,
+    contacts: &std::collections::HashMap<String, crate::model::Contact>,
+) -> Vec<crate::safety::MentionLabel> {
+    message
+        .mentions
+        .iter()
+        .map(|mention| {
+            let phone = crate::model::phone_of(&mention.id);
+            let label = contacts
+                .get(&mention.id)
+                .and_then(crate::model::Contact::display_name)
+                .map(str::to_owned)
+                .or_else(|| phone.map(crate::util::phone))
+                .unwrap_or_else(|| mention.user.clone());
+            crate::safety::MentionLabel {
+                user: mention.user.clone(),
+                label,
+                phone: phone.map(str::to_owned),
+            }
+        })
+        .collect()
+}
+
 fn message_row(
     message: crate::model::Message,
     pointer_sender: ComponentSender<NativeApplication>,
@@ -4266,6 +4298,7 @@ fn message_row(
         avatar,
         quote,
         body,
+        mentions: Vec::new(),
         footer: footer.join(" · "),
         accessible_label,
         show_sender,
@@ -6159,6 +6192,7 @@ impl NativeApplication {
                     show_timestamp,
                     self.audio_registry.clone(),
                 );
+                row.mentions = mention_labels(&row.message, &self.contacts);
                 row.audio = audio;
                 row
             })

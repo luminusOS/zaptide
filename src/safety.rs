@@ -135,10 +135,47 @@ pub fn chat_link_number(uri: &str) -> Option<&str> {
     uri.strip_prefix(CHAT_SCHEME)
 }
 
+/// A person mentioned in a message: the `@user` token in its text, the name
+/// to show, and their phone digits when the chat can be opened from it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MentionLabel {
+    pub user: String,
+    pub label: String,
+    pub phone: Option<String>,
+}
+
+/// Markup for the `@user` token at the start of `rest` when it names a known
+/// mention: a chat link when the phone is known, bold otherwise.
+fn mention_at(rest: &str, mentions: &[MentionLabel]) -> Option<(usize, String)> {
+    use gtk4::glib::markup_escape_text as esc;
+    let token = rest.strip_prefix('@')?;
+    let end = token
+        .find(|c: char| !c.is_ascii_alphanumeric())
+        .unwrap_or(token.len());
+    let mention = mentions
+        .iter()
+        .find(|mention| !mention.user.is_empty() && mention.user == token[..end])?;
+    let shown = format!("@{}", mention.label);
+    let markup = match &mention.phone {
+        Some(phone) => format!(
+            "<a href=\"{CHAT_SCHEME}{}\" title=\"Message on WhatsApp\">{}</a>",
+            esc(phone),
+            esc(&shown)
+        ),
+        None => format!("<b>{}</b>", esc(&shown)),
+    };
+    Some((1 + end, markup))
+}
+
 /// Pango markup for message text with web addresses, WhatsApp links and
 /// `+` phone numbers turned into links. Everything else is escaped, so
 /// message text can never inject markup.
 pub fn linkify_markup(text: &str) -> String {
+    linkify_markup_with_mentions(text, &[])
+}
+
+/// [`linkify_markup`] that also highlights the given `@user` mentions.
+pub fn linkify_markup_with_mentions(text: &str, mentions: &[MentionLabel]) -> String {
     use gtk4::glib::markup_escape_text as esc;
     // Pango rejects the character references GLib emits for control characters.
     let text: String = text
@@ -150,7 +187,14 @@ pub fn linkify_markup(text: &str) -> String {
     let (mut plain, mut index, mut boundary) = (0, 0, true);
     while let Some(c) = text[index..].chars().next() {
         let rest = &text[index..];
-        if let Some((len, href, title)) = boundary.then(|| link_at(rest)).flatten() {
+        // Only after whitespace or an opening mark, so `a@15581.com` stays an address.
+        if let Some((len, markup)) = boundary.then(|| mention_at(rest, mentions)).flatten() {
+            out.push_str(&esc(&text[plain..index]));
+            out.push_str(&markup);
+            index += len;
+            plain = index;
+            boundary = false;
+        } else if let Some((len, href, title)) = boundary.then(|| link_at(rest)).flatten() {
             out.push_str(&esc(&text[plain..index]));
             let title = title.map_or_else(String::new, |t| format!(" title=\"{t}\""));
             out.push_str(&format!(
@@ -186,6 +230,30 @@ mod tests {
             linkify_markup("(https://a.io)"),
             "(<a href=\"https://a.io/\">https://a.io</a>)"
         );
+    }
+
+    #[test]
+    fn mentions_show_the_name_and_open_the_chat_when_the_phone_is_known() {
+        use super::{MentionLabel, linkify_markup_with_mentions};
+        let mentions = [
+            MentionLabel {
+                user: "15581".into(),
+                label: "Ana <b>".into(),
+                phone: Some("5511912345678".into()),
+            },
+            MentionLabel {
+                user: "99999".into(),
+                label: "99999".into(),
+                phone: None,
+            },
+        ];
+        assert_eq!(
+            linkify_markup_with_mentions("hi @15581, and @99999! @12345 a@15581.com", &mentions),
+            "hi <a href=\"zaptide-chat:5511912345678\" title=\"Message on WhatsApp\">@Ana &lt;b&gt;</a>, \
+             and <b>@99999</b>! @12345 a@15581.com"
+        );
+        // No mentions known: text is unchanged apart from escaping.
+        assert_eq!(linkify_markup_with_mentions("@15581", &[]), "@15581");
     }
 
     #[test]
