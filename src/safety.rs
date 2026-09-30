@@ -382,8 +382,8 @@ mod tests {
     #[test]
     fn whatsapp_formatting_becomes_markup() {
         assert_eq!(
-            linkify_markup("Olá, *Customer*! _hi_ ~no~ `a<b` ok"),
-            "Olá, <b>Customer</b>! <i>hi</i> <s>no</s> <tt>a&lt;b</tt> ok"
+            linkify_markup("Hello, *Name*! _hi_ ~no~ `a<b` ok"),
+            "Hello, <b>Name</b>! <i>hi</i> <s>no</s> <tt>a&lt;b</tt> ok"
         );
         // Spans nest, and links inside them stay links.
         assert_eq!(

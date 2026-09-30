@@ -219,7 +219,7 @@ mod tests {
                 .collect()
         };
         let template = message(Content::Template {
-            text: "Olá, *Customer*! A *montagem do seu produto* foi agendada para _02/10_.\n\
+            text: "Hello, *Customer*! Your *order* is scheduled for _01/01_.\n\
                    - ~cancelada~ não\n> citação"
                 .into(),
             footer: Some("Store".into()),
