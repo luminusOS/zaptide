@@ -298,6 +298,35 @@ pub fn build_media_widget_with_action(
             root.append(&picker);
             ("", "")
         }
+        NativeMediaContent::Template {
+            text,
+            footer,
+            links,
+        } => {
+            if !text.is_empty() {
+                add_label(&root, text);
+            }
+            if let Some(footer) = footer {
+                let label = add_label(&root, footer);
+                label.add_css_class("dim-label");
+                label.add_css_class("caption");
+            }
+            for (label, url) in links {
+                let button = reply_button(label);
+                button.set_tooltip_text(Some(url));
+                let url = url.clone();
+                button.connect_clicked(move |button| {
+                    let window = button.root().and_downcast::<gtk::Window>();
+                    gtk::UriLauncher::new(&url).launch(
+                        window.as_ref(),
+                        gtk::gio::Cancellable::NONE,
+                        |_| {},
+                    );
+                });
+                root.append(&button);
+            }
+            ("", "")
+        }
         NativeMediaContent::VideoPlaceholder => ("Video", "Video preview unavailable"),
         NativeMediaContent::UnsupportedPlaceholder => (
             "Unsupported message",

@@ -131,6 +131,12 @@ pub enum NativeMediaContent {
         /// Title of the row already chosen.
         answered: Option<String>,
     },
+    /// Business template: body text and (label, address) buttons.
+    Template {
+        text: String,
+        footer: Option<String>,
+        links: Vec<(String, String)>,
+    },
     VideoPlaceholder,
     UnsupportedPlaceholder,
     Other,
@@ -145,6 +151,7 @@ impl fmt::Debug for NativeMediaContent {
             Self::Poll { .. } => "Poll",
             Self::Buttons { .. } => "Buttons",
             Self::List { .. } => "List",
+            Self::Template { .. } => "Template",
             Self::VideoPlaceholder => "VideoPlaceholder",
             Self::UnsupportedPlaceholder => "UnsupportedPlaceholder",
             Self::Other => "Other",
@@ -310,6 +317,18 @@ pub fn project_content(message: &Message) -> NativeMessageContent {
                 .as_deref()
                 .and_then(|id| message.content.choice(id))
                 .map(|(title, _)| title.to_owned()),
+        },
+        Content::Template {
+            text,
+            footer,
+            links,
+        } => NativeMediaContent::Template {
+            text: text.clone(),
+            footer: footer.clone(),
+            links: links
+                .iter()
+                .map(|link| (link.label.clone(), link.url.clone()))
+                .collect(),
         },
         Content::Video { .. } => NativeMediaContent::VideoPlaceholder,
         Content::Unsupported { .. } => NativeMediaContent::UnsupportedPlaceholder,

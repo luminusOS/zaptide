@@ -282,6 +282,14 @@ pub enum Content {
         #[serde(default)]
         answered: Option<String>,
     },
+    /// Business template: body text with buttons that open a web address.
+    Template {
+        text: String,
+        #[serde(default)]
+        footer: Option<String>,
+        #[serde(default)]
+        links: Vec<TemplateLink>,
+    },
     /// "This message was deleted."
     Revoked,
     /// Unsupported content with a user-facing description.
@@ -293,6 +301,13 @@ pub enum Content {
 /// First non-blank line of `text`, trimmed.
 fn first_line(text: &str) -> Option<&str> {
     text.lines().map(str::trim).find(|line| !line.is_empty())
+}
+
+/// A template button; `url` is always http or https.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TemplateLink {
+    pub label: String,
+    pub url: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -431,6 +446,10 @@ impl Content {
                 Some(line) => format!("List: {line}"),
                 None => "List".to_owned(),
             },
+            Self::Template { text, links, .. } => first_line(text)
+                .or_else(|| links.first().map(|link| link.label.as_str()))
+                .unwrap_or("Message")
+                .to_owned(),
             Self::Revoked => "This message was deleted".to_owned(),
             Self::Unsupported { what } => format!("Unsupported message ({what})"),
         }

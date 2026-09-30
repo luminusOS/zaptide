@@ -124,6 +124,80 @@ fn classification_reads_quick_reply_buttons_and_lists() {
 }
 
 #[test]
+fn business_templates_show_their_text_and_web_buttons() {
+    use wa::__buffa::oneof::hydrated_template_button::HydratedButton;
+    let url_button = |label: &str, url: &str| wa::HydratedTemplateButton {
+        hydrated_button: Some(HydratedButton::UrlButton(Box::new(
+            wa::hydrated_template_button::HydratedURLButton {
+                display_text: Some(label.into()),
+                url: Some(url.into()),
+                ..Default::default()
+            },
+        ))),
+        ..Default::default()
+    };
+    let hydrated = wa::Message {
+        template_message: MessageField::some(wa::message::TemplateMessage {
+            hydrated_template: MessageField::some(
+                wa::message::template_message::HydratedFourRowTemplate {
+                    hydrated_content_text: Some("Your assembly is booked".into()),
+                    hydrated_buttons: vec![
+                        url_button("Assembly status", "https://example.com/status"),
+                        url_button("Unsafe", "javascript:alert(1)"),
+                    ],
+                    ..Default::default()
+                },
+            ),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let Some(Content::Template { text, links, .. }) = classify(&hydrated) else {
+        panic!("a hydrated template is shown");
+    };
+    assert_eq!(text, "Your assembly is booked");
+    assert_eq!(links.len(), 1);
+    assert_eq!(links[0].label, "Assembly status");
+    assert_eq!(links[0].url, "https://example.com/status");
+
+    use wa::message::interactive_message as flow;
+    let native = wa::Message {
+        interactive_message: MessageField::some(wa::message::InteractiveMessage {
+            body: MessageField::some(flow::Body {
+                text: Some("Track it".into()),
+            }),
+            interactive_message: Some(
+                wa::__buffa::oneof::message::interactive_message::InteractiveMessage::NativeFlowMessage(
+                    Box::new(flow::NativeFlowMessage {
+                        buttons: vec![
+                            flow::native_flow_message::NativeFlowButton {
+                                name: Some("cta_url".into()),
+                                button_params_json: Some(
+                                    r#"{"display_text":"Open","url":"https://example.com/t"}"#
+                                        .into(),
+                                ),
+                            },
+                            flow::native_flow_message::NativeFlowButton {
+                                name: Some("cta_copy".into()),
+                                button_params_json: Some(r#"{"display_text":"Copy"}"#.into()),
+                            },
+                        ],
+                        ..Default::default()
+                    }),
+                ),
+            ),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let Some(Content::Template { text, links, .. }) = classify(&native) else {
+        panic!("a native-flow message is shown");
+    };
+    assert_eq!((text.as_str(), links.len()), ("Track it", 1));
+    assert_eq!(links[0].url, "https://example.com/t");
+}
+
+#[test]
 fn button_answers_carry_the_id_label_and_quote() {
     use wa::__buffa::oneof::message::buttons_response_message::Response;
     let context = wa::ContextInfo {

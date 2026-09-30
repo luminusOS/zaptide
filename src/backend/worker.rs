@@ -3439,6 +3439,7 @@ impl Worker {
                 | Content::Poll { .. }
                 | Content::Buttons { .. }
                 | Content::List { .. }
+                | Content::Template { .. }
         ) {
             self.emit(Event::Error("This message cannot be forwarded".to_owned()));
             return;

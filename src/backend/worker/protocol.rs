@@ -189,11 +189,10 @@ pub(super) fn classify(base: &wa::Message) -> Option<Content> {
     if base.sticker_pack_message.is_set() {
         return unsupported("sticker pack");
     }
-    if base.interactive_message.is_set()
-        || base.template_message.is_set()
-        || base.interactive_response_message.is_set()
-        || base.template_button_reply_message.is_set()
-    {
+    if base.template_message.is_set() || base.interactive_message.is_set() {
+        return template_content(base).or_else(|| unsupported("interactive message"));
+    }
+    if base.interactive_response_message.is_set() || base.template_button_reply_message.is_set() {
         return unsupported("interactive message");
     }
     if base.product_message.is_set() || base.order_message.is_set() {
@@ -290,6 +289,101 @@ fn buttons_content(message: &wa::message::ButtonsMessage) -> Option<Content> {
         buttons,
         answered: None,
     })
+}
+
+/// Body text and web-address buttons of a business template or native-flow
+/// message. Other button kinds cannot be answered from here and are dropped.
+fn template_content(base: &wa::Message) -> Option<Content> {
+    use wa::__buffa::oneof::message::template_message::Format;
+    let Some(template) = base.template_message.as_option() else {
+        return base.interactive_message.as_option().and_then(flow_content);
+    };
+    let hydrated = template
+        .hydrated_template
+        .as_option()
+        .or(match &template.format {
+            Some(Format::HydratedFourRowTemplate(hydrated)) => Some(&**hydrated),
+            _ => None,
+        });
+    if let Some(hydrated) = hydrated {
+        return hydrated_content(hydrated);
+    }
+    match &template.format {
+        Some(Format::InteractiveMessageTemplate(flow)) => flow_content(flow),
+        _ => None,
+    }
+}
+
+fn template_link(label: Option<String>, url: &str) -> Option<crate::model::TemplateLink> {
+    Some(crate::model::TemplateLink {
+        label: label?,
+        url: crate::safety::preview_url(url)?,
+    })
+}
+
+fn template(
+    text: Option<String>,
+    footer: Option<String>,
+    links: Vec<crate::model::TemplateLink>,
+) -> Option<Content> {
+    (text.is_some() || !links.is_empty()).then(|| Content::Template {
+        text: text.unwrap_or_default(),
+        footer,
+        links,
+    })
+}
+
+fn hydrated_content(
+    message: &wa::message::template_message::HydratedFourRowTemplate,
+) -> Option<Content> {
+    use wa::__buffa::oneof::hydrated_template_button::HydratedButton;
+    let links = message
+        .hydrated_buttons
+        .iter()
+        .filter_map(|button| match &button.hydrated_button {
+            Some(HydratedButton::UrlButton(button)) => template_link(
+                interactive_text(&button.display_text),
+                button.url.as_deref()?,
+            ),
+            _ => None,
+        })
+        .take(MAX_INTERACTIVE_BUTTONS)
+        .collect();
+    template(
+        interactive_text(&message.hydrated_content_text),
+        interactive_text(&message.hydrated_footer_text),
+        links,
+    )
+}
+
+fn flow_content(message: &wa::message::InteractiveMessage) -> Option<Content> {
+    use wa::__buffa::oneof::message::interactive_message::InteractiveMessage as Kind;
+    let links = match &message.interactive_message {
+        Some(Kind::NativeFlowMessage(flow)) => flow
+            .buttons
+            .iter()
+            .filter(|button| button.name.as_deref() == Some("cta_url"))
+            .filter_map(|button| {
+                let params: serde_json::Value =
+                    serde_json::from_str(button.button_params_json.as_deref()?).ok()?;
+                let label = params["display_text"].as_str().map(str::to_owned);
+                template_link(interactive_text(&label), params["url"].as_str()?)
+            })
+            .take(MAX_INTERACTIVE_BUTTONS)
+            .collect(),
+        _ => Vec::new(),
+    };
+    template(
+        message
+            .body
+            .as_option()
+            .and_then(|body| interactive_text(&body.text)),
+        message
+            .footer
+            .as_option()
+            .and_then(|footer| interactive_text(&footer.text)),
+        links,
+    )
 }
 
 fn list_content(message: &wa::message::ListMessage) -> Option<Content> {
