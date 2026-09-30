@@ -111,24 +111,23 @@ impl SimpleComponent for Sidebar {
                         #[wrap(Some)]
                         set_popover = &gtk::Popover {
                             #[wrap(Some)]
-                            set_child = &gtk::FlowBox {
-                                set_selection_mode: gtk::SelectionMode::None,
+                            set_child = &gtk::Grid {
                                 set_column_spacing: 6,
                                 set_row_spacing: 6,
-                                set_max_children_per_line: 3,
+                                set_column_homogeneous: true,
                                 set_margin_top: 6,
                                 set_margin_bottom: 6,
                                 set_margin_start: 6,
                                 set_margin_end: 6,
                                 #[name = "all_filter"]
-                                append = &gtk::ToggleButton {
+                                attach[0, 0, 1, 1] = &gtk::ToggleButton {
                                     set_label: "All",
                                     add_css_class: "zaptide-filter-pill",
                                     #[watch]
                                     set_active: !model.state.filters.private_only && !model.state.filters.groups_only,
                                     connect_toggled[sender] => move |button| if button.is_active() { sender.output(SidebarOutput::SetChatKindFilter(crate::native_chat_list::ChatKindFilter::All)).unwrap() },
                                 },
-                                append = &gtk::ToggleButton {
+                                attach[1, 0, 1, 1] = &gtk::ToggleButton {
                                     set_label: "Private",
                                     set_group: Some(&all_filter),
                                     add_css_class: "zaptide-filter-pill",
@@ -136,7 +135,7 @@ impl SimpleComponent for Sidebar {
                                     set_active: model.state.filters.private_only,
                                     connect_toggled[sender] => move |button| if button.is_active() { sender.output(SidebarOutput::SetChatKindFilter(crate::native_chat_list::ChatKindFilter::Private)).unwrap() },
                                 },
-                                append = &gtk::ToggleButton {
+                                attach[2, 0, 1, 1] = &gtk::ToggleButton {
                                     set_label: "Groups",
                                     set_group: Some(&all_filter),
                                     add_css_class: "zaptide-filter-pill",
@@ -144,21 +143,21 @@ impl SimpleComponent for Sidebar {
                                     set_active: model.state.filters.groups_only,
                                     connect_toggled[sender] => move |button| if button.is_active() { sender.output(SidebarOutput::SetChatKindFilter(crate::native_chat_list::ChatKindFilter::Groups)).unwrap() },
                                 },
-                                append = &gtk::ToggleButton {
+                                attach[0, 1, 1, 1] = &gtk::ToggleButton {
                                     set_label: "Unread",
                                     add_css_class: "zaptide-filter-pill",
                                     #[watch]
                                     set_active: model.state.filters.unread_only,
                                     connect_toggled[sender] => move |button| sender.output(SidebarOutput::SetUnreadFilter(button.is_active())).unwrap(),
                                 },
-                                append = &gtk::ToggleButton {
+                                attach[1, 1, 1, 1] = &gtk::ToggleButton {
                                     set_label: "Pinned",
                                     add_css_class: "zaptide-filter-pill",
                                     #[watch]
                                     set_active: model.state.filters.pinned_only,
                                     connect_toggled[sender] => move |button| sender.output(SidebarOutput::SetPinnedFilter(button.is_active())).unwrap(),
                                 },
-                                append = &gtk::ToggleButton {
+                                attach[2, 1, 1, 1] = &gtk::ToggleButton {
                                     set_label: "Muted",
                                     add_css_class: "zaptide-filter-pill",
                                     #[watch]
