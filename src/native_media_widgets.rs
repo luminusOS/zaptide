@@ -196,6 +196,68 @@ mod tests {
         }
     }
 
+    /// Renders an album of seven photos and a store template to PNGs under
+    /// `$RENDER_DIR`. Run under a display:
+    /// `RENDER_DIR=/tmp/zaptide xvfb-run -a cargo test render_album -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "needs a display"]
+    fn render_album_and_template() {
+        gtk::init().expect("display");
+        adw::init().expect("libadwaita");
+        let dir = PathBuf::from(std::env::var("RENDER_DIR").expect("RENDER_DIR"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let photos = |count: usize| -> Vec<Message> {
+            (0..count)
+                .map(|index| {
+                    let mut photo = message(Content::Image {
+                        caption: None,
+                        media: media(None, MediaState::Idle),
+                    });
+                    photo.id = format!("photo-{index}");
+                    photo
+                })
+                .collect()
+        };
+        let template = message(Content::Template {
+            text: "Hello! Your assembly is booked for 02/10.".into(),
+            footer: Some("Store".into()),
+            links: vec![crate::model::TemplateLink {
+                label: "Assembly status".into(),
+                url: "https://example.com/status".into(),
+            }],
+        });
+        let widgets = [
+            ("album-7", build_album_widget(&photos(7), |_| {}).widget),
+            ("album-4", build_album_widget(&photos(4), |_| {}).widget),
+            (
+                "template",
+                build_media_widget_with_action(&template, |_| {}).widget,
+            ),
+        ];
+        let context = gtk::glib::MainContext::default();
+        for (name, widget) in widgets {
+            let window = gtk::Window::builder()
+                .default_width(340)
+                .default_height(360)
+                .child(&widget)
+                .build();
+            window.present();
+            let end = std::time::Instant::now() + std::time::Duration::from_millis(400);
+            while std::time::Instant::now() < end {
+                context.iteration(false);
+            }
+            let paintable = gtk::WidgetPaintable::new(Some(&window));
+            let snapshot = gtk::Snapshot::new();
+            paintable.snapshot(&snapshot, 340.0, 360.0);
+            let node = snapshot.to_node().expect("rendered node");
+            let renderer = window.native().and_then(|native| native.renderer());
+            let texture = renderer.expect("renderer").render_texture(&node, None);
+            texture
+                .save_to_png(dir.join(format!("{name}.png")))
+                .unwrap();
+        }
+    }
+
     #[test]
     fn photos_keep_their_shape_within_the_frame() {
         assert_eq!(super::photo::photo_size(Some(4000), Some(3000)), (300, 225));

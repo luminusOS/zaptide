@@ -64,17 +64,18 @@ pub(super) fn append_photo(
     on_action: std::rc::Rc<dyn Fn(NativeMediaAction)>,
 ) {
     let size = photo_size(media.width, media.height);
-    append_photo_sized(parent, message, size, token, on_action, None);
+    append_photo_sized(parent, message, size, token, on_action, None, true);
 }
 
-/// Side of one album tile and the tiles per row: two large tiles for up to
-/// four photos, three smaller ones beyond that.
-pub(super) fn album_layout(count: usize) -> (i32, i32) {
-    if count <= 4 { (2, 150) } else { (3, 100) }
-}
+/// Tiles an album shows, in two columns of this side; a larger album shows a
+/// "+N" count on its last tile instead of the rest.
+const ALBUM_TILES: usize = 4;
+const ALBUM_COLUMNS: i32 = 2;
+const ALBUM_SIDE: i32 = 150;
 
 /// Several photos sent together, as one grid of square tiles. Each tile keeps
-/// the single photo's behaviour: thumbnail, download, and full view.
+/// the single photo's behaviour: thumbnail, download, and full view. Beyond
+/// four photos the last tile counts the rest and offers one download for all.
 pub fn build_album_widget(
     messages: &[Message],
     on_action: impl Fn(NativeMediaAction) + 'static,
@@ -86,8 +87,16 @@ pub fn build_album_widget(
         .column_spacing(3)
         .halign(gtk::Align::Start)
         .build();
-    let (columns, side) = album_layout(messages.len());
     let on_action: std::rc::Rc<dyn Fn(NativeMediaAction)> = std::rc::Rc::new(on_action);
+    let hidden = messages.len().saturating_sub(ALBUM_TILES);
+    // Only the last tile of a larger album downloads, and it downloads all.
+    let downloads: Vec<NativeMediaAction> = messages
+        .iter()
+        .filter_map(|message| match attachment_action(message) {
+            Some(action @ NativeMediaAction::Download { .. }) => Some(action),
+            _ => None,
+        })
+        .collect();
     // The viewer steps through the photos already on disk.
     let items: std::rc::Rc<Vec<PhotoItem>> = std::rc::Rc::new(
         messages
@@ -102,7 +111,7 @@ pub fn build_album_widget(
             .collect(),
     );
     let mut opened = 0;
-    for (index, message) in messages.iter().enumerate() {
+    for (index, message) in messages.iter().take(ALBUM_TILES).enumerate() {
         let tile = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let tile_token = DecodeToken::default();
         let viewer =
@@ -113,19 +122,81 @@ pub fn build_album_widget(
         append_photo_sized(
             &tile,
             message,
-            (side, side),
+            (ALBUM_SIDE, ALBUM_SIDE),
             &tile_token,
             on_action.clone(),
             viewer,
+            hidden == 0,
         );
         decode_token.adopt(tile_token);
-        grid.attach(&tile, index as i32 % columns, index as i32 / columns, 1, 1);
+        let last = hidden > 0 && index + 1 == ALBUM_TILES;
+        let cell: gtk::Widget = if last {
+            let overlay = gtk::Overlay::builder()
+                .child(&tile)
+                .overflow(gtk::Overflow::Hidden)
+                .css_classes(["zaptide-photo"])
+                .build();
+            overlay.add_overlay(&album_more(hidden, downloads.clone(), on_action.clone()));
+            overlay.upcast()
+        } else {
+            tile.upcast()
+        };
+        grid.attach(
+            &cell,
+            index as i32 % ALBUM_COLUMNS,
+            index as i32 / ALBUM_COLUMNS,
+            1,
+            1,
+        );
     }
     root.append(&grid);
     NativeMediaWidget {
         widget: root,
         decode_token,
     }
+}
+
+/// The scrim over an album's last tile: how many photos are not shown, and
+/// one button that downloads every photo still missing. Clicks elsewhere on
+/// it reach the tile below.
+fn album_more(
+    hidden: usize,
+    downloads: Vec<NativeMediaAction>,
+    on_action: std::rc::Rc<dyn Fn(NativeMediaAction)>,
+) -> gtk::Box {
+    let scrim = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(8)
+        .halign(gtk::Align::Fill)
+        .valign(gtk::Align::Fill)
+        .can_target(false)
+        .css_classes(["zaptide-album-more"])
+        .build();
+    let count = gtk::Label::builder()
+        .label(format!("+{hidden}"))
+        .valign(gtk::Align::Center)
+        .vexpand(true)
+        .css_classes(["title-1"])
+        .build();
+    scrim.append(&count);
+    if !downloads.is_empty() {
+        let button = gtk::Button::builder()
+            .icon_name("folder-download-symbolic")
+            .tooltip_text(format!("Download {} photos", downloads.len()))
+            .halign(gtk::Align::Center)
+            .margin_bottom(12)
+            .can_target(true)
+            .css_classes(["osd", "circular"])
+            .build();
+        button.update_property(&[gtk::accessible::Property::Label("Download all photos")]);
+        button.connect_clicked(move |_| {
+            for action in &downloads {
+                on_action(action.clone());
+            }
+        });
+        scrim.append(&button);
+    }
+    scrim
 }
 
 fn append_photo_sized(
@@ -135,6 +206,7 @@ fn append_photo_sized(
     token: &DecodeToken,
     on_action: std::rc::Rc<dyn Fn(NativeMediaAction)>,
     viewer: Option<(std::rc::Rc<Vec<PhotoItem>>, usize)>,
+    download_button: bool,
 ) {
     let (picture, frame) = media_frame(message, width, height, "Photo");
     match attachment_action(message) {
@@ -176,7 +248,9 @@ fn append_photo_sized(
                 .css_classes(["osd", "circular"])
                 .build();
             button.connect_clicked(move |_| on_action(action.clone()));
-            frame.add_overlay(&button);
+            if download_button {
+                frame.add_overlay(&button);
+            }
             parent.append(&frame);
         }
         Some(NativeMediaAction::AnswerButton { .. } | NativeMediaAction::AnswerListRow { .. })

@@ -1399,6 +1399,7 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
          .zaptide-emoji-grid { background: none; }\n\
          .zaptide-photo { border-radius: 10px; }\n\
          .zaptide-photo-button { padding: 0; border-radius: 10px; }\n\
+         .zaptide-album-more { color: white; background-color: alpha(black, 0.5); }\n\
          .zaptide-viewer { background-color: #101010; color: white; }\n\
          .zaptide-media-badge { padding: 2px 7px; border-radius: 9999px; color: white; background-color: alpha(black, 0.6); }\n\
          .zaptide-play { min-width: 48px; min-height: 48px; border-radius: 9999px; color: white; background-color: alpha(black, 0.55); }\n\
