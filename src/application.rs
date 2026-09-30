@@ -712,12 +712,40 @@ impl SimpleComponent for NativeApplication {
                             },
 
                                 #[wrap(Some)]
-                                #[name = "conversation_body"]
-                                set_content = &gtk::Box {
-                                    set_orientation: gtk::Orientation::Vertical,
+                                set_content = &gtk::Overlay {
+                                    #[name = "conversation_body"]
+                                    #[wrap(Some)]
+                                    set_child = &gtk::Box {
+                                        set_orientation: gtk::Orientation::Vertical,
 
-                                    append = model.transcript_view.widget(),
-                                    append = model.composer_view.widget(),
+                                        append = model.transcript_view.widget(),
+                                        append = model.composer_view.widget(),
+                                    },
+                                    // Shown while files are dragged over the
+                                    // conversation; it never takes the drag itself.
+                                    #[name = "drop_hint"]
+                                    add_overlay = &gtk::Revealer {
+                                        set_transition_type: gtk::RevealerTransitionType::Crossfade,
+                                        set_can_target: false,
+                                        #[wrap(Some)]
+                                        set_child = &gtk::Box {
+                                            add_css_class: "zaptide-drop-scrim",
+                                            append = &adw::Clamp {
+                                                set_maximum_size: 400,
+                                                set_hexpand: true,
+                                                set_valign: gtk::Align::Center,
+                                                #[wrap(Some)]
+                                                set_child = &adw::StatusPage {
+                                                    add_css_class: "card",
+                                                    add_css_class: "compact",
+                                                    add_css_class: "zaptide-drop-card",
+                                                    set_icon_name: Some("mail-attachment-symbolic"),
+                                                    set_title: "Drop Files to Attach",
+                                                    set_description: Some("Photos and files are added to your message, so you can write a caption before sending"),
+                                                },
+                                            },
+                                        },
+                                    },
                                 },
                         },
                     },
@@ -1103,17 +1131,17 @@ impl SimpleComponent for NativeApplication {
             gtk::gdk::DragAction::COPY,
         );
         drop_target.set_propagation_phase(gtk::PropagationPhase::Capture);
-        let drop_body = widgets.conversation_body.clone();
+        let drop_hint = widgets.drop_hint.clone();
         drop_target.connect_enter(move |_, _, _| {
-            drop_body.add_css_class("zaptide-drop-active");
+            drop_hint.set_reveal_child(true);
             gtk::gdk::DragAction::COPY
         });
-        let drop_body = widgets.conversation_body.clone();
-        drop_target.connect_leave(move |_| drop_body.remove_css_class("zaptide-drop-active"));
-        let drop_body = widgets.conversation_body.clone();
+        let drop_hint = widgets.drop_hint.clone();
+        drop_target.connect_leave(move |_| drop_hint.set_reveal_child(false));
+        let drop_hint = widgets.drop_hint.clone();
         let drop_sender = sender.clone();
         drop_target.connect_drop(move |_, value, _, _| {
-            drop_body.remove_css_class("zaptide-drop-active");
+            drop_hint.set_reveal_child(false);
             let Ok(files) = value.get::<gtk::gdk::FileList>() else {
                 return false;
             };
@@ -1448,7 +1476,9 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
          .zaptide-unread-pill.muted { color: @window_fg_color; background-color: alpha(currentColor, 0.18); }\n\
          .zaptide-composer { border-radius: 18px; background-color: color-mix(in srgb, currentColor 8%, transparent); }\n\
          .zaptide-composer textview, .zaptide-composer text { background: none; }\n\
-         .zaptide-drop-active { outline: 2px dashed @accent_bg_color; outline-offset: -8px; background-color: alpha(@accent_bg_color, 0.08); }\n\
+         .zaptide-drop-scrim { background-color: alpha(@window_bg_color, 0.75); }\n\
+         .zaptide-drop-card { margin: 24px; padding: 12px 24px; }\n\
+         .zaptide-drop-card image.icon { color: @accent_color; }\n\
          .zaptide-attachments { padding: 6px 8px 4px; border-radius: 18px; background-color: color-mix(in srgb, currentColor 5%, transparent); }\n\
          .zaptide-attachment { border-radius: 12px; }\n\
          .zaptide-attachment-file { padding: 0 40px 0 12px; }\n\
