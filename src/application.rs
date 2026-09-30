@@ -2112,12 +2112,24 @@ impl SimpleComponent for NativeApplication {
             .connect_notify_local(Some("collapsed"), move |split, _| {
                 split_sender.input(Input::SplitCollapsed(split.is_collapsed()));
             });
+        // The whole conversation accepts dropped files, not only the composer.
+        // Capture runs before the text view's own drop handling.
         let drop_target = gtk::DropTarget::new(
             gtk::gdk::FileList::static_type(),
             gtk::gdk::DragAction::COPY,
         );
+        drop_target.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let drop_body = widgets.conversation_body.clone();
+        drop_target.connect_enter(move |_, _, _| {
+            drop_body.add_css_class("zaptide-drop-active");
+            gtk::gdk::DragAction::COPY
+        });
+        let drop_body = widgets.conversation_body.clone();
+        drop_target.connect_leave(move |_| drop_body.remove_css_class("zaptide-drop-active"));
+        let drop_body = widgets.conversation_body.clone();
         let drop_sender = sender.clone();
         drop_target.connect_drop(move |_, value, _, _| {
+            drop_body.remove_css_class("zaptide-drop-active");
             let Ok(files) = value.get::<gtk::gdk::FileList>() else {
                 return false;
             };
@@ -2132,7 +2144,7 @@ impl SimpleComponent for NativeApplication {
             drop_sender.input(Input::AttachDropped(paths));
             true
         });
-        widgets.composer.add_controller(drop_target);
+        widgets.conversation_body.add_controller(drop_target);
         // Ctrl+V of copied files or of an image attaches them. Text copied
         // from office apps also carries a picture of itself, so an image
         // offered alongside text pastes as text.
@@ -3969,6 +3981,7 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
          .zaptide-unread-pill.muted { color: @window_fg_color; background-color: alpha(currentColor, 0.18); }\n\
          .zaptide-composer { border-radius: 18px; background-color: color-mix(in srgb, currentColor 8%, transparent); }\n\
          .zaptide-composer textview, .zaptide-composer text { background: none; }\n\
+         .zaptide-drop-active { outline: 2px dashed @accent_bg_color; outline-offset: -8px; background-color: alpha(@accent_bg_color, 0.08); }\n\
          .zaptide-attach-tile { padding: 10px 6px 8px; border-radius: 12px; min-width: 72px; }\n\
          .zaptide-attach-icon { min-width: 44px; min-height: 44px; border-radius: 9999px; color: white; }\n\
          .zaptide-attach-icon.gallery { background-color: #9141ac; }\n\
