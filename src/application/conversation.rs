@@ -535,6 +535,10 @@ impl NativeApplication {
         // Rebinding only the changed span keeps the reader's scroll position
         // through receipts, reactions, and incoming messages.
         let old_len = self.messages.len() as usize;
+        let old_last = old_len
+            .checked_sub(1)
+            .and_then(|last| self.messages.get(last as u32))
+            .map(|item| item.borrow().id.clone());
         let (prefix, removed, inserted) = changed_span(old_len, &rows, |position, row| {
             self.messages
                 .get(position as u32)
@@ -580,8 +584,10 @@ impl NativeApplication {
                 scroll_to_end(&self.messages.view);
             } else {
                 glide_to_end(&self.messages.view);
-                if inserted > removed
-                    && let Some(id) = self.message_ids.last()
+                // Only a new last message fades: older pages, separators and
+                // reactions leave the tail unchanged.
+                if let Some(id) = self.message_ids.last()
+                    && old_last.as_ref() != Some(id)
                 {
                     fade_in_row(&self.messages.view, id.clone());
                 }
