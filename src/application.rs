@@ -335,6 +335,11 @@ struct MessageRow {
     show_timestamp: bool,
     pointer_sender: ComponentSender<NativeApplication>,
     message: crate::model::Message,
+    /// Photos sent together, drawn as one grid by the first of them. Empty
+    /// for any other row.
+    album: Vec<crate::model::Message>,
+    /// A later photo of an album: its row stays in the list, drawn empty.
+    collapsed: bool,
     audio: Option<crate::native_voice::VoiceMessage>,
     audio_registry: AudioRegistry,
 }
@@ -343,6 +348,8 @@ impl MessageRow {
     /// Whether rebinding `other` would draw exactly this row.
     fn renders_like(&self, other: &Self) -> bool {
         self.message == other.message
+            && self.album == other.album
+            && self.collapsed == other.collapsed
             && self.audio == other.audio
             && self.mentions == other.mentions
             && self.separator == other.separator
@@ -390,6 +397,7 @@ struct MessageRowWidgets {
     audio: gtk::Box,
     audio_controls: Option<crate::native_media_widgets::AudioControls>,
     rendered_message: Option<crate::model::Message>,
+    rendered_album: Vec<crate::model::Message>,
     action_generation: std::rc::Rc<std::cell::Cell<u64>>,
     decode_token: Option<crate::native_media::DecodeToken>,
     menu_target: MenuTarget,
@@ -599,6 +607,7 @@ impl RelmListItem for MessageRow {
                 audio,
                 audio_controls: None,
                 rendered_message: None,
+                rendered_album: Vec::new(),
                 action_generation,
                 decode_token: None,
                 menu_target,
@@ -608,6 +617,7 @@ impl RelmListItem for MessageRow {
 
     fn bind(&mut self, widgets: &mut Self::Widgets, root: &mut Self::Root) {
         root.set_widget_name(&self.id);
+        root.set_visible(!self.collapsed);
         root.update_property(&[
             gtk::accessible::Property::Label(&self.accessible_label),
             gtk::accessible::Property::Description("Press Menu or Shift+F10 for actions"),
@@ -704,10 +714,17 @@ impl RelmListItem for MessageRow {
         }
         // Delivery and reaction updates must not rebuild media: a rebuilt
         // sticker or photo blanks while it decodes again and the list jumps.
-        if !widgets
-            .rendered_message
-            .as_ref()
-            .is_some_and(|previous| same_media(previous, &self.message))
+        let same_album = widgets.rendered_album.len() == self.album.len()
+            && widgets
+                .rendered_album
+                .iter()
+                .zip(&self.album)
+                .all(|(previous, next)| same_media(previous, next));
+        if !(same_album
+            && widgets
+                .rendered_message
+                .as_ref()
+                .is_some_and(|previous| same_media(previous, &self.message)))
         {
             if let Some(previous) = widgets.rendered_message.as_ref()
                 && previous.id != self.id
@@ -729,20 +746,23 @@ impl RelmListItem for MessageRow {
             let active_generation = widgets.action_generation.clone();
             let media = widgets.media.downgrade();
             let sender = self.pointer_sender.clone();
-            let rendered = crate::native_media_widgets::build_media_widget_with_action(
-                &self.message,
-                move |action| {
-                    if active_generation.get() == generation && media.upgrade().is_some() {
-                        sender.input(Input::MediaAction(action));
-                    }
-                },
-            );
+            let forward = move |action| {
+                if active_generation.get() == generation && media.upgrade().is_some() {
+                    sender.input(Input::MediaAction(action));
+                }
+            };
+            let rendered = if self.album.is_empty() {
+                crate::native_media_widgets::build_media_widget_with_action(&self.message, forward)
+            } else {
+                crate::native_media_widgets::build_album_widget(&self.album, forward)
+            };
             widgets
                 .media
                 .set_visible(rendered.widget.first_child().is_some());
             widgets.media.append(&rendered.widget);
             widgets.decode_token = Some(rendered.decode_token);
             widgets.rendered_message = Some(self.message.clone());
+            widgets.rendered_album = self.album.clone();
         }
         if let Some(voice) = &self.audio {
             if widgets.audio_controls.is_none() {
@@ -4335,9 +4355,61 @@ fn message_row(
         show_timestamp,
         pointer_sender,
         message,
+        album: Vec::new(),
+        collapsed: false,
         audio: None,
         audio_registry,
     }
+}
+
+/// How a message takes part in an album of photos sent together.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AlbumRole {
+    Single,
+    /// The first photo; draws the whole album of this many photos.
+    Leader(usize),
+    Follower,
+}
+
+/// Groups runs of photos from one sender, sent close together, into albums.
+/// `separated[i]` marks a day or unread divider above message `i`, which
+/// ends a run. A caption or quote on a later photo also ends it.
+fn album_roles(messages: &[crate::model::Message], separated: &[bool]) -> Vec<AlbumRole> {
+    use crate::model::Content;
+    const MAX_PHOTOS: usize = 10;
+    const GAP_SECONDS: i64 = 2 * 60;
+    let photo = |message: &crate::model::Message| {
+        matches!(message.content, Content::Image { .. }) && message.quoted.is_none()
+    };
+    let captioned = |message: &crate::model::Message| matches!(&message.content, Content::Image { caption: Some(text), .. } if !text.is_empty());
+    let joins = |previous: &crate::model::Message, next: &crate::model::Message, index: usize| {
+        photo(next)
+            && !captioned(next)
+            && !separated[index]
+            && previous.from_me == next.from_me
+            && previous.sender == next.sender
+            && next.timestamp >= previous.timestamp
+            && next.timestamp - previous.timestamp <= GAP_SECONDS
+    };
+    let mut roles = vec![AlbumRole::Single; messages.len()];
+    let mut start = 0;
+    while start < messages.len() {
+        let mut end = start + 1;
+        if photo(&messages[start]) {
+            while end < messages.len()
+                && end - start < MAX_PHOTOS
+                && joins(&messages[end - 1], &messages[end], end)
+            {
+                end += 1;
+            }
+        }
+        if end - start >= 2 {
+            roles[start] = AlbumRole::Leader(end - start);
+            roles[start + 1..end].fill(AlbumRole::Follower);
+        }
+        start = end;
+    }
+    roles
 }
 
 fn message_group_boundaries(messages: &[crate::model::Message]) -> Vec<(bool, bool)> {
@@ -6204,12 +6276,31 @@ impl NativeApplication {
             .collect::<Vec<_>>();
         let prefixes = conversation_prefixes(&timeline, unread);
         let boundaries = message_group_boundaries(&messages);
+        let separated = prefixes
+            .iter()
+            .map(|prefix| !prefix.is_empty())
+            .collect::<Vec<_>>();
+        let roles = album_roles(&messages, &separated);
+        let mut albums = roles
+            .iter()
+            .enumerate()
+            .map(|(index, role)| match role {
+                AlbumRole::Leader(count) => messages[index..index + count].to_vec(),
+                _ => Vec::new(),
+            })
+            .collect::<Vec<_>>();
         let rows = messages
             .into_iter()
             .enumerate()
-            .map(|(index, message)| {
+            .map(|(index, mut message)| {
                 let audio = self.project_voice(&message);
-                let (show_sender, show_timestamp) = boundaries[index];
+                let (show_sender, mut show_timestamp) = boundaries[index];
+                let album = std::mem::take(&mut albums[index]);
+                // The album's delivery mark and spacing follow its last photo.
+                if let Some(last) = album.last() {
+                    message.status = last.status;
+                    show_timestamp = boundaries[index + album.len() - 1].1;
+                }
                 let avatar = (!message.from_me)
                     .then(|| self.avatars.get(&message.sender).cloned())
                     .flatten();
@@ -6223,6 +6314,8 @@ impl NativeApplication {
                     self.audio_registry.clone(),
                 );
                 row.audio = audio;
+                row.album = album;
+                row.collapsed = roles[index] == AlbumRole::Follower;
                 row
             })
             .collect::<Vec<_>>();
@@ -8266,6 +8359,60 @@ mod tests {
         assert_eq!(
             message_group_boundaries(&messages),
             vec![(true, false), (false, true), (true, true), (true, true)]
+        );
+    }
+
+    #[test]
+    fn photos_sent_together_form_one_album() {
+        use crate::model::{Content, Media, MediaState};
+        let photo = |id: &str, from_me: bool, timestamp: i64, caption: Option<&str>| {
+            let mut message = grouping_message(id, "Alice", from_me, timestamp);
+            message.content = Content::Image {
+                media: Media {
+                    mime: "image/jpeg".into(),
+                    size: 1,
+                    width: None,
+                    height: None,
+                    path: None,
+                    state: MediaState::Idle,
+                },
+                caption: caption.map(Into::into),
+            };
+            message
+        };
+        let messages = vec![
+            photo("a", true, 100, Some("trip")),
+            photo("b", true, 101, None),
+            photo("c", true, 102, None),
+            // A caption starts a new run; a text or another sender ends one.
+            photo("d", true, 103, Some("again")),
+            photo("e", true, 104, None),
+            grouping_message("t", "Alice", true, 105),
+            photo("f", true, 106, None),
+            photo("g", false, 107, None),
+            // Too long after the previous photo.
+            photo("h", false, 1_000, None),
+        ];
+        let mut separated = vec![false; messages.len()];
+        assert_eq!(
+            album_roles(&messages, &separated),
+            [
+                AlbumRole::Leader(3),
+                AlbumRole::Follower,
+                AlbumRole::Follower,
+                AlbumRole::Leader(2),
+                AlbumRole::Follower,
+                AlbumRole::Single,
+                AlbumRole::Single,
+                AlbumRole::Single,
+                AlbumRole::Single,
+            ]
+        );
+        // A divider above a photo ends the album there.
+        separated[2] = true;
+        assert_eq!(
+            &album_roles(&messages, &separated)[..3],
+            [AlbumRole::Leader(2), AlbumRole::Follower, AlbumRole::Single]
         );
     }
 

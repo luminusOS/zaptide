@@ -974,7 +974,52 @@ fn append_photo(
     token: &DecodeToken,
     on_action: std::rc::Rc<dyn Fn(NativeMediaAction)>,
 ) {
-    let (width, height) = photo_size(media.width, media.height);
+    let size = photo_size(media.width, media.height);
+    append_photo_sized(parent, message, size, token, on_action);
+}
+
+/// Side of one album tile and the tiles per row: two large tiles for up to
+/// four photos, three smaller ones beyond that.
+fn album_layout(count: usize) -> (i32, i32) {
+    if count <= 4 { (2, 150) } else { (3, 100) }
+}
+
+/// Several photos sent together, as one grid of square tiles. Each tile keeps
+/// the single photo's behaviour: thumbnail, download, and full view.
+pub fn build_album_widget(
+    messages: &[Message],
+    on_action: impl Fn(NativeMediaAction) + 'static,
+) -> NativeMediaWidget {
+    let mut decode_token = DecodeToken::default();
+    let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    let grid = gtk::Grid::builder()
+        .row_spacing(3)
+        .column_spacing(3)
+        .halign(gtk::Align::Start)
+        .build();
+    let (columns, side) = album_layout(messages.len());
+    let on_action: std::rc::Rc<dyn Fn(NativeMediaAction)> = std::rc::Rc::new(on_action);
+    for (index, message) in messages.iter().enumerate() {
+        let tile = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let tile_token = DecodeToken::default();
+        append_photo_sized(&tile, message, (side, side), &tile_token, on_action.clone());
+        decode_token.adopt(tile_token);
+        grid.attach(&tile, index as i32 % columns, index as i32 / columns, 1, 1);
+    }
+    root.append(&grid);
+    NativeMediaWidget {
+        widget: root,
+        decode_token,
+    }
+}
+
+fn append_photo_sized(
+    parent: &gtk::Box,
+    message: &Message,
+    (width, height): (i32, i32),
+    token: &DecodeToken,
+    on_action: std::rc::Rc<dyn Fn(NativeMediaAction)>,
+) {
     let (picture, frame) = media_frame(message, width, height, "Photo");
     match attachment_action(message) {
         Some(NativeMediaAction::Open(path)) => {

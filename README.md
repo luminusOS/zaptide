@@ -20,6 +20,8 @@ stored locally in an encrypted archive.
 
 - Chat, search and send text, replies, reactions, polls, voice notes, stickers
   and attachments. Older messages load from the archive or your phone.
+- Photos sent together appear as one album in a single bubble, and files can be
+  dropped anywhere in a conversation to attach them.
 - The sticker picker shows your recently used stickers from your phone and
   stickers you sent or saved locally. Stickers received from other people stay
   in chats and do not appear in the picker automatically.

@@ -409,9 +409,15 @@ pub fn attachment_action(message: &Message) -> Option<NativeMediaAction> {
 
 /// Shared generation source for cancelling stale asynchronous decodes.
 #[derive(Clone, Default)]
-pub struct DecodeToken(Arc<AtomicU64>);
+pub struct DecodeToken(Arc<AtomicU64>, Vec<DecodeToken>);
 
 impl DecodeToken {
+    /// Makes `cancel` on this token cancel `child` too. A token serves one
+    /// decode at a time, so a widget with several images needs one per image.
+    pub fn adopt(&mut self, child: DecodeToken) {
+        self.1.push(child);
+    }
+
     /// Start new decode generation; all earlier tickets become stale.
     pub fn issue(&self) -> DecodeTicket {
         let generation = self.0.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
@@ -424,6 +430,7 @@ impl DecodeToken {
     /// Invalidates outstanding decode tickets when virtualized row is recycled.
     pub fn cancel(&self) {
         self.0.fetch_add(1, Ordering::AcqRel);
+        self.1.iter().for_each(DecodeToken::cancel);
     }
 }
 
@@ -665,6 +672,14 @@ mod tests {
             media.state = MediaState::Downloading;
         }
         assert_eq!(attachment_action(&downloadable), None);
+
+        let mut album = DecodeToken::default();
+        let tile = DecodeToken::default();
+        album.adopt(tile.clone());
+        let ticket = tile.issue();
+        assert!(ticket.is_current());
+        album.cancel();
+        assert!(!ticket.is_current());
 
         let token = DecodeToken::default();
         let first = token.issue();
