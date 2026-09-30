@@ -738,7 +738,6 @@ impl SimpleComponent for NativeApplication {
                                                 set_valign: gtk::Align::Center,
                                                 #[wrap(Some)]
                                                 set_child = &adw::StatusPage {
-                                                    add_css_class: "card",
                                                     add_css_class: "compact",
                                                     add_css_class: "zaptide-drop-card",
                                                     set_icon_name: Some("mail-attachment-symbolic"),
@@ -1479,9 +1478,8 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
          .zaptide-unread-pill.muted { color: @window_fg_color; background-color: alpha(currentColor, 0.18); }\n\
          .zaptide-composer { border-radius: 18px; background-color: color-mix(in srgb, currentColor 8%, transparent); }\n\
          .zaptide-composer textview, .zaptide-composer text { background: none; }\n\
-         .zaptide-drop-scrim { background-color: alpha(@window_bg_color, 0.75); }\n\
-         .zaptide-drop-card { margin: 24px; padding: 12px 24px; }\n\
-         .zaptide-drop-card image.icon { color: @accent_color; }\n\
+         .zaptide-drop-scrim { background-color: alpha(@shade_color, 2); }\n\
+         .zaptide-drop-card { margin: 24px; padding: 12px 24px; border-radius: 15px; background-color: @dialog_bg_color; color: @dialog_fg_color; box-shadow: 0 0 14px 2px rgba(0,0,6,0.03), 0 0 5px 2px rgba(0,0,6,0.10), 0 0 0 1px rgba(0,0,0,0.05); }\n\
          .zaptide-attachments { padding: 6px 8px 4px; border-radius: 18px; background-color: color-mix(in srgb, currentColor 5%, transparent); }\n\
          .zaptide-attachment { border-radius: 12px; }\n\
          .zaptide-attachment-file { padding: 0 40px 0 12px; }\n\
