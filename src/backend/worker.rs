@@ -694,7 +694,7 @@ impl Worker {
 
     fn backfill(&mut self) {
         // Bump to re-derive stored rows after `classify` or `thumbnail_of` change.
-        const VERSION: &str = "4";
+        const VERSION: &str = "5";
         if self.archive.meta("derived").ok().flatten().as_deref() == Some(VERSION) {
             return;
         }

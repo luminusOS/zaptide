@@ -839,7 +839,7 @@ fn version_three_archive_rederives_unsupported_buttons() {
     ));
     assert_eq!(
         worker.archive.meta("derived").unwrap().as_deref(),
-        Some("4")
+        Some("5")
     );
 }
 
