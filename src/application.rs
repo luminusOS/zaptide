@@ -3249,13 +3249,8 @@ impl NativeApplication {
                     let popover = popover.clone();
                     gtk::glib::idle_add_local_once(move || popover.unparent());
                 });
-                let (content, stack) = sticker_picker_content(
-                    &self.sticker_packs,
-                    &self.favorite_stickers,
-                    &self.recent_stickers,
-                    None,
-                    &sender,
-                );
+                let (content, stack) =
+                    sticker_picker_content(&self.recent_stickers, &self.favorite_stickers, &sender);
                 popover.set_child(Some(&content));
                 popover.set_parent(anchor);
                 popover.popup();
@@ -5741,7 +5736,7 @@ impl NativeApplication {
         }
     }
 
-    /// Rebuilds the open picker from the latest lists, staying on its page.
+    /// Rebuilds the open picker from the latest own and saved stickers.
     fn refresh_sticker_picker(&mut self, sender: &ComponentSender<NativeApplication>) {
         let Some((popover, stack)) = &self.sticker_picker else {
             return;
@@ -5750,7 +5745,6 @@ impl NativeApplication {
             self.sticker_picker = None;
             return;
         }
-        let page = stack.visible_child_name();
         let scroll = |stack: &gtk::Stack| {
             stack
                 .visible_child()
@@ -5759,13 +5753,8 @@ impl NativeApplication {
         };
         let offset = scroll(stack).map(|adjustment| adjustment.value());
         let had_focus = popover.focus_child().is_some();
-        let (content, new_stack) = sticker_picker_content(
-            &self.sticker_packs,
-            &self.favorite_stickers,
-            &self.recent_stickers,
-            page.as_deref(),
-            sender,
-        );
+        let (content, new_stack) =
+            sticker_picker_content(&self.recent_stickers, &self.favorite_stickers, sender);
         popover.set_child(Some(&content));
         if had_focus {
             content.child_focus(gtk::DirectionType::TabForward);
@@ -7653,12 +7642,10 @@ fn reaction_bar(
     bar
 }
 
-/// Sticker pages over a bottom row of page buttons, like the phone's picker.
+/// Shows recently used own stickers, followed by locally saved stickers.
 fn sticker_picker_content(
-    packs: &[crate::model::StickerPack],
-    favorites: &[std::path::PathBuf],
     recent: &[std::path::PathBuf],
-    page: Option<&str>,
+    favorites: &[std::path::PathBuf],
     sender: &ComponentSender<NativeApplication>,
 ) -> (gtk::Box, gtk::Stack) {
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -7667,124 +7654,59 @@ fn sticker_picker_content(
         .vexpand(true)
         .transition_type(gtk::StackTransitionType::Crossfade)
         .build();
-    let tabs = gtk::Box::builder()
-        .spacing(4)
-        .margin_start(6)
-        .margin_end(6)
-        .margin_top(6)
-        .margin_bottom(6)
-        .build();
-    let mut first_tab: Option<gtk::ToggleButton> = None;
-
-    let mut add_page =
-        |name: String, title: &str, icon: Option<&str>, paths: &[std::path::PathBuf]| {
-            let grid = gtk::FlowBox::builder()
-                .selection_mode(gtk::SelectionMode::None)
-                .homogeneous(true)
-                .min_children_per_line(4)
-                .max_children_per_line(4)
-                .column_spacing(4)
-                .row_spacing(4)
-                .margin_start(8)
-                .margin_end(8)
-                .margin_top(8)
-                .margin_bottom(8)
-                .valign(gtk::Align::Start)
-                .build();
-            for path in paths {
-                let button = gtk::Button::builder()
-                    .css_classes(["flat", "zaptide-sticker"])
-                    .tooltip_text("Send sticker")
-                    .build();
-                button.update_property(&[gtk::accessible::Property::Label("Sticker")]);
-                load_sticker_preview(&button, path, 72);
-                animate_sticker_on_hover(&button, path);
-                let path = path.clone();
-                let sender = sender.clone();
-                button.connect_clicked(move |_| sender.input(Input::SendSticker(path.clone())));
-                grid.append(&button);
+    let stickers = recent
+        .iter()
+        .chain(favorites)
+        .cloned()
+        .fold(Vec::new(), |mut paths, path| {
+            if !paths.contains(&path) {
+                paths.push(path);
             }
-            let scroller = gtk::ScrolledWindow::builder()
-                .hscrollbar_policy(gtk::PolicyType::Never)
-                .child(&grid)
-                .build();
-            stack.add_titled(&scroller, Some(&name), title);
-
-            let tab = gtk::ToggleButton::builder()
-                .css_classes(["flat", "zaptide-sticker-tab"])
-                .tooltip_text(title)
-                .build();
-            tab.update_property(&[gtk::accessible::Property::Label(title)]);
-            match (icon, paths.first()) {
-                (Some(icon), _) => tab.set_icon_name(icon),
-                (None, Some(cover)) => load_sticker_preview(tab.upcast_ref(), cover, 28),
-                (None, None) => tab.set_label(title),
-            }
-            match &first_tab {
-                Some(first) => tab.set_group(Some(first)),
-                None => {
-                    tab.set_active(true);
-                    first_tab = Some(tab.clone());
-                }
-            }
-            {
-                let stack = stack.clone();
-                let name = name.clone();
-                tab.connect_toggled(move |tab| {
-                    if tab.is_active() {
-                        stack.set_visible_child_name(&name);
-                    }
-                });
-            }
-            if page == Some(name.as_str()) {
-                tab.set_active(true);
-            }
-            tabs.append(&tab);
-        };
-
-    if !recent.is_empty() {
-        add_page(
-            "recent".into(),
-            "Recent",
-            Some("document-open-recent-symbolic"),
-            recent,
-        );
-    }
-    if !favorites.is_empty() {
-        add_page(
-            "favorites".into(),
-            "Favorites",
-            Some("starred-symbolic"),
-            favorites,
-        );
-    }
-    for pack in packs {
-        add_page(
-            format!("pack:{}", pack.dir.display()),
-            &pack.name,
-            None,
-            &pack.stickers,
-        );
-    }
-
-    if first_tab.is_none() {
+            paths
+        });
+    if stickers.is_empty() {
         let empty = adw::StatusPage::builder()
             .icon_name("emoji-nature-symbolic")
             .title("No Stickers Yet")
-            .description("Stickers you send, receive, or save appear here.")
+            .description("Your recently used stickers appear here.")
             .vexpand(true)
             .build();
         empty.add_css_class("compact");
         content.append(&empty);
-        return (content, stack);
+    } else {
+        let grid = gtk::FlowBox::builder()
+            .selection_mode(gtk::SelectionMode::None)
+            .homogeneous(true)
+            .min_children_per_line(4)
+            .max_children_per_line(4)
+            .column_spacing(4)
+            .row_spacing(4)
+            .margin_start(8)
+            .margin_end(8)
+            .margin_top(8)
+            .margin_bottom(8)
+            .valign(gtk::Align::Start)
+            .build();
+        for path in &stickers {
+            let button = gtk::Button::builder()
+                .css_classes(["flat", "zaptide-sticker"])
+                .tooltip_text("Send sticker")
+                .build();
+            button.update_property(&[gtk::accessible::Property::Label("Sticker")]);
+            load_sticker_preview(&button, path, 72);
+            animate_sticker_on_hover(&button, path);
+            let path = path.clone();
+            let sender = sender.clone();
+            button.connect_clicked(move |_| sender.input(Input::SendSticker(path.clone())));
+            grid.append(&button);
+        }
+        let scroller = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .child(&grid)
+            .build();
+        stack.add_titled(&scroller, Some("recent"), "Stickers");
+        content.append(&stack);
     }
-    content.append(&stack);
-    content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-    let tab_scroller = gtk::ScrolledWindow::builder()
-        .vscrollbar_policy(gtk::PolicyType::Never)
-        .child(&tabs)
-        .build();
-    content.append(&tab_scroller);
     (content, stack)
 }
 

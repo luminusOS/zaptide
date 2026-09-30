@@ -8098,6 +8098,39 @@ mod receipt_tests {
     }
 
     #[test]
+    fn phone_recents_and_saved_stickers_keep_their_sources() {
+        let (mut worker, events, _, _) = worker();
+        let root = tempfile::tempdir().expect("temporary sticker root");
+        worker.dirs = AppDirs::under(root.path());
+        let saved = worker.dirs.saved_sticker_dir().join("favorite.webp");
+        let phone_recent = worker.dirs.sticker_cache_dir().join("phone-recent.webp");
+        std::fs::create_dir_all(worker.dirs.saved_sticker_dir()).expect("saved directory");
+        std::fs::create_dir_all(worker.dirs.sticker_cache_dir()).expect("cache directory");
+        std::fs::write(&saved, b"favorite").expect("favorite fixture");
+        std::fs::write(&phone_recent, b"recent").expect("recent fixture");
+        worker
+            .archive
+            .upsert_phone_sticker("phone-recent", b"metadata", 42, 1.0)
+            .expect("phone sticker");
+        worker
+            .archive
+            .set_sticker_path("phone-recent", &phone_recent)
+            .expect("cached sticker");
+
+        worker.emit_stickers();
+        let Event::Stickers {
+            saved: favorites,
+            recent,
+            ..
+        } = events.try_recv().expect("sticker event")
+        else {
+            panic!("expected sticker event");
+        };
+        assert_eq!(favorites, vec![saved]);
+        assert_eq!(recent, vec![phone_recent]);
+    }
+
+    #[test]
     fn logout_cleanup_removes_session_sidecars_and_account_caches() {
         let root = tempfile::tempdir().expect("temporary account root");
         let dirs = AppDirs::under(root.path());

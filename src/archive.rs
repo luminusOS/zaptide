@@ -838,12 +838,13 @@ impl Archive {
         rows.collect()
     }
 
-    /// Returns downloaded chat stickers for the picker, newest first.
+    /// Returns downloaded stickers we sent for the picker, newest first.
     pub fn recent_stickers(&self, limit: usize) -> Result<Vec<ArchivedSticker>> {
         let mut statement = self.connection.prepare(
             "SELECT json_extract(content, '$.media.path') AS path, MAX(timestamp), raw
              FROM messages
              WHERE json_extract(content, '$.kind') = 'sticker' AND path IS NOT NULL
+               AND from_me = 1
                -- A pending or failed send has no raw message to resend.
                AND raw IS NOT NULL
              GROUP BY path
@@ -863,14 +864,15 @@ impl Archive {
             .collect())
     }
 
-    /// Returns undownloaded sticker messages, outgoing first and newest first.
+    /// Returns undownloaded stickers we sent, newest first.
     pub fn stickers_without_file(&self, limit: usize) -> Result<Vec<(String, String)>> {
         let mut statement = self.connection.prepare(
             "SELECT chat, id FROM messages
              WHERE json_extract(content, '$.kind') = 'sticker'
+               AND from_me = 1
                AND json_extract(content, '$.media.path') IS NULL
                AND raw IS NOT NULL
-             ORDER BY from_me DESC, timestamp DESC
+             ORDER BY timestamp DESC
              LIMIT ?1",
         )?;
         let rows = statement.query_map(params![limit as i64], |row| {
@@ -2083,7 +2085,7 @@ mod sticker_tests {
             chat: chat.into(),
             sender: chat.into(),
             sender_name: None,
-            from_me: false,
+            from_me: true,
             timestamp,
             content: Content::Sticker {
                 media: Media {
@@ -2148,6 +2150,15 @@ mod sticker_tests {
                 Some(b"raw"),
             )
             .expect("inserted");
+        archive
+            .insert_message(
+                &Message {
+                    from_me: false,
+                    ..sticker("a@s.whatsapp.net", "received", 30, None)
+                },
+                Some(b"raw"),
+            )
+            .expect("received");
         let missing = archive.stickers_without_file(10).expect("lists");
         assert_eq!(
             missing,
@@ -2174,8 +2185,21 @@ mod sticker_tests {
         archive
             .insert_message(&sticker("a@s.whatsapp.net", "s2", 20, Some(path)), None)
             .expect("inserted");
+        let received =
+            std::env::temp_dir().join(format!("zaptide-received-{}.webp", std::process::id()));
+        std::fs::write(&received, b"received").expect("file");
+        archive
+            .insert_message(
+                &Message {
+                    from_me: false,
+                    ..sticker("a@s.whatsapp.net", "received", 30, received.to_str())
+                },
+                Some(b"raw"),
+            )
+            .expect("received");
         let recent = archive.recent_stickers(10).expect("lists");
         std::fs::remove_file(&file).ok();
+        std::fs::remove_file(&received).ok();
         assert_eq!(recent.len(), 1);
         assert_eq!(recent[0].raw.as_deref(), Some(&b"raw"[..]));
     }

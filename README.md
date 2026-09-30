@@ -20,6 +20,9 @@ stored locally in an encrypted archive.
 
 - Chat, search and send text, replies, reactions, polls, voice notes, stickers
   and attachments. Older messages load from the archive or your phone.
+- The sticker picker shows your recently used stickers from your phone and
+  stickers you sent or saved locally. Stickers received from other people stay
+  in chats and do not appear in the picker automatically.
 - Read and answer quick-reply buttons and single-select lists when a sender
   delivers them. Mentioned contacts show their saved names in messages and
   copied transcripts; unknown contacts can show their WhatsApp name on hover.
