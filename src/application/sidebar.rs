@@ -129,10 +129,15 @@ impl SimpleComponent for Sidebar {
                                     set_justify_last_line: false,
                                     set_child_spacing: 6,
                                     set_line_spacing: 6,
-                                    set_natural_line_length: 280,
+                                    set_natural_line_length: 320,
                                     #[name = "all_filter"]
                                     append = &gtk::ToggleButton {
-                                        set_label: "All",
+                                        #[wrap(Some)]
+                                        set_child = &adw::ButtonContent {
+                                            set_icon_name: "view-list-bullet-symbolic",
+                                            set_label: "All",
+                                        },
+                                        update_property: &[gtk::accessible::Property::Label("All")],
                                         #[watch]
                                         set_active: !model.state.filters.private_only && !model.state.filters.groups_only,
                                         #[watch]
@@ -140,7 +145,12 @@ impl SimpleComponent for Sidebar {
                                         connect_toggled[sender] => move |button| if button.is_active() { sender.output(SidebarOutput::SetChatKindFilter(crate::native_chat_list::ChatKindFilter::All)).unwrap() },
                                     },
                                     append = &gtk::ToggleButton {
-                                        set_label: "Private",
+                                        #[wrap(Some)]
+                                        set_child = &adw::ButtonContent {
+                                            set_icon_name: "avatar-default-symbolic",
+                                            set_label: "Private",
+                                        },
+                                        update_property: &[gtk::accessible::Property::Label("Private")],
                                         set_group: Some(&all_filter),
                                         #[watch]
                                         set_active: model.state.filters.private_only,
@@ -149,7 +159,12 @@ impl SimpleComponent for Sidebar {
                                         connect_toggled[sender] => move |button| if button.is_active() { sender.output(SidebarOutput::SetChatKindFilter(crate::native_chat_list::ChatKindFilter::Private)).unwrap() },
                                     },
                                     append = &gtk::ToggleButton {
-                                        set_label: "Groups",
+                                        #[wrap(Some)]
+                                        set_child = &adw::ButtonContent {
+                                            set_icon_name: "system-users-symbolic",
+                                            set_label: "Groups",
+                                        },
+                                        update_property: &[gtk::accessible::Property::Label("Groups")],
                                         set_group: Some(&all_filter),
                                         #[watch]
                                         set_active: model.state.filters.groups_only,
@@ -168,9 +183,14 @@ impl SimpleComponent for Sidebar {
                                     set_justify_last_line: false,
                                     set_child_spacing: 6,
                                     set_line_spacing: 6,
-                                    set_natural_line_length: 280,
+                                    set_natural_line_length: 320,
                                     append = &gtk::ToggleButton {
-                                        set_label: "Unread",
+                                        #[wrap(Some)]
+                                        set_child = &adw::ButtonContent {
+                                            set_icon_name: "mail-unread-symbolic",
+                                            set_label: "Unread",
+                                        },
+                                        update_property: &[gtk::accessible::Property::Label("Unread")],
                                         #[watch]
                                         set_active: model.state.filters.unread_only,
                                         #[watch]
@@ -178,7 +198,12 @@ impl SimpleComponent for Sidebar {
                                         connect_toggled[sender] => move |button| sender.output(SidebarOutput::SetUnreadFilter(button.is_active())).unwrap(),
                                     },
                                     append = &gtk::ToggleButton {
-                                        set_label: "Pinned",
+                                        #[wrap(Some)]
+                                        set_child = &adw::ButtonContent {
+                                            set_icon_name: "view-pin-symbolic",
+                                            set_label: "Pinned",
+                                        },
+                                        update_property: &[gtk::accessible::Property::Label("Pinned")],
                                         #[watch]
                                         set_active: model.state.filters.pinned_only,
                                         #[watch]
@@ -186,7 +211,12 @@ impl SimpleComponent for Sidebar {
                                         connect_toggled[sender] => move |button| sender.output(SidebarOutput::SetPinnedFilter(button.is_active())).unwrap(),
                                     },
                                     append = &gtk::ToggleButton {
-                                        set_label: "Muted",
+                                        #[wrap(Some)]
+                                        set_child = &adw::ButtonContent {
+                                            set_icon_name: "notifications-disabled-symbolic",
+                                            set_label: "Muted",
+                                        },
+                                        update_property: &[gtk::accessible::Property::Label("Muted")],
                                         #[watch]
                                         set_active: model.state.filters.muted == crate::native_chat_list::MutedFilter::Only,
                                         #[watch]
