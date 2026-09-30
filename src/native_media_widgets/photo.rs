@@ -189,8 +189,14 @@ fn album_download(
     downloads: Vec<NativeMediaAction>,
     on_action: std::rc::Rc<dyn Fn(NativeMediaAction)>,
 ) -> gtk::Button {
-    let button = gtk::Button::builder()
+    let icon = gtk::Image::builder()
         .icon_name("folder-download-symbolic")
+        .pixel_size(28)
+        .build();
+    let button = gtk::Button::builder()
+        .child(&icon)
+        .width_request(56)
+        .height_request(56)
         .tooltip_text(format!("Download {} photos", downloads.len()))
         .halign(gtk::Align::Center)
         .valign(gtk::Align::Center)
