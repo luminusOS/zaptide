@@ -36,6 +36,12 @@ jobs:
           lock = tomllib.loads(Path("Cargo.lock").read_text())
           assert manifest["package"]["version"] == version, "Tag does not match Cargo.toml"
           assert any(p["name"] == "zaptide" and p["version"] == version for p in lock["package"]), "Cargo.lock does not match"
+          # `flatpak info` and software centres read the version from the
+          # newest <release> in the metainfo, not from the binary.
+          import xml.etree.ElementTree as ET
+          metainfo = ET.parse("packaging/flatpak/dev.luminusos.ZapTide.metainfo.xml").getroot()
+          newest = metainfo.find("releases/release")
+          assert newest is not None and newest.get("version") == version, "Newest metainfo release does not match"
           PY
 
   ci:

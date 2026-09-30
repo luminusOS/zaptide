@@ -36,6 +36,19 @@
     <control>keyboard</control>
   </supports>
   <releases>
+    <release version="0.3.0" date="2026-09-29">
+      <description>
+        <p>Answer quick-reply buttons and list messages, and see mentioned
+        people by name.</p>
+      </description>
+    </release>
+    <release version="0.2.0" date="2026-09-29">
+      <description>
+        <p>Richer contact info and groups in common, a searchable mention
+        picker, a live voice recording meter, links in messages, and a
+        Gallery and Files attach menu.</p>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-09-28">
       <description>
         <p>First ZapTide release with a native GTK interface, encrypted local
