@@ -1582,13 +1582,27 @@ impl SimpleComponent for NativeApplication {
                                         set_spacing: 6,
                                         #[watch]
                                         set_visible: model.reply_to.is_some() || model.editing.is_some(),
-                                        append = &gtk::Label {
+                                        append = &gtk::Box {
+                                            set_orientation: gtk::Orientation::Vertical,
                                             add_css_class: "zaptide-quote",
                                             set_hexpand: true,
-                                            set_xalign: 0.0,
-                                            set_ellipsize: gtk::pango::EllipsizeMode::End,
-                                            #[watch]
-                                            set_label: if model.editing.is_some() { "Editing message" } else { "Replying to message" },
+                                            append = &gtk::Label {
+                                                add_css_class: "heading",
+                                                set_xalign: 0.0,
+                                                set_ellipsize: gtk::pango::EllipsizeMode::End,
+                                                #[watch]
+                                                set_label: &model.composer_context().0,
+                                            },
+                                            append = &gtk::Label {
+                                                add_css_class: "dim-label",
+                                                set_xalign: 0.0,
+                                                set_ellipsize: gtk::pango::EllipsizeMode::End,
+                                                set_single_line_mode: true,
+                                                #[watch]
+                                                set_label: &model.composer_context().1,
+                                                #[watch]
+                                                set_visible: !model.composer_context().1.is_empty(),
+                                            },
                                         },
                                         append = &gtk::Button {
                                             set_icon_name: "window-close-symbolic",
@@ -6223,6 +6237,28 @@ impl NativeApplication {
             .as_ref()
             .is_some_and(|chat| self.pending_clipboard_images.contains_key(chat));
         files + usize::from(image)
+    }
+
+    /// Title and one-line preview for the bar above the composer: the message
+    /// being edited, or the one being replied to and who wrote it.
+    fn composer_context(&self) -> (String, String) {
+        if let Some((_, id)) = &self.editing {
+            let preview = self.message_snapshots.get(id).map(|m| m.summary());
+            return ("Editing message".into(), preview.unwrap_or_default());
+        }
+        let Some(message) = self
+            .reply_to
+            .as_ref()
+            .and_then(|(_, id)| self.message_snapshots.get(id))
+        else {
+            return ("Replying to message".into(), String::new());
+        };
+        let who = if message.from_me {
+            "yourself".to_owned()
+        } else {
+            sender_label(message.sender_name.as_deref(), &message.sender)
+        };
+        (format!("Replying to {who}"), message.summary())
     }
 
     fn can_attach(&self) -> bool {
