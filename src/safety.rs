@@ -229,17 +229,109 @@ pub fn linkify_markup(text: &str) -> String {
 
 /// [`linkify_markup`] that also highlights the given `@user` mentions.
 pub fn linkify_markup_with_mentions(text: &str, mentions: &[MentionLabel]) -> String {
-    use gtk4::glib::markup_escape_text as esc;
     // Pango rejects the character references GLib emits for control characters.
     let text: String = text
         .chars()
         .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
         .collect();
-    let text = text.as_str();
     let mut out = String::with_capacity(text.len());
+    render(&text, mentions, true, &mut out);
+    out
+}
+
+/// Byte offset of the marker closing the `marker` span that starts `rest`.
+/// As in WhatsApp, a span stays on one line, holds something, does not start
+/// or end with whitespace, and ends before a character that is not a letter or digit.
+fn closing_marker(rest: &str, marker: char) -> Option<usize> {
+    let mut chars = rest.char_indices().skip(1);
+    let (_, first) = chars.next()?;
+    if first.is_whitespace() || first == marker {
+        return None;
+    }
+    let mut previous = first;
+    for (index, c) in chars {
+        if c == '\n' {
+            return None;
+        }
+        if c == marker && !previous.is_whitespace() {
+            let after = rest[index + c.len_utf8()..].chars().next();
+            if after.is_none_or(|after| !after.is_alphanumeric()) {
+                return Some(index);
+            }
+        }
+        previous = c;
+    }
+    None
+}
+
+/// Appends the Pango markup of `text` to `out`: WhatsApp formatting (`*bold*`,
+/// `_italic_`, `~strike~`, `` `code` ``, code blocks, `>` quotes, `-` lists),
+/// links and mentions. Everything else is escaped.
+fn render(text: &str, mentions: &[MentionLabel], mut line_start: bool, out: &mut String) {
+    use gtk4::glib::markup_escape_text as esc;
     let (mut plain, mut index, mut boundary) = (0, 0, true);
     while let Some(c) = text[index..].chars().next() {
         let rest = &text[index..];
+        if line_start {
+            let block = if rest.starts_with("> ") {
+                Some("<span alpha=\"60%\">▎</span> ")
+            } else if rest.starts_with("- ") || rest.starts_with("* ") {
+                Some("• ")
+            } else {
+                None
+            };
+            if let Some(markup) = block {
+                out.push_str(&esc(&text[plain..index]));
+                out.push_str(markup);
+                index += 2;
+                plain = index;
+                line_start = false;
+                boundary = true;
+                continue;
+            }
+        }
+        if let Some(code) = rest.strip_prefix("```")
+            && let Some(end) = code.find("```")
+            && !code[..end].trim().is_empty()
+        {
+            out.push_str(&esc(&text[plain..index]));
+            out.push_str(&format!("<tt>{}</tt>", esc(code[..end].trim_matches('\n'))));
+            index += 6 + end;
+            plain = index;
+            boundary = false;
+            line_start = false;
+            continue;
+        }
+        // Only after a character that is not a letter or digit, so `snake_case` stays plain.
+        let opens = text[..index]
+            .chars()
+            .next_back()
+            .is_none_or(|before| !before.is_alphanumeric());
+        let tag = match c {
+            '*' => Some("b"),
+            '_' => Some("i"),
+            '~' => Some("s"),
+            '`' => Some("tt"),
+            _ => None,
+        };
+        if let (true, Some(tag), Some(end)) =
+            (opens, tag, tag.and_then(|_| closing_marker(rest, c)))
+        {
+            out.push_str(&esc(&text[plain..index]));
+            let inner = &rest[c.len_utf8()..end];
+            out.push_str(&format!("<{tag}>"));
+            if tag == "tt" {
+                out.push_str(&esc(inner));
+            } else {
+                render(inner, mentions, false, out);
+            }
+            out.push_str(&format!("</{tag}>"));
+            index += end + c.len_utf8();
+            plain = index;
+            boundary = false;
+            line_start = false;
+            continue;
+        }
         // Only after whitespace or an opening mark, so `a@15581.com` stays an address.
         if let Some((len, markup)) = boundary.then(|| mention_at(rest, mentions)).flatten() {
             out.push_str(&esc(&text[plain..index]));
@@ -260,11 +352,13 @@ pub fn linkify_markup_with_mentions(text: &str, mentions: &[MentionLabel]) -> St
             boundary = false;
         } else {
             boundary = c.is_whitespace() || matches!(c, '(' | '[' | '"' | '\'');
+            line_start = c == '\n';
             index += c.len_utf8();
+            continue;
         }
+        line_start = false;
     }
     out.push_str(&esc(&text[plain..]));
-    out
 }
 
 #[cfg(test)]
@@ -283,6 +377,48 @@ mod tests {
             linkify_markup("(https://a.io)"),
             "(<a href=\"https://a.io/\">https://a.io</a>)"
         );
+    }
+
+    #[test]
+    fn whatsapp_formatting_becomes_markup() {
+        assert_eq!(
+            linkify_markup("Olá, *Customer*! _hi_ ~no~ `a<b` ok"),
+            "Olá, <b>Customer</b>! <i>hi</i> <s>no</s> <tt>a&lt;b</tt> ok"
+        );
+        // Spans nest, and links inside them stay links.
+        assert_eq!(
+            linkify_markup("*bold _both_* _see https://a.io_"),
+            "<b>bold <i>both</i></b> <i>see <a href=\"https://a.io/\">https://a.io</a></i>"
+        );
+        // Code is literal.
+        assert_eq!(linkify_markup("`*x*`"), "<tt>*x*</tt>");
+        assert_eq!(linkify_markup("```\n*x*\nmore\n```"), "<tt>*x*\nmore</tt>");
+        // Not spans: spaces inside, empty, inside a word, unclosed, across lines.
+        for plain in [
+            "2 * 3 * 4",
+            "** x",
+            "snake_case_name",
+            "a*b*c",
+            "*open",
+            "*a\nb*",
+            "* *",
+        ] {
+            assert!(
+                !linkify_markup(plain).contains("<b>") && !linkify_markup(plain).contains("<i>"),
+                "{plain}"
+            );
+        }
+        assert_eq!(linkify_markup("foo_bar_ and _x_y"), "foo_bar_ and _x_y");
+        // A closing mark must not be followed by a letter or digit.
+        assert_eq!(linkify_markup("*a*b"), "*a*b");
+        assert_eq!(linkify_markup("(*a*)"), "(<b>a</b>)");
+        assert_eq!(
+            linkify_markup("> quoted\n- one\n* two\n1. three"),
+            "<span alpha=\"60%\">▎</span> quoted\n• one\n• two\n1. three"
+        );
+        assert_eq!(linkify_markup("a - b"), "a - b");
+        // Markup characters in the text stay escaped inside a span.
+        assert_eq!(linkify_markup("*<b>*"), "<b>&lt;b&gt;</b>");
     }
 
     #[test]

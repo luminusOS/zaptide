@@ -63,8 +63,8 @@ pub(crate) use sticker::{StickerAnimation, decode_sticker_file};
 pub use widget::build_media_widget_with_action;
 
 use cards::{
-    ListChoiceSection, add_label, decode_preview_async, link_card, location_card, reply_button,
-    show_list_choices,
+    ListChoiceSection, add_formatted_label, add_label, decode_preview_async, link_card,
+    location_card, reply_button, show_list_choices,
 };
 use photo::{append_photo, append_video, document_card};
 use sticker::append_sticker;
@@ -219,7 +219,9 @@ mod tests {
                 .collect()
         };
         let template = message(Content::Template {
-            text: "Hello! Your assembly is booked for 02/10.".into(),
+            text: "Olá, *Customer*! A *montagem do seu produto* foi agendada para _02/10_.\n\
+                   - ~cancelada~ não\n> citação"
+                .into(),
             footer: Some("Store".into()),
             links: vec![crate::model::TemplateLink {
                 label: "Assembly status".into(),

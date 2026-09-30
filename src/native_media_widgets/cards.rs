@@ -148,6 +148,21 @@ pub(super) fn link_card(
     })
 }
 
+/// A label for sender-written text: WhatsApp formatting and web links apply.
+/// In-app chat links need the message row, so they only show as text here.
+pub(super) fn add_formatted_label(parent: &gtk::Box, text: &str) -> gtk::Label {
+    let label = add_label(parent, text);
+    label.set_markup(&crate::safety::linkify_markup(text));
+    label.connect_activate_link(|_, uri| {
+        if uri.starts_with(crate::safety::CHAT_SCHEME) {
+            gtk::glib::Propagation::Stop
+        } else {
+            gtk::glib::Propagation::Proceed
+        }
+    });
+    label
+}
+
 pub(super) fn add_label(parent: &gtk::Box, text: &str) -> gtk::Label {
     let label = gtk::Label::new(Some(text));
     label.set_xalign(0.0);

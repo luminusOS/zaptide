@@ -134,7 +134,7 @@ pub fn build_media_widget_with_action(
             answered,
         } => {
             if !text.is_empty() {
-                add_label(&root, text);
+                add_formatted_label(&root, text);
             }
             if let Some(footer) = footer {
                 let label = add_label(&root, footer);
@@ -204,7 +204,7 @@ pub fn build_media_widget_with_action(
                 add_label(&root, title).add_css_class("heading");
             }
             if let Some(description) = description {
-                add_label(&root, description);
+                add_formatted_label(&root, description);
             }
             // Row ids come from the message itself, in the projection's order.
             let ids: Vec<&str> = match &message.content {
@@ -304,7 +304,7 @@ pub fn build_media_widget_with_action(
             links,
         } => {
             if !text.is_empty() {
-                add_label(&root, text);
+                add_formatted_label(&root, text);
             }
             if let Some(footer) = footer {
                 let label = add_label(&root, footer);
