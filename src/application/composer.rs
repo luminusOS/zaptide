@@ -10,7 +10,7 @@ pub(super) struct ComposerState {
     pub(super) recording_send_enabled: bool,
     pub(super) context: Option<(String, String)>,
     pub(super) attachment_count: usize,
-    pub(super) attachment_names: Vec<String>,
+    pub(super) attachment_paths: Vec<std::path::PathBuf>,
     pub(super) clipboard_preview: Option<gtk::gdk::Texture>,
     pub(super) can_attach: bool,
     pub(super) can_mention: bool,
@@ -31,7 +31,7 @@ impl Default for ComposerState {
             recording_send_enabled: false,
             context: None,
             attachment_count: 0,
-            attachment_names: Vec::new(),
+            attachment_paths: Vec::new(),
             clipboard_preview: None,
             can_attach: false,
             can_mention: false,
@@ -56,6 +56,7 @@ pub(super) struct ComposerView {
     buffer: gtk::TextBuffer,
     text_view: Option<gtk::TextView>,
     sticker_button: Option<gtk::Button>,
+    attachment_list: Option<gtk::Box>,
 }
 
 #[derive(Debug)]
@@ -69,6 +70,7 @@ pub(super) enum ComposerViewOutput {
     SendText(String),
     PickAttachments { gallery: bool },
     ClearAttachments,
+    RemoveAttachment(std::path::PathBuf),
     CancelReply,
     CancelEdit,
     Recording(crate::native_voice::RecordingIntent),
@@ -198,43 +200,49 @@ impl SimpleComponent for ComposerView {
             },
 
             append = &gtk::Box {
+                set_orientation: gtk::Orientation::Vertical,
                 set_margin_start: 12,
                 set_margin_end: 12,
                 set_margin_top: 6,
                 set_spacing: 6,
+                add_css_class: "zaptide-attachments",
                 #[watch]
                 set_visible: model.state.attachment_count > 0,
-                append = &gtk::Picture {
-                    set_size_request: (96, 72),
-                    set_can_shrink: true,
-                    set_content_fit: gtk::ContentFit::Contain,
-                    set_tooltip_text: Some("Clipboard image staged for sending"),
-                    set_alternative_text: Some("Clipboard image preview"),
-                    #[watch]
-                    set_visible: model.state.clipboard_preview.is_some(),
-                    #[watch]
-                    set_paintable: model.state.clipboard_preview.as_ref(),
+                append = &gtk::Box {
+                    set_spacing: 6,
+                    append = &gtk::Label {
+                        set_hexpand: true,
+                        set_xalign: 0.0,
+                        set_margin_start: 2,
+                        add_css_class: "caption-heading",
+                        add_css_class: "dim-label",
+                        #[watch]
+                        set_label: &super::attachment_summary(&[], model.state.attachment_count),
+                    },
+                    append = &gtk::Button {
+                        #[wrap(Some)]
+                        set_child = &libadwaita::ButtonContent {
+                            set_icon_name: "edit-clear-all-symbolic",
+                            set_label: "Remove All",
+                        },
+                        set_valign: gtk::Align::Center,
+                        add_css_class: "flat",
+                        add_css_class: "zaptide-tray-action",
+                        connect_clicked[sender] => move |_| sender.output(ComposerViewOutput::ClearAttachments).unwrap(),
+                    },
                 },
-                append = &gtk::Image {
-                    set_icon_name: Some("mail-attachment-symbolic"),
-                    #[watch]
-                    set_visible: model.state.attachment_names.len() == model.state.attachment_count,
-                },
-                append = &gtk::Label {
-                    set_hexpand: true,
-                    set_xalign: 0.0,
-                    set_ellipsize: gtk::pango::EllipsizeMode::Middle,
-                    #[watch]
-                    set_label: &super::attachment_summary(&model.state.attachment_names, model.state.attachment_count),
-                    #[watch]
-                    set_tooltip_text: Some(&model.state.attachment_names.join("\n")).filter(|names| !names.is_empty()).map(String::as_str),
-                },
-                append = &gtk::Button {
-                    set_icon_name: "window-close-symbolic",
-                    set_tooltip_text: Some("Clear attachments"),
-                    add_css_class: "flat",
-                    add_css_class: "circular",
-                    connect_clicked[sender] => move |_| sender.output(ComposerViewOutput::ClearAttachments).unwrap(),
+                append = &gtk::ScrolledWindow {
+                    set_vscrollbar_policy: gtk::PolicyType::Never,
+                    set_propagate_natural_height: true,
+                    #[name = "attachment_list"]
+                    #[wrap(Some)]
+                    set_child = &gtk::Box {
+                        set_spacing: 8,
+                        set_margin_top: 2,
+                        set_margin_bottom: 4,
+                        set_margin_start: 2,
+                        set_margin_end: 2,
+                    },
                 },
             },
 
@@ -395,6 +403,7 @@ impl SimpleComponent for ComposerView {
             buffer: init.buffer,
             text_view: None,
             sticker_button: None,
+            attachment_list: None,
         };
         let enter_setting = init.enter_sends;
         let input = sender.clone();
@@ -433,14 +442,162 @@ impl SimpleComponent for ComposerView {
         widgets.composer.add_controller(composer_keys);
         model.text_view = Some(widgets.composer.clone());
         model.sticker_button = Some(widgets.sticker_button.clone());
+        model.attachment_list = Some(widgets.attachment_list.clone());
+        model.rebuild_attachments(&sender);
         ComponentParts { model, widgets }
     }
 
-    fn update(&mut self, input: Self::Input, _sender: ComponentSender<Self>) {
+    fn update(&mut self, input: Self::Input, sender: ComponentSender<Self>) {
         match input {
             ComposerViewInput::Sync(state) => {
+                let staged_changed = state.attachment_paths != self.state.attachment_paths
+                    || state.clipboard_preview != self.state.clipboard_preview;
                 self.state = state;
+                if staged_changed {
+                    self.rebuild_attachments(&sender);
+                }
             }
         }
     }
+}
+
+/// Side of an attachment card in the tray above the composer.
+const CARD_EDGE: i32 = 72;
+
+impl ComposerView {
+    /// One card per staged item; rebuilt only when the staged set changes.
+    fn rebuild_attachments(&self, sender: &ComponentSender<Self>) {
+        let Some(list) = &self.attachment_list else {
+            return;
+        };
+        while let Some(child) = list.first_child() {
+            list.remove(&child);
+        }
+        if let Some(texture) = &self.state.clipboard_preview {
+            let picture = gtk::Picture::for_paintable(texture);
+            picture.set_alternative_text(Some("Clipboard image"));
+            list.append(&attachment_card(
+                &thumbnail(picture),
+                "Clipboard image",
+                None,
+                sender,
+            ));
+        }
+        for path in &self.state.attachment_paths {
+            let name = path.file_name().map_or_else(
+                || path.display().to_string(),
+                |name| name.to_string_lossy().into_owned(),
+            );
+            let content_type = gtk::gio::content_type_guess(Some(path), None).0;
+            let content = if content_type.starts_with("image/") {
+                // ponytail: decodes on the main thread; fine for a few photos,
+                // move to glycin like the timeline if large batches stall.
+                let picture = gtk::Picture::for_filename(path);
+                picture.set_alternative_text(Some(&name));
+                thumbnail(picture)
+            } else {
+                file_tile(&name, &content_type)
+            };
+            list.append(&attachment_card(
+                &content,
+                &name,
+                Some(path.clone()),
+                sender,
+            ));
+        }
+    }
+}
+
+/// A square cover-cropped preview; the clamps stop the picture's natural
+/// size from growing the card.
+fn thumbnail(picture: gtk::Picture) -> gtk::Widget {
+    picture.set_content_fit(gtk::ContentFit::Cover);
+    picture.set_can_shrink(true);
+    picture.set_size_request(CARD_EDGE, CARD_EDGE);
+    let clamp = |child: &gtk::Widget, orientation| {
+        libadwaita::Clamp::builder()
+            .orientation(orientation)
+            .maximum_size(CARD_EDGE)
+            .tightening_threshold(CARD_EDGE)
+            .child(child)
+            .build()
+    };
+    let wide = clamp(picture.upcast_ref(), gtk::Orientation::Horizontal);
+    clamp(wide.upcast_ref(), gtk::Orientation::Vertical).upcast()
+}
+
+/// File type icon beside the file name and type, for non-image files.
+fn file_tile(name: &str, content_type: &str) -> gtk::Widget {
+    let tile = gtk::Box::builder()
+        .spacing(8)
+        .height_request(CARD_EDGE)
+        .css_classes(["zaptide-attachment-file"])
+        .build();
+    tile.append(
+        &gtk::Image::builder()
+            .gicon(&gtk::gio::content_type_get_symbolic_icon(content_type))
+            .pixel_size(24)
+            .build(),
+    );
+    let text = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .valign(gtk::Align::Center)
+        .build();
+    text.append(
+        &gtk::Label::builder()
+            .label(name)
+            .xalign(0.0)
+            .max_width_chars(18)
+            .ellipsize(gtk::pango::EllipsizeMode::Middle)
+            .build(),
+    );
+    text.append(
+        &gtk::Label::builder()
+            .label(gtk::gio::content_type_get_description(content_type))
+            .xalign(0.0)
+            .max_width_chars(18)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .css_classes(["caption", "dim-label"])
+            .build(),
+    );
+    tile.append(&text);
+    tile.upcast()
+}
+
+/// Rounded card with a remove button in its corner. `None` removes a
+/// clipboard image, which is the only staged item when present.
+fn attachment_card(
+    content: &gtk::Widget,
+    name: &str,
+    path: Option<std::path::PathBuf>,
+    sender: &ComponentSender<ComposerView>,
+) -> gtk::Overlay {
+    let card = gtk::Overlay::builder()
+        .child(content)
+        .tooltip_text(name)
+        .overflow(gtk::Overflow::Hidden)
+        .valign(gtk::Align::Center)
+        .css_classes(["card", "zaptide-attachment"])
+        .build();
+    let label = format!("Remove {name}");
+    let remove = gtk::Button::builder()
+        .icon_name("window-close-symbolic")
+        .tooltip_text(&label)
+        .halign(gtk::Align::End)
+        .valign(gtk::Align::Start)
+        .margin_top(4)
+        .margin_end(4)
+        .css_classes(["circular", "osd", "zaptide-attachment-remove"])
+        .build();
+    remove.update_property(&[gtk::accessible::Property::Label(&label)]);
+    let sender = sender.clone();
+    remove.connect_clicked(move |_| {
+        let output = match &path {
+            Some(path) => ComposerViewOutput::RemoveAttachment(path.clone()),
+            None => ComposerViewOutput::ClearAttachments,
+        };
+        sender.output(output).unwrap();
+    });
+    card.add_overlay(&remove);
+    card
 }

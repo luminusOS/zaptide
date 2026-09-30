@@ -1,10 +1,6 @@
 use super::*;
 
-pub(super) fn attach_dropped(
-    application: &mut NativeApplication,
-    paths: Vec<std::path::PathBuf>,
-    sender: &ComponentSender<NativeApplication>,
-) {
+pub(super) fn attach_dropped(application: &mut NativeApplication, paths: Vec<std::path::PathBuf>) {
     let Some(chat) = application
         .active_chat
         .clone()
@@ -37,7 +33,7 @@ pub(super) fn attach_dropped(
         &application.pending_attachment_names(),
         application.pending_attachment_count(),
     );
-    application.show_attachment_preview(sender);
+    application.composer_view.model().focus_text_view();
 }
 
 pub(super) fn pick_attachments(
@@ -104,7 +100,6 @@ pub(super) fn attachments_picked(
     chat: String,
     paths: Vec<std::path::PathBuf>,
     documents: bool,
-    sender: &ComponentSender<NativeApplication>,
 ) {
     if paths.is_empty() {
         return;
@@ -129,7 +124,7 @@ pub(super) fn attachments_picked(
         .entry(chat)
         .or_default()
         .extend(paths);
-    application.show_attachment_preview(sender);
+    application.composer_view.model().focus_text_view();
 }
 
 pub(super) fn clear_attachments(application: &mut NativeApplication) {
@@ -137,4 +132,19 @@ pub(super) fn clear_attachments(application: &mut NativeApplication) {
         application.pending_attachments.remove(chat);
         application.pending_clipboard_images.remove(chat);
     }
+}
+
+pub(super) fn remove_attachment(application: &mut NativeApplication, path: &std::path::Path) {
+    let Some(chat) = application.active_chat.clone() else {
+        return;
+    };
+    if let Some(paths) = application.pending_attachments.get_mut(&chat) {
+        paths.retain(|staged| staged != path);
+        if paths.is_empty() {
+            application.pending_attachments.remove(&chat);
+        }
+    }
+    application
+        .document_attachments
+        .remove(&(chat, path.to_path_buf()));
 }

@@ -21,7 +21,6 @@ impl NativeApplication {
             .active_chat
             .as_deref()
             .and_then(|id| self.chat_snapshots.iter().find(|chat| chat.id == id));
-        let attachment_names = self.pending_attachment_names();
         ComposerState {
             active: self.active_chat.is_some(),
             recording: self.recording_active(),
@@ -30,7 +29,12 @@ impl NativeApplication {
             recording_send_enabled: self.pending_send.is_none() && !self.audio.voice_send_pending,
             context: has_context.then_some((context_title, context_preview)),
             attachment_count: self.pending_attachment_count(),
-            attachment_names,
+            attachment_paths: self
+                .active_chat
+                .as_ref()
+                .and_then(|chat| self.pending_attachments.get(chat))
+                .cloned()
+                .unwrap_or_default(),
             clipboard_preview: self
                 .active_chat
                 .as_ref()

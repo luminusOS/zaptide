@@ -19,10 +19,7 @@ use albums::{AlbumRole, album_roles};
 use composer::{
     ComposerState, ComposerView, ComposerViewInit, ComposerViewInput, ComposerViewOutput,
 };
-use dialogs::{
-    attach_tile, show_archive_confirmation, show_attachment_preview_dialog,
-    show_unlink_confirmation,
-};
+use dialogs::{attach_tile, show_archive_confirmation, show_unlink_confirmation};
 use dialogs::{
     show_chat_info_dialog, show_forward_dialog, show_mention_dialog, show_new_chat_dialog,
     show_poll_dialog, sticker_picker_content,
@@ -59,8 +56,6 @@ fn dialog_action_callback(
     let sender = sender.clone();
     std::rc::Rc::new(move |action| {
         sender.input(match action {
-            dialogs::DialogAction::SendText(text) => Input::SendText(text),
-            dialogs::DialogAction::ClearAttachments => Input::ClearAttachments,
             dialogs::DialogAction::ArchiveChat(id) => Input::ArchiveChat(id),
             dialogs::DialogAction::UnlinkConfirmed => Input::UnlinkConfirmed,
             dialogs::DialogAction::CreatePoll(draft) => Input::CreatePoll(draft),
@@ -541,6 +536,7 @@ pub enum Input {
         documents: bool,
     },
     ClearAttachments,
+    RemoveAttachment(std::path::PathBuf),
     SendText(String),
     CopyTranscript,
     ActivateVoice,
@@ -918,6 +914,7 @@ impl SimpleComponent for NativeApplication {
                     Input::PickAttachments { gallery }
                 }
                 ComposerViewOutput::ClearAttachments => Input::ClearAttachments,
+                ComposerViewOutput::RemoveAttachment(path) => Input::RemoveAttachment(path),
                 ComposerViewOutput::CancelReply => Input::CancelReply,
                 ComposerViewOutput::CancelEdit => Input::CancelEdit,
                 ComposerViewOutput::Recording(intent) => Input::Recording(intent),
@@ -1452,6 +1449,11 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
          .zaptide-composer { border-radius: 18px; background-color: color-mix(in srgb, currentColor 8%, transparent); }\n\
          .zaptide-composer textview, .zaptide-composer text { background: none; }\n\
          .zaptide-drop-active { outline: 2px dashed @accent_bg_color; outline-offset: -8px; background-color: alpha(@accent_bg_color, 0.08); }\n\
+         .zaptide-attachments { padding: 6px 8px 4px; border-radius: 18px; background-color: color-mix(in srgb, currentColor 5%, transparent); }\n\
+         .zaptide-attachment { border-radius: 12px; }\n\
+         .zaptide-attachment-file { padding: 0 40px 0 12px; }\n\
+         .zaptide-attachment-remove { min-width: 24px; min-height: 24px; padding: 0; }\n\
+         .zaptide-tray-action { min-height: 24px; padding: 2px 10px; border-radius: 9999px; font-size: 0.9em; }\n\
          .zaptide-attach-tile { padding: 10px 6px 8px; border-radius: 12px; min-width: 72px; }\n\
          .zaptide-attach-icon { min-width: 44px; min-height: 44px; border-radius: 9999px; color: white; }\n\
          .zaptide-attach-icon.gallery { background-color: #9141ac; }\n\
@@ -2238,32 +2240,6 @@ impl NativeApplication {
             self.status = "Reading clipboard image".into();
         } else {
             self.status = "Could not read clipboard image".into();
-        }
-    }
-
-    /// Previews what is staged for the open chat with a caption field that
-    /// starts from the draft. Closing without sending drops the attachments.
-    fn show_attachment_preview(&self, sender: &ComponentSender<Self>) {
-        let Some(chat) = self.active_chat.as_ref() else {
-            return;
-        };
-        let image = self
-            .pending_clipboard_images
-            .get(chat)
-            .map(|image| image.preview.clone());
-        let paths = self
-            .pending_attachments
-            .get(chat)
-            .cloned()
-            .unwrap_or_default();
-        if image.is_some() || !paths.is_empty() {
-            show_attachment_preview_dialog(
-                &self.window,
-                &dialog_action_callback(sender),
-                image,
-                &paths,
-                &self.draft,
-            );
         }
     }
 

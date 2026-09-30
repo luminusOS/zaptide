@@ -5,8 +5,6 @@ use super::*;
 pub(super) type DialogActionCallback = std::rc::Rc<dyn Fn(DialogAction)>;
 
 pub(super) enum DialogAction {
-    SendText(String),
-    ClearAttachments,
     ArchiveChat(String),
     UnlinkConfirmed,
     CreatePoll(crate::model::PollDraft),
@@ -37,135 +35,6 @@ pub(super) fn attach_tile(icon: &str, label: &str, tone: &str) -> gtk::Box {
             .build(),
     );
     tile
-}
-
-/// "Send Image", "Send 3 Files": images when every item is one.
-fn attachment_preview_title(count: usize, images: bool) -> String {
-    let noun = if images { "Image" } else { "File" };
-    if count == 1 {
-        format!("Send {noun}")
-    } else {
-        format!("Send {count} {noun}s")
-    }
-}
-
-fn is_image_file(path: &std::path::Path) -> bool {
-    gtk::gio::content_type_guess(Some(path), None)
-        .0
-        .starts_with("image/")
-}
-
-pub(super) fn show_attachment_preview_dialog(
-    parent: &adw::ApplicationWindow,
-    on_action: &DialogActionCallback,
-    image: Option<gtk::gdk::Texture>,
-    paths: &[std::path::PathBuf],
-    draft: &str,
-) {
-    let carousel = adw::Carousel::builder().vexpand(true).spacing(12).build();
-    let picture = |picture: gtk::Picture| {
-        picture.set_content_fit(gtk::ContentFit::Contain);
-        picture.set_can_shrink(true);
-        picture.set_hexpand(true);
-        picture.set_vexpand(true);
-        picture
-    };
-    if let Some(texture) = &image {
-        carousel.append(&picture(gtk::Picture::for_paintable(texture)));
-    }
-    for path in paths {
-        // ponytail: decodes on the main thread; fine for a few photos, move
-        // to glycin like the timeline if large batches stall the window.
-        if is_image_file(path) {
-            carousel.append(&picture(gtk::Picture::for_filename(path)));
-            continue;
-        }
-        let page = adw::StatusPage::builder()
-            .icon_name("text-x-generic-symbolic")
-            .title(
-                path.file_name()
-                    .map(|name| name.to_string_lossy())
-                    .unwrap_or_default(),
-            )
-            .hexpand(true)
-            .build();
-        page.add_css_class("compact");
-        carousel.append(&page);
-    }
-    let count = carousel.n_pages() as usize;
-    let dots = adw::CarouselIndicatorDots::builder()
-        .carousel(&carousel)
-        .visible(count > 1)
-        .build();
-
-    let caption = gtk::Entry::builder()
-        .placeholder_text("Add a caption")
-        .text(draft)
-        .hexpand(true)
-        .build();
-    let send = gtk::Button::builder()
-        .child(&paper_plane_icon())
-        .tooltip_text("Send")
-        .valign(gtk::Align::Center)
-        .css_classes(["circular", "suggested-action"])
-        .build();
-    send.update_property(&[gtk::accessible::Property::Label("Send")]);
-    let bar = gtk::Box::builder()
-        .spacing(6)
-        .margin_top(6)
-        .margin_bottom(12)
-        .margin_start(12)
-        .margin_end(12)
-        .build();
-    bar.append(&caption);
-    bar.append(&send);
-
-    let content = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(6)
-        .margin_start(12)
-        .margin_end(12)
-        .build();
-    content.append(&carousel);
-    content.append(&dots);
-    let view = adw::ToolbarView::new();
-    view.add_top_bar(&adw::HeaderBar::new());
-    view.set_content(Some(&content));
-    view.add_bottom_bar(&bar);
-    let dialog = adw::Dialog::builder()
-        .title(attachment_preview_title(
-            count,
-            image.is_some() || paths.iter().all(|path| is_image_file(path)),
-        ))
-        .content_width(520)
-        .content_height(560)
-        .child(&view)
-        .build();
-
-    let sent = std::rc::Rc::new(std::cell::Cell::new(false));
-    let (close, send_action, sending) = (dialog.clone(), on_action.clone(), sent.clone());
-    let entry = caption.clone();
-    send.connect_clicked(move |_| {
-        sending.set(true);
-        send_action(DialogAction::SendText(entry.text().to_string()));
-        close.close();
-    });
-    let button = send.clone();
-    caption.connect_activate(move |_| button.emit_clicked());
-    let on_action = on_action.clone();
-    dialog.connect_closed(move |_| {
-        if !sent.get() {
-            on_action(DialogAction::ClearAttachments);
-        }
-    });
-    // Keep the draft that became the caption instead of selecting it, so
-    // typing adds to it.
-    caption.connect_has_focus_notify(|entry| {
-        let entry = entry.clone();
-        gtk::glib::idle_add_local_once(move || entry.set_position(-1));
-    });
-    dialog.set_focus(Some(&caption));
-    dialog.present(Some(parent));
 }
 
 pub(super) fn show_archive_confirmation(
@@ -216,18 +85,6 @@ pub(super) fn show_unlink_confirmation(
         }
     });
     dialog.present(Some(parent));
-}
-
-#[cfg(test)]
-mod tests {
-    use super::attachment_preview_title;
-
-    #[test]
-    fn attachment_preview_titles_count_images_and_files() {
-        assert_eq!(attachment_preview_title(1, true), "Send Image");
-        assert_eq!(attachment_preview_title(3, true), "Send 3 Images");
-        assert_eq!(attachment_preview_title(2, false), "Send 2 Files");
-    }
 }
 
 /// New Poll: a question, 2–12 answers added or removed in place, and a

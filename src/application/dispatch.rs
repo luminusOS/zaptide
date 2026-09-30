@@ -988,10 +988,10 @@ impl NativeApplication {
                 }
             }
             Input::PasteClipboardImage => self.paste_clipboard_image(&sender),
-            Input::AttachDropped(paths) => attachments::attach_dropped(self, paths, &sender),
+            Input::AttachDropped(paths) => attachments::attach_dropped(self, paths),
             Input::ClipboardImageReady { chat, pixels } => {
                 self.stage_clipboard_image(chat, pixels);
-                self.show_attachment_preview(&sender);
+                self.composer_view.model().focus_text_view();
             }
             Input::OpenSelectedUri => self.open_selected_uri(&sender),
             Input::PortalUriFinished(success) => {
@@ -1032,8 +1032,9 @@ impl NativeApplication {
                 chat,
                 paths,
                 documents,
-            } => attachments::attachments_picked(self, chat, paths, documents, &sender),
+            } => attachments::attachments_picked(self, chat, paths, documents),
             Input::ClearAttachments => attachments::clear_attachments(self),
+            Input::RemoveAttachment(path) => attachments::remove_attachment(self, &path),
             Input::CopyTranscript => self.copy_transcript(),
             Input::CopySelectedText => {
                 if let Some(text) = self.selected_message().and_then(message_text) {
