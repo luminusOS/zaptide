@@ -89,7 +89,7 @@ pub fn build_album_widget(
         .build();
     let on_action: std::rc::Rc<dyn Fn(NativeMediaAction)> = std::rc::Rc::new(on_action);
     let hidden = messages.len().saturating_sub(ALBUM_TILES);
-    // Only the last tile of a larger album downloads, and it downloads all.
+    // A larger album has one download button for all of its photos.
     let downloads: Vec<NativeMediaAction> = messages
         .iter()
         .filter_map(|message| match attachment_action(message) {
@@ -136,7 +136,7 @@ pub fn build_album_widget(
                 .overflow(gtk::Overflow::Hidden)
                 .css_classes(["zaptide-photo"])
                 .build();
-            overlay.add_overlay(&album_more(hidden, downloads.clone(), on_action.clone()));
+            overlay.add_overlay(&album_more(hidden));
             overlay.upcast()
         } else {
             tile.upcast()
@@ -149,54 +149,60 @@ pub fn build_album_widget(
             1,
         );
     }
-    root.append(&grid);
+    // One download for the whole album, centred where the four tiles meet.
+    let album = gtk::Overlay::builder()
+        .child(&grid)
+        .halign(gtk::Align::Start)
+        .build();
+    if hidden > 0 && !downloads.is_empty() {
+        album.add_overlay(&album_download(downloads, on_action));
+    }
+    root.append(&album);
     NativeMediaWidget {
         widget: root,
         decode_token,
     }
 }
 
-/// The scrim over an album's last tile: how many photos are not shown, and
-/// one button that downloads every photo still missing. Clicks elsewhere on
-/// it reach the tile below.
-fn album_more(
-    hidden: usize,
-    downloads: Vec<NativeMediaAction>,
-    on_action: std::rc::Rc<dyn Fn(NativeMediaAction)>,
-) -> gtk::Box {
+/// The scrim over an album's last tile, with how many photos are not shown
+/// centred on it. Clicks pass through to the tile below.
+fn album_more(hidden: usize) -> gtk::Box {
     let scrim = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(8)
-        .halign(gtk::Align::Fill)
-        .valign(gtk::Align::Fill)
         .can_target(false)
         .css_classes(["zaptide-album-more"])
         .build();
-    let count = gtk::Label::builder()
-        .label(format!("+{hidden}"))
-        .valign(gtk::Align::Center)
-        .vexpand(true)
-        .css_classes(["title-1"])
-        .build();
-    scrim.append(&count);
-    if !downloads.is_empty() {
-        let button = gtk::Button::builder()
-            .icon_name("folder-download-symbolic")
-            .tooltip_text(format!("Download {} photos", downloads.len()))
+    scrim.append(
+        &gtk::Label::builder()
+            .label(format!("+{hidden}"))
+            .hexpand(true)
+            .vexpand(true)
             .halign(gtk::Align::Center)
-            .margin_bottom(12)
-            .can_target(true)
-            .css_classes(["osd", "circular"])
-            .build();
-        button.update_property(&[gtk::accessible::Property::Label("Download all photos")]);
-        button.connect_clicked(move |_| {
-            for action in &downloads {
-                on_action(action.clone());
-            }
-        });
-        scrim.append(&button);
-    }
+            .valign(gtk::Align::Center)
+            .css_classes(["title-1"])
+            .build(),
+    );
     scrim
+}
+
+/// The one button, centred on the album, that downloads every photo still missing.
+fn album_download(
+    downloads: Vec<NativeMediaAction>,
+    on_action: std::rc::Rc<dyn Fn(NativeMediaAction)>,
+) -> gtk::Button {
+    let button = gtk::Button::builder()
+        .icon_name("folder-download-symbolic")
+        .tooltip_text(format!("Download {} photos", downloads.len()))
+        .halign(gtk::Align::Center)
+        .valign(gtk::Align::Center)
+        .css_classes(["osd", "circular"])
+        .build();
+    button.update_property(&[gtk::accessible::Property::Label("Download all photos")]);
+    button.connect_clicked(move |_| {
+        for action in &downloads {
+            on_action(action.clone());
+        }
+    });
+    button
 }
 
 fn append_photo_sized(
