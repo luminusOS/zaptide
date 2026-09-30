@@ -7,13 +7,14 @@ use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::model::{Chat, ChatKind, Content, Delivery, LastMessage, Message};
+use crate::model::{Chat, ChatKind, Content, Delivery, Message};
 
 mod contacts;
 mod encryption;
 mod media;
 mod polls;
 mod receipts;
+mod row;
 pub use polls::PollVote;
 
 /// Recent phone sticker metadata, last-used time, and optional local file.
@@ -111,7 +112,6 @@ const CHAT_COLUMNS: &str =
                     m.from_me, m.sender_name, m.content, m.status, m.sender, c.participants, c.read_only,
                     c.pinned_at, c.ephemeral_expiration, c.locked";
 
-/// Adds columns introduced after the initial schema when missing.
 const MIGRATIONS: &[(&str, &str, &str)] = &[
     ("messages", "thumbnail", "BLOB"),
     ("messages", "mentions", "TEXT NOT NULL DEFAULT '[]'"),
@@ -137,75 +137,6 @@ const CHAT_JOIN: &str = "FROM chats c
 
 const MESSAGE_COLUMNS: &str = "id, sender, sender_name, from_me, timestamp, content, status, quoted, reactions, edited, thumbnail, mentions, forwarded, delivered_at, read_at";
 
-fn content_from_json(json: &str) -> Content {
-    serde_json::from_str(json).unwrap_or(Content::Unsupported {
-        what: "unreadable".into(),
-    })
-}
-
-/// Maps a row selected with [`MESSAGE_COLUMNS`].
-fn message_from_row(chat: &str, row: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
-    let content: String = row.get(5)?;
-    let quoted: Option<String> = row.get(7)?;
-    let reactions: String = row.get(8)?;
-    let mentions: String = row.get(11)?;
-    Ok(Message {
-        id: row.get(0)?,
-        chat: chat.to_owned(),
-        sender: row.get(1)?,
-        sender_name: row.get(2)?,
-        from_me: row.get(3)?,
-        timestamp: row.get(4)?,
-        content: content_from_json(&content),
-        status: status_from_rank(row.get(6)?),
-        delivered_at: row.get(13)?,
-        read_at: row.get(14)?,
-        quoted: quoted.and_then(|quoted| serde_json::from_str(&quoted).ok()),
-        reactions: serde_json::from_str(&reactions).unwrap_or_default(),
-        edited: row.get(9)?,
-        mentions: serde_json::from_str(&mentions).unwrap_or_default(),
-        forwarded: row.get(12)?,
-        thumbnail: row.get(10)?,
-    })
-}
-
-fn chat_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Chat> {
-    let content: Option<String> = row.get(10)?;
-    let last = match content {
-        Some(content) => {
-            let content = content_from_json(&content);
-            Some(LastMessage {
-                from_me: row.get(8)?,
-                sender: row.get::<_, Option<String>>(12)?.unwrap_or_default(),
-                sender_name: row.get(9)?,
-                summary: content.summary(),
-                status: status_from_rank(row.get(11)?),
-            })
-        }
-        None => None,
-    };
-    let kind: String = row.get(2)?;
-    let participants: String = row.get(13)?;
-    Ok(Chat {
-        id: row.get(0)?,
-        name: row.get(1)?,
-        kind: kind_from_name(&kind),
-        last_activity: row.get(3)?,
-        unread: row.get(4)?,
-        archived: row.get(5)?,
-        pinned: row.get(6)?,
-        pinned_at: row.get(15)?,
-        muted_until: row.get(7)?,
-        locked: row.get(17)?,
-        last,
-        participants: serde_json::from_str(&participants).unwrap_or_default(),
-        read_only: row.get(14)?,
-        ephemeral_expiration: row
-            .get::<_, Option<u32>>(16)?
-            .filter(|expiration| *expiration != 0),
-    })
-}
-
 fn status_rank(status: Delivery) -> i64 {
     match status {
         Delivery::None => 0,
@@ -218,7 +149,6 @@ fn status_rank(status: Delivery) -> i64 {
     }
 }
 
-/// Timestamp column for a remembered delivery stage.
 fn stamp_column(status: Delivery) -> Option<&'static str> {
     match status {
         Delivery::Delivered => Some("delivered_at"),
@@ -559,7 +489,7 @@ impl Archive {
         let mut statement = self.connection.prepare(&format!(
             "SELECT {CHAT_COLUMNS} {CHAT_JOIN} ORDER BY c.last_activity DESC"
         ))?;
-        let rows = statement.query_map([], chat_from_row)?;
+        let rows = statement.query_map([], row::chat_from_row)?;
         rows.collect()
     }
 
@@ -567,7 +497,9 @@ impl Archive {
         let mut statement = self.connection.prepare(&format!(
             "SELECT {CHAT_COLUMNS} {CHAT_JOIN} WHERE c.id = ?1"
         ))?;
-        statement.query_row(params![id], chat_from_row).optional()
+        statement
+            .query_row(params![id], row::chat_from_row)
+            .optional()
     }
 
     pub fn bump_unread(&self, id: &str) -> Result<()> {
@@ -734,7 +666,7 @@ impl Archive {
         let (before_time, before_id) = before.unwrap_or((i64::MAX, ""));
         let rows = statement
             .query_map(params![chat, before_time, before_id, limit as i64], |row| {
-                message_from_row(chat, row)
+                row::message_from_row(chat, row)
             })?;
         let mut messages: Vec<Message> = rows.collect::<Result<_>>()?;
         messages.reverse();
@@ -759,7 +691,7 @@ impl Archive {
         ))?;
         let rows = statement.query_map(
             params![chat, from, before.0, before.1, limit as i64],
-            |row| message_from_row(chat, row),
+            |row| row::message_from_row(chat, row),
         )?;
         rows.collect()
     }
@@ -897,7 +829,7 @@ impl Archive {
             .query_row(
                 &format!("SELECT {MESSAGE_COLUMNS} FROM messages WHERE chat = ?1 AND id = ?2"),
                 params![chat, id],
-                |row| message_from_row(chat, row),
+                |row| row::message_from_row(chat, row),
             )
             .optional()
     }

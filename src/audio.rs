@@ -3,54 +3,37 @@
 //! Input and output devices are opened on demand and released when idle.
 
 use std::collections::HashMap;
-use std::io::{Read, Seek};
 use std::num::NonZero;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+#[cfg(test)]
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 #[cfg(test)]
 use std::time::Instant;
 
-use rodio::Source;
 use rodio::buffer::SamplesBuffer;
 
 use crate::voice;
 
+mod decode;
 mod recorder;
+
+use decode::{
+    DecodePermit, Decoded, LONGEST_RECORDING, decode_file_with, decode_file_with_waveform,
+    publish_decode,
+};
+#[cfg(test)]
+use decode::{
+    MAX_AUDIO_BYTES, MAX_AUDIO_SAMPLES, MAX_DECODE_JOBS, audio_limit_error,
+    collect_samples_limited, collect_samples_with_limits, decode_file, decode_opus,
+    input_frame_limit, read_audio, try_acquire_decode_job,
+};
 
 #[cfg(test)]
 use recorder::record_with;
 pub use recorder::{Recorder, recording_path};
-
-/// Maximum recording length. The phone uses a shorter limit.
-const LONGEST_RECORDING: Duration = Duration::from_secs(15 * 60);
-const MAX_DECODE_JOBS: usize = 2;
-const MAX_AUDIO_BYTES: u64 = 64 * 1024 * 1024;
-const MAX_AUDIO_SAMPLES: usize = voice::RATE as usize * LONGEST_RECORDING.as_secs() as usize;
-static ACTIVE_DECODE_JOBS: AtomicUsize = AtomicUsize::new(0);
-
-struct DecodePermit;
-
-impl DecodePermit {
-    fn acquire() -> Option<Self> {
-        try_acquire_decode_job(&ACTIVE_DECODE_JOBS, MAX_DECODE_JOBS).then_some(Self)
-    }
-}
-
-fn try_acquire_decode_job(active: &AtomicUsize, limit: usize) -> bool {
-    active
-        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
-            (count < limit).then_some(count + 1)
-        })
-        .is_ok()
-}
-
-impl Drop for DecodePermit {
-    fn drop(&mut self) {
-        ACTIVE_DECODE_JOBS.fetch_sub(1, Ordering::AcqRel);
-    }
-}
 
 fn mono() -> NonZero<u16> {
     NonZero::<u16>::MIN
@@ -95,8 +78,6 @@ pub fn speed_label(speed: f32) -> String {
         format!("{speed:.1}x")
     }
 }
-
-type Decoded = Arc<Mutex<Option<Result<Vec<f32>, String>>>>;
 
 /// Plays one clip at a time through the default output device.
 pub struct Player {
@@ -391,14 +372,12 @@ impl Player {
         });
         if let Some(result) = decoded {
             let Decoding { message, start, .. } = self.decoding.take().expect("just seen");
-            let samples = result?;
+            let (samples, bars) = result?;
             if samples.is_empty() {
                 return Err("The clip is empty".to_owned());
             }
             let samples = Arc::new(samples);
-            self.bars
-                .entry(message.clone())
-                .or_insert_with(|| voice::waveform(&samples));
+            self.bars.entry(message.clone()).or_insert(bars);
             self.loaded = Some(Loaded {
                 message,
                 buffer: Arc::clone(&samples),
@@ -428,7 +407,6 @@ impl Player {
             .zip(self.output.as_ref())
             .is_some_and(|(loaded, (_, sink))| playback_ended(loaded, sink.empty()));
         if ended {
-            // Release the device after playback ends.
             self.output = None;
         }
         Ok(())
@@ -447,7 +425,7 @@ impl Player {
             .name("voice-decode".to_owned())
             .spawn(move || {
                 let _permit = permit;
-                let result = decode_file_with(&path, &thread_cancelled);
+                let result = decode_file_with_waveform(&path, &thread_cancelled);
                 if publish_decode(&thread_slot, &thread_cancelled, result) {}
             });
         if let Err(error) = spawned {
@@ -520,77 +498,12 @@ fn open_device<T, E: std::fmt::Display>(
     open().map_err(|error| format!("{description}: {error}"))
 }
 
-fn publish_decode(
-    slot: &Decoded,
-    cancelled: &AtomicBool,
-    result: Result<Vec<f32>, String>,
-) -> bool {
-    if cancelled.load(Ordering::Relaxed) {
-        return false;
-    }
-    *slot.lock().unwrap_or_else(|p| p.into_inner()) = Some(result);
-    true
-}
-
 fn playback_ended(loaded: &mut Loaded, sink_empty: bool) -> bool {
     if loaded.done || loaded.paused || !sink_empty {
         return false;
     }
     loaded.done = true;
     true
-}
-
-/// Decodes a file to mono 48 kHz samples. OGG/Opus uses the voice codec; other
-/// supported formats use rodio.
-#[cfg(test)]
-fn decode_file(path: &Path) -> Result<Vec<f32>, String> {
-    decode_file_with(path, &AtomicBool::new(false))
-}
-
-fn decode_file_with(path: &Path, cancelled: &AtomicBool) -> Result<Vec<f32>, String> {
-    if is_cancelled(cancelled) {
-        return Err("Audio decoding cancelled".to_owned());
-    }
-    let mut file =
-        std::fs::File::open(path).map_err(|error| format!("Could not read the audio: {error}"))?;
-    let size = file
-        .metadata()
-        .map_err(|error| format!("Could not read the audio: {error}"))?
-        .len();
-    if size > MAX_AUDIO_BYTES {
-        return Err(audio_limit_error());
-    }
-    let mut signature = [0; 4];
-    let read = file
-        .read(&mut signature)
-        .map_err(|error| format!("Could not read the audio: {error}"))?;
-    if read == signature.len() && &signature == b"OggS" {
-        file.seek(std::io::SeekFrom::Start(0))
-            .map_err(|error| format!("Could not read the audio: {error}"))?;
-        let bytes = read_audio(file, size, cancelled)?;
-        if is_cancelled(cancelled) {
-            return Err("Audio decoding cancelled".to_owned());
-        }
-        if let Ok(samples) = decode_opus(&bytes, cancelled) {
-            if is_cancelled(cancelled) {
-                return Err("Audio decoding cancelled".to_owned());
-            }
-            if samples.len() > MAX_AUDIO_SAMPLES {
-                return Err(audio_limit_error());
-            }
-            return Ok(samples);
-        }
-    }
-    if is_cancelled(cancelled) {
-        return Err("Audio decoding cancelled".to_owned());
-    }
-    let file =
-        std::fs::File::open(path).map_err(|error| format!("Could not read the audio: {error}"))?;
-    let decoder = rodio::Decoder::new(std::io::BufReader::new(file))
-        .map_err(|error| format!("Could not decode the audio: {error}"))?;
-    let channels = decoder.channels().get();
-    let rate = decoder.sample_rate().get();
-    collect_samples(decoder, channels, rate, cancelled)
 }
 
 /// Generate bounded waveform data off the GTK thread for an attachment.
@@ -604,188 +517,57 @@ pub(crate) fn waveform_file_cancellable(
 ) -> Result<Vec<u8>, String> {
     let _permit =
         DecodePermit::acquire().ok_or_else(|| "Too many audio clips are decoding".to_owned())?;
-    decode_file_with(path, cancelled).map(|samples| voice::waveform(&samples))
+    waveform_cancellable(&decode_file_with(path, cancelled)?, cancelled)
 }
 
-fn is_cancelled(cancelled: &AtomicBool) -> bool {
-    cancelled.load(Ordering::Acquire)
+fn waveform_cancellable(samples: &[f32], cancelled: &AtomicBool) -> Result<Vec<u8>, String> {
+    waveform_with_cancel_check(samples, || cancelled.load(Ordering::Acquire))
 }
 
-fn audio_limit_error() -> String {
-    "The audio exceeds the supported size or duration".to_owned()
-}
-
-fn read_audio(
-    mut reader: impl std::io::Read,
-    size: u64,
-    cancelled: &AtomicBool,
+fn waveform_with_cancel_check(
+    samples: &[f32],
+    mut is_cancelled: impl FnMut() -> bool,
 ) -> Result<Vec<u8>, String> {
-    if size > MAX_AUDIO_BYTES {
-        return Err(audio_limit_error());
+    const CANCEL_CHECK_INTERVAL: usize = 4_096;
+    if is_cancelled() {
+        return Err("Audio decoding cancelled".to_owned());
     }
-    let mut bytes = Vec::with_capacity(size as usize);
-    let mut chunk = [0u8; 16 * 1024];
-    loop {
-        if is_cancelled(cancelled) {
-            return Err("Audio decoding cancelled".to_owned());
-        }
-        let count = reader
-            .read(&mut chunk)
-            .map_err(|error| format!("Could not read the audio: {error}"))?;
-        if count == 0 {
-            break;
-        }
-        if bytes.len().saturating_add(count) > MAX_AUDIO_BYTES as usize {
-            return Err(audio_limit_error());
-        }
-        bytes.extend_from_slice(&chunk[..count]);
+    if samples.is_empty() {
+        return Ok(vec![0; voice::BARS]);
     }
-    Ok(bytes)
-}
 
-fn decode_opus(bytes: &[u8], cancelled: &AtomicBool) -> Result<Vec<f32>, String> {
-    let mut reader = ogg::PacketReader::new(std::io::Cursor::new(bytes));
-    let mut decoder = None;
-    let mut channels = 0usize;
-    let mut skip = 0usize;
-    let mut tagged = false;
-    let mut out = Vec::new();
-    let mut scratch = vec![0.0f32; 11_520];
-    loop {
-        if is_cancelled(cancelled) {
-            return Err("Audio decoding cancelled".to_owned());
-        }
-        let packet = match reader.read_packet() {
-            Ok(Some(packet)) => packet,
-            Ok(None) => break,
-            Err(error) => return Err(format!("Could not decode the audio: {error}")),
-        };
-        if decoder.is_none() {
-            let head = packet
-                .data
-                .strip_prefix(b"OpusHead")
-                .ok_or_else(|| "Could not decode the audio: not an Opus stream".to_owned())?;
-            if head.len() < 11 {
-                return Err("Could not decode the audio: truncated Opus header".to_owned());
+    let slice = samples.len().div_ceil(voice::BARS);
+    let mut loudness = Vec::with_capacity(voice::BARS);
+    for chunk in samples.chunks(slice) {
+        let mut sum = 0.0f32;
+        for (index, sample) in chunk.iter().enumerate() {
+            if index % CANCEL_CHECK_INTERVAL == 0 && is_cancelled() {
+                return Err("Audio decoding cancelled".to_owned());
             }
-            channels = usize::from(head[1]);
-            let layout = match channels {
-                1 => opus::Channels::Mono,
-                2 => opus::Channels::Stereo,
-                other => return Err(format!("Could not decode the audio: {other} channels")),
-            };
-            skip = usize::from(u16::from_le_bytes([head[2], head[3]]));
-            decoder = Some(
-                opus::Decoder::new(voice::RATE, layout)
-                    .map_err(|error| format!("Could not decode the audio: {error}"))?,
-            );
-            continue;
+            sum += sample * sample;
         }
-        if !tagged {
-            tagged = true;
-            continue;
-        }
-        let opus_decoder = decoder.as_mut().expect("Opus header initialized decoder");
-        let frames = opus_decoder
-            .decode_float(&packet.data, &mut scratch, false)
-            .map_err(|error| format!("Could not decode the audio: bad Opus packet: {error}"))?;
-        let decoded = &scratch[..frames * channels];
-        let mono = if channels == 2 {
-            decoded
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|[left, right]| (left + right) * 0.5)
-                .collect::<Vec<_>>()
-        } else {
-            decoded.to_vec()
-        };
-        let skipped = skip.min(mono.len());
-        skip -= skipped;
-        if out.len().saturating_add(mono.len() - skipped) > MAX_AUDIO_SAMPLES {
-            return Err(audio_limit_error());
-        }
-        out.extend_from_slice(&mono[skipped..]);
+        loudness.push((sum / chunk.len() as f32).sqrt());
     }
-    if decoder.is_none() {
-        return Err("Could not decode the audio: not an OGG stream".to_owned());
+    if is_cancelled() {
+        return Err("Audio decoding cancelled".to_owned());
     }
-    Ok(out)
-}
 
-fn collect_samples<I: Iterator<Item = f32>>(
-    decoder: I,
-    channels: u16,
-    sample_rate: u32,
-    cancelled: &AtomicBool,
-) -> Result<Vec<f32>, String> {
-    collect_samples_limited(decoder, channels, sample_rate, cancelled, MAX_AUDIO_SAMPLES)
-}
-
-fn collect_samples_limited<I: Iterator<Item = f32>>(
-    mut decoder: I,
-    channels: u16,
-    sample_rate: u32,
-    cancelled: &AtomicBool,
-    max_samples: usize,
-) -> Result<Vec<f32>, String> {
-    let input_channels = usize::from(channels.max(1));
-    let max_input = (u64::from(sample_rate.max(1))
-        .saturating_mul(LONGEST_RECORDING.as_secs())
-        .saturating_mul(input_channels as u64))
-    .min(max_samples as u64) as usize;
-    let mut interleaved = Vec::with_capacity(max_input.min(8_192));
-    loop {
-        if is_cancelled(cancelled) {
-            return Err("Audio decoding cancelled".to_owned());
-        }
-        let Some(sample) = decoder.next() else {
-            break;
-        };
-        if interleaved.len() == max_input {
-            return Err(audio_limit_error());
-        }
-        interleaved.push(sample);
+    let loudest = loudness.iter().copied().fold(0.0f32, f32::max);
+    let mut bars: Vec<u8> = loudness
+        .iter()
+        .map(|value| {
+            if loudest > 0.0 {
+                (value / loudest * 100.0).round() as u8
+            } else {
+                0
+            }
+        })
+        .collect();
+    bars.resize(voice::BARS, 0);
+    if is_cancelled() {
+        return Err("Audio decoding cancelled".to_owned());
     }
-    mono_at_rate_cancellable(&interleaved, channels, sample_rate, cancelled, max_samples)
-}
-
-fn mono_at_rate_cancellable(
-    interleaved: &[f32],
-    channels: u16,
-    sample_rate: u32,
-    cancelled: &AtomicBool,
-    max_samples: usize,
-) -> Result<Vec<f32>, String> {
-    let channels = usize::from(channels.max(1));
-    let mut mono = Vec::with_capacity((interleaved.len() / channels).min(8_192));
-    for (index, frame) in interleaved.chunks_exact(channels).enumerate() {
-        if index % 4_096 == 0 && is_cancelled(cancelled) {
-            return Err("Audio decoding cancelled".to_owned());
-        }
-        mono.push(frame.iter().sum::<f32>() / channels as f32);
-    }
-    if sample_rate == voice::RATE || sample_rate == 0 || mono.is_empty() {
-        return Ok(mono);
-    }
-    let ratio = f64::from(sample_rate) / f64::from(voice::RATE);
-    let count = (mono.len() as f64 / ratio).floor() as usize;
-    if count > max_samples {
-        return Err(audio_limit_error());
-    }
-    let mut output = Vec::with_capacity(count.min(8_192));
-    for index in 0..count {
-        if index % 4_096 == 0 && is_cancelled(cancelled) {
-            return Err("Audio decoding cancelled".to_owned());
-        }
-        let position = index as f64 * ratio;
-        let left = position.floor() as usize;
-        let fraction = (position - left as f64) as f32;
-        let a = mono[left.min(mono.len() - 1)];
-        let b = mono.get(left + 1).copied().unwrap_or(a);
-        output.push(a + (b - a) * fraction);
-    }
-    Ok(output)
+    Ok(bars)
 }
 
 #[cfg(test)]
@@ -923,7 +705,7 @@ mod tests {
         let cancelled = Arc::clone(&player.decoding.as_ref().unwrap().cancelled);
         player.stop();
 
-        assert!(!publish_decode(&slot, &cancelled, Ok(vec![0.5])));
+        assert!(!publish_decode(&slot, &cancelled, Ok((vec![0.5], vec![1]))));
         assert!(slot.lock().unwrap().is_none());
     }
 
@@ -969,6 +751,106 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err, audio_limit_error());
+    }
+
+    #[test]
+    fn stereo_full_rate_duration_counts_frames_and_accepts_exact_limit() {
+        let frames = input_frame_limit(voice::RATE);
+        assert_eq!(frames, voice::RATE as usize * 15 * 60);
+        assert_eq!(frames * 2, voice::RATE as usize * 15 * 60 * 2);
+
+        let accepted = collect_samples_with_limits(
+            [0.25, 0.75, -0.5, 0.5].into_iter(),
+            2,
+            voice::RATE,
+            &AtomicBool::new(false),
+            2,
+            2,
+        )
+        .expect("two stereo frames meet exact input-frame limit");
+        assert_eq!(accepted, vec![0.5, 0.0]);
+
+        let rejected = collect_samples_with_limits(
+            [0.25, 0.75, -0.5, 0.5, 0.0, 0.0].into_iter(),
+            2,
+            voice::RATE,
+            &AtomicBool::new(false),
+            3,
+            2,
+        )
+        .unwrap_err();
+        assert_eq!(rejected, audio_limit_error());
+    }
+
+    #[test]
+    fn incremental_downmix_and_linear_resampling_cover_mono_and_stereo() {
+        let mono = collect_samples_limited(
+            [0.0, 1.0, 0.0, 1.0].into_iter(),
+            1,
+            voice::RATE / 2,
+            &AtomicBool::new(false),
+            8,
+        )
+        .expect("mono input resamples");
+        assert_eq!(mono, vec![0.0, 0.5, 1.0, 0.5, 0.0, 0.5, 1.0, 1.0]);
+
+        let stereo = collect_samples_limited(
+            [1.0, -1.0, 1.0, 0.0, 0.0, 1.0].into_iter(),
+            2,
+            voice::RATE / 2,
+            &AtomicBool::new(false),
+            8,
+        )
+        .expect("stereo input is averaged and resampled");
+        assert_eq!(stereo, vec![0.0, 0.25, 0.5, 0.5, 0.5, 0.5]);
+
+        let unchanged = collect_samples_limited(
+            [0.2, -0.4].into_iter(),
+            1,
+            voice::RATE,
+            &AtomicBool::new(false),
+            2,
+        )
+        .expect("mono full-rate input passes through");
+        assert_eq!(unchanged, vec![0.2, -0.4]);
+    }
+
+    #[test]
+    fn incremental_decode_stops_consuming_at_output_cap() {
+        struct CountedSamples(Arc<AtomicUsize>);
+
+        impl Iterator for CountedSamples {
+            type Item = f32;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                Some(0.25)
+            }
+        }
+
+        let consumed = Arc::new(AtomicUsize::new(0));
+        let result = collect_samples_limited(
+            CountedSamples(Arc::clone(&consumed)),
+            1,
+            voice::RATE / 2,
+            &AtomicBool::new(false),
+            4,
+        );
+        assert_eq!(result.unwrap_err(), audio_limit_error());
+        assert!(consumed.load(Ordering::Relaxed) <= 8);
+    }
+
+    #[test]
+    fn waveform_scan_honors_cancellation_before_returning_bars() {
+        let samples = vec![0.5; 20_000];
+        let mut checks = 0;
+        let error = waveform_with_cancel_check(&samples, || {
+            checks += 1;
+            checks == 3
+        })
+        .unwrap_err();
+        assert_eq!(error, "Audio decoding cancelled");
+        assert_eq!(checks, 3);
     }
 
     #[test]
@@ -1078,7 +960,8 @@ mod tests {
             .map(|i| (i as f32 * 330.0 * std::f32::consts::TAU / voice::RATE as f32).sin() * 0.3)
             .collect();
         let bytes = voice::encode(&tone).expect("encodes synthetic tone");
-        let decoded = decode_opus(&bytes, &AtomicBool::new(false)).expect("decodes tone");
+        let decoded = decode_opus(std::io::Cursor::new(bytes), &AtomicBool::new(false))
+            .expect("decodes tone");
         assert!(!decoded.is_empty());
         assert!(decoded.len() <= MAX_AUDIO_SAMPLES);
         assert!(decoded.iter().any(|sample| sample.abs() > 0.01));

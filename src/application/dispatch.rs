@@ -1,5 +1,8 @@
 use super::*;
 
+mod attachments;
+mod backend_events;
+
 impl NativeApplication {
     pub(super) fn handle_input(&mut self, input: Input, sender: ComponentSender<Self>) {
         match input {
@@ -136,108 +139,8 @@ impl NativeApplication {
                 }
             }
             Input::BackendReady => {
-                let mut events = Vec::new();
-                if let Some(backend) = &self.backend {
-                    drain_backend_events(backend, &self.notifier, |event| match event {
-                        Event::Link(status) => events.push(NativeEvent::Link(status)),
-                        Event::Syncing(syncing) => events.push(NativeEvent::Syncing(syncing)),
-                        Event::Chats(rows) => events.push(NativeEvent::Chats(rows)),
-                        Event::ChatUpdated(chat) => events.push(NativeEvent::ChatUpdated(chat)),
-                        Event::Contacts(contacts) => events.push(NativeEvent::Contacts(contacts)),
-                        Event::Messages {
-                            chat,
-                            messages,
-                            older,
-                            complete,
-                        } => events.push(NativeEvent::Messages {
-                            chat,
-                            messages,
-                            older,
-                            complete,
-                        }),
-                        Event::OlderFetched { chat, more } => {
-                            events.push(NativeEvent::OlderFetched { chat, more })
-                        }
-                        Event::Stickers {
-                            saved,
-                            packs,
-                            recent,
-                        } => events.push(NativeEvent::Stickers {
-                            saved,
-                            packs,
-                            recent,
-                        }),
-                        Event::MessageUpdated(message) => {
-                            events.push(NativeEvent::MessageUpdated(message))
-                        }
-                        Event::Edited { chat, id, success } => {
-                            events.push(NativeEvent::Edited { chat, id, success })
-                        }
-                        Event::Sent { chat, success } => {
-                            events.push(NativeEvent::Sent { chat, success })
-                        }
-                        Event::AttachmentCompleted {
-                            chat,
-                            path,
-                            success,
-                            ..
-                        } => events.push(NativeEvent::AttachmentCompleted {
-                            chat,
-                            path,
-                            success,
-                        }),
-                        Event::Media {
-                            chat,
-                            message,
-                            result,
-                        } => events.push(NativeEvent::Media {
-                            chat,
-                            message,
-                            result,
-                        }),
-                        Event::ReceiptsPrivacy { disabled } => {
-                            events.push(NativeEvent::ReceiptsPrivacy { disabled })
-                        }
-                        Event::ContactReady { id, name } => {
-                            events.push(NativeEvent::ContactReady { id, name })
-                        }
-                        Event::ContactAbout { id, about } => {
-                            events.push(NativeEvent::ContactAbout { id, about })
-                        }
-                        Event::Info(message) => events.push(NativeEvent::Info(message)),
-                        Event::MessageDeleted { chat, id } => {
-                            events.push(NativeEvent::MessageDeleted { chat, id })
-                        }
-                        Event::Incoming { chat, message } => {
-                            events.push(NativeEvent::Incoming { chat, message })
-                        }
-                        Event::Typing {
-                            chat,
-                            sender,
-                            composing,
-                        } => events.push(NativeEvent::Typing {
-                            chat,
-                            sender,
-                            composing,
-                        }),
-                        Event::Presence {
-                            id,
-                            online,
-                            last_seen,
-                        } => events.push(NativeEvent::Presence {
-                            id,
-                            online,
-                            last_seen,
-                        }),
-                        Event::Avatar {
-                            id,
-                            full: false,
-                            path,
-                        } => events.push(NativeEvent::Avatar { id, path }),
-                        Event::Error(error) => events.push(NativeEvent::Error(error)),
-                        _ => {}
-                    });
-                }
+                let events =
+                    backend_events::drain_and_convert(self.backend.as_ref(), &self.notifier);
                 for event in events {
                     match event {
                         NativeEvent::Link(link) => {
@@ -1085,34 +988,7 @@ impl NativeApplication {
                 }
             }
             Input::PasteClipboardImage => self.paste_clipboard_image(&sender),
-            Input::AttachDropped(paths) => {
-                let Some(chat) = self.active_chat.clone().filter(|_| self.can_attach()) else {
-                    self.status = "Choose a writable chat before attaching files".into();
-                    return;
-                };
-                if paths.is_empty() {
-                    return;
-                }
-                if self.pending_clipboard_images.contains_key(&chat) {
-                    self.status = "Clear the staged clipboard image before adding files".into();
-                    return;
-                }
-                self.composer
-                    .stage_attachment_caption(&chat, self.draft.clone());
-                for path in &paths {
-                    self.document_attachments
-                        .remove(&(chat.clone(), path.clone()));
-                }
-                self.pending_attachments
-                    .entry(chat)
-                    .or_default()
-                    .extend(paths);
-                self.status = attachment_summary(
-                    &self.pending_attachment_names(),
-                    self.pending_attachment_count(),
-                );
-                self.show_attachment_preview(&sender);
-            }
+            Input::AttachDropped(paths) => attachments::attach_dropped(self, paths, &sender),
             Input::ClipboardImageReady { chat, pixels } => {
                 self.stage_clipboard_image(chat, pixels);
                 self.show_attachment_preview(&sender);
@@ -1150,89 +1026,14 @@ impl NativeApplication {
                 self.toast("Clipboard or portal action failed");
             }
             Input::PickAttachments { gallery } => {
-                let Some(chat) = self.active_chat.clone().filter(|_| self.can_attach()) else {
-                    return;
-                };
-                if !self.portal_requests.borrow().is_empty() {
-                    self.status = "Finish the active portal action first".into();
-                    return;
-                }
-                if self.pending_clipboard_images.contains_key(&chat) {
-                    self.status = "Clear the staged clipboard image before adding files".into();
-                    return;
-                }
-                let input = sender.clone();
-                let requests = self.portal_requests.clone();
-                let request_id = std::rc::Rc::new(std::cell::Cell::new(None));
-                let callback_request_id = request_id.clone();
-                let (title, filter) = if gallery {
-                    let filter = gtk::FileFilter::new();
-                    filter.set_name(Some("Photos and videos"));
-                    filter.add_mime_type("image/*");
-                    filter.add_mime_type("video/*");
-                    ("Gallery", Some(filter))
-                } else {
-                    ("Send files as documents", None)
-                };
-                let request = self.portals.open_files(
-                    Some(&self.window),
-                    title,
-                    filter.as_ref(),
-                    move |result| {
-                        if let Some(id) = callback_request_id.get() {
-                            requests.borrow_mut().remove(&id);
-                        }
-                        let paths = result
-                            .unwrap_or_default()
-                            .into_iter()
-                            .filter_map(|file| file.path())
-                            .collect();
-                        input.input(Input::AttachmentsPicked {
-                            chat,
-                            paths,
-                            documents: !gallery,
-                        });
-                    },
-                );
-                if let Some(id) = request {
-                    request_id.set(Some(id));
-                    self.portal_requests.borrow_mut().insert(id);
-                }
+                attachments::pick_attachments(self, gallery, &sender)
             }
             Input::AttachmentsPicked {
                 chat,
                 paths,
                 documents,
-            } => {
-                if paths.is_empty() {
-                    return;
-                }
-                if self.pending_clipboard_images.contains_key(&chat) {
-                    self.status = "Clear the staged clipboard image before adding files".into();
-                    return;
-                }
-                self.composer
-                    .stage_attachment_caption(&chat, self.composer.draft(&chat).to_owned());
-                for path in &paths {
-                    let key = (chat.clone(), path.clone());
-                    if documents {
-                        self.document_attachments.insert(key);
-                    } else {
-                        self.document_attachments.remove(&key);
-                    }
-                }
-                self.pending_attachments
-                    .entry(chat)
-                    .or_default()
-                    .extend(paths);
-                self.show_attachment_preview(&sender);
-            }
-            Input::ClearAttachments => {
-                if let Some(chat) = &self.active_chat {
-                    self.pending_attachments.remove(chat);
-                    self.pending_clipboard_images.remove(chat);
-                }
-            }
+            } => attachments::attachments_picked(self, chat, paths, documents, &sender),
+            Input::ClearAttachments => attachments::clear_attachments(self),
             Input::CopyTranscript => self.copy_transcript(),
             Input::CopySelectedText => {
                 if let Some(text) = self.selected_message().and_then(message_text) {
