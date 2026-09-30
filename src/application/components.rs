@@ -75,7 +75,7 @@ impl NativeApplication {
 
     fn sync_sidebar(&self) {
         let state = SidebarState {
-            query: self.chat_projection.query().to_owned(),
+            search_resets: self.search_resets,
             filters: self.chat_filters,
             archived: self.showing_archived(),
             archived_unread: self.archived_unread_count(),

@@ -3,7 +3,8 @@ use relm4::prelude::*;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct SidebarState {
-    pub(super) query: String,
+    /// Changes when search is cleared from outside the entry.
+    pub(super) search_resets: u64,
     pub(super) filters: crate::native_chat_list::ChatListFilters,
     pub(super) archived: bool,
     pub(super) archived_unread: usize,
@@ -16,7 +17,7 @@ pub(super) struct SidebarState {
 impl Default for SidebarState {
     fn default() -> Self {
         Self {
-            query: String::new(),
+            search_resets: 0,
             filters: Default::default(),
             archived: false,
             archived_unread: 0,
@@ -252,7 +253,6 @@ impl SimpleComponent for Sidebar {
         };
         let chat_view = &init.chat_view;
         let widgets = view_output!();
-        widgets.search_entry.set_text(&model.state.query);
         model.search_entry = Some(widgets.search_entry.clone());
         ComponentParts { model, widgets }
     }
@@ -260,14 +260,13 @@ impl SimpleComponent for Sidebar {
     fn update(&mut self, input: Self::Input, _sender: ComponentSender<Self>) {
         match input {
             SidebarInput::Sync(state) => {
-                // Only an outside change (such as a filter reset) rewrites the
-                // entry; search-changed is debounced, so writing the state back
-                // on every sync would erase what was typed since.
+                // The entry owns its text. Writing the stored query back would
+                // race the debounced search-changed and eat typed letters, so
+                // only an explicit outside reset clears it.
                 if let Some(entry) = &self.search_entry
-                    && state.query != self.state.query
-                    && entry.text() != state.query
+                    && state.search_resets != self.state.search_resets
                 {
-                    entry.set_text(&state.query);
+                    entry.set_text("");
                 }
                 self.state = state;
             }

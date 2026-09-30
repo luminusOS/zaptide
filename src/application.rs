@@ -485,6 +485,8 @@ pub struct NativeApplication {
     phone_linking: bool,
     /// Chat snapshots changed since the list widget was last rebuilt.
     chats_dirty: bool,
+    /// Bumped when search is cleared from outside the search entry.
+    search_resets: u64,
     chats_flush_scheduled: bool,
     zoom_provider: gtk::CssProvider,
     custom_theme_provider: gtk::CssProvider,
@@ -1046,6 +1048,7 @@ impl SimpleComponent for NativeApplication {
             split_view: None,
             phone_linking: false,
             chats_dirty: false,
+            search_resets: 0,
             chats_flush_scheduled: false,
             zoom_provider: gtk::CssProvider::new(),
             custom_theme_provider: gtk::CssProvider::new(),

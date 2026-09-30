@@ -42,6 +42,7 @@ impl NativeApplication {
             ..Default::default()
         };
         self.chat_projection.set_query("");
+        self.search_resets += 1;
         self.chat_projection.set_filters(self.chat_filters);
     }
 
