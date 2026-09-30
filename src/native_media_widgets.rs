@@ -63,8 +63,8 @@ pub(crate) use sticker::{StickerAnimation, decode_sticker_file};
 pub use widget::build_media_widget_with_action;
 
 use cards::{
-    ListChoiceSection, add_formatted_label, add_label, decode_preview_async, link_card,
-    location_card, reply_button, show_list_choices,
+    ListChoiceSection, add_formatted_label, add_label, decode_preview_async, link_button,
+    link_card, location_card, reply_button, show_list_choices,
 };
 use photo::{append_photo, append_video, document_card};
 use sticker::append_sticker;

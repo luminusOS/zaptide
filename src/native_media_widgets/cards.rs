@@ -278,6 +278,16 @@ pub(super) fn reply_button(text: &str) -> gtk::Button {
     button
 }
 
+/// Button that opens a web address, marked with the external-link icon.
+pub(super) fn link_button(text: &str) -> gtk::Button {
+    let content = adw::ButtonContent::builder()
+        .icon_name("adw-external-link-symbolic")
+        .label(text)
+        .can_shrink(true)
+        .build();
+    gtk::Button::builder().child(&content).build()
+}
+
 pub(super) fn decode_preview_async(
     image: &gtk::Image,
     load: impl FnOnce() -> Option<Vec<u8>> + Send + 'static,

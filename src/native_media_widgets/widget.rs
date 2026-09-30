@@ -312,7 +312,7 @@ pub fn build_media_widget_with_action(
                 label.add_css_class("caption");
             }
             for (label, url) in links {
-                let button = reply_button(label);
+                let button = link_button(label);
                 button.set_tooltip_text(Some(url));
                 let url = url.clone();
                 button.connect_clicked(move |button| {
