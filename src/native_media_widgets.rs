@@ -975,7 +975,7 @@ fn append_photo(
     on_action: std::rc::Rc<dyn Fn(NativeMediaAction)>,
 ) {
     let size = photo_size(media.width, media.height);
-    append_photo_sized(parent, message, size, token, on_action);
+    append_photo_sized(parent, message, size, token, on_action, None);
 }
 
 /// Side of one album tile and the tiles per row: two large tiles for up to
@@ -999,10 +999,36 @@ pub fn build_album_widget(
         .build();
     let (columns, side) = album_layout(messages.len());
     let on_action: std::rc::Rc<dyn Fn(NativeMediaAction)> = std::rc::Rc::new(on_action);
+    // The viewer steps through the photos already on disk.
+    let items: std::rc::Rc<Vec<PhotoItem>> = std::rc::Rc::new(
+        messages
+            .iter()
+            .filter_map(|message| match attachment_action(message) {
+                Some(NativeMediaAction::Open(path)) => Some(PhotoItem {
+                    path,
+                    details: ViewerDetails::of(message),
+                }),
+                _ => None,
+            })
+            .collect(),
+    );
+    let mut opened = 0;
     for (index, message) in messages.iter().enumerate() {
         let tile = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let tile_token = DecodeToken::default();
-        append_photo_sized(&tile, message, (side, side), &tile_token, on_action.clone());
+        let viewer =
+            matches!(attachment_action(message), Some(NativeMediaAction::Open(_))).then(|| {
+                opened += 1;
+                (items.clone(), opened - 1)
+            });
+        append_photo_sized(
+            &tile,
+            message,
+            (side, side),
+            &tile_token,
+            on_action.clone(),
+            viewer,
+        );
         decode_token.adopt(tile_token);
         grid.attach(&tile, index as i32 % columns, index as i32 / columns, 1, 1);
     }
@@ -1019,6 +1045,7 @@ fn append_photo_sized(
     (width, height): (i32, i32),
     token: &DecodeToken,
     on_action: std::rc::Rc<dyn Fn(NativeMediaAction)>,
+    viewer: Option<(std::rc::Rc<Vec<PhotoItem>>, usize)>,
 ) {
     let (picture, frame) = media_frame(message, width, height, "Photo");
     match attachment_action(message) {
@@ -1039,9 +1066,15 @@ fn append_photo_sized(
                 .css_classes(["flat", "zaptide-photo-button"])
                 .build();
             button.update_property(&[gtk::accessible::Property::Label("View photo")]);
-            let details = ViewerDetails::of(message);
+            let (items, start) = viewer.unwrap_or_else(|| {
+                let item = PhotoItem {
+                    path,
+                    details: ViewerDetails::of(message),
+                };
+                (std::rc::Rc::new(vec![item]), 0)
+            });
             button.connect_clicked(move |button| {
-                show_photo(button, &path, &details, on_action.clone());
+                show_photo(button, items.clone(), start, on_action.clone());
             });
             parent.append(&button);
         }
@@ -1221,7 +1254,8 @@ fn show_video(
         details,
         &stack,
         &[open.upcast(), show_in_folder_button(path).upcast()],
-    );
+    )
+    .dialog;
     *target.borrow_mut() = dialog.downgrade();
     dialog.connect_closed(move |_| {
         if let Some(stream) = video.media_stream() {
@@ -1390,10 +1424,9 @@ fn media_viewer(
     details: &ViewerDetails,
     content: &impl IsA<gtk::Widget>,
     actions: &[gtk::Widget],
-) -> adw::Dialog {
-    let header = adw::HeaderBar::builder()
-        .title_widget(&adw::WindowTitle::new(&details.title, &details.subtitle))
-        .build();
+) -> Viewer {
+    let title = adw::WindowTitle::new(&details.title, &details.subtitle);
+    let header = adw::HeaderBar::builder().title_widget(&title).build();
     for action in actions {
         header.pack_end(action);
     }
@@ -1403,33 +1436,53 @@ fn media_viewer(
         .css_classes(["zaptide-viewer"])
         .build();
     view.add_top_bar(&header);
-    if let Some(caption) = &details.caption {
-        let label = gtk::Label::builder()
-            .label(caption)
-            .wrap(true)
-            .wrap_mode(gtk::pango::WrapMode::WordChar)
-            .max_width_chars(80)
-            .justify(gtk::Justification::Center)
-            .selectable(true)
-            .margin_top(10)
-            .margin_bottom(10)
-            .margin_start(16)
-            .margin_end(16)
-            .build();
-        view.add_bottom_bar(&label);
-        view.set_bottom_bar_style(adw::ToolbarStyle::Raised);
-    }
+    let caption = gtk::Label::builder()
+        .label(details.caption.as_deref().unwrap_or_default())
+        .wrap(true)
+        .wrap_mode(gtk::pango::WrapMode::WordChar)
+        .max_width_chars(80)
+        .justify(gtk::Justification::Center)
+        .selectable(true)
+        .margin_top(10)
+        .margin_bottom(10)
+        .margin_start(16)
+        .margin_end(16)
+        .build();
+    view.add_bottom_bar(&caption);
+    view.set_bottom_bar_style(adw::ToolbarStyle::Raised);
+    view.set_reveal_bottom_bars(details.caption.is_some());
     // Most of the window, as a photo viewer would take.
     let (width, height) = parent
         .as_ref()
         .root()
         .map_or((900, 700), |root| (root.width(), root.height()));
-    adw::Dialog::builder()
+    let dialog = adw::Dialog::builder()
         .title(&details.title)
         .content_width((width * 9 / 10).max(360))
         .content_height((height * 9 / 10).max(360))
         .child(&view)
-        .build()
+        .build();
+    Viewer {
+        dialog,
+        title,
+        caption,
+        view,
+    }
+}
+
+/// A viewer dialog and the parts that change when it shows another item.
+struct Viewer {
+    dialog: adw::Dialog,
+    title: adw::WindowTitle,
+    caption: gtk::Label,
+    view: adw::ToolbarView,
+}
+
+/// One photo the viewer can step to.
+#[derive(Clone)]
+struct PhotoItem {
+    path: std::path::PathBuf,
+    details: ViewerDetails,
 }
 
 /// A header button that closes `dialog` after opening the file elsewhere.
@@ -1460,10 +1513,11 @@ fn open_with_button(
 /// with double-click or the zoom button, and dragged around when larger.
 fn show_photo(
     parent: &impl IsA<gtk::Widget>,
-    path: &std::path::Path,
-    details: &ViewerDetails,
+    items: std::rc::Rc<Vec<PhotoItem>>,
+    start: usize,
     on_action: std::rc::Rc<dyn Fn(NativeMediaAction)>,
 ) {
+    let start = start.min(items.len().saturating_sub(1));
     let picture = gtk::Picture::builder()
         .content_fit(gtk::ContentFit::Contain)
         .can_shrink(true)
@@ -1471,14 +1525,6 @@ fn show_photo(
         .vexpand(true)
         .build();
     picture.update_property(&[gtk::accessible::Property::Label("Photo")]);
-    // The sender's thumbnail shows at once, until the file itself loads.
-    if let Some(texture) = details
-        .thumbnail
-        .as_deref()
-        .and_then(|bytes| gdk::Texture::from_bytes(&glib::Bytes::from(bytes)).ok())
-    {
-        picture.set_paintable(Some(&texture));
-    }
     let scroller = gtk::ScrolledWindow::builder()
         .child(&picture)
         .hscrollbar_policy(gtk::PolicyType::Never)
@@ -1553,28 +1599,137 @@ fn show_photo(
             }
         });
     }
-    let (open, target) = open_with_button(path, on_action);
-    let dialog = media_viewer(
+    // The header actions follow whichever photo is showing.
+    let current = std::rc::Rc::new(std::cell::Cell::new(start));
+    let dialog_ref: std::rc::Rc<std::cell::RefCell<glib::WeakRef<adw::Dialog>>> =
+        std::rc::Rc::default();
+    let open = gtk::Button::builder()
+        .icon_name("adw-external-link-symbolic")
+        .tooltip_text("Open With Another App")
+        .build();
+    {
+        let (items, current, dialog_ref) = (items.clone(), current.clone(), dialog_ref.clone());
+        open.connect_clicked(move |_| {
+            on_action(NativeMediaAction::Open(items[current.get()].path.clone()));
+            if let Some(dialog) = dialog_ref.borrow().upgrade() {
+                dialog.close();
+            }
+        });
+    }
+    let folder = gtk::Button::builder()
+        .icon_name("folder-open-symbolic")
+        .tooltip_text("Show in Folder")
+        .valign(gtk::Align::Center)
+        .build();
+    {
+        let (items, current) = (items.clone(), current.clone());
+        folder.connect_clicked(move |button| show_in_folder(button, &items[current.get()].path));
+    }
+    let previous = photo_step_button("go-previous-symbolic", "Previous Photo", gtk::Align::Start);
+    let next = photo_step_button("go-next-symbolic", "Next Photo", gtk::Align::End);
+    let overlay = gtk::Overlay::builder().child(&scroller).build();
+    if items.len() > 1 {
+        overlay.add_overlay(&previous);
+        overlay.add_overlay(&next);
+    }
+    let viewer = media_viewer(
         parent,
-        details,
-        &scroller,
+        &items[start].details,
+        &overlay,
         &[
             open.upcast(),
-            show_in_folder_button(path).upcast(),
+            folder.upcast(),
             copy.upcast(),
-            zoom.upcast(),
+            zoom.clone().upcast(),
         ],
     );
-    *target.borrow_mut() = dialog.downgrade();
-    // Full size up to a large screen; the view fits it to the dialog.
-    load_photo(
-        &picture,
-        path.to_path_buf(),
-        3840,
-        3840,
-        &DecodeToken::default(),
-    );
+    let dialog = viewer.dialog.clone();
+    *dialog_ref.borrow_mut() = dialog.downgrade();
+    // One token: showing another photo drops the previous one's pending load.
+    let token = DecodeToken::default();
+    let shown = current.clone();
+    let show: std::rc::Rc<dyn Fn(usize)> = {
+        let items = items.clone();
+        let (picture, previous, next) = (picture.clone(), previous.clone(), next.clone());
+        std::rc::Rc::new(move |index: usize| {
+            current.set(index);
+            let item = &items[index];
+            zoom.set_active(false);
+            // The sender's thumbnail shows at once, until the file loads.
+            picture.set_paintable(
+                item.details
+                    .thumbnail
+                    .as_deref()
+                    .and_then(|bytes| gdk::Texture::from_bytes(&glib::Bytes::from(bytes)).ok())
+                    .as_ref(),
+            );
+            // Full size up to a large screen; the view fits it to the dialog.
+            load_photo(&picture, item.path.clone(), 3840, 3840, &token);
+            viewer.title.set_title(&item.details.title);
+            viewer.title.set_subtitle(&if items.len() > 1 {
+                format!(
+                    "{} · {} of {}",
+                    item.details.subtitle,
+                    index + 1,
+                    items.len()
+                )
+            } else {
+                item.details.subtitle.clone()
+            });
+            viewer
+                .caption
+                .set_label(item.details.caption.as_deref().unwrap_or_default());
+            viewer
+                .view
+                .set_reveal_bottom_bars(item.details.caption.is_some());
+            previous.set_sensitive(index > 0);
+            next.set_sensitive(index + 1 < items.len());
+        })
+    };
+    let step: std::rc::Rc<dyn Fn(isize)> = {
+        let (show, items, shown) = (show.clone(), items.clone(), shown.clone());
+        std::rc::Rc::new(move |delta: isize| {
+            let target = shown.get().saturating_add_signed(delta);
+            if delta != 0 && target < items.len() && target != shown.get() {
+                show(target);
+            }
+        })
+    };
+    for (button, delta) in [(&previous, -1), (&next, 1)] {
+        let step = step.clone();
+        button.connect_clicked(move |_| step(delta));
+    }
+    let keys = gtk::EventControllerKey::new();
+    keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+    keys.connect_key_pressed(move |_, key, _, _| match key {
+        gdk::Key::Left => {
+            step(-1);
+            glib::Propagation::Stop
+        }
+        gdk::Key::Right => {
+            step(1);
+            glib::Propagation::Stop
+        }
+        _ => glib::Propagation::Proceed,
+    });
+    dialog.add_controller(keys);
+    show(start);
     dialog.present(Some(parent));
+}
+
+/// A round button over the viewer's edge that steps to a neighbouring photo.
+fn photo_step_button(icon: &str, tooltip: &str, side: gtk::Align) -> gtk::Button {
+    let button = gtk::Button::builder()
+        .icon_name(icon)
+        .tooltip_text(tooltip)
+        .halign(side)
+        .valign(gtk::Align::Center)
+        .margin_start(12)
+        .margin_end(12)
+        .css_classes(["osd", "circular"])
+        .build();
+    button.update_property(&[gtk::accessible::Property::Label(tooltip)]);
+    button
 }
 
 fn photo_runtime() -> &'static tokio::runtime::Runtime {
