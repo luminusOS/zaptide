@@ -61,6 +61,7 @@ enum ChatChange {
 
 enum NativeEvent {
     Link(LinkStatus),
+    Syncing(bool),
     Chats(Vec<crate::model::Chat>),
     ChatUpdated(Box<crate::model::Chat>),
     Contacts(Vec<crate::model::Contact>),
@@ -873,6 +874,16 @@ pub struct Init {
     pub dirs: AppDirs,
 }
 
+/// How long the resume spinner may show if the link never reports back.
+const RESUME_REFRESH_LIMIT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Whether a check that saw `wall` pass on the wall clock and `monotonic` on
+/// the monotonic clock woke from a suspend: only the wall clock keeps
+/// counting while the computer sleeps.
+fn slept_through(wall: std::time::Duration, monotonic: std::time::Duration) -> bool {
+    wall.saturating_sub(monotonic) > std::time::Duration::from_secs(20)
+}
+
 pub struct NativeApplication {
     window: adw::ApplicationWindow,
     backend: Option<Backend>,
@@ -966,6 +977,12 @@ pub struct NativeApplication {
     account_receipts_off: bool,
     played_voice: std::collections::HashSet<(String, String)>,
     link: LinkStatus,
+    /// The backend is syncing history or preferences.
+    syncing: bool,
+    /// Reconnecting after a suspend, until the link is back.
+    resuming: bool,
+    /// The link left `Connected` since the resume began.
+    resume_dropped: bool,
     theme_catalog: crate::theme::custom::Catalog,
     page_title: String,
     status: String,
@@ -1006,6 +1023,10 @@ pub enum Input {
     SetArchivedFilter(bool),
     SetMutedFilter(bool),
     Reconnect,
+    /// The computer woke from suspend: the connection may be dead.
+    Resumed,
+    /// Resume refresh still showing after its time limit.
+    ResumeSettled,
     SelectMessage(u32),
     ShowMessageMenu {
         id: String,
@@ -1294,6 +1315,11 @@ impl SimpleComponent for NativeApplication {
                                     set_icon_name: "chat-message-new-symbolic",
                                     set_tooltip_text: Some("New chat"),
                                     set_action_name: Some("win.new-chat"),
+                                },
+                                pack_start = &adw::Spinner {
+                                    set_tooltip_text: Some("Updating messages"),
+                                    #[watch]
+                                    set_visible: model.refreshing(),
                                 },
                                 pack_end = &gtk::MenuButton {
                                     set_icon_name: "open-menu-symbolic",
@@ -2020,6 +2046,9 @@ impl SimpleComponent for NativeApplication {
             account_receipts_off: false,
             played_voice: std::collections::HashSet::new(),
             link: LinkStatus::Starting,
+            syncing: false,
+            resuming: false,
+            resume_dropped: false,
             theme_catalog,
             page_title,
             status,
@@ -2148,6 +2177,20 @@ impl SimpleComponent for NativeApplication {
             });
         // The whole conversation accepts dropped files, not only the composer.
         // Capture runs before the text view's own drop handling.
+        let (mut last_wall, mut last_monotonic) =
+            (std::time::SystemTime::now(), std::time::Instant::now());
+        let resume_sender = sender.clone();
+        gtk::glib::timeout_add_local(std::time::Duration::from_secs(5), move || {
+            let (wall, monotonic) = (std::time::SystemTime::now(), std::time::Instant::now());
+            if slept_through(
+                wall.duration_since(last_wall).unwrap_or_default(),
+                monotonic.duration_since(last_monotonic),
+            ) {
+                resume_sender.input(Input::Resumed);
+            }
+            (last_wall, last_monotonic) = (wall, monotonic);
+            gtk::glib::ControlFlow::Continue
+        });
         let drop_target = gtk::DropTarget::new(
             gtk::gdk::FileList::static_type(),
             gtk::gdk::DragAction::COPY,
@@ -2370,6 +2413,7 @@ impl NativeApplication {
                 if let Some(backend) = &self.backend {
                     drain_backend_events(backend, &self.notifier, |event| match event {
                         Event::Link(status) => events.push(NativeEvent::Link(status)),
+                        Event::Syncing(syncing) => events.push(NativeEvent::Syncing(syncing)),
                         Event::Chats(rows) => events.push(NativeEvent::Chats(rows)),
                         Event::ChatUpdated(chat) => events.push(NativeEvent::ChatUpdated(chat)),
                         Event::Contacts(contacts) => events.push(NativeEvent::Contacts(contacts)),
@@ -2528,9 +2572,17 @@ impl NativeApplication {
                                 LinkStatus::Unlinked { qr: Some(qr), .. } => qr_texture(qr),
                                 _ => None,
                             };
+                            if self.resuming {
+                                if link.is_connected() {
+                                    self.resuming = !self.resume_dropped;
+                                } else {
+                                    self.resume_dropped = true;
+                                }
+                            }
                             self.link = link;
                             (self.page_title, self.status) = link_page(&self.link);
                         }
+                        NativeEvent::Syncing(syncing) => self.syncing = syncing,
                         NativeEvent::Chats(chats) => {
                             self.apply_chat_changes(vec![ChatChange::Snapshot(chats)]);
                         }
@@ -2992,6 +3044,27 @@ impl NativeApplication {
                     self.status = "Reconnecting to WhatsApp".into();
                 }
             }
+            Input::Resumed => {
+                let linked = matches!(
+                    self.link,
+                    LinkStatus::Connecting
+                        | LinkStatus::Connected
+                        | LinkStatus::Disconnected { .. }
+                );
+                if let (true, Some(backend)) = (linked, &self.backend) {
+                    // The socket died with the suspend but may not know yet;
+                    // reconnecting now brings the missed messages in.
+                    backend.send(crate::backend::Command::Reconnect);
+                    self.resuming = true;
+                    self.resume_dropped = false;
+                    self.status = "Refreshing messages".into();
+                    let input = sender.clone();
+                    gtk::glib::timeout_add_local_once(RESUME_REFRESH_LIMIT, move || {
+                        input.input(Input::ResumeSettled)
+                    });
+                }
+            }
+            Input::ResumeSettled => self.resuming = false,
             Input::UnlinkConfirmed => {
                 if let Some(backend) = &self.backend {
                     backend.send(crate::backend::Command::Unlink);
@@ -6239,6 +6312,17 @@ impl NativeApplication {
         files + usize::from(image)
     }
 
+    /// Whether messages are being brought up to date: syncing with the phone,
+    /// reconnecting, or refreshing after a suspend.
+    fn refreshing(&self) -> bool {
+        self.syncing
+            || self.resuming
+            || matches!(
+                self.link,
+                LinkStatus::Connecting | LinkStatus::Disconnected { .. }
+            )
+    }
+
     /// Title and one-line preview for the bar above the composer: the message
     /// being edited, or the one being replied to and who wrote it.
     fn composer_context(&self) -> (String, String) {
@@ -8396,6 +8480,17 @@ mod tests {
             message_group_boundaries(&messages),
             vec![(true, false), (false, true), (true, true), (true, true)]
         );
+    }
+
+    #[test]
+    fn a_wall_clock_jump_beyond_the_monotonic_one_is_a_suspend() {
+        use std::time::Duration;
+        let secs = Duration::from_secs;
+        assert!(!slept_through(secs(5), secs(5)));
+        // A late timer moves both clocks together.
+        assert!(!slept_through(secs(40), secs(40)));
+        assert!(slept_through(secs(3600), secs(5)));
+        assert!(!slept_through(secs(5), secs(40)));
     }
 
     #[test]
