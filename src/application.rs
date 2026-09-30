@@ -1451,11 +1451,7 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
          .zaptide-sender-purple { color: @purple_3; }\n\
          .zaptide-bubble:hover { box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 12%, transparent); }\n\
          .zaptide-message-timestamp { min-width: 36px; font-weight: normal; }\n\
-         .zaptide-filter-pill { border-radius: 9999px; padding: 4px 12px; min-height: 22px; background-color: alpha(currentColor, 0.08); box-shadow: none; }\n\
-         .zaptide-filter-pill:hover { background-color: alpha(currentColor, 0.11); }\n\
-         .zaptide-filter-pill:checked { background-color: alpha(@accent_color, 0.18); color: @accent_color; font-weight: bold; }\n\
          .zaptide-filters-active { color: @accent_color; }\n\
-         .zaptide-filter-pill:checked:hover { background-color: alpha(@accent_color, 0.24); }\n\
          .zaptide-unread-pill { font-weight: bold; font-size: 0.8em; border-radius: 9999px; min-width: 1.4em; padding: 2px 6px; color: @accent_fg_color; background-color: @accent_bg_color; }\n\
          .zaptide-delivery { opacity: 0.6; }\n\
          .zaptide-delivery.read { opacity: 1; color: #53bdeb; }\n\
