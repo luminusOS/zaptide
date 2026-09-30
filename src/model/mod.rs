@@ -528,6 +528,19 @@ impl Content {
                     lines.push(format!("[{button}]"));
                 }
             }
+            Self::Template {
+                text,
+                footer,
+                links,
+            } => {
+                lines.push(text.trim().to_owned());
+                lines.extend(footer.clone());
+                lines.extend(
+                    links
+                        .iter()
+                        .map(|link| format!("[{}] {}", link.label, link.url)),
+                );
+            }
             _ => return None,
         }
         lines.retain(|line| !line.trim().is_empty());
