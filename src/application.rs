@@ -1,5 +1,41 @@
 //! Relm4 root shell: link page, chat list, and conversation.
 
+mod albums;
+mod audio;
+mod chats;
+mod components;
+mod composer;
+mod conversation;
+mod dialogs;
+mod dispatch;
+mod link_page;
+mod linking;
+mod presentation;
+mod rows;
+mod sidebar;
+mod transcript_view;
+
+use albums::{AlbumRole, album_roles};
+use composer::{
+    ComposerState, ComposerView, ComposerViewInit, ComposerViewInput, ComposerViewOutput,
+};
+use dialogs::{
+    attach_tile, show_archive_confirmation, show_attachment_preview_dialog,
+    show_unlink_confirmation,
+};
+use dialogs::{
+    show_chat_info_dialog, show_forward_dialog, show_mention_dialog, show_new_chat_dialog,
+    show_poll_dialog, sticker_picker_content,
+};
+use link_page::{LinkPage, LinkPageInit, LinkPageInput, LinkPageOutput, LinkPageState};
+use linking::{link_page, qr_texture};
+use presentation::*;
+use rows::MessageRowWidgets;
+use sidebar::{Sidebar, SidebarInit, SidebarInput, SidebarOutput, SidebarState};
+use transcript_view::{
+    TranscriptState, TranscriptView, TranscriptViewInit, TranscriptViewInput, TranscriptViewOutput,
+};
+
 use adw::prelude::*;
 use relm4::{
     RelmApp,
@@ -16,6 +52,26 @@ use crate::{
     notifier::EventNotifier,
     paths::AppDirs,
 };
+
+fn dialog_action_callback(
+    sender: &ComponentSender<NativeApplication>,
+) -> dialogs::DialogActionCallback {
+    let sender = sender.clone();
+    std::rc::Rc::new(move |action| {
+        sender.input(match action {
+            dialogs::DialogAction::SendText(text) => Input::SendText(text),
+            dialogs::DialogAction::ClearAttachments => Input::ClearAttachments,
+            dialogs::DialogAction::ArchiveChat(id) => Input::ArchiveChat(id),
+            dialogs::DialogAction::UnlinkConfirmed => Input::UnlinkConfirmed,
+            dialogs::DialogAction::CreatePoll(draft) => Input::CreatePoll(draft),
+            dialogs::DialogAction::StartChat { id, name } => Input::StartChat { id, name },
+            dialogs::DialogAction::NewContact { phone, name } => Input::NewContact { phone, name },
+            dialogs::DialogAction::InsertMentionId(id) => Input::InsertMentionId(id),
+            dialogs::DialogAction::ForwardSelected(id) => Input::ForwardSelected(id),
+            dialogs::DialogAction::SendSticker(path) => Input::SendSticker(path),
+        });
+    })
+}
 
 #[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct ChatRow {
@@ -41,17 +97,6 @@ thread_local! {
     static AVATAR_TEXTURES: std::cell::RefCell<
         std::collections::HashMap<std::path::PathBuf, gtk::gdk::Texture>,
     > = std::cell::RefCell::default();
-}
-
-struct ChatRowWidgets {
-    name: gtk::Label,
-    preview: gtk::Label,
-    status: gtk::DrawingArea,
-    status_icon: gtk::Image,
-    unread: gtk::Label,
-    pinned: gtk::Image,
-    muted: gtk::Image,
-    avatar: adw::Avatar,
 }
 
 enum ChatChange {
@@ -183,141 +228,6 @@ impl PendingSend {
     }
 }
 
-impl RelmListItem for ChatRow {
-    type Root = gtk::Box;
-    type Widgets = ChatRowWidgets;
-
-    fn setup(_item: &gtk::ListItem) -> (Self::Root, Self::Widgets) {
-        // The row's padding lives on this box (see the zaptide-chat-item
-        // style), so its open-chat background covers the whole row.
-        let root = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(10)
-            .css_classes(["zaptide-chat-item"])
-            .build();
-        let avatar = adw::Avatar::new(40, None, true);
-        let name = gtk::Label::builder()
-            .ellipsize(gtk::pango::EllipsizeMode::End)
-            .halign(gtk::Align::Start)
-            .hexpand(true)
-            .build();
-        name.add_css_class("heading");
-        let preview = gtk::Label::builder()
-            .ellipsize(gtk::pango::EllipsizeMode::End)
-            .halign(gtk::Align::Start)
-            .xalign(0.0)
-            .hexpand(true)
-            .build();
-        preview.add_css_class("dim-label");
-        preview.add_css_class("caption");
-        let unread = gtk::Label::builder()
-            .visible(false)
-            .valign(gtk::Align::Center)
-            .build();
-        unread.add_css_class("zaptide-unread-pill");
-        let status_icon = |icon: &str, label: &str| {
-            let image = gtk::Image::builder()
-                .icon_name(icon)
-                .tooltip_text(label)
-                .visible(false)
-                .build();
-            image.add_css_class("dim-label");
-            image.update_property(&[gtk::accessible::Property::Label(label)]);
-            image
-        };
-        let muted = status_icon("notifications-disabled-symbolic", "Muted");
-        let pinned = status_icon("view-pin-symbolic", "Pinned");
-        let details = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(3)
-            .hexpand(true)
-            .valign(gtk::Align::Center)
-            .build();
-        let title = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(6)
-            .build();
-        title.append(&name);
-        title.append(&muted);
-        title.append(&pinned);
-        title.append(&unread);
-        details.append(&title);
-        let status = delivery_ticks();
-        status.set_visible(false);
-        let status_icon = gtk::Image::builder().pixel_size(12).visible(false).build();
-        let preview_row = gtk::Box::builder().spacing(4).build();
-        preview_row.append(&status);
-        preview_row.append(&status_icon);
-        preview_row.append(&preview);
-        details.append(&preview_row);
-        root.append(&avatar);
-        root.append(&details);
-        (
-            root,
-            ChatRowWidgets {
-                name,
-                preview,
-                status,
-                status_icon,
-                unread,
-                pinned,
-                muted,
-                avatar,
-            },
-        )
-    }
-
-    fn bind(&mut self, widgets: &mut Self::Widgets, root: &mut Self::Root) {
-        // Named by chat, so `mark_open_chat` can find the bound row.
-        root.set_widget_name(&self.id);
-        // Not on the list's row: restyling it while binding rebinds rows.
-        if self.open {
-            root.add_css_class("zaptide-chat-open");
-        } else {
-            root.remove_css_class("zaptide-chat-open");
-        }
-        widgets.name.set_label(&self.name);
-        widgets.preview.set_label(&self.preview);
-        let (glyph, icon, read) = delivery_mark(self.delivery);
-        set_delivery_ticks(&widgets.status, glyph);
-        if read {
-            widgets.status.add_css_class("read");
-        } else {
-            widgets.status.remove_css_class("read");
-        }
-        widgets.status_icon.set_icon_name(icon);
-        widgets.status_icon.set_visible(icon.is_some());
-        if self.delivery == crate::model::Delivery::Failed {
-            widgets.status_icon.add_css_class("zaptide-delivery-failed");
-        } else {
-            widgets
-                .status_icon
-                .remove_css_class("zaptide-delivery-failed");
-        }
-        widgets.pinned.set_visible(self.pinned);
-        widgets.muted.set_visible(self.muted);
-        widgets.unread.set_visible(self.unread.is_some());
-        if self.quiet {
-            widgets.unread.add_css_class("muted");
-        } else {
-            widgets.unread.remove_css_class("muted");
-        }
-        if let Some(unread) = &self.unread {
-            widgets.unread.set_label(unread);
-        }
-        widgets.avatar.set_text(Some(&self.name));
-        let image = self.avatar.as_ref().and_then(|path| {
-            AVATAR_TEXTURES.with_borrow_mut(|cache| {
-                if !cache.contains_key(path) {
-                    cache.insert(path.clone(), gtk::gdk::Texture::from_filename(path).ok()?);
-                }
-                cache.get(path).cloned()
-            })
-        });
-        widgets.avatar.set_custom_image(image.as_ref());
-    }
-}
-
 struct MessageRow {
     id: String,
     /// Day and unread separators shown above the row.
@@ -380,427 +290,27 @@ impl Ord for MessageRow {
     }
 }
 
-struct MessageRowWidgets {
-    separator: gtk::Label,
-    avatar: adw::Avatar,
-    leading_space: gtk::Box,
-    trailing_space: gtk::Box,
-    bubble: gtk::Box,
-    header: gtk::Box,
-    name: gtk::Label,
-    quote: gtk::Label,
-    body: gtk::Label,
-    footer: gtk::Label,
-    reactions: gtk::Box,
-    status: gtk::DrawingArea,
-    status_icon: gtk::Image,
-    media: gtk::Box,
-    audio: gtk::Box,
-    audio_controls: Option<crate::native_media_widgets::AudioControls>,
-    rendered_message: Option<crate::model::Message>,
-    rendered_album: Vec<crate::model::Message>,
-    action_generation: std::rc::Rc<std::cell::Cell<u64>>,
-    decode_token: Option<crate::native_media::DecodeToken>,
-    menu_target: MenuTarget,
-}
-
-/// The bound message and its sender, read by the row's context-menu gesture.
-type MenuTarget =
-    std::rc::Rc<std::cell::RefCell<Option<(String, ComponentSender<NativeApplication>)>>>;
 type AudioRegistry = std::rc::Rc<
     std::cell::RefCell<
         std::collections::HashMap<String, crate::native_media_widgets::AudioControls>,
     >,
 >;
 
-impl RelmListItem for MessageRow {
-    type Root = gtk::Box;
-    type Widgets = MessageRowWidgets;
-
-    fn setup(_item: &gtk::ListItem) -> (Self::Root, Self::Widgets) {
-        let root = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .margin_start(12)
-            .margin_end(12)
-            .focusable(true)
-            .build();
-        root.add_css_class("zaptide-message-item");
-        let separator = gtk::Label::builder()
-            .halign(gtk::Align::Center)
-            .justify(gtk::Justification::Center)
-            .margin_top(12)
-            .margin_bottom(6)
-            .css_classes(["dim-label", "caption-heading"])
-            .build();
-        root.append(&separator);
-        let row = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(8)
-            .build();
-        row.add_css_class("zaptide-message-row");
-        let leading_space = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        leading_space.set_hexpand(true);
-        row.append(&leading_space);
-        let avatar = adw::Avatar::new(36, None, true);
-        avatar.set_valign(gtk::Align::Start);
-        row.append(&avatar);
-        let bubble = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(2)
-            .build();
-        bubble.add_css_class("zaptide-bubble");
-        let header = gtk::Box::builder().spacing(6).build();
-        let name = gtk::Label::builder()
-            .xalign(0.0)
-            .ellipsize(gtk::pango::EllipsizeMode::End)
-            .css_classes(["heading"])
-            .build();
-        header.append(&name);
-        bubble.append(&header);
-        let quote = gtk::Label::builder()
-            .xalign(0.0)
-            .wrap(true)
-            .wrap_mode(gtk::pango::WrapMode::WordChar)
-            .max_width_chars(52)
-            .css_classes(["zaptide-quote"])
-            .build();
-        bubble.append(&quote);
-        // A wrapped TextView inside a ListView measures its height at the wrong
-        // width and leaves tall blank rows; a Label measures height-for-width.
-        let body = gtk::Label::builder()
-            .xalign(0.0)
-            .wrap(true)
-            .wrap_mode(gtk::pango::WrapMode::WordChar)
-            .max_width_chars(52)
-            .selectable(true)
-            .build();
-        bubble.append(&body);
-        let media = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        bubble.append(&media);
-        let audio = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        bubble.append(&audio);
-        let footer = gtk::Label::builder()
-            .xalign(1.0)
-            .wrap(true)
-            .max_width_chars(52)
-            .css_classes(["dim-label", "caption"])
-            .build();
-        let status = delivery_ticks();
-        let status_icon = gtk::Image::builder().pixel_size(12).build();
-        let footer_row = gtk::Box::builder()
-            .spacing(4)
-            .halign(gtk::Align::End)
-            .build();
-        footer_row.append(&footer);
-        footer_row.append(&status);
-        footer_row.append(&status_icon);
-        bubble.append(&footer_row);
-        // Only cap the width: below the tightening threshold a Clamp narrows
-        // its child and centres it, leaving wide bubbles off the row's edge.
-        let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        column.append(&bubble);
-        let reactions = gtk::Box::builder()
-            .spacing(4)
-            .margin_top(3)
-            .margin_start(6)
-            .margin_end(6)
-            .build();
-        column.append(&reactions);
-        // Not expanding: an expanding attachment row would otherwise make the
-        // Clamp share the spacer's width and centre the bubble inside it.
-        let clamp = adw::Clamp::builder()
-            .maximum_size(480)
-            .tightening_threshold(480)
-            .hexpand(false)
-            .child(&column)
-            .build();
-        row.append(&clamp);
-        let trailing_space = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        trailing_space.set_hexpand(true);
-        row.append(&trailing_space);
-        root.append(&row);
-        let menu_target: MenuTarget = std::rc::Rc::default();
-        let link_target = menu_target.clone();
-        body.connect_activate_link(move |_, uri| {
-            // A mention with no chat to open only carries a tooltip.
-            if uri == crate::safety::MENTION_SCHEME {
-                return gtk::glib::Propagation::Stop;
-            }
-            let (Some(phone), Some((_, sender))) = (
-                crate::safety::chat_link_number(uri),
-                link_target.borrow().clone(),
-            ) else {
-                return gtk::glib::Propagation::Proceed;
-            };
-            sender.input(Input::NewContact {
-                phone: phone.to_owned(),
-                name: None,
-            });
-            gtk::glib::Propagation::Stop
-        });
-        let context_click = gtk::GestureClick::new();
-        context_click.set_button(gtk::gdk::BUTTON_SECONDARY);
-        context_click.set_propagation_phase(gtk::PropagationPhase::Capture);
-        let gesture_target = menu_target.clone();
-        let focus_row = root.downgrade();
-        context_click.connect_pressed(move |gesture, _, x, y| {
-            // Claim the click so a selectable label cannot also open its own
-            // context menu over ours; two grabbing popovers freeze the app.
-            gesture.set_state(gtk::EventSequenceState::Claimed);
-            if let (Some((id, sender)), Some(row)) =
-                (gesture_target.borrow().clone(), gesture.widget())
-            {
-                if let Some(root) = focus_row.upgrade() {
-                    root.grab_focus();
-                }
-                if let Some(point) = message_menu_position(&row, x, y) {
-                    sender.input(Input::ShowMessageMenu {
-                        id,
-                        x: point.x(),
-                        y: point.y(),
-                    });
-                }
-            }
-        });
-        bubble.add_controller(context_click);
-        let menu_keys = gtk::EventControllerKey::new();
-        menu_keys.set_propagation_phase(gtk::PropagationPhase::Capture);
-        let key_target = menu_target.clone();
-        menu_keys.connect_key_pressed(move |controller, key, _, modifiers| {
-            if key != gtk::gdk::Key::Menu
-                && !(key == gtk::gdk::Key::F10
-                    && modifiers.contains(gtk::gdk::ModifierType::SHIFT_MASK))
-            {
-                return gtk::glib::Propagation::Proceed;
-            }
-            if let (Some((id, sender)), Some(row)) =
-                (key_target.borrow().clone(), controller.widget())
-                && let Some(point) = message_menu_position(&row, 24.0, row.height() as f64 / 2.0)
-            {
-                sender.input(Input::ShowMessageMenu {
-                    id,
-                    x: point.x(),
-                    y: point.y(),
-                });
-                return gtk::glib::Propagation::Stop;
-            }
-            gtk::glib::Propagation::Proceed
-        });
-        root.add_controller(menu_keys);
-        let action_generation = std::rc::Rc::new(std::cell::Cell::new(0));
-        (
-            root,
-            MessageRowWidgets {
-                separator,
-                avatar,
-                leading_space,
-                trailing_space,
-                bubble,
-                header,
-                name,
-                quote,
-                body,
-                footer,
-                reactions,
-                status,
-                status_icon,
-                media,
-                audio,
-                audio_controls: None,
-                rendered_message: None,
-                rendered_album: Vec::new(),
-                action_generation,
-                decode_token: None,
-                menu_target,
-            },
-        )
-    }
-
-    fn bind(&mut self, widgets: &mut Self::Widgets, root: &mut Self::Root) {
-        root.set_widget_name(&self.id);
-        root.set_visible(!self.collapsed);
-        root.update_property(&[
-            gtk::accessible::Property::Label(&self.accessible_label),
-            gtk::accessible::Property::Description("Press Menu or Shift+F10 for actions"),
-        ]);
-        let outgoing = self.message.from_me;
-        widgets.leading_space.set_visible(outgoing);
-        widgets.trailing_space.set_visible(!outgoing);
-        widgets.avatar.set_visible(!outgoing);
-        widgets
-            .bubble
-            .remove_css_class(if outgoing { "incoming" } else { "outgoing" });
-        widgets
-            .bubble
-            .add_css_class(if outgoing { "outgoing" } else { "incoming" });
-        root.set_margin_top(if self.show_sender { 6 } else { 0 });
-        root.set_margin_bottom(if self.show_timestamp { 6 } else { 0 });
-        widgets.separator.set_label(&self.separator);
-        widgets.separator.set_visible(!self.separator.is_empty());
-        // Continuation rows keep the avatar's space so incoming bubbles align.
-        widgets
-            .avatar
-            .set_opacity(if self.show_sender { 1.0 } else { 0.0 });
-        widgets.avatar.set_text(Some(&self.sender));
-        let image = self.avatar.as_ref().and_then(|path| {
-            AVATAR_TEXTURES.with_borrow_mut(|cache| {
-                if !cache.contains_key(path) {
-                    cache.insert(path.clone(), gtk::gdk::Texture::from_filename(path).ok()?);
-                }
-                cache.get(path).cloned()
-            })
-        });
-        widgets.avatar.set_custom_image(image.as_ref());
-        widgets.header.set_visible(self.show_sender && !outgoing);
-        widgets.name.set_label(&self.sender);
-        widgets
-            .name
-            .set_css_classes(&["heading", self.sender_class]);
-        widgets.quote.set_label(&self.quote);
-        widgets.quote.set_visible(!self.quote.is_empty());
-        widgets
-            .body
-            .set_markup(&crate::safety::linkify_markup_with_mentions(
-                &self.body,
-                &self.mentions,
-            ));
-        widgets.body.set_visible(!self.body.is_empty());
-        widgets
-            .body
-            .update_property(&[gtk::accessible::Property::Label(&self.accessible_label)]);
-        *widgets.menu_target.borrow_mut() = Some((self.id.clone(), self.pointer_sender.clone()));
-        widgets.footer.set_label(&self.footer);
-        widgets.footer.set_visible(!self.footer.is_empty());
-        while let Some(child) = widgets.reactions.first_child() {
-            widgets.reactions.remove(&child);
-        }
-        widgets.reactions.set_halign(if outgoing {
-            gtk::Align::End
-        } else {
-            gtk::Align::Start
-        });
-        let counts = reaction_counts(&self.message.reactions);
-        widgets.reactions.set_visible(!counts.is_empty());
-        for (emoji, count, from_me) in counts {
-            widgets.reactions.append(&reaction_chip(
-                &self.id,
-                &emoji,
-                count,
-                from_me,
-                &self.pointer_sender,
-            ));
-        }
-        let (glyph, icon, read) = delivery_mark(self.message.status);
-        set_delivery_ticks(&widgets.status, glyph);
-        if read {
-            widgets.status.add_css_class("read");
-        } else {
-            widgets.status.remove_css_class("read");
-        }
-        widgets.status_icon.set_icon_name(icon);
-        if self.message.status == crate::model::Delivery::Failed {
-            widgets.status_icon.add_css_class("zaptide-delivery-failed");
-        } else {
-            widgets
-                .status_icon
-                .remove_css_class("zaptide-delivery-failed");
-        }
-        widgets.status_icon.set_visible(icon.is_some());
-        let words = delivery_label(self.message.status).trim_start_matches(" · ");
-        for widget in [
-            widgets.status.upcast_ref::<gtk::Widget>(),
-            widgets.status_icon.upcast_ref(),
-        ] {
-            widget.set_tooltip_text((!words.is_empty()).then_some(words));
-        }
-        // Delivery and reaction updates must not rebuild media: a rebuilt
-        // sticker or photo blanks while it decodes again and the list jumps.
-        let same_album = widgets.rendered_album.len() == self.album.len()
-            && widgets
-                .rendered_album
-                .iter()
-                .zip(&self.album)
-                .all(|(previous, next)| same_media(previous, next));
-        if !(same_album
-            && widgets
-                .rendered_message
-                .as_ref()
-                .is_some_and(|previous| same_media(previous, &self.message)))
-        {
-            if let Some(previous) = widgets.rendered_message.as_ref()
-                && previous.id != self.id
-            {
-                self.audio_registry.borrow_mut().remove(&previous.id);
-            }
-            if let Some(token) = widgets.decode_token.take() {
-                token.cancel();
-            }
-            while let Some(child) = widgets.media.first_child() {
-                widgets.media.remove(&child);
-            }
-            while let Some(child) = widgets.audio.first_child() {
-                widgets.audio.remove(&child);
-            }
-            widgets.audio_controls = None;
-            let generation = widgets.action_generation.get().wrapping_add(1);
-            widgets.action_generation.set(generation);
-            let active_generation = widgets.action_generation.clone();
-            let media = widgets.media.downgrade();
-            let sender = self.pointer_sender.clone();
-            let forward = move |action| {
-                if active_generation.get() == generation && media.upgrade().is_some() {
-                    sender.input(Input::MediaAction(action));
-                }
-            };
-            let rendered = if self.album.is_empty() {
-                crate::native_media_widgets::build_media_widget_with_action(&self.message, forward)
-            } else {
-                crate::native_media_widgets::build_album_widget(&self.album, forward)
-            };
-            widgets
-                .media
-                .set_visible(rendered.widget.first_child().is_some());
-            widgets.media.append(&rendered.widget);
-            widgets.decode_token = Some(rendered.decode_token);
-            widgets.rendered_message = Some(self.message.clone());
-            widgets.rendered_album = self.album.clone();
-        }
-        if let Some(voice) = &self.audio {
-            if widgets.audio_controls.is_none() {
-                let sender = self.pointer_sender.clone();
-                let id = self.id.clone();
-                let generation = widgets.action_generation.get();
-                let active_generation = widgets.action_generation.clone();
-                let voice_note = matches!(
-                    &self.message.content,
-                    crate::model::Content::Audio {
-                        voice_note: true,
-                        ..
-                    }
-                );
-                let controls = crate::native_media_widgets::AudioControls::new(
-                    voice,
-                    voice_note,
-                    move |intent| {
-                        if active_generation.get() == generation {
-                            sender.input(Input::AudioControl {
-                                id: id.clone(),
-                                intent,
-                            });
-                        }
-                    },
-                );
-                widgets.audio.append(&controls.widget);
-                self.audio_registry
-                    .borrow_mut()
-                    .insert(self.id.clone(), controls.clone());
-                widgets.audio_controls = Some(controls);
-            } else if let Some(controls) = &widgets.audio_controls {
-                controls.update(voice);
-            }
-        }
-        widgets.audio.set_visible(self.audio.is_some());
-    }
+struct AudioState {
+    selected_voice: Option<crate::native_voice::VoiceMessage>,
+    selected_voice_message: Option<String>,
+    media: crate::services::media::MediaService,
+    audio_waveforms: std::collections::HashMap<(String, String), Vec<u8>>,
+    waveform_queue: std::collections::VecDeque<(String, String, std::path::PathBuf)>,
+    waveform_busy: bool,
+    waveform_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    waveform_attempted: std::collections::HashSet<(String, String)>,
+    playing_audio: Option<String>,
+    audio_errors: std::collections::HashMap<(String, String), String>,
+    audio_registry: AudioRegistry,
+    voice_send_pending: bool,
+    recording_meter: crate::native_media_widgets::RecordingMeter,
+    played_voice: std::collections::HashSet<(String, String)>,
 }
 
 /// A funnel, which neither Adwaita nor GTK ships; a `-symbolic` name lets
@@ -892,13 +402,6 @@ pub struct NativeApplication {
     _event_drain: GlibEventDrain,
     shutdown_started: bool,
     chats: TypedListView<ChatRow, gtk::SingleSelection>,
-    chat_search: Option<gtk::SearchEntry>,
-    unread_filter: Option<gtk::ToggleButton>,
-    pinned_filter: Option<gtk::ToggleButton>,
-    chat_section: Option<adw::ToggleGroup>,
-    muted_filter: Option<gtk::ToggleButton>,
-    /// The "All" pill; activating it clears the private/group filter.
-    chat_kind_filter: Option<gtk::ToggleButton>,
     chat_projection: crate::native_chat_list::ChatListProjection,
     chat_filters: crate::native_chat_list::ChatListFilters,
     chat_ids: Vec<String>,
@@ -921,6 +424,9 @@ pub struct NativeApplication {
     presence: std::collections::HashMap<String, (bool, Option<i64>)>,
     messages: TypedListView<MessageRow, gtk::NoSelection>,
     qr_texture: Option<gtk::gdk::Texture>,
+    link_page: relm4::Controller<LinkPage>,
+    transcript_view: relm4::Controller<TranscriptView>,
+    composer_view: relm4::Controller<ComposerView>,
     history_complete: bool,
     loading_older: bool,
     message_ids: Vec<String>,
@@ -929,19 +435,7 @@ pub struct NativeApplication {
     pointer_sender: ComponentSender<NativeApplication>,
     editable_messages: std::collections::HashMap<String, String>,
     transcript: Vec<crate::native_transcript::TranscriptRow>,
-    selected_voice: Option<crate::native_voice::VoiceMessage>,
-    selected_voice_message: Option<String>,
-    media: crate::services::media::MediaService,
-    audio_waveforms: std::collections::HashMap<(String, String), Vec<u8>>,
-    waveform_queue: std::collections::VecDeque<(String, String, std::path::PathBuf)>,
-    waveform_busy: bool,
-    waveform_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-    waveform_attempted: std::collections::HashSet<(String, String)>,
-    playing_audio: Option<String>,
-    audio_errors: std::collections::HashMap<(String, String), String>,
-    audio_registry: AudioRegistry,
-    voice_send_pending: bool,
-    recording_meter: crate::native_media_widgets::RecordingMeter,
+    audio: AudioState,
     /// About row of the open contact-info dialog, filled when the fetch returns.
     info_about: Option<(String, adw::ActionRow)>,
     message_target: Option<String>,
@@ -960,8 +454,6 @@ pub struct NativeApplication {
     drafts: std::collections::HashMap<String, String>,
     composer: crate::native_composer::NativeComposerState,
     composer_buffer: gtk::TextBuffer,
-    composer_view: Option<gtk::TextView>,
-    sticker_button: Option<gtk::Button>,
     /// The open sticker picker and its page stack, refreshed as lists arrive.
     sticker_picker: Option<(gtk::Popover, gtk::Stack)>,
     pending_composer_request: Option<crate::native_composer::ComposerRequest>,
@@ -975,7 +467,6 @@ pub struct NativeApplication {
     reply_to: Option<(String, String)>,
     editing: Option<(String, String)>,
     account_receipts_off: bool,
-    played_voice: std::collections::HashSet<(String, String)>,
     link: LinkStatus,
     /// The backend is syncing history or preferences.
     syncing: bool,
@@ -993,7 +484,7 @@ pub struct NativeApplication {
         std::cell::RefCell<std::collections::HashSet<crate::native_portals::RequestId>>,
     >,
     preferences: Option<crate::native_preferences::NativePreferencesDialog>,
-    sidebar: Option<gtk::Widget>,
+    sidebar: relm4::Controller<Sidebar>,
     sidebar_visible: bool,
     split_view: Option<adw::OverlaySplitView>,
     phone_linking: bool,
@@ -1019,7 +510,7 @@ pub enum Input {
     SearchChats(String),
     SetUnreadFilter(bool),
     SetPinnedFilter(bool),
-    SetChatKindFilter(usize),
+    SetChatKindFilter(crate::native_chat_list::ChatKindFilter),
     SetArchivedFilter(bool),
     SetMutedFilter(bool),
     Reconnect,
@@ -1079,6 +570,7 @@ pub enum Input {
     Recording(crate::native_voice::RecordingIntent),
     PollVoice,
     ShowStickerPicker,
+    ShowPollCreator,
     SendSticker(std::path::PathBuf),
     ClearTyping(String),
     StopComposing(String),
@@ -1164,137 +656,9 @@ impl SimpleComponent for NativeApplication {
             #[wrap(Some)]
             set_content = &adw::ToastOverlay {
                 #[wrap(Some)]
+                #[name = "page_stack"]
                 set_child = &gtk::Stack {
                     set_transition_type: gtk::StackTransitionType::Crossfade,
-
-                    add_named[Some("link")] = &adw::ToolbarView {
-                        add_top_bar = &adw::HeaderBar {
-                            set_show_title: false,
-                            pack_end = &gtk::MenuButton {
-                                set_icon_name: "open-menu-symbolic",
-                                set_tooltip_text: Some("Main menu"),
-                                set_menu_model: Some(&link_menu),
-                            },
-                        },
-
-                        #[wrap(Some)]
-                        set_content = &gtk::ScrolledWindow {
-                            set_hscrollbar_policy: gtk::PolicyType::Never,
-                            #[wrap(Some)]
-                            set_child = &adw::Clamp {
-                                set_maximum_size: 420,
-                                set_valign: gtk::Align::Center,
-                                #[wrap(Some)]
-                                set_child = &gtk::Box {
-                                    set_orientation: gtk::Orientation::Vertical,
-                                    set_spacing: 18,
-                                    set_margin_top: 24,
-                                    set_margin_bottom: 24,
-                                    set_margin_start: 24,
-                                    set_margin_end: 24,
-
-                                    append = &gtk::Label {
-                                        add_css_class: "title-1",
-                                        set_wrap: true,
-                                        set_justify: gtk::Justification::Center,
-                                        #[watch]
-                                        set_label: if model.phone_linking && model.pair_code().is_none() { "Link with phone number" } else { model.page_title.as_str() },
-                                    },
-                                    #[name = "status_label"]
-                                    append = &gtk::Label {
-                                        add_css_class: "dim-label",
-                                        set_wrap: true,
-                                        set_justify: gtk::Justification::Center,
-                                        #[watch]
-                                        set_label: if model.phone_linking && model.pair_code().is_none() && !model.pairing_requested() { "Choose your country and enter your phone number. WhatsApp will send a code to type on your phone." } else { model.status.as_str() },
-                                    },
-                                    append = &gtk::Picture {
-                                        add_css_class: "zaptide-qr",
-                                        set_halign: gtk::Align::Center,
-                                        set_size_request: (264, 264),
-                                        set_can_shrink: false,
-                                        set_alternative_text: Some("WhatsApp device-linking QR code"),
-                                        #[watch]
-                                        set_visible: model.qr_texture.is_some() && !model.phone_linking,
-                                        #[watch]
-                                        set_paintable: model.qr_texture.as_ref(),
-                                    },
-                                    append = &gtk::Box {
-                                        set_halign: gtk::Align::Center,
-                                        set_spacing: 12,
-                                        add_css_class: "card",
-                                        add_css_class: "zaptide-pair-code",
-                                        #[watch]
-                                        set_visible: model.pair_code().is_some(),
-                                        append = &gtk::Label {
-                                            add_css_class: "zaptide-pair-code-label",
-                                            add_css_class: "monospace",
-                                            set_selectable: true,
-                                            #[watch]
-                                            set_label: model.pair_code().unwrap_or_default(),
-                                        },
-                                        append = &gtk::Button {
-                                            set_icon_name: "edit-copy-symbolic",
-                                            set_tooltip_text: Some("Copy Code"),
-                                            set_valign: gtk::Align::Center,
-                                            add_css_class: "flat",
-                                            add_css_class: "circular",
-                                            connect_clicked => Input::CopyPairCode,
-                                        },
-                                    },
-                                    append = &adw::Spinner {
-                                        set_halign: gtk::Align::Center,
-                                        set_size_request: (32, 32),
-                                        #[watch]
-                                        set_visible: model.link_busy(),
-                                    },
-                                    append = &gtk::Box {
-                                        set_orientation: gtk::Orientation::Vertical,
-                                        set_spacing: 12,
-                                        #[watch]
-                                        set_visible: model.phone_linking && model.pair_code().is_none() && !model.pairing_requested(),
-                                        append = &gtk::Box {
-                                            set_spacing: 8,
-                                            #[name = "country_picker"]
-                                            append = &country_picker() -> gtk::DropDown {},
-                                            #[name = "phone_entry"]
-                                            append = &gtk::Entry {
-                                                set_hexpand: true,
-                                                set_placeholder_text: Some("Phone number"),
-                                                set_input_purpose: gtk::InputPurpose::Phone,
-                                                connect_activate[sender, country_picker] => move |entry| sender.input(Input::PairWithPhone(international_phone(&country_picker, entry))),
-                                            },
-                                        },
-                                        append = &gtk::Button {
-                                            set_label: "Get Code",
-                                            set_halign: gtk::Align::Center,
-                                            add_css_class: "pill",
-                                            add_css_class: "suggested-action",
-                                            connect_clicked[sender, phone_entry, country_picker] => move |_| sender.input(Input::PairWithPhone(international_phone(&country_picker, &phone_entry))),
-                                        },
-                                    },
-                                    append = &gtk::Button {
-                                        set_halign: gtk::Align::Center,
-                                        add_css_class: "pill",
-                                        #[watch]
-                                        set_visible: matches!(model.link, LinkStatus::Unlinked { .. }),
-                                        #[watch]
-                                        set_label: if model.phone_linking || model.pairing_requested() || model.pair_code().is_some() { "Use QR Code Instead" } else { "Link With Phone Number" },
-                                        connect_clicked => Input::TogglePhoneLinking,
-                                    },
-                                    append = &gtk::Button {
-                                        set_label: "Try Again",
-                                        set_halign: gtk::Align::Center,
-                                        add_css_class: "pill",
-                                        add_css_class: "suggested-action",
-                                        #[watch]
-                                        set_visible: matches!(model.link, LinkStatus::Failed(_) | LinkStatus::LoggedOut | LinkStatus::Disconnected { .. }),
-                                        connect_clicked => Input::Reconnect,
-                                    },
-                                },
-                            },
-                        },
-                    },
 
                     #[name = "main_split_view"]
                     add_named[Some("chats")] = &adw::OverlaySplitView {
@@ -1303,179 +667,7 @@ impl SimpleComponent for NativeApplication {
                         #[watch]
                         set_show_sidebar: model.sidebar_visible,
 
-                        #[wrap(Some)]
-                        #[name = "sidebar"]
-                        set_sidebar = &adw::ToolbarView {
-                            add_top_bar = &adw::HeaderBar {
-                                #[wrap(Some)]
-                                set_title_widget = &adw::WindowTitle {
-                                    set_title: "ZapTide",
-                                },
-                                pack_start = &gtk::Button {
-                                    set_icon_name: "chat-message-new-symbolic",
-                                    set_tooltip_text: Some("New chat"),
-                                    set_action_name: Some("win.new-chat"),
-                                },
-                                pack_start = &adw::Spinner {
-                                    set_tooltip_text: Some("Updating messages"),
-                                    #[watch]
-                                    set_visible: model.refreshing(),
-                                },
-                                pack_end = &gtk::MenuButton {
-                                    set_icon_name: "open-menu-symbolic",
-                                    set_tooltip_text: Some("Main menu"),
-                                    set_primary: true,
-                                    set_menu_model: Some(&primary_menu),
-                                },
-                            },
-
-                            #[wrap(Some)]
-                            set_content = &gtk::Box {
-                                set_orientation: gtk::Orientation::Vertical,
-                                // Filters as pills in a popover beside the search, as in
-                                // Aetheris; the funnel turns accent while any is on.
-                                append = &gtk::Box {
-                                    add_css_class: "linked",
-                                    set_margin_start: 12,
-                                    set_margin_end: 12,
-                                    set_margin_bottom: 6,
-                                    #[name = "chat_search"]
-                                    append = &gtk::SearchEntry {
-                                        set_hexpand: true,
-                                        set_placeholder_text: Some("Search chats"),
-                                        connect_search_changed[sender] => move |entry| sender.input(Input::SearchChats(entry.text().to_string())),
-                                    },
-                                    append = &gtk::MenuButton {
-                                        set_icon_name: "zaptide-filter-symbolic",
-                                        set_tooltip_text: Some("Filters"),
-                                        update_property: &[gtk::accessible::Property::Label("Filter chats")],
-                                        #[watch]
-                                        set_class_active: ("zaptide-filters-active", model.filters_active()),
-                                        #[wrap(Some)]
-                                        set_popover = &gtk::Popover {
-                                            #[wrap(Some)]
-                                            set_child = &gtk::FlowBox {
-                                                set_selection_mode: gtk::SelectionMode::None,
-                                                set_column_spacing: 6,
-                                                set_row_spacing: 6,
-                                                set_max_children_per_line: 3,
-                                                set_margin_top: 6,
-                                                set_margin_bottom: 6,
-                                                set_margin_start: 6,
-                                                set_margin_end: 6,
-                                        #[name = "chat_kind_filter"]
-                                        append = &gtk::ToggleButton {
-                                            set_label: "All",
-                                            set_active: true,
-                                            add_css_class: "zaptide-filter-pill",
-                                            connect_toggled[sender] => move |button| if button.is_active() { sender.input(Input::SetChatKindFilter(0)) },
-                                        },
-                                        append = &gtk::ToggleButton {
-                                            set_label: "Private",
-                                            set_group: Some(&chat_kind_filter),
-                                            add_css_class: "zaptide-filter-pill",
-                                            connect_toggled[sender] => move |button| if button.is_active() { sender.input(Input::SetChatKindFilter(1)) },
-                                        },
-                                        append = &gtk::ToggleButton {
-                                            set_label: "Groups",
-                                            set_group: Some(&chat_kind_filter),
-                                            add_css_class: "zaptide-filter-pill",
-                                            connect_toggled[sender] => move |button| if button.is_active() { sender.input(Input::SetChatKindFilter(2)) },
-                                        },
-                                        #[name = "unread_filter"]
-                                        append = &gtk::ToggleButton {
-                                            set_label: "Unread",
-                                            add_css_class: "zaptide-filter-pill",
-                                            connect_toggled[sender] => move |button| sender.input(Input::SetUnreadFilter(button.is_active())),
-                                        },
-                                        #[name = "pinned_filter"]
-                                        append = &gtk::ToggleButton {
-                                            set_label: "Pinned",
-                                            add_css_class: "zaptide-filter-pill",
-                                            connect_toggled[sender] => move |button| sender.input(Input::SetPinnedFilter(button.is_active())),
-                                        },
-                                        #[name = "muted_filter"]
-                                        append = &gtk::ToggleButton {
-                                            set_label: "Muted",
-                                            add_css_class: "zaptide-filter-pill",
-                                            connect_toggled[sender] => move |button| sender.input(Input::SetMutedFilter(button.is_active())),
-                                        },
-                                            },
-                                        },
-                                    },
-                                },
-                                append = &gtk::Box {
-                                    set_spacing: 4,
-                                    set_margin_start: 12,
-                                    set_margin_end: 12,
-                                    set_margin_bottom: 6,
-                                    #[name = "chat_section"]
-                                    append = &adw::ToggleGroup {
-                                        set_hexpand: true,
-                                        set_homogeneous: true,
-                                        add_css_class: "flat",
-                                        add = adw::Toggle {
-                                            set_name: Some("chats"),
-                                            set_icon_name: Some("user-available-symbolic"),
-                                            set_tooltip: "Chats",
-                                        },
-                                        add = adw::Toggle {
-                                            set_name: Some("archived"),
-                                            // With a child, only the label names the button for
-                                            // screen readers; the child is what is shown.
-                                            set_label: Some("Archived"),
-                                            set_tooltip: "Archived",
-                                            #[wrap(Some)]
-                                            set_child = &gtk::Box {
-                                                set_spacing: 6,
-                                                set_halign: gtk::Align::Center,
-                                                append = &gtk::Image {
-                                                    set_icon_name: Some("package-x-generic-symbolic"),
-                                                },
-                                                append = &gtk::Label {
-                                                    add_css_class: "zaptide-unread-pill",
-                                                    add_css_class: "muted",
-                                                    add_css_class: "compact",
-                                                    set_valign: gtk::Align::Center,
-                                                    #[watch]
-                                                    set_visible: model.archived_unread_count() > 0,
-                                                    #[watch]
-                                                    set_label: &model.archived_unread_count().to_string(),
-                                                },
-                                            },
-                                        },
-                                        set_active_name: Some("chats"),
-                                        connect_active_name_notify[sender] => move |group| {
-                                            sender.input(Input::SetArchivedFilter(group.active_name().as_deref() == Some("archived")));
-                                        },
-                                    },
-                                },
-                                append = &gtk::ScrolledWindow {
-                                    set_vexpand: true,
-                                    set_hscrollbar_policy: gtk::PolicyType::Never,
-                                    #[watch]
-                                    set_visible: !model.chat_ids.is_empty(),
-                                    #[local_ref]
-                                    chat_view -> gtk::ListView {
-                                        add_css_class: "navigation-sidebar",
-                                        add_css_class: "zaptide-chat-list",
-                                        set_single_click_activate: true,
-                                        connect_activate[sender] => move |_, position| sender.input(Input::SelectChat(position)),
-                                    },
-                                },
-                                append = &adw::StatusPage {
-                                    add_css_class: "compact",
-                                    set_vexpand: true,
-                                    set_icon_name: Some("system-search-symbolic"),
-                                    #[watch]
-                                    set_visible: model.chat_ids.is_empty(),
-                                    #[watch]
-                                    set_title: model.chat_list_empty_title(),
-                                    #[watch]
-                                    set_description: Some(model.chat_list_empty_description()),
-                                },
-                            },
-                        },
+                        set_sidebar: Some(model.sidebar.widget()),
 
                         #[wrap(Some)]
                         set_content = &adw::ToolbarView {
@@ -1523,309 +715,14 @@ impl SimpleComponent for NativeApplication {
                                 connect_button_clicked => Input::Reconnect,
                             },
 
-                            #[wrap(Some)]
-                            set_content = &gtk::Stack {
-
-                                add_named[Some("empty")] = &adw::StatusPage {
-                                    set_icon_name: Some("chat-message-new-symbolic"),
-                                    set_title: "No Conversation Selected",
-                                    set_description: Some("Choose a chat from the list to start messaging."),
-                                },
-
+                                #[wrap(Some)]
                                 #[name = "conversation_body"]
-                                add_named[Some("conversation")] = &gtk::Box {
+                                set_content = &gtk::Box {
                                     set_orientation: gtk::Orientation::Vertical,
 
-                                    append = &gtk::Button {
-                                        set_label: "Load Older Messages",
-                                        set_halign: gtk::Align::Center,
-                                        set_margin_top: 6,
-                                        add_css_class: "flat",
-                                        #[watch]
-                                        set_visible: !model.message_ids.is_empty() && !model.history_complete,
-                                        #[watch]
-                                        set_sensitive: !model.loading_older,
-                                        connect_clicked => Input::LoadOlder,
-                                    },
-
-                                    append = &gtk::ScrolledWindow {
-                                        set_vexpand: true,
-                                        set_hscrollbar_policy: gtk::PolicyType::Never,
-                                        #[local_ref]
-                                        message_view -> gtk::ListView {
-                                            add_css_class: "zaptide-transcript",
-                                            set_single_click_activate: true,
-                                            connect_activate[sender] => move |_, position| sender.input(Input::SelectMessage(position)),
-                                        },
-                                    },
-
-                                    append = &gtk::Box {
-                                        set_margin_start: 12,
-                                        set_margin_end: 12,
-                                        set_margin_top: 6,
-                                        set_spacing: 6,
-                                        set_valign: gtk::Align::Center,
-                                        #[watch]
-                                        set_visible: model.recording_active(),
-                                        append = &gtk::Button {
-                                            set_icon_name: "user-trash-symbolic",
-                                            set_tooltip_text: Some("Discard recording"),
-                                            add_css_class: "flat",
-                                            add_css_class: "circular",
-                                            connect_clicked => Input::Recording(crate::native_voice::RecordingIntent::Cancel),
-                                        },
-                                        append = &gtk::Image {
-                                            set_icon_name: Some("media-record-symbolic"),
-                                            update_property: &[gtk::accessible::Property::Label("Recording")],
-                                            add_css_class: "error",
-                                            #[watch]
-                                            set_opacity: model.recording_blink(),
-                                        },
-                                        append = &gtk::Label {
-                                            add_css_class: "numeric",
-                                            #[watch]
-                                            set_label: &model.recording_time(),
-                                        },
-                                        #[local_ref]
-                                        recording_meter_area -> gtk::DrawingArea {},
-                                        append = &gtk::Button {
-                                            #[wrap(Some)]
-                                            set_child = &paper_plane_icon() -> gtk::DrawingArea {},
-                                            set_tooltip_text: Some("Send voice message"),
-                                            update_property: &[gtk::accessible::Property::Label("Send voice message")],
-                                            add_css_class: "suggested-action",
-                                            add_css_class: "circular",
-                                            #[watch]
-                                            set_sensitive: model.pending_send.is_none() && !model.voice_send_pending,
-                                            connect_clicked => Input::Recording(crate::native_voice::RecordingIntent::Send),
-                                        },
-                                    },
-
-                                    append = &gtk::Box {
-                                        set_margin_start: 12,
-                                        set_margin_end: 12,
-                                        set_margin_top: 6,
-                                        set_spacing: 6,
-                                        #[watch]
-                                        set_visible: model.reply_to.is_some() || model.editing.is_some(),
-                                        append = &gtk::Box {
-                                            set_orientation: gtk::Orientation::Vertical,
-                                            add_css_class: "zaptide-quote",
-                                            set_hexpand: true,
-                                            append = &gtk::Label {
-                                                add_css_class: "heading",
-                                                set_xalign: 0.0,
-                                                set_ellipsize: gtk::pango::EllipsizeMode::End,
-                                                #[watch]
-                                                set_label: &model.composer_context().0,
-                                            },
-                                            append = &gtk::Label {
-                                                add_css_class: "dim-label",
-                                                set_xalign: 0.0,
-                                                set_ellipsize: gtk::pango::EllipsizeMode::End,
-                                                set_single_line_mode: true,
-                                                #[watch]
-                                                set_label: &model.composer_context().1,
-                                                #[watch]
-                                                set_visible: !model.composer_context().1.is_empty(),
-                                            },
-                                        },
-                                        append = &gtk::Button {
-                                            set_icon_name: "window-close-symbolic",
-                                            set_tooltip_text: Some("Cancel"),
-                                            add_css_class: "flat",
-                                            add_css_class: "circular",
-                                            connect_clicked[sender] => move |_| {
-                                                sender.input(Input::CancelReply);
-                                                sender.input(Input::CancelEdit);
-                                            },
-                                        },
-                                    },
-
-                                    append = &gtk::Box {
-                                        set_margin_start: 12,
-                                        set_margin_end: 12,
-                                        set_margin_top: 6,
-                                        set_spacing: 6,
-                                        #[watch]
-                                        set_visible: model.pending_attachment_count() > 0,
-                                        append = &gtk::Picture {
-                                            set_size_request: (96, 72),
-                                            set_can_shrink: true,
-                                            set_content_fit: gtk::ContentFit::Contain,
-                                            set_tooltip_text: Some("Clipboard image staged for sending"),
-                                            set_alternative_text: Some("Clipboard image preview"),
-                                            #[watch]
-                                            set_visible: model.active_chat.as_ref().is_some_and(|chat| model.pending_clipboard_images.contains_key(chat)),
-                                            #[watch]
-                                            set_paintable: model.active_chat.as_ref().and_then(|chat| model.pending_clipboard_images.get(chat)).map(|image| &image.preview),
-                                        },
-                                        append = &gtk::Image {
-                                            set_icon_name: Some("mail-attachment-symbolic"),
-                                            #[watch]
-                                            set_visible: model.pending_attachment_names().len() == model.pending_attachment_count(),
-                                        },
-                                        append = &gtk::Label {
-                                            set_hexpand: true,
-                                            set_xalign: 0.0,
-                                            set_ellipsize: gtk::pango::EllipsizeMode::Middle,
-                                            #[watch]
-                                            set_label: &attachment_summary(&model.pending_attachment_names(), model.pending_attachment_count()),
-                                            #[watch]
-                                            set_tooltip_text: Some(&model.pending_attachment_names().join("\n")).filter(|names| !names.is_empty()).map(String::as_str),
-                                        },
-                                        append = &gtk::Button {
-                                            set_icon_name: "window-close-symbolic",
-                                            set_tooltip_text: Some("Clear attachments"),
-                                            add_css_class: "flat",
-                                            add_css_class: "circular",
-                                            connect_clicked => Input::ClearAttachments,
-                                        },
-                                    },
-
-                                    append = &gtk::Box {
-                                        set_spacing: 6,
-                                        set_margin_top: 6,
-                                        set_margin_bottom: 6,
-                                        set_margin_start: 6,
-                                        set_margin_end: 6,
-
-                                        append = &gtk::MenuButton {
-                                            set_icon_name: "mail-attachment-symbolic",
-                                            set_tooltip_text: Some("Attach"),
-                                            set_valign: gtk::Align::End,
-                                            add_css_class: "flat",
-                                            add_css_class: "circular",
-                                            set_direction: gtk::ArrowType::Up,
-                                            #[wrap(Some)]
-                                            #[name = "attach_popover"]
-                                            set_popover = &gtk::Popover {
-                                                add_css_class: "menu",
-                                                #[wrap(Some)]
-                                                set_child = &gtk::Grid {
-                                                    set_column_spacing: 4,
-                                                    set_row_spacing: 4,
-                                                    set_column_homogeneous: true,
-                                                    attach[0, 0, 1, 1] = &gtk::Button {
-                                                        set_child: Some(&attach_tile("image-x-generic-symbolic", "Gallery", "gallery")),
-                                                        set_tooltip_text: Some("Send photos and videos"),
-                                                        add_css_class: "flat",
-                                                        add_css_class: "zaptide-attach-tile",
-                                                        #[watch]
-                                                        set_sensitive: model.can_attach(),
-                                                        connect_clicked[sender, attach_popover] => move |_| { attach_popover.popdown(); sender.input(Input::PickAttachments { gallery: true }) },
-                                                    },
-                                                    attach[1, 0, 1, 1] = &gtk::Button {
-                                                        set_child: Some(&attach_tile("text-x-generic-symbolic", "Files", "files")),
-                                                        set_tooltip_text: Some("Send any file as a document"),
-                                                        add_css_class: "flat",
-                                                        add_css_class: "zaptide-attach-tile",
-                                                        #[watch]
-                                                        set_sensitive: model.can_attach(),
-                                                        connect_clicked[sender, attach_popover] => move |_| { attach_popover.popdown(); sender.input(Input::PickAttachments { gallery: false }) },
-                                                    },
-                                                    attach[0, 1, 1, 1] = &gtk::Button {
-                                                        set_child: Some(&attach_tile("view-list-bullet-symbolic", "Poll", "poll")),
-                                                        set_tooltip_text: Some("Create a poll"),
-                                                        add_css_class: "flat",
-                                                        add_css_class: "zaptide-attach-tile",
-                                                        #[watch]
-                                                        set_sensitive: model.can_attach(),
-                                                        connect_clicked[sender, attach_popover, dialog_parent] => move |_| { attach_popover.popdown(); show_poll_dialog(&dialog_parent, &sender) },
-                                                    },
-                                                    attach[1, 1, 1, 1] = &gtk::Button {
-                                                        set_child: Some(&attach_tile("avatar-default-symbolic", "Mention", "mention")),
-                                                        set_tooltip_text: Some("Mention a participant"),
-                                                        add_css_class: "flat",
-                                                        add_css_class: "zaptide-attach-tile",
-                                                        #[watch]
-                                                        set_sensitive: model.active_chat.as_deref().and_then(|id| model.chat_snapshots.iter().find(|chat| chat.id == id)).is_some_and(|chat| !chat.participants.is_empty()),
-                                                        connect_clicked[sender, attach_popover] => move |_| { attach_popover.popdown(); sender.input(Input::InsertMention) },
-                                                    },
-                                                },
-                                            },
-                                        },
-
-                                         append = &gtk::MenuButton {
-                                            set_icon_name: "face-smile-symbolic",
-                                            set_tooltip_text: Some("Emoji"),
-                                            set_valign: gtk::Align::End,
-                                            add_css_class: "flat",
-                                            add_css_class: "circular",
-                                            set_popover: Some(&{
-                                                let sender = sender.clone();
-                                                crate::native_emoji::picker(move |emoji| sender.input(Input::InsertEmoji(emoji.to_owned())))
-                                            }),
-                                        },
-
-                                        #[name = "sticker_button"]
-                                        append = &gtk::Button {
-                                            set_icon_name: "emoji-nature-symbolic",
-                                            set_tooltip_text: Some("Sticker"),
-                                            set_valign: gtk::Align::End,
-                                            add_css_class: "flat",
-                                            add_css_class: "circular",
-                                            connect_clicked => Input::ShowStickerPicker,
-                                        },
-
-                                        append = &gtk::ScrolledWindow {
-                                            add_css_class: "zaptide-composer",
-                                            set_hexpand: true,
-                                            set_hscrollbar_policy: gtk::PolicyType::Never,
-                                            set_propagate_natural_height: true,
-                                            set_max_content_height: 160,
-                                            #[name = "composer"]
-                                            #[wrap(Some)]
-                                            set_child = &gtk::TextView {
-                                                set_wrap_mode: gtk::WrapMode::WordChar,
-                                                set_top_margin: 8,
-                                                set_bottom_margin: 8,
-                                                set_left_margin: 12,
-                                                set_right_margin: 12,
-                                                set_buffer: Some(&model.composer_buffer),
-                                                #[watch]
-                                                set_editable: !model.voice_send_pending && model.active_chat.as_deref().and_then(|id| model.chat_snapshots.iter().find(|chat| chat.id == id)).is_some_and(crate::model::Chat::can_send),
-                                                #[watch]
-                                                set_tooltip_text: Some(if model.editing.is_some() { "Edit message" } else { "Write a message" }),
-                                            },
-                                        },
-
-                                        append = &gtk::Button {
-                                            set_icon_name: "audio-input-microphone-symbolic",
-                                            set_tooltip_text: Some("Record voice message"),
-                                            set_valign: gtk::Align::End,
-                                            add_css_class: "flat",
-                                            add_css_class: "circular",
-                                            #[watch]
-                                            set_visible: model.draft.trim().is_empty() && model.editing.is_none(),
-                                            #[watch]
-                                            set_sensitive: model.can_send_voice() && !model.recording_active(),
-                                            connect_clicked => Input::Recording(crate::native_voice::RecordingIntent::Start),
-                                        },
-
-                                        append = &gtk::Button {
-                                            #[wrap(Some)]
-                                            set_child = &paper_plane_icon() -> gtk::DrawingArea {},
-                                            set_valign: gtk::Align::End,
-                                            add_css_class: "circular",
-                                            add_css_class: "suggested-action",
-                                            #[watch]
-                                            set_tooltip_text: Some(if model.editing.is_some() { "Save edit" } else { "Send" }),
-                                            #[watch]
-                                            update_property: &[gtk::accessible::Property::Label(if model.editing.is_some() { "Save edit" } else { "Send" })],
-                                            #[watch]
-                                            set_sensitive: model.active_chat.as_deref().and_then(|id| model.chat_snapshots.iter().find(|chat| chat.id == id)).is_some_and(crate::model::Chat::can_send),
-                                            connect_clicked[sender, composer] => move |_| {
-                                                let buffer = composer.buffer();
-                                                sender.input(Input::SendText(buffer.text(&buffer.start_iter(), &buffer.end_iter(), true).to_string()));
-                                            },
-                                        },
-                                    },
+                                    append = model.transcript_view.widget(),
+                                    append = model.composer_view.widget(),
                                 },
-
-                                #[watch]
-                                set_visible_child_name: if model.active_chat.is_some() { "conversation" } else { "empty" },
-                            },
                         },
                     },
 
@@ -1910,30 +807,8 @@ impl SimpleComponent for NativeApplication {
         });
         chat_view.add_controller(chat_keys);
         let messages: TypedListView<MessageRow, gtk::NoSelection> = TypedListView::new();
-        let message_view = &messages.view.clone();
         let composer_buffer = gtk::TextBuffer::new(None);
         let enter_sends = std::rc::Rc::new(std::cell::Cell::new(true));
-        let composer_keys = gtk::EventControllerKey::new();
-        composer_keys.set_propagation_phase(gtk::PropagationPhase::Bubble);
-        let enter_setting = enter_sends.clone();
-        let enter_buffer = composer_buffer.clone();
-        let enter_sender = sender.clone();
-        composer_keys.connect_key_pressed(move |_, key, _, modifiers| {
-            if matches!(key, gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter)
-                && should_send_on_enter(
-                    enter_setting.get(),
-                    modifiers.contains(gtk::gdk::ModifierType::CONTROL_MASK),
-                    modifiers.contains(gtk::gdk::ModifierType::SHIFT_MASK),
-                )
-            {
-                let text = enter_buffer
-                    .text(&enter_buffer.start_iter(), &enter_buffer.end_iter(), true)
-                    .to_string();
-                enter_sender.input(Input::SendText(text));
-                return gtk::glib::Propagation::Stop;
-            }
-            gtk::glib::Propagation::Proceed
-        });
         let settings_path = init.dirs.settings_file();
         let settings = crate::settings::Settings::load(&settings_path);
         enter_sends.set(settings.enter_sends);
@@ -1947,23 +822,110 @@ impl SimpleComponent for NativeApplication {
             settings.custom_theme.clone(),
             &notifier,
         );
-        let mut media_service = crate::services::media::MediaService::default();
-        media_service.set_speed(settings.voice_speed);
-        let (backend, page_title, status) = match Backend::try_spawn(init.dirs, notifier.clone()) {
-            Ok(backend) => (
-                Some(backend),
-                "Starting ZapTide".into(),
-                "Waiting for first native frame".into(),
-            ),
-            Err(_) => {
-                log::error!("native backend could not start");
-                (
-                    None,
-                    "ZapTide needs attention".into(),
-                    "Backend unavailable".into(),
-                )
-            }
-        };
+        let mut media = crate::services::media::MediaService::default();
+        media.set_speed(settings.voice_speed);
+        let (backend, page_title, status): (Option<Backend>, String, String) =
+            match Backend::try_spawn(init.dirs, notifier.clone()) {
+                Ok(backend) => (
+                    Some(backend),
+                    "Starting ZapTide".into(),
+                    "Waiting for first native frame".into(),
+                ),
+                Err(_) => {
+                    log::error!("native backend could not start");
+                    (
+                        None,
+                        "ZapTide needs attention".into(),
+                        "Backend unavailable".into(),
+                    )
+                }
+            };
+        let link_menu = gtk::gio::Menu::new();
+        link_menu.append(Some("_Preferences"), Some("win.preferences"));
+        link_menu.append(Some("_About ZapTide"), Some("win.about"));
+        link_menu.append(Some("_Quit"), Some("win.quit"));
+        let link_page = LinkPage::builder()
+            .launch(LinkPageInit {
+                state: LinkPageState {
+                    link: LinkStatus::Starting,
+                    title: page_title.clone(),
+                    status: status.clone(),
+                    qr_texture: None,
+                    phone_linking: false,
+                    busy: true,
+                },
+                menu: link_menu,
+            })
+            .forward(sender.input_sender(), |output| match output {
+                LinkPageOutput::PairWithPhone(phone) => Input::PairWithPhone(phone),
+                LinkPageOutput::TogglePhoneLinking => Input::TogglePhoneLinking,
+                LinkPageOutput::CopyPairCode => Input::CopyPairCode,
+                LinkPageOutput::Reconnect => Input::Reconnect,
+            });
+        let primary_menu = gtk::gio::Menu::new();
+        let section = gtk::gio::Menu::new();
+        section.append(Some("_New Chat"), Some("win.new-chat"));
+        section.append(Some("_Unlink This Computer"), Some("win.unlink"));
+        primary_menu.append_section(None, &section);
+        let section = gtk::gio::Menu::new();
+        section.append(Some("_Preferences"), Some("win.preferences"));
+        section.append(Some("_Keyboard Shortcuts"), Some("win.shortcuts"));
+        section.append(Some("_About ZapTide"), Some("win.about"));
+        section.append(Some("_Quit"), Some("win.quit"));
+        primary_menu.append_section(None, &section);
+        let sidebar = Sidebar::builder()
+            .launch(SidebarInit {
+                state: SidebarState::default(),
+                chat_view: chats.view.clone(),
+                menu: primary_menu.clone(),
+            })
+            .forward(sender.input_sender(), |output| match output {
+                SidebarOutput::SearchChats(query) => Input::SearchChats(query),
+                SidebarOutput::SetUnreadFilter(active) => Input::SetUnreadFilter(active),
+                SidebarOutput::SetPinnedFilter(active) => Input::SetPinnedFilter(active),
+                SidebarOutput::SetChatKindFilter(kind) => Input::SetChatKindFilter(kind),
+                SidebarOutput::SetArchivedFilter(active) => Input::SetArchivedFilter(active),
+                SidebarOutput::SetMutedFilter(active) => Input::SetMutedFilter(active),
+                SidebarOutput::SelectChat(position) => Input::SelectChat(position),
+                SidebarOutput::NewChat => Input::ShowNewChat,
+            });
+        let transcript_view = TranscriptView::builder()
+            .launch(TranscriptViewInit {
+                state: TranscriptState {
+                    active: false,
+                    has_messages: false,
+                    history_complete: false,
+                    loading_older: false,
+                },
+                message_view: messages.view.clone(),
+            })
+            .forward(sender.input_sender(), |output| match output {
+                TranscriptViewOutput::LoadOlder => Input::LoadOlder,
+                TranscriptViewOutput::SelectMessage(position) => Input::SelectMessage(position),
+            });
+        let recording_meter = crate::native_media_widgets::RecordingMeter::default();
+        let composer_view = ComposerView::builder()
+            .launch(ComposerViewInit {
+                state: ComposerState::default(),
+                buffer: composer_buffer.clone(),
+                enter_sends: enter_sends.clone(),
+                recording_meter_area: recording_meter.area.clone(),
+            })
+            .forward(sender.input_sender(), |output| match output {
+                ComposerViewOutput::DraftChanged(text) => Input::DraftChanged(text),
+                ComposerViewOutput::SendText(text) => Input::SendText(text),
+                ComposerViewOutput::PickAttachments { gallery } => {
+                    Input::PickAttachments { gallery }
+                }
+                ComposerViewOutput::ClearAttachments => Input::ClearAttachments,
+                ComposerViewOutput::CancelReply => Input::CancelReply,
+                ComposerViewOutput::CancelEdit => Input::CancelEdit,
+                ComposerViewOutput::Recording(intent) => Input::Recording(intent),
+                ComposerViewOutput::InsertMention => Input::InsertMention,
+                ComposerViewOutput::ShowStickerPicker => Input::ShowStickerPicker,
+                ComposerViewOutput::ShowPollCreator => Input::ShowPollCreator,
+                ComposerViewOutput::InsertEmoji(emoji) => Input::InsertEmoji(emoji),
+            });
         let mut model = Self {
             window: root.clone(),
             backend,
@@ -1972,12 +934,6 @@ impl SimpleComponent for NativeApplication {
             _event_drain: event_drain,
             shutdown_started: false,
             chats,
-            chat_search: None,
-            unread_filter: None,
-            pinned_filter: None,
-            chat_section: None,
-            muted_filter: None,
-            chat_kind_filter: None,
             chat_projection: crate::native_chat_list::ChatListProjection::default(),
             chat_filters: crate::native_chat_list::ChatListFilters::default(),
             chat_ids: Vec::new(),
@@ -1996,6 +952,9 @@ impl SimpleComponent for NativeApplication {
             presence: std::collections::HashMap::new(),
             messages,
             qr_texture: None,
+            link_page,
+            transcript_view,
+            composer_view,
             history_complete: false,
             loading_older: false,
             message_ids: Vec::new(),
@@ -2004,19 +963,22 @@ impl SimpleComponent for NativeApplication {
             pointer_sender: sender.clone(),
             editable_messages: std::collections::HashMap::new(),
             transcript: Vec::new(),
-            selected_voice: None,
-            selected_voice_message: None,
-            media: media_service,
-            audio_waveforms: Default::default(),
-            waveform_queue: Default::default(),
-            waveform_busy: false,
-            waveform_cancel: None,
-            waveform_attempted: Default::default(),
-            playing_audio: None,
-            audio_errors: Default::default(),
-            audio_registry: Default::default(),
-            voice_send_pending: false,
-            recording_meter: Default::default(),
+            audio: AudioState {
+                selected_voice: None,
+                selected_voice_message: None,
+                media,
+                audio_waveforms: Default::default(),
+                waveform_queue: Default::default(),
+                waveform_busy: false,
+                waveform_cancel: None,
+                waveform_attempted: Default::default(),
+                playing_audio: None,
+                audio_errors: Default::default(),
+                audio_registry: Default::default(),
+                voice_send_pending: false,
+                recording_meter,
+                played_voice: Default::default(),
+            },
             info_about: None,
             message_target: None,
             opened_unread: 0,
@@ -2032,8 +994,6 @@ impl SimpleComponent for NativeApplication {
             drafts: std::collections::HashMap::new(),
             composer: crate::native_composer::NativeComposerState::default(),
             composer_buffer,
-            composer_view: None,
-            sticker_button: None,
             sticker_picker: None,
             pending_composer_request: None,
             pending_attachments: std::collections::HashMap::new(),
@@ -2044,7 +1004,6 @@ impl SimpleComponent for NativeApplication {
             reply_to: None,
             editing: None,
             account_receipts_off: false,
-            played_voice: std::collections::HashSet::new(),
             link: LinkStatus::Starting,
             syncing: false,
             resuming: false,
@@ -2057,7 +1016,7 @@ impl SimpleComponent for NativeApplication {
             portals: crate::native_portals::NativePortals::default(),
             portal_requests: std::rc::Rc::default(),
             preferences: None,
-            sidebar: None,
+            sidebar,
             sidebar_visible: true,
             split_view: None,
             phone_linking: false,
@@ -2067,29 +1026,6 @@ impl SimpleComponent for NativeApplication {
             custom_theme_provider: gtk::CssProvider::new(),
             enter_sends,
         };
-        let buffer_sender = sender.clone();
-        model.composer_buffer.connect_changed(move |buffer| {
-            let text = buffer
-                .text(&buffer.start_iter(), &buffer.end_iter(), true)
-                .to_string();
-            buffer_sender.input(Input::DraftChanged(text));
-        });
-        let dialog_parent = model.window.clone();
-        let link_menu = gtk::gio::Menu::new();
-        link_menu.append(Some("_Preferences"), Some("win.preferences"));
-        link_menu.append(Some("_About ZapTide"), Some("win.about"));
-        link_menu.append(Some("_Quit"), Some("win.quit"));
-        let primary_menu = gtk::gio::Menu::new();
-        let section = gtk::gio::Menu::new();
-        section.append(Some("_New Chat"), Some("win.new-chat"));
-        section.append(Some("_Unlink This Computer"), Some("win.unlink"));
-        primary_menu.append_section(None, &section);
-        let section = gtk::gio::Menu::new();
-        section.append(Some("_Preferences"), Some("win.preferences"));
-        section.append(Some("_Keyboard Shortcuts"), Some("win.shortcuts"));
-        section.append(Some("_About ZapTide"), Some("win.about"));
-        section.append(Some("_Quit"), Some("win.quit"));
-        primary_menu.append_section(None, &section);
         install_window_actions(&root, &sender);
         install_icons(&icon_dir);
         let (tray_actions, tray_receiver) = relm4::channel();
@@ -2109,33 +1045,17 @@ impl SimpleComponent for NativeApplication {
         root.connect_visible_notify(move |_| {
             visibility_sender.input(Input::WindowVisibilityChanged)
         });
-        let recording_meter_area = &model.recording_meter.area.clone();
         let widgets = view_output!();
-        model.chat_search = Some(widgets.chat_search.clone());
-        model.unread_filter = Some(widgets.unread_filter.clone());
-        model.pinned_filter = Some(widgets.pinned_filter.clone());
-        model.chat_section = Some(widgets.chat_section.clone());
-        model.muted_filter = Some(widgets.muted_filter.clone());
-        model.chat_kind_filter = Some(widgets.chat_kind_filter.clone());
-        model.composer_view = Some(widgets.composer.clone());
-        model.sticker_button = Some(widgets.sticker_button.clone());
+        widgets
+            .page_stack
+            .add_named(model.link_page.widget(), Some("link"));
+        widgets
+            .page_stack
+            .set_visible_child_name(if model.is_linked() { "chats" } else { "link" });
         model.message_menu.set_parent(&widgets.conversation_body);
         model.message_menu.set_has_arrow(false);
         model.message_menu.set_halign(gtk::Align::Start);
         install_message_actions(&root, &sender);
-        widgets
-            .status_label
-            .set_accessible_role(gtk::AccessibleRole::Status);
-        widgets
-            .status_label
-            .connect_notify_local(Some("label"), |widget, _| {
-                if let Some(label) = widget.downcast_ref::<gtk::Label>() {
-                    let text = label.label();
-                    if !text.is_empty() {
-                        label.announce(&text, gtk::AccessibleAnnouncementPriority::Medium);
-                    }
-                }
-            });
         widgets
             .conversation_title
             .connect_notify_local(Some("subtitle"), |title, _| {
@@ -2157,16 +1077,6 @@ impl SimpleComponent for NativeApplication {
             Some(&true.to_value()),
         );
         root.add_breakpoint(breakpoint);
-        widgets.composer.add_controller(composer_keys);
-        widgets
-            .composer
-            .update_property(&[gtk::accessible::Property::Label("Message composer")]);
-        widgets
-            .composer
-            .update_property(&[gtk::accessible::Property::Description(
-                "Write a message. Return inserts a line; use Send to submit when using IME.",
-            )]);
-        model.sidebar = Some(widgets.sidebar.clone().upcast());
         model.split_view = Some(widgets.main_split_view.clone());
         model.sidebar_visible = !widgets.main_split_view.is_collapsed();
         let split_sender = sender.clone();
@@ -2226,40 +1136,44 @@ impl SimpleComponent for NativeApplication {
         // from office apps also carries a picture of itself, so an image
         // offered alongside text pastes as text.
         let paste_sender = sender.clone();
-        widgets.composer.connect_paste_clipboard(move |view| {
-            let clipboard = view.clipboard();
-            let formats = clipboard.formats();
-            if formats.contains_type(gtk::gdk::FileList::static_type()) {
-                view.stop_signal_emission_by_name("paste-clipboard");
-                let input = paste_sender.clone();
-                gtk::glib::spawn_future_local(async move {
-                    let Ok(value) = clipboard
-                        .read_value_future(
-                            gtk::gdk::FileList::static_type(),
-                            gtk::glib::Priority::DEFAULT,
-                        )
-                        .await
-                    else {
-                        return;
-                    };
-                    let paths: Vec<_> = value
-                        .get::<gtk::gdk::FileList>()
-                        .map(|files| files.files())
-                        .unwrap_or_default()
-                        .into_iter()
-                        .filter_map(|file| file.path())
-                        .collect();
-                    if !paths.is_empty() {
-                        input.input(Input::AttachDropped(paths));
-                    }
-                });
-            } else if formats.contains_type(gtk::gdk::Texture::static_type())
-                && !formats.contains_type(String::static_type())
-            {
-                view.stop_signal_emission_by_name("paste-clipboard");
-                paste_sender.input(Input::PasteClipboardImage);
-            }
-        });
+        model
+            .composer_view
+            .model()
+            .text_view()
+            .connect_paste_clipboard(move |view| {
+                let clipboard = view.clipboard();
+                let formats = clipboard.formats();
+                if formats.contains_type(gtk::gdk::FileList::static_type()) {
+                    view.stop_signal_emission_by_name("paste-clipboard");
+                    let input = paste_sender.clone();
+                    gtk::glib::spawn_future_local(async move {
+                        let Ok(value) = clipboard
+                            .read_value_future(
+                                gtk::gdk::FileList::static_type(),
+                                gtk::glib::Priority::DEFAULT,
+                            )
+                            .await
+                        else {
+                            return;
+                        };
+                        let paths: Vec<_> = value
+                            .get::<gtk::gdk::FileList>()
+                            .map(|files| files.files())
+                            .unwrap_or_default()
+                            .into_iter()
+                            .filter_map(|file| file.path())
+                            .collect();
+                        if !paths.is_empty() {
+                            input.input(Input::AttachDropped(paths));
+                        }
+                    });
+                } else if formats.contains_type(gtk::gdk::Texture::static_type())
+                    && !formats.contains_type(String::static_type())
+                {
+                    view.stop_signal_emission_by_name("paste-clipboard");
+                    paste_sender.input(Input::PasteClipboardImage);
+                }
+            });
         model.install_zoom_provider();
         model.apply_runtime_settings();
 
@@ -2267,1602 +1181,21 @@ impl SimpleComponent for NativeApplication {
     }
 
     fn update(&mut self, input: Self::Input, sender: ComponentSender<Self>) {
+        let draft_empty_before = match &input {
+            Input::DraftChanged(text) => {
+                Some((self.draft.trim().is_empty(), text.trim().is_empty()))
+            }
+            _ => None,
+        };
         self.handle_input(input, sender);
+        self.sync_components(draft_empty_before);
         self.sync_chat_menu();
         self.sync_tray();
     }
 }
 
-impl NativeApplication {
-    fn handle_input(&mut self, input: Input, sender: ComponentSender<Self>) {
-        match input {
-            Input::WindowActivated => self.read_open_chat(),
-            Input::WindowMapped => {
-                gtk::glib::idle_add_local_once(move || sender.input(Input::StartBackend));
-            }
-            Input::ToggleSidebar => self.sidebar_visible = !self.sidebar_visible,
-            Input::SplitCollapsed(collapsed) => self.sidebar_visible = !collapsed,
-            Input::ShowPreferences => {
-                let preferences =
-                    crate::native_preferences::NativePreferences::from(&self.settings);
-                let theme_choices: Vec<_> = self
-                    .theme_catalog
-                    .picker_themes()
-                    .map(|theme| theme.filename.clone())
-                    .collect();
-                let dialog = crate::native_preferences::NativePreferencesDialog::new(
-                    &preferences,
-                    &theme_choices,
-                );
-                dialog.present(&self.window);
-                let input_sender = sender.clone();
-                connect_widget_changes(dialog.dialog().upcast_ref(), &input_sender);
-                let input_sender = sender.clone();
-                dialog
-                    .open_themes_folder_button()
-                    .connect_clicked(move |_| input_sender.input(Input::OpenThemesFolder));
-                self.preferences = Some(dialog);
-            }
-            Input::OpenThemesFolder => self.prepare_themes_folder(&sender),
-            Input::ThemesFolderPrepared(success) => {
-                if success {
-                    self.launch_themes_folder(&sender);
-                } else {
-                    self.status = "Could not open themes folder".into();
-                    self.toast("Could not open themes folder");
-                }
-            }
-            Input::ThemesFolderFinished(success) => {
-                self.status = if success {
-                    "Opened themes folder".into()
-                } else {
-                    "Could not open themes folder".into()
-                };
-                if !success {
-                    self.toast("Could not open themes folder");
-                }
-            }
-            Input::ShowAbout => {
-                let about = adw::AboutDialog::builder()
-                    .application_name("ZapTide")
-                    .application_icon("dev.luminusos.ZapTide")
-                    .version(env!("CARGO_PKG_VERSION"))
-                    .developer_name("LuminusOS")
-                    .build();
-                about.present(Some(&self.window));
-            }
-            Input::ShowShortcuts => {
-                let (send, newline) = if self.enter_sends.get() {
-                    ("Return", "<Shift>Return")
-                } else {
-                    ("<Control>Return", "Return")
-                };
-                let dialog = adw::ShortcutsDialog::new();
-                for (title, items) in [
-                    (
-                        "Chat List",
-                        &[
-                            ("Previous chat", "Up"),
-                            ("Next chat", "Down"),
-                            ("Open chat", "Return"),
-                        ][..],
-                    ),
-                    (
-                        "Composer",
-                        &[("Send message", send), ("New line", newline)][..],
-                    ),
-                    (
-                        "Messages",
-                        &[
-                            ("Open message menu", "Menu <Shift>F10"),
-                            ("Copy selected text", "<Control>c"),
-                        ][..],
-                    ),
-                ] {
-                    let section = adw::ShortcutsSection::new(Some(title));
-                    for (item, accelerator) in items {
-                        section.add(adw::ShortcutsItem::new(item, accelerator));
-                    }
-                    dialog.add(section);
-                }
-                dialog.present(Some(&self.window));
-            }
-            Input::ApplyPreferences => {
-                if let Some(dialog) = &self.preferences {
-                    let changes = dialog.take_changes();
-                    let errors = dialog.take_errors();
-                    let custom_theme_changed = changes.iter().any(|change| {
-                        change.settings_field()
-                            == crate::native_preferences::SettingsField::CustomTheme
-                    });
-                    for change in changes {
-                        if change.apply(&mut self.settings).is_ok() {
-                            if let Err(_error) = self.settings.save(&self.settings_path) {
-                                self.status = "Could not save preferences".into();
-                                self.toast("Could not save preferences");
-                            } else {
-                                self.status = "Preferences saved".into();
-                            }
-                        } else {
-                            self.status = "Preference value is invalid".into();
-                            self.toast("Preference value is invalid");
-                        }
-                    }
-                    if custom_theme_changed {
-                        self.sync_custom_theme_selection();
-                        if self.settings.save(&self.settings_path).is_err() {
-                            self.status = "Could not save preferences".into();
-                            self.toast("Could not save preferences");
-                        }
-                    }
-                    if !errors.is_empty() {
-                        self.status = "Preference value is invalid".into();
-                        self.toast("Preference value is invalid");
-                    }
-                    self.apply_runtime_settings();
-                }
-            }
-            Input::StartBackend => {
-                if let Some(startup) = self.backend.as_mut().and_then(Backend::take_startup) {
-                    let _ = startup.send(());
-                    self.status = "Starting backend".into();
-                }
-            }
-            Input::BackendReady => {
-                let mut events = Vec::new();
-                if let Some(backend) = &self.backend {
-                    drain_backend_events(backend, &self.notifier, |event| match event {
-                        Event::Link(status) => events.push(NativeEvent::Link(status)),
-                        Event::Syncing(syncing) => events.push(NativeEvent::Syncing(syncing)),
-                        Event::Chats(rows) => events.push(NativeEvent::Chats(rows)),
-                        Event::ChatUpdated(chat) => events.push(NativeEvent::ChatUpdated(chat)),
-                        Event::Contacts(contacts) => events.push(NativeEvent::Contacts(contacts)),
-                        Event::Messages {
-                            chat,
-                            messages,
-                            older,
-                            complete,
-                        } => events.push(NativeEvent::Messages {
-                            chat,
-                            messages,
-                            older,
-                            complete,
-                        }),
-                        Event::OlderFetched { chat, more } => {
-                            events.push(NativeEvent::OlderFetched { chat, more })
-                        }
-                        Event::Stickers {
-                            saved,
-                            packs,
-                            recent,
-                        } => events.push(NativeEvent::Stickers {
-                            saved,
-                            packs,
-                            recent,
-                        }),
-                        Event::MessageUpdated(message) => {
-                            events.push(NativeEvent::MessageUpdated(message))
-                        }
-                        Event::Edited { chat, id, success } => {
-                            events.push(NativeEvent::Edited { chat, id, success })
-                        }
-                        Event::Sent { chat, success } => {
-                            events.push(NativeEvent::Sent { chat, success })
-                        }
-                        Event::AttachmentCompleted {
-                            chat,
-                            path,
-                            success,
-                            ..
-                        } => events.push(NativeEvent::AttachmentCompleted {
-                            chat,
-                            path,
-                            success,
-                        }),
-                        Event::Media {
-                            chat,
-                            message,
-                            result,
-                        } => events.push(NativeEvent::Media {
-                            chat,
-                            message,
-                            result,
-                        }),
-                        Event::ReceiptsPrivacy { disabled } => {
-                            events.push(NativeEvent::ReceiptsPrivacy { disabled })
-                        }
-                        Event::ContactReady { id, name } => {
-                            events.push(NativeEvent::ContactReady { id, name })
-                        }
-                        Event::ContactAbout { id, about } => {
-                            events.push(NativeEvent::ContactAbout { id, about })
-                        }
-                        Event::Info(message) => events.push(NativeEvent::Info(message)),
-                        Event::MessageDeleted { chat, id } => {
-                            events.push(NativeEvent::MessageDeleted { chat, id })
-                        }
-                        Event::Incoming { chat, message } => {
-                            events.push(NativeEvent::Incoming { chat, message })
-                        }
-                        Event::Typing {
-                            chat,
-                            sender,
-                            composing,
-                        } => events.push(NativeEvent::Typing {
-                            chat,
-                            sender,
-                            composing,
-                        }),
-                        Event::Presence {
-                            id,
-                            online,
-                            last_seen,
-                        } => events.push(NativeEvent::Presence {
-                            id,
-                            online,
-                            last_seen,
-                        }),
-                        Event::Avatar {
-                            id,
-                            full: false,
-                            path,
-                        } => events.push(NativeEvent::Avatar { id, path }),
-                        Event::Error(error) => events.push(NativeEvent::Error(error)),
-                        _ => {}
-                    });
-                }
-                for event in events {
-                    match event {
-                        NativeEvent::Link(link) => {
-                            if matches!(link, LinkStatus::LoggedOut) {
-                                self.media.stop_playback();
-                                self.playing_audio = None;
-                                self.waveform_queue.clear();
-                                if let Some(cancel) = self.waveform_cancel.take() {
-                                    cancel.store(true, std::sync::atomic::Ordering::Release);
-                                }
-                                self.audio_waveforms.clear();
-                                self.waveform_attempted.clear();
-                                self.audio_errors.clear();
-                                self.audio_registry.borrow_mut().clear();
-                                for chat in &self.chat_snapshots {
-                                    self.notifications.clear_chat(&chat.id);
-                                }
-                                self.active_chat = None;
-                                self.chat_snapshots.clear();
-                                self.chat_ids.clear();
-                                self.reset_chat_filters(false);
-                                self.message_ids.clear();
-                                self.message_snapshots.clear();
-                                self.editable_messages.clear();
-                                self.messages.clear();
-                                self.contacts.clear();
-                                self.avatars.clear();
-                                self.presence.clear();
-                                self.typing.clear();
-                                self.typing_until.clear();
-                                self.composing_until.clear();
-                                self.drafts.clear();
-                                self.composer =
-                                    crate::native_composer::NativeComposerState::default();
-                                self.composer_buffer.set_text("");
-                                self.draft.clear();
-                                self.editing = None;
-                                self.reply_to = None;
-                                self.pending_edit = None;
-                                self.pending_composer_request = None;
-                                self.pending_send = None;
-                                self.voice_send_pending = false;
-                                self.account_receipts_off = false;
-                                self.played_voice.clear();
-                                self.avatar_requests.clear();
-                                self.pending_attachments.clear();
-                                self.document_attachments.clear();
-                                self.pending_clipboard_images.clear();
-                                self.selected_voice = None;
-                                self.selected_voice_message = None;
-                                self.pending_quote_navigation = None;
-                                self.history_complete = false;
-                                self.loading_older = false;
-                                self.transcript.clear();
-                                self.chats_dirty = true;
-                                self.sync_chat_projection();
-                            }
-                            self.qr_texture = match &link {
-                                LinkStatus::Unlinked { qr: Some(qr), .. } => qr_texture(qr),
-                                _ => None,
-                            };
-                            if self.resuming {
-                                if link.is_connected() {
-                                    self.resuming = !self.resume_dropped;
-                                } else {
-                                    self.resume_dropped = true;
-                                }
-                            }
-                            self.link = link;
-                            (self.page_title, self.status) = link_page(&self.link);
-                        }
-                        NativeEvent::Syncing(syncing) => self.syncing = syncing,
-                        NativeEvent::Chats(chats) => {
-                            self.apply_chat_changes(vec![ChatChange::Snapshot(chats)]);
-                        }
-                        NativeEvent::ChatUpdated(chat) => {
-                            self.apply_chat_changes(vec![ChatChange::Update(*chat)]);
-                            self.read_open_chat();
-                        }
-                        // An empty list clears contacts on logout; otherwise
-                        // the backend sends the full set or single updates.
-                        NativeEvent::Contacts(contacts) => {
-                            if contacts.is_empty() {
-                                self.contacts.clear();
-                            }
-                            self.contacts.extend(
-                                contacts
-                                    .into_iter()
-                                    .map(|contact| (contact.id.clone(), contact)),
-                            );
-                            if !self.message_ids.is_empty() {
-                                self.sync_transcript();
-                                self.rebuild_message_rows();
-                            }
-                        }
-                        NativeEvent::Messages {
-                            chat,
-                            messages,
-                            older,
-                            complete,
-                        } => {
-                            if self.active_chat.as_deref() == Some(&chat) {
-                                self.history_complete = complete;
-                                self.loading_older = false;
-                            }
-                            self.apply_messages(chat.clone(), messages, older);
-                            if let Some((target_chat, target_id)) =
-                                self.pending_quote_navigation.clone()
-                                && target_chat == chat
-                                && self.message_ids.contains(&target_id)
-                            {
-                                self.pending_quote_navigation = None;
-                                self.scroll_message_into_view(&target_id);
-                            }
-                        }
-                        NativeEvent::OlderFetched { chat, more } => {
-                            if self.active_chat.as_deref() == Some(&chat) {
-                                self.loading_older = false;
-                                self.history_complete = !more;
-                                if !more {
-                                    self.status = "No older messages available".into();
-                                }
-                            }
-                        }
-                        NativeEvent::Stickers {
-                            saved,
-                            packs,
-                            recent,
-                        } => {
-                            let changed = saved != self.favorite_stickers
-                                || packs != self.sticker_packs
-                                || recent != self.recent_stickers;
-                            let packs_changed = packs != self.sticker_packs;
-                            self.favorite_stickers = saved;
-                            self.sticker_packs = packs;
-                            self.recent_stickers = recent;
-                            if changed {
-                                self.refresh_sticker_picker(&sender);
-                            }
-                            if !packs_changed {
-                                continue;
-                            }
-                            self.sticker_emojis.clear();
-                            for pack in &self.sticker_packs {
-                                for sticker in &pack.stickers {
-                                    if let Ok(bytes) = std::fs::read(sticker) {
-                                        let emojis = crate::sticker_meta::emojis(&bytes);
-                                        if !emojis.is_empty() {
-                                            self.sticker_emojis.insert(sticker.clone(), emojis);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        NativeEvent::MessageUpdated(message) => self.message_updated(*message),
-                        NativeEvent::Edited { chat, id, success } => self.edited(chat, id, success),
-                        NativeEvent::Sent { chat, success } => {
-                            if self.voice_send_pending {
-                                self.voice_send_pending = false;
-                                self.status = if success {
-                                    "Voice message sent".into()
-                                } else {
-                                    "Voice message could not be sent".into()
-                                };
-                            } else {
-                                self.sent(chat, success);
-                            }
-                        }
-                        NativeEvent::AttachmentCompleted {
-                            chat,
-                            path,
-                            success,
-                        } => self.attachment_completed(chat, path, success),
-                        NativeEvent::Media {
-                            chat,
-                            message,
-                            result,
-                        } => self.media_completed(&chat, &message, result),
-                        NativeEvent::MessageDeleted { chat, id } => {
-                            self.message_deleted(&chat, &id)
-                        }
-                        NativeEvent::Incoming { chat, message } => {
-                            if self.settings.auto_download
-                                && should_auto_download(message.content.media())
-                                && let Some(backend) = &self.backend
-                            {
-                                backend.send(crate::backend::Command::Download {
-                                    chat: chat.clone(),
-                                    message: message.id.clone(),
-                                });
-                                if let Some(media) = self
-                                    .message_snapshots
-                                    .get_mut(&message.id)
-                                    .and_then(|known| known.content.media_mut())
-                                {
-                                    media.state = crate::model::MediaState::Downloading;
-                                }
-                            }
-                            let known = self.chat_snapshots.iter().find(|known| known.id == chat);
-                            if notification_should_show(
-                                self.settings.notifications,
-                                self.window.is_active(),
-                                self.active_chat.as_deref(),
-                                &chat,
-                                known,
-                            ) {
-                                let title = known.map_or_else(
-                                    || {
-                                        sender_label(
-                                            message.sender_name.as_deref(),
-                                            &message.sender,
-                                        )
-                                    },
-                                    |known| known.name.clone(),
-                                );
-                                let body = if !self.settings.notification_previews {
-                                    "New message".to_owned()
-                                } else if known.is_some_and(crate::model::Chat::is_group) {
-                                    format!(
-                                        "{}: {}",
-                                        sender_label(
-                                            message.sender_name.as_deref(),
-                                            &message.sender
-                                        ),
-                                        message.summary()
-                                    )
-                                } else {
-                                    message.summary()
-                                };
-                                if let Err(error) = self.notifications.show(
-                                    &chat,
-                                    &title,
-                                    &body,
-                                    self.avatars.get(&chat).map(std::path::PathBuf::as_path),
-                                ) {
-                                    log::warn!("could not show a notification: {error}");
-                                }
-                            }
-                        }
-                        NativeEvent::Typing {
-                            chat,
-                            sender: typing_sender,
-                            composing,
-                        } => {
-                            if composing {
-                                let name = self
-                                    .chat_snapshots
-                                    .iter()
-                                    .find(|known| known.id == typing_sender)
-                                    .map(|known| known.name.clone())
-                                    .unwrap_or_else(|| "Someone".into());
-                                self.typing.insert(chat.clone(), name);
-                                self.typing_until.insert(
-                                    chat.clone(),
-                                    std::time::Instant::now() + std::time::Duration::from_secs(5),
-                                );
-                                let input = sender.clone();
-                                gtk::glib::timeout_add_local_once(
-                                    std::time::Duration::from_secs(5),
-                                    move || {
-                                        input.input(Input::ClearTyping(chat));
-                                    },
-                                );
-                            } else {
-                                self.typing.remove(&chat);
-                                self.typing_until.remove(&chat);
-                            }
-                        }
-                        NativeEvent::Presence {
-                            id,
-                            online,
-                            last_seen,
-                        } => {
-                            self.presence.insert(id, (online, last_seen));
-                        }
-                        NativeEvent::Avatar { id, path } => {
-                            if let Some(path) = path {
-                                self.avatars.insert(id, path);
-                            } else {
-                                self.avatars.remove(&id);
-                            }
-                            self.chats_dirty = true;
-                        }
-                        NativeEvent::ReceiptsPrivacy { disabled } => {
-                            self.account_receipts_off = disabled
-                        }
-                        NativeEvent::ContactAbout { id, about } => {
-                            if let Some((chat, row)) = &self.info_about
-                                && chat == &id
-                                && let Some(about) = about
-                            {
-                                row.set_subtitle(&about);
-                                row.set_visible(true);
-                            }
-                        }
-                        NativeEvent::ContactReady { id, name } => {
-                            let display_name = name
-                                .filter(|name| !name.trim().is_empty())
-                                .unwrap_or_else(|| crate::util::phone(&id));
-                            self.apply_chat_changes(vec![ChatChange::Update(
-                                crate::model::Chat::new(id.clone(), display_name),
-                            )]);
-                            self.status = "Contact is on WhatsApp".into();
-                            sender.input(Input::OpenChatId(id));
-                        }
-                        NativeEvent::Info(message) => {
-                            self.status = message.clone();
-                            self.toast(&message);
-                        }
-                        NativeEvent::Error(error) => {
-                            self.loading_older = false;
-                            log::warn!("native backend operation failed");
-                            let feedback = sanitized_error_feedback(&error);
-                            self.status = feedback.into();
-                            self.toast(feedback);
-                        }
-                    }
-                }
-                if self.chats_dirty && self.chat_ids.is_empty() {
-                    self.flush_chats();
-                } else if self.chats_dirty && !self.chats_flush_scheduled {
-                    // ponytail: fixed 200 ms coalescing window; make it adaptive if
-                    // very large archives still stutter during sync.
-                    self.chats_flush_scheduled = true;
-                    let flush = sender.clone();
-                    gtk::glib::timeout_add_local_once(
-                        std::time::Duration::from_millis(200),
-                        move || flush.input(Input::FlushChats),
-                    );
-                }
-                self.poll_theme_catalog();
-            }
-            Input::SelectChat(position) => {
-                let Some(chat) = self.chat_ids.get(position as usize).cloned() else {
-                    return;
-                };
-                if self
-                    .split_view
-                    .as_ref()
-                    .is_some_and(adw::OverlaySplitView::is_collapsed)
-                {
-                    self.sidebar_visible = false;
-                }
-                if self.active_chat.as_deref() != Some(&chat) {
-                    self.cancel_portal_requests();
-                    self.media.stop_playback();
-                    self.playing_audio = None;
-                    self.waveform_queue.clear();
-                    if let Some(cancel) = self.waveform_cancel.take() {
-                        cancel.store(true, std::sync::atomic::Ordering::Release);
-                    }
-                    self.audio_waveforms.clear();
-                    self.waveform_attempted.clear();
-                    self.audio_errors.clear();
-                    self.audio_registry.borrow_mut().clear();
-                }
-                self.notifications.clear_chat(&chat);
-                if let Some(previous) = self.active_chat.as_deref() {
-                    if self
-                        .editing
-                        .as_ref()
-                        .is_some_and(|(editing_chat, _)| editing_chat == previous)
-                    {
-                        self.composer.set_draft(
-                            previous,
-                            self.drafts.get(previous).cloned().unwrap_or_default(),
-                        );
-                    }
-                    self.composer.cancel_context(previous);
-                }
-                self.chat_projection.select(chat.clone());
-                self.active_chat = Some(chat.clone());
-                self.mark_open_chat();
-                self.reply_to = None;
-                self.editing = None;
-                self.pending_edit = None;
-                self.draft = self.composer.draft(&chat).to_owned();
-                self.composer_buffer.set_text(&self.draft);
-                self.messages.clear();
-                self.message_target = None;
-                self.opened_unread = self
-                    .chat_snapshots
-                    .iter()
-                    .find(|known| known.id == chat)
-                    .map_or(0, |known| known.unread as usize);
-                self.unread_marker = None;
-                self.history_complete = false;
-                self.loading_older = false;
-                self.message_ids.clear();
-                self.message_snapshots.clear();
-                self.editable_messages.clear();
-                self.transcript.clear();
-                self.selected_voice = None;
-                self.selected_voice_message = None;
-                self.page_title = self
-                    .chat_snapshots
-                    .iter()
-                    .find(|known| known.id == chat)
-                    .map(|known| known.name.clone())
-                    .unwrap_or_else(|| "Conversation".into());
-                self.status = "Loading messages".into();
-                if let Some(backend) = &self.backend {
-                    backend.send(crate::backend::Command::MarkRead {
-                        chat: chat.clone(),
-                        receipts: self.settings.send_read_receipts && !self.account_receipts_off,
-                    });
-                    backend.send(crate::backend::Command::LoadChat { chat, before: None });
-                }
-                self.focus_composer();
-            }
-            Input::HighlightChat(position) => {
-                if let Some(chat) = self.chat_ids.get(position as usize) {
-                    self.chat_projection.select(chat.clone());
-                }
-            }
-            Input::LoadOlder => {
-                let Some(chat) = self.active_chat.clone() else {
-                    return;
-                };
-                if self.loading_older {
-                    return;
-                }
-                let Some(backend) = &self.backend else {
-                    self.status = "Backend unavailable".into();
-                    return;
-                };
-                self.loading_older = true;
-                if self.history_complete {
-                    backend.send(crate::backend::Command::FetchOlder(chat.clone()));
-                } else if let Some(oldest) = self
-                    .message_snapshots
-                    .values()
-                    .filter(|message| message.chat == chat)
-                    .min_by_key(|message| (message.timestamp, message.id.as_str()))
-                {
-                    backend.send(crate::backend::Command::LoadChat {
-                        chat: chat.clone(),
-                        before: Some((oldest.timestamp, oldest.id.clone())),
-                    });
-                } else {
-                    self.loading_older = false;
-                }
-            }
-            Input::OpenChatId(chat) => {
-                self.window.present();
-                let archived = self
-                    .chat_snapshots
-                    .iter()
-                    .any(|known| known.id == chat && known.archived);
-                self.reset_chat_filters(archived);
-                self.sync_chat_projection();
-                if let Some(position) = self.chat_ids.iter().position(|id| id == &chat) {
-                    sender.input(Input::SelectChat(position as u32));
-                }
-            }
-            Input::SearchChats(query) => {
-                self.chat_projection.set_query(query);
-                self.sync_chat_projection();
-            }
-            Input::SetUnreadFilter(enabled) => {
-                self.chat_filters.unread_only = enabled;
-                self.chat_projection.set_filters(self.chat_filters);
-                self.sync_chat_projection();
-            }
-            Input::SetPinnedFilter(enabled) => {
-                self.chat_filters.pinned_only = enabled;
-                self.chat_projection.set_filters(self.chat_filters);
-                self.sync_chat_projection();
-            }
-            Input::SetArchivedFilter(enabled) => {
-                self.chat_filters.archive = if enabled {
-                    crate::native_chat_list::ArchiveFilter::Only
-                } else {
-                    crate::native_chat_list::ArchiveFilter::Exclude
-                };
-                self.chat_projection.set_filters(self.chat_filters);
-                self.sync_chat_projection();
-            }
-            Input::SetMutedFilter(enabled) => {
-                self.chat_filters.muted = if enabled {
-                    crate::native_chat_list::MutedFilter::Only
-                } else {
-                    crate::native_chat_list::MutedFilter::All
-                };
-                self.chat_projection.set_filters(self.chat_filters);
-                self.sync_chat_projection();
-            }
-            Input::SetChatKindFilter(kind) => {
-                self.chat_filters.private_only = kind == 1;
-                self.chat_filters.groups_only = kind == 2;
-                self.chat_projection.set_filters(self.chat_filters);
-                self.sync_chat_projection();
-            }
-            Input::ToggleSelectedPin => {
-                if let Some(chat) = self.selected_chat().cloned()
-                    && let Some(backend) = &self.backend
-                {
-                    backend.send(crate::backend::Command::SetPinned(chat.id, !chat.pinned));
-                }
-            }
-            Input::ToggleSelectedArchive => {
-                if let Some(chat) = self.selected_chat() {
-                    if chat.archived {
-                        sender.input(Input::ArchiveChat(chat.id.clone()));
-                    } else {
-                        show_archive_confirmation(&self.window, &sender, chat);
-                    }
-                }
-            }
-            Input::ArchiveChat(id) => {
-                if let Some(chat) = self.chat_snapshots.iter().find(|chat| chat.id == id)
-                    && let Some(backend) = &self.backend
-                {
-                    backend.send(crate::backend::Command::SetArchived(id, !chat.archived));
-                }
-            }
-            Input::ToggleSelectedMute => {
-                if let Some(chat) = self.selected_chat().cloned()
-                    && let Some(backend) = &self.backend
-                {
-                    let muted = chat.muted(crate::util::now());
-                    backend.send(crate::backend::Command::SetMuted(
-                        chat.id,
-                        (!muted).then_some(i64::MAX),
-                    ));
-                }
-            }
-            Input::Reconnect => {
-                if let Some(backend) = &self.backend {
-                    backend.send(crate::backend::Command::Reconnect);
-                    self.status = "Reconnecting to WhatsApp".into();
-                }
-            }
-            Input::Resumed => {
-                let linked = matches!(
-                    self.link,
-                    LinkStatus::Connecting
-                        | LinkStatus::Connected
-                        | LinkStatus::Disconnected { .. }
-                );
-                if let (true, Some(backend)) = (linked, &self.backend) {
-                    // The socket died with the suspend but may not know yet;
-                    // reconnecting now brings the missed messages in.
-                    backend.send(crate::backend::Command::Reconnect);
-                    self.resuming = true;
-                    self.resume_dropped = false;
-                    self.status = "Refreshing messages".into();
-                    let input = sender.clone();
-                    gtk::glib::timeout_add_local_once(RESUME_REFRESH_LIMIT, move || {
-                        input.input(Input::ResumeSettled)
-                    });
-                }
-            }
-            Input::ResumeSettled => self.resuming = false,
-            Input::UnlinkConfirmed => {
-                if let Some(backend) = &self.backend {
-                    backend.send(crate::backend::Command::Unlink);
-                    self.status = "Unlinking this computer".into();
-                } else {
-                    self.status = "Backend unavailable".into();
-                }
-            }
-            Input::ShowChatInfo => {
-                if let Some(chat) = self
-                    .active_chat
-                    .as_ref()
-                    .and_then(|id| self.chat_snapshots.iter().find(|chat| &chat.id == id))
-                {
-                    self.info_about = show_chat_info_dialog(
-                        &self.window,
-                        chat,
-                        &self.contacts,
-                        self.avatars.get(&chat.id).map(std::path::PathBuf::as_path),
-                        self.presence.get(&chat.id).copied(),
-                        &self.chat_snapshots,
-                        &self.avatars,
-                    );
-                    if self.info_about.is_some()
-                        && let Some(backend) = &self.backend
-                    {
-                        backend.send(crate::backend::Command::ContactAbout {
-                            id: chat.id.clone(),
-                        });
-                    }
-                }
-            }
-            Input::ShowNewChat => {
-                show_new_chat_dialog(&self.window, &sender, new_chat_contacts(&self.contacts))
-            }
-            Input::StartChat { id, name } => {
-                if !self.chat_snapshots.iter().any(|chat| chat.id == id) {
-                    self.apply_chat_changes(vec![ChatChange::Update(crate::model::Chat::new(
-                        id.clone(),
-                        name,
-                    ))]);
-                }
-                sender.input(Input::OpenChatId(id));
-            }
-            Input::Tray(action) => {
-                use crate::native_tray::TrayAction;
-                match action {
-                    TrayAction::ToggleWindow if self.window.is_visible() => {
-                        self.window.set_visible(false)
-                    }
-                    TrayAction::ToggleWindow => self.window.present(),
-                    TrayAction::NewChat => {
-                        self.window.present();
-                        sender.input(Input::ShowNewChat);
-                    }
-                    TrayAction::ToggleNotifications => {
-                        self.settings.notifications = !self.settings.notifications;
-                        if self.settings.save(&self.settings_path).is_err() {
-                            self.status = "Could not save preferences".into();
-                        }
-                    }
-                    TrayAction::Preferences => {
-                        self.window.present();
-                        sender.input(Input::ShowPreferences);
-                    }
-                    TrayAction::Quit => sender.input(Input::Quit),
-                    TrayAction::Shown(shown) => {
-                        self.tray_shown = shown;
-                        // Without a tray there is no way back to a hidden window.
-                        if !shown {
-                            self.window.present();
-                        }
-                    }
-                }
-            }
-            Input::WindowVisibilityChanged => {}
-            Input::TogglePhoneLinking => {
-                // Leaving a requested or shown code goes back to the QR code.
-                if self.pairing_requested() || self.pair_code().is_some() {
-                    self.phone_linking = false;
-                    if let Some(backend) = &self.backend {
-                        backend.send(crate::backend::Command::CancelPhonePairing);
-                    }
-                } else {
-                    self.phone_linking = !self.phone_linking;
-                }
-            }
-            Input::CopyPairCode => {
-                if let Some(code) = self.pair_code().map(str::to_owned) {
-                    crate::native_portals::NativePortals::write_clipboard_text(
-                        &self.window.clipboard(),
-                        &code,
-                    );
-                    self.toast("Code copied");
-                }
-            }
-            Input::FlushChats => {
-                self.chats_flush_scheduled = false;
-                self.flush_chats();
-            }
-            Input::PairWithPhone(phone) => {
-                let Some(digits) = normalized_phone(&phone) else {
-                    self.status = "Enter valid phone number with country code".into();
-                    self.toast("Enter valid phone number with country code");
-                    return;
-                };
-                if let Some(backend) = &self.backend {
-                    backend.send(crate::backend::Command::PairWithPhone(digits));
-                    self.status = "Requesting a pairing code from WhatsApp".into();
-                } else {
-                    self.status = "Backend unavailable".into();
-                }
-            }
-            Input::NewContact { phone, name } => {
-                let Some(digits) = normalized_phone(&phone) else {
-                    self.status = "Enter valid phone number with country code".into();
-                    self.toast("Enter valid phone number with country code");
-                    return;
-                };
-                let name = name.filter(|name| !name.trim().is_empty());
-                // A phone number in a message: an existing chat needs no lookup.
-                let id = format!("{digits}@s.whatsapp.net");
-                if name.is_none() && self.chat_snapshots.iter().any(|chat| chat.id == id) {
-                    sender.input(Input::OpenChatId(id));
-                    return;
-                }
-                if let Some(backend) = &self.backend {
-                    backend.send(crate::backend::Command::NewContact {
-                        phone: digits,
-                        first_name: name.clone(),
-                        full_name: name,
-                        to_phone: self.settings.save_contacts_to_phone,
-                    });
-                    self.status = "Checking contact on WhatsApp".into();
-                } else {
-                    self.status = "Backend unavailable".into();
-                }
-            }
-            Input::ShowMessageMenu { id, x, y } => self.show_message_menu(id, x, y, &sender),
-            Input::SelectMessage(position) => {
-                if self.active_chat.is_none() {
-                    return;
-                }
-                let Some(message) = self.message_ids.get(position as usize) else {
-                    return;
-                };
-                self.selected_voice_message = self
-                    .message_snapshots
-                    .get(message)
-                    .and_then(|message| self.project_voice(message).map(|_| message.id.clone()));
-                self.selected_voice = self
-                    .message_snapshots
-                    .get(message)
-                    .and_then(|message| self.project_voice(message));
-            }
-            Input::OpenQuoted => {
-                let Some(message) = self.selected_message().cloned() else {
-                    return;
-                };
-                let Some(quoted_id) = message.quoted.map(|quoted| quoted.id) else {
-                    return;
-                };
-                if self.message_ids.contains(&quoted_id) {
-                    self.scroll_message_into_view(&quoted_id);
-                } else if let Some(backend) = &self.backend {
-                    self.pending_quote_navigation = Some((message.chat.clone(), quoted_id.clone()));
-                    backend.send(crate::backend::Command::LoadUntil {
-                        chat: message.chat,
-                        id: quoted_id,
-                        before: (message.timestamp, message.id),
-                    });
-                    self.status = "Loading quoted message".into();
-                }
-            }
-            Input::ReplySelected => {
-                let Some((chat, message)) =
-                    self.active_chat.clone().zip(self.selected_message_id())
-                else {
-                    return;
-                };
-                self.composer.begin_reply(&chat, message.clone());
-                self.reply_to = Some((chat, message));
-                self.editing = None;
-                self.status = "Replying to selected message".into();
-                self.focus_composer();
-            }
-            Input::EditSelected => {
-                if self.pending_edit.is_some() {
-                    self.status = "Saving edit".into();
-                    return;
-                }
-                let Some((chat, message)) =
-                    self.active_chat.clone().zip(self.selected_message_id())
-                else {
-                    return;
-                };
-                if let Some(text) = self.editable_messages.get(&message).cloned() {
-                    self.editing = Some((chat.clone(), message.clone()));
-                    self.reply_to = None;
-                    self.draft = text;
-                    self.composer.begin_edit(&chat, message, self.draft.clone());
-                    self.composer_buffer.set_text(&self.draft);
-                    self.status = "Editing selected message".into();
-                    self.focus_composer();
-                } else {
-                    self.reply_to = Some((chat.clone(), message.clone()));
-                    self.composer.begin_reply(&chat, message);
-                    self.composer.begin_reply(
-                        &self.reply_to.as_ref().unwrap().0,
-                        self.reply_to.as_ref().unwrap().1.clone(),
-                    );
-                    self.status = "Replying to selected message".into();
-                }
-            }
-            Input::CancelReply => {
-                if let Some((chat, _)) = self.reply_to.take() {
-                    self.composer.cancel_context(&chat);
-                }
-            }
-            Input::CancelEdit => {
-                if self.editing.take().is_some()
-                    && let Some(chat) = &self.active_chat
-                {
-                    self.draft = self.drafts.get(chat).cloned().unwrap_or_default();
-                    self.composer.cancel_context(chat);
-                    self.composer.set_draft(chat, self.draft.clone());
-                    self.composer_buffer.set_text(&self.draft);
-                }
-                self.pending_edit = None;
-            }
-            Input::DraftChanged(text) => {
-                self.draft = text;
-                if let Some(chat) = &self.active_chat {
-                    self.composer.set_draft(chat, self.draft.clone());
-                    if self.editing.is_none() {
-                        self.drafts.insert(chat.clone(), self.draft.clone());
-                    }
-                    if self.settings.send_typing
-                        && let Some(backend) = &self.backend
-                    {
-                        backend.send(crate::backend::Command::Composing {
-                            chat: chat.clone(),
-                            composing: true,
-                        });
-                    }
-                    self.composing_until.insert(
-                        chat.clone(),
-                        std::time::Instant::now() + std::time::Duration::from_secs(3),
-                    );
-                    let input = sender.clone();
-                    let chat = chat.clone();
-                    gtk::glib::timeout_add_local_once(
-                        std::time::Duration::from_secs(3),
-                        move || {
-                            input.input(Input::StopComposing(chat));
-                        },
-                    );
-                }
-            }
-            Input::ClearTyping(chat) => {
-                if self
-                    .typing_until
-                    .get(&chat)
-                    .is_some_and(|until| *until <= std::time::Instant::now())
-                {
-                    self.typing.remove(&chat);
-                    self.typing_until.remove(&chat);
-                }
-            }
-            Input::StopComposing(chat) => {
-                if self
-                    .composing_until
-                    .get(&chat)
-                    .is_some_and(|until| *until <= std::time::Instant::now())
-                {
-                    self.composing_until.remove(&chat);
-                    if self.settings.send_typing
-                        && let Some(backend) = &self.backend
-                    {
-                        backend.send(crate::backend::Command::Composing {
-                            chat,
-                            composing: false,
-                        });
-                    }
-                }
-            }
-            Input::InsertEmoji(emoji) => {
-                let mut end = self.composer_buffer.end_iter();
-                self.composer_buffer.insert(&mut end, &emoji);
-            }
-            Input::ShowStickerPicker => {
-                if let Some(backend) = &self.backend {
-                    backend.send(crate::backend::Command::RecentStickers);
-                }
-                let Some(anchor) = &self.sticker_button else {
-                    return;
-                };
-                // Anchored to the button, the popover flips above it near screen edges.
-                let popover = gtk::Popover::builder()
-                    .position(gtk::PositionType::Top)
-                    .css_classes(["zaptide-sticker-picker"])
-                    .build();
-                popover.connect_closed(|popover| {
-                    let popover = popover.clone();
-                    gtk::glib::idle_add_local_once(move || popover.unparent());
-                });
-                let (content, stack) =
-                    sticker_picker_content(&self.recent_stickers, &self.favorite_stickers, &sender);
-                popover.set_child(Some(&content));
-                popover.set_parent(anchor);
-                popover.popup();
-                self.sticker_picker = Some((popover, stack));
-            }
-            Input::SendSticker(path) => {
-                if let Some((popover, _)) = self.sticker_picker.take() {
-                    popover.popdown();
-                }
-                if let (Some(chat), Some(backend)) = (&self.active_chat, &self.backend) {
-                    backend.send(crate::backend::Command::SendSticker {
-                        chat: chat.clone(),
-                        path,
-                    });
-                }
-            }
-            Input::InsertMention => {
-                let participants = self
-                    .active_chat
-                    .as_deref()
-                    .and_then(|chat| self.chat_snapshots.iter().find(|known| known.id == chat))
-                    .map(|chat| chat.participants.clone())
-                    .unwrap_or_default();
-                if participants.is_empty() {
-                    return;
-                }
-                let mut people: Vec<_> = participants
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, id)| {
-                        let name = self.participant_label(&id, index);
-                        let phone = crate::model::phone_of(&id).map(crate::util::phone);
-                        (id, name, phone)
-                    })
-                    .collect();
-                people.sort_by_cached_key(|(_, name, _)| name.to_lowercase());
-                show_mention_dialog(&self.window, &sender, people, &self.avatars);
-            }
-            Input::InsertMentionId(participant) => {
-                let known = self
-                    .active_chat
-                    .as_deref()
-                    .and_then(|chat| self.chat_snapshots.iter().find(|known| known.id == chat))
-                    .is_some_and(|chat| chat.participants.contains(&participant));
-                if known {
-                    let token = participant.split('@').next().unwrap_or_default();
-                    let mut end = self.composer_buffer.end_iter();
-                    self.composer_buffer.insert(&mut end, &format!("@{token} "));
-                }
-            }
-            Input::PasteClipboardImage => self.paste_clipboard_image(&sender),
-            Input::AttachDropped(paths) => {
-                let Some(chat) = self.active_chat.clone().filter(|_| self.can_attach()) else {
-                    self.status = "Choose a writable chat before attaching files".into();
-                    return;
-                };
-                if paths.is_empty() {
-                    return;
-                }
-                if self.pending_clipboard_images.contains_key(&chat) {
-                    self.status = "Clear the staged clipboard image before adding files".into();
-                    return;
-                }
-                self.composer
-                    .stage_attachment_caption(&chat, self.draft.clone());
-                for path in &paths {
-                    self.document_attachments
-                        .remove(&(chat.clone(), path.clone()));
-                }
-                self.pending_attachments
-                    .entry(chat)
-                    .or_default()
-                    .extend(paths);
-                self.status = attachment_summary(
-                    &self.pending_attachment_names(),
-                    self.pending_attachment_count(),
-                );
-                self.show_attachment_preview(&sender);
-            }
-            Input::ClipboardImageReady { chat, pixels } => {
-                self.stage_clipboard_image(chat, pixels);
-                self.show_attachment_preview(&sender);
-            }
-            Input::OpenSelectedUri => self.open_selected_uri(&sender),
-            Input::PortalUriFinished(success) => {
-                self.status = if success {
-                    "Link opened".into()
-                } else {
-                    "Could not open link".into()
-                };
-            }
-            Input::SaveSelectedAttachment => self.save_selected_attachment(&sender),
-            Input::ShowSelectedInFolder => {
-                if let Some(path) = self
-                    .selected_message()
-                    .and_then(|message| message.content.media())
-                    .and_then(|media| media.path.clone())
-                {
-                    crate::native_media_widgets::show_in_folder(&self.window, &path);
-                }
-            }
-            Input::SaveAttachmentFinished(success) => {
-                self.status = if success {
-                    "Attachment saved".into()
-                } else {
-                    "Could not save attachment".into()
-                };
-                if !success {
-                    self.toast("Could not save attachment");
-                }
-            }
-            Input::PortalActionFinished(error) => {
-                self.status = error;
-                self.toast("Clipboard or portal action failed");
-            }
-            Input::PickAttachments { gallery } => {
-                let Some(chat) = self.active_chat.clone().filter(|_| self.can_attach()) else {
-                    return;
-                };
-                if !self.portal_requests.borrow().is_empty() {
-                    self.status = "Finish the active portal action first".into();
-                    return;
-                }
-                if self.pending_clipboard_images.contains_key(&chat) {
-                    self.status = "Clear the staged clipboard image before adding files".into();
-                    return;
-                }
-                let input = sender.clone();
-                let requests = self.portal_requests.clone();
-                let request_id = std::rc::Rc::new(std::cell::Cell::new(None));
-                let callback_request_id = request_id.clone();
-                let (title, filter) = if gallery {
-                    let filter = gtk::FileFilter::new();
-                    filter.set_name(Some("Photos and videos"));
-                    filter.add_mime_type("image/*");
-                    filter.add_mime_type("video/*");
-                    ("Gallery", Some(filter))
-                } else {
-                    ("Send files as documents", None)
-                };
-                let request = self.portals.open_files(
-                    Some(&self.window),
-                    title,
-                    filter.as_ref(),
-                    move |result| {
-                        if let Some(id) = callback_request_id.get() {
-                            requests.borrow_mut().remove(&id);
-                        }
-                        let paths = result
-                            .unwrap_or_default()
-                            .into_iter()
-                            .filter_map(|file| file.path())
-                            .collect();
-                        input.input(Input::AttachmentsPicked {
-                            chat,
-                            paths,
-                            documents: !gallery,
-                        });
-                    },
-                );
-                if let Some(id) = request {
-                    request_id.set(Some(id));
-                    self.portal_requests.borrow_mut().insert(id);
-                }
-            }
-            Input::AttachmentsPicked {
-                chat,
-                paths,
-                documents,
-            } => {
-                if paths.is_empty() {
-                    return;
-                }
-                if self.pending_clipboard_images.contains_key(&chat) {
-                    self.status = "Clear the staged clipboard image before adding files".into();
-                    return;
-                }
-                self.composer
-                    .stage_attachment_caption(&chat, self.composer.draft(&chat).to_owned());
-                for path in &paths {
-                    let key = (chat.clone(), path.clone());
-                    if documents {
-                        self.document_attachments.insert(key);
-                    } else {
-                        self.document_attachments.remove(&key);
-                    }
-                }
-                self.pending_attachments
-                    .entry(chat)
-                    .or_default()
-                    .extend(paths);
-                self.show_attachment_preview(&sender);
-            }
-            Input::ClearAttachments => {
-                if let Some(chat) = &self.active_chat {
-                    self.pending_attachments.remove(chat);
-                    self.pending_clipboard_images.remove(chat);
-                }
-            }
-            Input::CopyTranscript => self.copy_transcript(),
-            Input::CopySelectedText => {
-                if let Some(text) = self.selected_message().and_then(message_text) {
-                    crate::native_portals::NativePortals::write_clipboard_text(
-                        &self.window.clipboard(),
-                        &text,
-                    );
-                    self.toast("Copied");
-                }
-            }
-            Input::ActivateVoice => self.activate_voice(&sender),
-            Input::CycleVoiceSpeed => self.cycle_voice_speed(),
-            Input::SeekVoice(fraction) => self.seek_voice(fraction, &sender),
-            Input::AudioControl { id, intent } => self.audio_control(&id, intent, &sender),
-            Input::AudioWaveformReady { chat, id, bars } => {
-                self.waveform_busy = false;
-                self.waveform_cancel = None;
-                if self.active_chat.as_deref() == Some(&chat)
-                    && let Some(bars) = bars
-                {
-                    self.audio_waveforms.insert((chat, id.clone()), bars);
-                    self.refresh_message_row(&id);
-                }
-                self.pump_waveforms(&sender);
-            }
-            Input::MediaAction(action) => match action {
-                crate::native_media::NativeMediaAction::Download { message, .. } => {
-                    self.activate_attachment(&message)
-                }
-                crate::native_media::NativeMediaAction::AnswerButton {
-                    chat,
-                    message,
-                    button,
-                } => {
-                    if let Some(backend) = &self.backend {
-                        backend.send(crate::backend::Command::AnswerButton {
-                            chat,
-                            message,
-                            button,
-                        });
-                    } else {
-                        self.status = "Backend unavailable".into();
-                    }
-                }
-                crate::native_media::NativeMediaAction::AnswerListRow { chat, message, row } => {
-                    if let Some(backend) = &self.backend {
-                        backend.send(crate::backend::Command::AnswerListRow { chat, message, row });
-                    } else {
-                        self.status = "Backend unavailable".into();
-                    }
-                }
-                crate::native_media::NativeMediaAction::Open(path) => {
-                    if let Some(id) = self
-                        .message_snapshots
-                        .values()
-                        .find(|message| {
-                            message
-                                .content
-                                .media()
-                                .and_then(|media| media.path.as_ref())
-                                == Some(&path)
-                        })
-                        .map(|message| message.id.clone())
-                    {
-                        self.activate_attachment(&id);
-                    }
-                }
-            },
-            Input::ActivateSelectedAttachment => {
-                if let Some(id) = self.selected_message_id() {
-                    self.activate_attachment(&id);
-                }
-            }
-            Input::ReactSelected(emoji) => self.react_selected(emoji),
-            Input::ReactTo { id, emoji } => {
-                self.message_target = Some(id);
-                self.react_selected(emoji);
-            }
-            Input::ShowForward => {
-                let mut chats: Vec<_> = self
-                    .chat_snapshots
-                    .iter()
-                    .filter(|chat| {
-                        forwardable_chat(chat)
-                            && !chat.archived
-                            && self.active_chat.as_ref() != Some(&chat.id)
-                    })
-                    .cloned()
-                    .collect();
-                chats.sort_by_key(|chat| std::cmp::Reverse(chat.last_activity));
-                let summary = self
-                    .selected_message()
-                    .map(crate::model::Message::summary)
-                    .unwrap_or_default();
-                show_forward_dialog(&self.window, &sender, &summary, chats, &self.avatars);
-            }
-            Input::ForwardSelected(destination) => self.forward_selected(destination),
-            Input::DeleteSelected(everyone) => {
-                let dialog = adw::AlertDialog::builder()
-                    .heading("Delete message?")
-                    .body(if everyone {
-                        "Delete this message for everyone?"
-                    } else {
-                        "Delete this message for you?"
-                    })
-                    .build();
-                dialog.add_response("cancel", "Cancel");
-                dialog.add_response("delete", "Delete");
-                dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
-                let input = sender.clone();
-                dialog.connect_response(None, move |_, response| {
-                    if response == "delete" {
-                        input.input(Input::ConfirmDelete(everyone));
-                    }
-                });
-                dialog.present(Some(&self.window));
-            }
-            Input::ConfirmDelete(everyone) => self.delete_selected(everyone),
-            Input::VoteOption(choice) => {
-                self.poll_choice = choice;
-                self.vote_selected();
-            }
-            Input::CreatePoll(draft) => self.create_poll(draft),
-            Input::Recording(intent) => {
-                self.recording_action(intent);
-                self.recording_meter
-                    .set_levels(&self.media.recent_recording_levels(crate::voice::BARS));
-                self.schedule_voice_poll(&sender);
-            }
-            Input::PollVoice => {
-                if let Err(error) = self.media.poll() {
-                    self.status = "Audio playback could not continue.".into();
-                    if let (Some(chat), Some(id)) = (&self.active_chat, &self.playing_audio) {
-                        self.audio_errors.insert((chat.clone(), id.clone()), error);
-                    }
-                }
-                if let Some(id) = self.playing_audio.clone() {
-                    if self.media.actually_playing(&id) {
-                        self.tell_played(&id);
-                    }
-                    self.update_audio_row(&id);
-                }
-                self.refresh_selected_voice();
-                if self.media.is_recording() {
-                    self.recording_meter
-                        .set_levels(&self.media.recent_recording_levels(crate::voice::BARS));
-                }
-                self.schedule_voice_poll(&sender);
-            }
-            Input::SendText(text) => {
-                self.draft = text;
-                if let Some(chat) = &self.active_chat {
-                    self.composer.set_draft(chat, self.draft.clone());
-                }
-                if self.pending_send.is_some() || self.voice_send_pending {
-                    self.status = "Waiting for previous message.".into();
-                    return;
-                }
-                let Some(chat) = self.active_chat.clone() else {
-                    return;
-                };
-                let mentions = self
-                    .chat_snapshots
-                    .iter()
-                    .find(|known| known.id == chat)
-                    .map(|known| {
-                        crate::native_composer::mention_ids(&self.draft, &known.participants)
-                    })
-                    .unwrap_or_default();
-                let attachment_count = self.pending_attachment_count();
-                if self.draft.trim().is_empty() && attachment_count == 0 {
-                    return;
-                }
-                let writable = self
-                    .chat_snapshots
-                    .iter()
-                    .find(|known| known.id == chat)
-                    .is_some_and(crate::model::Chat::can_send);
-                if !writable {
-                    self.status = "This conversation is read-only.".into();
-                    return;
-                }
-                if let Some(backend) = &self.backend {
-                    if attachment_count > 0 && self.editing.is_some() {
-                        self.status = "Finish editing before sending attachments.".into();
-                        return;
-                    }
-                    if let Some((edit_chat, id)) = self.editing.as_ref()
-                        && edit_chat == &chat
-                    {
-                        if self.pending_edit.is_some() {
-                            self.status = "Saving edit".into();
-                            return;
-                        }
-                        self.pending_composer_request = self.composer.submit(&chat);
-                        self.pending_edit = Some((chat.clone(), id.clone(), self.draft.clone()));
-                        backend.send(crate::backend::Command::EditText {
-                            chat,
-                            id: id.clone(),
-                            text: self.draft.clone(),
-                            mentions: mentions.clone(),
-                        });
-                        self.status = "Saving edit".into();
-                        return;
-                    }
-                    let quote = self
-                        .reply_to
-                        .as_ref()
-                        .filter(|(reply_chat, _)| reply_chat == &chat)
-                        .map(|(_, message)| message.clone());
-                    self.pending_composer_request = self.composer.submit(&chat);
-                    let attachments = self.pending_attachments.remove(&chat).unwrap_or_default();
-                    let has_clipboard_image = self.pending_clipboard_images.contains_key(&chat);
-                    self.pending_send = Some(PendingSend {
-                        chat: chat.clone(),
-                        text: self.draft.clone(),
-                        reply: quote.clone(),
-                        attachments,
-                        failed_attachments: Vec::new(),
-                        clipboard_image: has_clipboard_image,
-                        remaining: attachment_count.max(1),
-                        failed: false,
-                    });
-                    if let Some(pending) = &self.pending_send
-                        && !pending.attachments.is_empty()
-                    {
-                        let documents = pending
-                            .attachments
-                            .iter()
-                            .filter(|path| {
-                                self.document_attachments
-                                    .contains(&(chat.clone(), (*path).clone()))
-                            })
-                            .cloned()
-                            .collect();
-                        backend.send(crate::backend::Command::SendFiles {
-                            chat,
-                            paths: pending.attachments.clone(),
-                            documents,
-                            caption: caption(&self.draft),
-                            quoting: quote,
-                            mentions: mentions.clone(),
-                        });
-                        self.status = "Sending attachments".into();
-                    } else if let Some(image) = self.pending_clipboard_images.get(&chat) {
-                        backend.send(crate::backend::Command::SendImage {
-                            chat,
-                            width: image.width,
-                            height: image.height,
-                            rgba: image.rgba.clone(),
-                            caption: caption(&self.draft),
-                            quoting: quote,
-                            mentions: mentions.clone(),
-                        });
-                        self.status = "Sending clipboard image".into();
-                    } else {
-                        backend.send(crate::backend::Command::SendText {
-                            chat,
-                            text: self.draft.clone(),
-                            quoting: quote,
-                            mentions,
-                        });
-                        self.status = "Sending message".into();
-                    }
-                    // The pending row shows the message now; a failure restores it.
-                    self.draft.clear();
-                    self.composer_buffer.set_text("");
-                } else {
-                    self.status = "Backend unavailable. Draft kept.".into();
-                }
-            }
-            Input::Close => {
-                self.cancel_portal_requests();
-                if self.settings.keep_running_in_background && self.tray_shown {
-                    self.window.set_visible(false);
-                } else if self.settings.keep_running_in_background {
-                    self.present_quit_confirmation_dialog(sender);
-                } else {
-                    self.request_shutdown(sender);
-                }
-            }
-            Input::Quit => {
-                self.cancel_portal_requests();
-                self.request_shutdown(sender);
-            }
-            Input::ShutdownComplete => {
-                self.status = "Shutdown complete".into();
-                relm4::main_application().quit();
-            }
-        }
-    }
+fn composer_draft_state_changed(before_empty: bool, after_empty: bool) -> bool {
+    before_empty != after_empty
 }
 
 /// Moves a list to its end once rows are laid out. `ListView::scroll_to`
@@ -3976,34 +1309,6 @@ fn paper_plane_icon() -> gtk::DrawingArea {
         let _ = cairo.fill();
     });
     icon
-}
-
-fn chat_row(chat: crate::model::Chat, avatar: Option<std::path::PathBuf>, open: bool) -> ChatRow {
-    let unread = (chat.unread != 0).then(|| chat.unread.to_string());
-    let muted = chat.muted(crate::util::now());
-    let delivery = chat
-        .last
-        .as_ref()
-        .filter(|last| last.from_me)
-        .map_or(crate::model::Delivery::None, |last| last.status);
-    let preview = chat
-        .last
-        .as_ref()
-        .map(|last| last.summary.clone())
-        .unwrap_or_else(|| "No messages yet".into());
-    ChatRow {
-        id: chat.id,
-        last_activity: chat.last_activity,
-        name: chat.name.clone(),
-        preview,
-        unread,
-        avatar,
-        pinned: chat.pinned,
-        muted,
-        quiet: muted || chat.archived,
-        delivery,
-        open,
-    }
 }
 
 fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssProvider) {
@@ -4240,42 +1545,6 @@ fn conversation_prefixes(messages: &[(i64, bool)], unread: usize) -> Vec<String>
         .collect()
 }
 
-/// Best label for a sender: the saved or pushed name, else the formatted
-/// phone number, so unnamed contacts never read as a bare "Contact".
-fn sender_label(name: Option<&str>, id: &str) -> String {
-    if let Some(name) = name.filter(|name| !name.is_empty()) {
-        return name.to_owned();
-    }
-    crate::model::phone_of(id)
-        .map(crate::util::phone)
-        .unwrap_or_else(|| id.to_owned())
-}
-
-fn delivery_label(delivery: crate::model::Delivery) -> &'static str {
-    match delivery {
-        crate::model::Delivery::Pending => " · Queued",
-        crate::model::Delivery::Sent => " · Sent",
-        crate::model::Delivery::Delivered => " · Delivered",
-        crate::model::Delivery::Read => " · Read",
-        crate::model::Delivery::Played => " · Played",
-        crate::model::Delivery::Failed => " · Failed",
-        crate::model::Delivery::None => "",
-    }
-}
-
-/// Compact delivery indicator: check glyphs, highlighted once read, or an
-/// icon for queued and failed sends.
-fn delivery_mark(delivery: crate::model::Delivery) -> (&'static str, Option<&'static str>, bool) {
-    match delivery {
-        crate::model::Delivery::Pending => ("", Some("document-open-recent-symbolic"), false),
-        crate::model::Delivery::Failed => ("", Some("dialog-error-symbolic"), false),
-        crate::model::Delivery::Sent => ("✓", None, false),
-        crate::model::Delivery::Delivered => ("✓✓", None, false),
-        crate::model::Delivery::Read | crate::model::Delivery::Played => ("✓✓", None, true),
-        crate::model::Delivery::None => ("", None, false),
-    }
-}
-
 /// WhatsApp-style check marks, drawn so the double tick overlaps like the
 /// original instead of depending on the font's check glyph.
 fn delivery_ticks() -> gtk::DrawingArea {
@@ -4321,41 +1590,6 @@ fn set_delivery_ticks(area: &gtk::DrawingArea, glyph: &str) {
         area.remove_css_class("double");
     }
     area.queue_draw();
-}
-
-/// Names for the people a message mentions: the saved or WhatsApp name, else
-/// the formatted phone, else the raw token.
-fn mention_labels(
-    message: &crate::model::Message,
-    contacts: &std::collections::HashMap<String, crate::model::Contact>,
-) -> Vec<crate::safety::MentionLabel> {
-    message
-        .mentions
-        .iter()
-        .map(|mention| {
-            let phone = crate::model::phone_of(&mention.id);
-            // A saved name is the label; otherwise the number, with the name
-            // the person goes by on WhatsApp on hover.
-            let saved = contacts
-                .get(&mention.id)
-                .and_then(|contact| contact.full_name.as_deref())
-                .filter(|name| !name.is_empty());
-            let label = saved
-                .map(str::to_owned)
-                .or_else(|| phone.map(crate::util::phone))
-                .unwrap_or_else(|| mention.user.clone());
-            let hint = match (saved, &mention.name) {
-                (None, Some(name)) => Some(format!("~{name}")),
-                _ => None,
-            };
-            crate::safety::MentionLabel {
-                user: mention.user.clone(),
-                label,
-                phone: phone.map(str::to_owned),
-                hint,
-            }
-        })
-        .collect()
 }
 
 fn message_row(
@@ -4449,95 +1683,6 @@ fn message_row(
     }
 }
 
-/// How a message takes part in an album of photos sent together.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum AlbumRole {
-    Single,
-    /// The first photo; draws the whole album of this many photos.
-    Leader(usize),
-    Follower,
-}
-
-/// Groups runs of photos from one sender, sent close together, into albums.
-/// `separated[i]` marks a day or unread divider above message `i`, which
-/// ends a run. A caption or quote on a later photo also ends it.
-fn album_roles(messages: &[crate::model::Message], separated: &[bool]) -> Vec<AlbumRole> {
-    use crate::model::Content;
-    const MAX_PHOTOS: usize = 10;
-    const GAP_SECONDS: i64 = 2 * 60;
-    let photo = |message: &crate::model::Message| {
-        matches!(message.content, Content::Image { .. }) && message.quoted.is_none()
-    };
-    let captioned = |message: &crate::model::Message| matches!(&message.content, Content::Image { caption: Some(text), .. } if !text.is_empty());
-    let joins = |previous: &crate::model::Message, next: &crate::model::Message, index: usize| {
-        photo(next)
-            && !captioned(next)
-            && !separated[index]
-            && previous.from_me == next.from_me
-            && previous.sender == next.sender
-            && next.timestamp >= previous.timestamp
-            && next.timestamp - previous.timestamp <= GAP_SECONDS
-    };
-    let mut roles = vec![AlbumRole::Single; messages.len()];
-    let mut start = 0;
-    while start < messages.len() {
-        let mut end = start + 1;
-        if photo(&messages[start]) {
-            while end < messages.len()
-                && end - start < MAX_PHOTOS
-                && joins(&messages[end - 1], &messages[end], end)
-            {
-                end += 1;
-            }
-        }
-        if end - start >= 2 {
-            roles[start] = AlbumRole::Leader(end - start);
-            roles[start + 1..end].fill(AlbumRole::Follower);
-        }
-        start = end;
-    }
-    roles
-}
-
-fn message_group_boundaries(messages: &[crate::model::Message]) -> Vec<(bool, bool)> {
-    const GROUP_WINDOW_SECONDS: i64 = 5 * 60;
-    let same_group = |first: &crate::model::Message, next: &crate::model::Message| {
-        first.from_me == next.from_me
-            && first.sender == next.sender
-            && next.timestamp >= first.timestamp
-            && next.timestamp - first.timestamp <= GROUP_WINDOW_SECONDS
-            && crate::util::day_label(first.timestamp) == crate::util::day_label(next.timestamp)
-    };
-    messages
-        .iter()
-        .enumerate()
-        .map(|(index, message)| {
-            let starts_group = index == 0 || !same_group(&messages[index - 1], message);
-            let ends_group =
-                index + 1 == messages.len() || !same_group(message, &messages[index + 1]);
-            (starts_group, ends_group)
-        })
-        .collect()
-}
-
-/// Reactions grouped by emoji, in first-seen order: (emoji, count, ours).
-fn reaction_counts(reactions: &[crate::model::Reaction]) -> Vec<(String, usize, bool)> {
-    let mut counts = Vec::<(String, usize, bool)>::new();
-    for reaction in reactions
-        .iter()
-        .filter(|reaction| !reaction.emoji.is_empty())
-    {
-        match counts.iter_mut().find(|entry| entry.0 == reaction.emoji) {
-            Some(entry) => {
-                entry.1 += 1;
-                entry.2 |= reaction.from_me;
-            }
-            None => counts.push((reaction.emoji.clone(), 1, reaction.from_me)),
-        }
-    }
-    counts
-}
-
 /// A pill under the bubble; clicking it adds this reaction, or removes ours.
 fn reaction_chip(
     id: &str,
@@ -4602,312 +1747,7 @@ fn reaction_summary(reactions: &[crate::model::Reaction]) -> String {
     format!("\n{summary}")
 }
 
-fn transcript_row(
-    message: &crate::model::Message,
-    contacts: &std::collections::HashMap<String, crate::model::Contact>,
-) -> crate::native_transcript::TranscriptRow {
-    let sender = if message.from_me {
-        "You".to_owned()
-    } else {
-        sender_label(message.sender_name.as_deref(), &message.sender)
-    };
-    crate::native_transcript::TranscriptRow {
-        header: format!(
-            "[{}] {sender}: ",
-            crate::util::copy_stamp(message.timestamp)
-        ),
-        text: crate::safety::display_mentions(
-            &transcript_text(message),
-            &mention_labels(message, contacts),
-        ),
-    }
-}
-
-fn transcript_text(message: &crate::model::Message) -> String {
-    match &message.content {
-        crate::model::Content::Text { text, .. } => text.clone(),
-        content => content
-            .interactive_lines()
-            .unwrap_or_else(|| message.summary()),
-    }
-}
-
-fn editable_text(message: &crate::model::Message) -> Option<String> {
-    match (&message.from_me, &message.content) {
-        (true, crate::model::Content::Text { text, .. }) => Some(text.clone()),
-        _ => None,
-    }
-}
-
-fn link_page(link: &LinkStatus) -> (String, String) {
-    match link {
-        LinkStatus::Starting => (
-            "Starting ZapTide".into(),
-            "Preparing WhatsApp connection.".into(),
-        ),
-        // The code itself is shown large below the text, with a copy button.
-        LinkStatus::Unlinked {
-            pair_code: Some(_), ..
-        } => (
-            "Enter code on your phone".into(),
-            "In WhatsApp on your phone, open Linked devices, tap Link a device, then \
-             Link with phone number instead, and enter this code."
-                .into(),
-        ),
-        LinkStatus::Unlinked { pairing_phone, .. } if pairing_phone.is_some() => (
-            "Requesting pairing code".into(),
-            "Waiting for WhatsApp to provide a pairing code.".into(),
-        ),
-        LinkStatus::Unlinked { qr: Some(_), .. } => (
-            "Link this computer".into(),
-            "Open WhatsApp, choose Linked devices, then scan the QR code.".into(),
-        ),
-        LinkStatus::Unlinked { .. } => (
-            "Link this computer".into(),
-            "Waiting for WhatsApp to provide a QR code.".into(),
-        ),
-        LinkStatus::Connecting => ("Connecting".into(), "Completing WhatsApp linking.".into()),
-        LinkStatus::Connected => ("Connected".into(), "Loading your chats.".into()),
-        LinkStatus::Disconnected { .. } => (
-            "Reconnecting".into(),
-            "Connection lost. ZapTide is reconnecting automatically.".into(),
-        ),
-        LinkStatus::LoggedOut => (
-            "Phone unlinked this computer".into(),
-            "Requesting a new WhatsApp link code.".into(),
-        ),
-        LinkStatus::Failed(_) => (
-            "ZapTide needs attention".into(),
-            "WhatsApp connection could not start. Check the desktop log for details.".into(),
-        ),
-    }
-}
-
-fn qr_texture(qr: &str) -> Option<gtk::gdk::Texture> {
-    const QUIET: usize = 4;
-    // GtkPicture shows the texture at its pixel size; keep it near 264 px.
-    const SIDE: usize = 264;
-    let code = qrcode::QrCode::new(qr.as_bytes()).ok()?;
-    let width = code.width();
-    let module = (SIDE / (width + 2 * QUIET)).max(2);
-    let side = (width + 2 * QUIET) * module;
-    let mut image = image::RgbaImage::from_pixel(side as u32, side as u32, image::Rgba([255; 4]));
-    for (index, color) in code.to_colors().into_iter().enumerate() {
-        if color != qrcode::Color::Dark {
-            continue;
-        }
-        let x0 = (index % width + QUIET) * module;
-        let y0 = (index / width + QUIET) * module;
-        for y in y0..y0 + module {
-            for x in x0..x0 + module {
-                image.put_pixel(x as u32, y as u32, image::Rgba([0, 0, 0, 255]));
-            }
-        }
-    }
-    let mut encoded = std::io::Cursor::new(Vec::new());
-    image::DynamicImage::ImageRgba8(image)
-        .write_to(&mut encoded, image::ImageFormat::Png)
-        .ok()?;
-    gtk::gdk::Texture::from_bytes(&gtk::glib::Bytes::from_owned(encoded.into_inner())).ok()
-}
-
 impl NativeApplication {
-    /// Clears search and filters, keeping widgets in step with the model.
-    fn reset_chat_filters(&mut self, archived: bool) {
-        self.chat_filters = crate::native_chat_list::ChatListFilters {
-            archive: if archived {
-                crate::native_chat_list::ArchiveFilter::Only
-            } else {
-                crate::native_chat_list::ArchiveFilter::Exclude
-            },
-            ..Default::default()
-        };
-        self.chat_projection.set_query("");
-        self.chat_projection.set_filters(self.chat_filters);
-        if let Some(search) = &self.chat_search {
-            search.set_text("");
-        }
-        for filter in [
-            self.unread_filter.as_ref(),
-            self.pinned_filter.as_ref(),
-            self.muted_filter.as_ref(),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            filter.set_active(false);
-        }
-        if let Some(filter) = &self.chat_kind_filter {
-            filter.set_active(true);
-        }
-        if let Some(section) = &self.chat_section {
-            section.set_active_name(Some(if archived { "archived" } else { "chats" }));
-        }
-    }
-
-    /// Whether any filter in the funnel popover narrows the list.
-    fn filters_active(&self) -> bool {
-        let filters = self.chat_filters;
-        filters.unread_only
-            || filters.pinned_only
-            || filters.private_only
-            || filters.groups_only
-            || filters.muted != crate::native_chat_list::MutedFilter::default()
-    }
-
-    /// Sends the tray what changed: window visibility, unread chats that are
-    /// not muted or archived, and whether notifications are on.
-    fn sync_tray(&mut self) {
-        let Some(tray) = &self.tray else {
-            return;
-        };
-        let now = crate::util::now();
-        let state = crate::native_tray::TrayState {
-            unread_chats: self
-                .chat_snapshots
-                .iter()
-                .filter(|chat| {
-                    chat.unread > 0 && !chat.archived && !chat.locked && !chat.muted(now)
-                })
-                .count(),
-            notifications: self.settings.notifications,
-        };
-        if state != self.tray_state {
-            tray.update(state.clone());
-            self.tray_state = state;
-        }
-    }
-
-    /// Relabels the chat menu for the open chat. Rebuilt only when a label
-    /// changes, so an open menu is left alone by unrelated updates.
-    fn sync_chat_menu(&mut self) {
-        let state = self.selected_chat().map(|chat| {
-            (
-                chat.is_group(),
-                chat.pinned,
-                chat.muted(crate::util::now()),
-                chat.archived,
-            )
-        });
-        if state == self.chat_menu_state {
-            return;
-        }
-        self.chat_menu_state = state;
-        self.chat_menu.remove_all();
-        let Some((group, pinned, muted, archived)) = state else {
-            return;
-        };
-        let section = gtk::gio::Menu::new();
-        let info = if group {
-            "_Group Info"
-        } else {
-            "_Contact Info"
-        };
-        section.append(Some(info), Some("win.chat-info"));
-        self.chat_menu.append_section(None, &section);
-        let section = gtk::gio::Menu::new();
-        let pin = if pinned { "Un_pin Chat" } else { "_Pin Chat" };
-        section.append(Some(pin), Some("win.chat-pin"));
-        let mute = if muted {
-            "_Unmute Notifications"
-        } else {
-            "_Mute Notifications"
-        };
-        section.append(Some(mute), Some("win.chat-mute"));
-        let archive = if archived {
-            "Un_archive Chat"
-        } else {
-            "_Archive Chat"
-        };
-        section.append(Some(archive), Some("win.chat-archive"));
-        self.chat_menu.append_section(None, &section);
-        let section = gtk::gio::Menu::new();
-        section.append(Some("Copy _Transcript"), Some("win.copy-transcript"));
-        self.chat_menu.append_section(None, &section);
-    }
-
-    /// Archived chats with unread messages, as counted on the phone.
-    fn archived_unread_count(&self) -> usize {
-        self.chat_snapshots
-            .iter()
-            .filter(|chat| chat.archived && !chat.locked && chat.unread > 0)
-            .count()
-    }
-
-    fn showing_archived(&self) -> bool {
-        self.chat_filters.archive == crate::native_chat_list::ArchiveFilter::Only
-    }
-
-    fn leaves_section(&self, chat: &crate::model::Chat) -> bool {
-        chat.locked || chat.archived != self.showing_archived()
-    }
-
-    /// Whether a search or filter pill, rather than an empty section, hides chats.
-    fn chat_list_narrowed(&self) -> bool {
-        let filters = self.chat_filters;
-        !self.chat_projection.query().is_empty()
-            || filters.unread_only
-            || filters.pinned_only
-            || filters.private_only
-            || filters.groups_only
-            || filters.muted == crate::native_chat_list::MutedFilter::Only
-    }
-
-    fn chat_list_empty_title(&self) -> &'static str {
-        match (!self.chat_list_narrowed(), self.showing_archived()) {
-            (false, _) => "No Results",
-            (true, true) => "No Archived Chats",
-            (true, false) => "No Chats Yet",
-        }
-    }
-
-    fn chat_list_empty_description(&self) -> &'static str {
-        match (!self.chat_list_narrowed(), self.showing_archived()) {
-            (false, _) => "No chats match this search or filter.",
-            (true, true) => "Archived conversations appear here.",
-            (true, false) => "Conversations appear here as WhatsApp syncs.",
-        }
-    }
-
-    fn is_linked(&self) -> bool {
-        matches!(
-            self.link,
-            LinkStatus::Connected | LinkStatus::Connecting | LinkStatus::Disconnected { .. }
-        ) || (!self.chat_snapshots.is_empty() && !matches!(self.link, LinkStatus::LoggedOut))
-    }
-
-    fn pair_code(&self) -> Option<&str> {
-        match &self.link {
-            LinkStatus::Unlinked {
-                pair_code: Some(code),
-                ..
-            } => Some(code),
-            _ => None,
-        }
-    }
-
-    fn pairing_requested(&self) -> bool {
-        matches!(
-            self.link,
-            LinkStatus::Unlinked {
-                pairing_phone: Some(_),
-                ..
-            }
-        )
-    }
-
-    /// The link page is waiting on WhatsApp rather than on the user.
-    fn link_busy(&self) -> bool {
-        match &self.link {
-            LinkStatus::Starting | LinkStatus::Connecting | LinkStatus::Connected => true,
-            LinkStatus::Unlinked { qr, pair_code, .. } => {
-                pair_code.is_none()
-                    && (self.pairing_requested() || (qr.is_none() && !self.phone_linking))
-            }
-            _ => false,
-        }
-    }
-
     fn header_subtitle(&self) -> String {
         let Some(chat) = &self.active_chat else {
             return String::new();
@@ -4923,9 +1763,7 @@ impl NativeApplication {
     }
 
     fn focus_composer(&self) {
-        if let Some(composer) = &self.composer_view {
-            composer.grab_focus();
-        }
+        self.composer_view.model().focus_text_view();
     }
 
     fn themes_directory(&self) -> std::path::PathBuf {
@@ -5009,11 +1847,11 @@ impl NativeApplication {
             "window {{ font-size: {:.0}%; }}",
             100.0 * self.settings.zoom
         ));
-        if let Some(sidebar) = &self.sidebar {
-            sidebar.set_width_request(self.settings.sidebar_width.round() as i32);
-        }
+        self.sidebar
+            .widget()
+            .set_width_request(self.settings.sidebar_width.round() as i32);
         self.enter_sends.set(self.settings.enter_sends);
-        self.media.set_speed(self.settings.voice_speed);
+        self.audio.media.set_speed(self.settings.voice_speed);
     }
 
     fn cancel_portal_requests(&mut self) {
@@ -5031,14 +1869,6 @@ impl NativeApplication {
         gtk::glib::idle_add_local_once(move || {
             view.scroll_to(position as u32, gtk::ListScrollFlags::NONE, None);
         });
-    }
-
-    fn selected_chat(&self) -> Option<&crate::model::Chat> {
-        // The projection refreshes on a throttled flush and hides filtered-out
-        // chats, so it can still name the previous chat right after opening one.
-        self.active_chat
-            .as_ref()
-            .and_then(|id| self.chat_snapshots.iter().find(|chat| &chat.id == id))
     }
 
     fn show_message_menu(
@@ -5206,11 +2036,12 @@ impl NativeApplication {
     }
 
     fn recording_active(&self) -> bool {
-        self.media.is_recording()
+        self.audio.media.is_recording()
     }
 
     fn recording_time(&self) -> String {
-        self.media
+        self.audio
+            .media
             .recording_elapsed()
             .map(|elapsed| crate::util::duration(elapsed.as_secs().min(u64::from(u32::MAX)) as u32))
             .unwrap_or_default()
@@ -5218,7 +2049,7 @@ impl NativeApplication {
 
     /// Opacity of the record dot; it pulses once a second.
     fn recording_blink(&self) -> f64 {
-        match self.media.recording_elapsed() {
+        match self.audio.media.recording_elapsed() {
             Some(elapsed) if elapsed.subsec_millis() >= 500 => 0.3,
             _ => 1.0,
         }
@@ -5227,7 +2058,7 @@ impl NativeApplication {
     fn can_send_voice(&self) -> bool {
         !self.recording_active()
             && self.pending_send.is_none()
-            && !self.voice_send_pending
+            && !self.audio.voice_send_pending
             && self
                 .active_chat
                 .as_deref()
@@ -5368,7 +2199,13 @@ impl NativeApplication {
             .cloned()
             .unwrap_or_default();
         if image.is_some() || !paths.is_empty() {
-            show_attachment_preview_dialog(&self.window, sender, image, &paths, &self.draft);
+            show_attachment_preview_dialog(
+                &self.window,
+                &dialog_action_callback(sender),
+                image,
+                &paths,
+                &self.draft,
+            );
         }
     }
 
@@ -5378,7 +2215,7 @@ impl NativeApplication {
             return;
         }
         if self.pending_send.is_some()
-            || self.voice_send_pending
+            || self.audio.voice_send_pending
             || self
                 .pending_attachments
                 .get(&chat)
@@ -5523,24 +2360,6 @@ impl NativeApplication {
         }
     }
 
-    fn update_audio_row(&mut self, id: &str) {
-        let Some(voice) = self
-            .message_snapshots
-            .get(id)
-            .and_then(|message| self.project_voice(message))
-        else {
-            return;
-        };
-        if let Some(position) = self.message_ids.iter().position(|known| known == id)
-            && let Some(row) = self.messages.get(position as u32)
-        {
-            row.borrow_mut().audio = Some(voice.clone());
-        }
-        if let Some(controls) = self.audio_registry.borrow().get(id) {
-            controls.update(&voice);
-        }
-    }
-
     fn react_selected(&mut self, emoji: String) {
         let Some((chat, message)) = self.active_chat.clone().zip(self.selected_message_id()) else {
             return;
@@ -5666,96 +2485,6 @@ impl NativeApplication {
         }
     }
 
-    fn seek_voice(&mut self, fraction: f64, sender: &ComponentSender<Self>) {
-        let Some(action) = self.selected_voice.as_ref().and_then(|voice| {
-            voice.action(crate::native_voice::VoiceIntent::Seek(fraction as f32))
-        }) else {
-            return;
-        };
-        if let crate::model::Action::SeekVoice {
-            message,
-            path,
-            fraction,
-        } = action
-        {
-            if self.media.seek(&message, &path, fraction).is_err() {
-                self.status = "Voice playback could not seek".into();
-            } else {
-                self.playing_audio = Some(message.clone());
-            }
-            self.refresh_selected_voice();
-            self.schedule_voice_poll(sender);
-        }
-    }
-
-    fn recording_action(&mut self, intent: crate::native_voice::RecordingIntent) {
-        let active = self.media.is_recording();
-        let projection =
-            crate::native_voice::project_recording(crate::native_voice::VoiceRecordingInput {
-                recording: active,
-                elapsed: self.media.recording_elapsed().unwrap_or_default(),
-                levels: &self.media.recording_levels(),
-            });
-        let Some(action) = projection.action(intent) else {
-            return;
-        };
-        match action {
-            crate::model::Action::StartRecording => {
-                if self.can_send_voice() {
-                    self.media.start_recording();
-                }
-            }
-            crate::model::Action::CancelRecording => {
-                self.media.cancel_recording();
-                self.status = "Recording canceled".into();
-            }
-            crate::model::Action::SendRecording => {
-                let Some(samples) = self.media.finish_recording() else {
-                    return;
-                };
-                match samples {
-                    Ok(samples) => {
-                        if let (Some(chat), Some(backend)) =
-                            (self.active_chat.clone(), self.backend.as_ref())
-                        {
-                            let quoting = self
-                                .reply_to
-                                .as_ref()
-                                .filter(|(reply_chat, _)| reply_chat == &chat)
-                                .map(|(_, id)| id.clone());
-                            backend.send(crate::backend::Command::SendVoice {
-                                chat,
-                                samples,
-                                quoting,
-                            });
-                            self.voice_send_pending = true;
-                            self.status = "Sending voice message".into();
-                        }
-                    }
-                    Err(_) => self.status = "Could not record voice message".into(),
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn apply_chat_changes(&mut self, changes: Vec<ChatChange>) {
-        for change in changes {
-            match change {
-                ChatChange::Snapshot(chats) => {
-                    for chat in &chats {
-                        self.request_avatar(&chat.id);
-                    }
-                    self.reset_chats(chats)
-                }
-                ChatChange::Update(chat) => {
-                    self.request_avatar(&chat.id);
-                    self.update_chat(chat)
-                }
-            }
-        }
-    }
-
     fn request_avatar(&mut self, id: &str) {
         if self.avatar_requests.insert(id.to_owned())
             && let Some(backend) = &self.backend
@@ -5764,150 +2493,6 @@ impl NativeApplication {
                 id: id.to_owned(),
                 full: false,
             });
-        }
-    }
-
-    fn reset_chats(&mut self, chats: Vec<crate::model::Chat>) {
-        self.chat_snapshots = chats;
-        self.chats_dirty = true;
-        if self.active_chat.as_deref().is_some_and(|id| {
-            self.chat_snapshots
-                .iter()
-                .find(|chat| chat.id == id)
-                .is_none_or(|chat| self.leaves_section(chat))
-        }) {
-            self.clear_active_chat();
-        }
-    }
-
-    fn update_chat(&mut self, chat: crate::model::Chat) {
-        if let Some(index) = self
-            .chat_snapshots
-            .iter()
-            .position(|known| known.id == chat.id)
-        {
-            self.chat_snapshots.remove(index);
-        }
-        let index = self
-            .chat_snapshots
-            .partition_point(|known| known.last_activity >= chat.last_activity);
-        if self.leaves_section(&chat) && self.active_chat.as_deref() == Some(&chat.id) {
-            self.clear_active_chat();
-        }
-        self.chat_snapshots.insert(index, chat);
-        self.chats_dirty = true;
-    }
-
-    /// Rebuilds the chat list widget from the snapshots, once per burst of
-    /// backend changes. History sync sends thousands of chat and avatar
-    /// updates; rebuilding per event froze the interface.
-    fn flush_chats(&mut self) {
-        if self.chats_dirty {
-            self.sync_chat_projection();
-        }
-    }
-
-    /// Messages arriving in the chat on screen are read as they come in,
-    /// but only while the window has focus, as on the phone.
-    fn read_open_chat(&self) {
-        if !self.window.is_active() {
-            return;
-        }
-        let Some(chat) = self.active_chat.as_deref() else {
-            return;
-        };
-        if self
-            .chat_snapshots
-            .iter()
-            .any(|known| known.id == chat && known.unread > 0)
-            && let Some(backend) = &self.backend
-        {
-            backend.send(crate::backend::Command::MarkRead {
-                chat: chat.to_owned(),
-                receipts: self.settings.send_read_receipts && !self.account_receipts_off,
-            });
-        }
-    }
-
-    /// Moves the open-chat mark without rebuilding the list: rows between
-    /// the old and new open chat would be recreated, losing scroll and focus.
-    fn mark_open_chat(&self) {
-        let open = self.active_chat.as_deref();
-        for (position, id) in self.chat_ids.iter().enumerate() {
-            if let Some(item) = self.chats.get(position as u32) {
-                let is_open = open == Some(id.as_str());
-                if item.borrow().open != is_open {
-                    item.borrow_mut().open = is_open;
-                }
-            }
-        }
-        let mut row = self.chats.view.first_child();
-        while let Some(current) = row {
-            if let Some(root) = current.first_child() {
-                if open == Some(root.widget_name().as_str()) {
-                    root.add_css_class("zaptide-chat-open");
-                } else {
-                    root.remove_css_class("zaptide-chat-open");
-                }
-            }
-            row = current.next_sibling();
-        }
-    }
-
-    fn sync_chat_projection(&mut self) {
-        // New activity inserts rows above the visible ones, and the list keeps
-        // its anchor on the old first row; stay pinned to the newest chat.
-        let at_top = self
-            .chats
-            .view
-            .vadjustment()
-            .is_none_or(|adjustment| adjustment.value() <= 0.0);
-        if std::mem::take(&mut self.chats_dirty) {
-            self.chat_projection
-                .replace_snapshot(self.chat_snapshots.clone());
-            self.chat_projection.set_filters(self.chat_filters);
-        }
-        let selected = self.chat_projection.selected_id().map(str::to_owned);
-        self.chat_ids.clear();
-        let mut rows = Vec::new();
-        for chat in self.chat_projection.visible() {
-            self.chat_ids.push(chat.id.clone());
-            let open = self.active_chat.as_deref() == Some(chat.id.as_str());
-            rows.push(chat_row(
-                chat.clone(),
-                self.avatars.get(&chat.id).cloned(),
-                open,
-            ));
-        }
-        // Replace only the changed middle so scrolling and a click in progress
-        // survive the frequent small reorders of history sync.
-        let old_len = self.chats.len() as usize;
-        let (prefix, removed, inserted) = changed_span(old_len, &rows, |position, row| {
-            self.chats
-                .get(position as u32)
-                .is_some_and(|item| *item.borrow() == *row)
-        });
-        if removed + inserted > old_len.max(rows.len()) / 2 {
-            self.chats.clear();
-            self.chats.extend_from_iter(rows);
-        } else {
-            for _ in 0..removed {
-                self.chats.remove(prefix as u32);
-            }
-            for (offset, row) in rows.into_iter().skip(prefix).take(inserted).enumerate() {
-                self.chats.insert((prefix + offset) as u32, row);
-            }
-        }
-        if let Some(position) = selected
-            .as_deref()
-            .and_then(|id| self.chat_ids.iter().position(|known| known == id))
-        {
-            self.chats.selection_model.set_selected(position as u32);
-        }
-        if at_top && !self.chat_ids.is_empty() {
-            self.chats
-                .view
-                .scroll_to(0, gtk::ListScrollFlags::NONE, None);
         }
     }
 
@@ -5928,8 +2513,11 @@ impl NativeApplication {
         };
         let offset = scroll(stack).map(|adjustment| adjustment.value());
         let had_focus = popover.focus_child().is_some();
-        let (content, new_stack) =
-            sticker_picker_content(&self.recent_stickers, &self.favorite_stickers, sender);
+        let (content, new_stack) = sticker_picker_content(
+            &self.recent_stickers,
+            &self.favorite_stickers,
+            &dialog_action_callback(sender),
+        );
         popover.set_child(Some(&content));
         if had_focus {
             content.child_focus(gtk::DirectionType::TabForward);
@@ -5977,206 +2565,6 @@ impl NativeApplication {
         }
     }
 
-    fn apply_messages(&mut self, chat: String, messages: Vec<crate::model::Message>, older: bool) {
-        if self.active_chat.as_deref() != Some(&chat) {
-            return;
-        }
-        let anchor = older.then(|| self.message_ids.first().cloned()).flatten();
-        let mut page_ids = std::collections::HashSet::new();
-        let messages = messages
-            .into_iter()
-            .filter(|message| {
-                page_ids.insert(message.id.clone())
-                    && !self.message_ids.iter().any(|id| id == &message.id)
-            })
-            .collect::<Vec<_>>();
-        if older {
-            for message in messages.into_iter().rev() {
-                if let Some(text) = editable_text(&message) {
-                    self.editable_messages.insert(message.id.clone(), text);
-                }
-                self.message_ids.insert(0, message.id.clone());
-                self.message_snapshots
-                    .insert(message.id.clone(), message.clone());
-            }
-        } else {
-            for message in messages {
-                if let Some(text) = editable_text(&message) {
-                    self.editable_messages.insert(message.id.clone(), text);
-                }
-                self.message_ids.push(message.id.clone());
-                self.message_snapshots
-                    .insert(message.id.clone(), message.clone());
-            }
-        }
-        for id in trim_message_window(&mut self.message_ids, older, ACTIVE_MESSAGE_LIMIT) {
-            self.editable_messages.remove(&id);
-            self.message_snapshots.remove(&id);
-        }
-        self.download_missing_stickers();
-        self.queue_waveforms();
-        self.rebuild_message_rows();
-        self.sync_transcript();
-        if older
-            && let Some(anchor) = anchor
-            && let Some(position) = self.message_ids.iter().position(|id| id == &anchor)
-        {
-            let view = self.messages.view.clone();
-            gtk::glib::idle_add_local_once(move || {
-                view.scroll_to(position as u32, gtk::ListScrollFlags::NONE, None);
-            });
-        }
-        self.status = "Conversation loaded".into();
-    }
-
-    fn message_updated(&mut self, message: crate::model::Message) {
-        let text = editable_text(&message);
-        if self.active_chat.as_deref() == Some(&message.chat)
-            && self.message_ids.iter().any(|id| id == &message.id)
-        {
-            if let Some(text) = &text {
-                self.editable_messages
-                    .insert(message.id.clone(), text.clone());
-            } else {
-                self.editable_messages.remove(&message.id);
-            }
-            self.message_snapshots
-                .insert(message.id.clone(), message.clone());
-            self.rebuild_message_rows();
-            self.sync_transcript();
-            self.refresh_selected_voice();
-        }
-    }
-
-    fn edited(&mut self, chat: String, id: String, success: bool) {
-        if !is_edit_completion(self.pending_edit.as_ref(), &chat, &id) {
-            return;
-        }
-        self.pending_edit = None;
-        if success {
-            if let Some(request) = self.pending_composer_request.take() {
-                self.composer.complete_edit(&request);
-            }
-            if self
-                .editing
-                .as_ref()
-                .is_some_and(|editing| editing == &(chat.clone(), id.clone()))
-            {
-                self.editing = None;
-                self.draft = self.drafts.get(&chat).cloned().unwrap_or_default();
-                self.composer.cancel_context(&chat);
-                self.composer.set_draft(&chat, self.draft.clone());
-                self.composer_buffer.set_text(&self.draft);
-                self.status = "Message updated".into();
-            }
-        } else {
-            if let Some(request) = self.pending_composer_request.take() {
-                let text = request.text().to_owned();
-                self.composer.complete_edit(&request);
-                self.composer.set_draft(&chat, text);
-            }
-            self.status = "Edit could not be saved. Draft kept.".into();
-        }
-    }
-
-    fn sent(&mut self, chat: String, success: bool) {
-        if self
-            .pending_send
-            .as_ref()
-            .is_some_and(|pending| !pending.attachments.is_empty())
-        {
-            return;
-        }
-        self.send_completed(chat, success);
-    }
-
-    fn attachment_completed(&mut self, chat: String, path: std::path::PathBuf, success: bool) {
-        let Some(pending) = self.pending_send.as_mut() else {
-            return;
-        };
-        if pending.chat != chat || !pending.attachments.contains(&path) {
-            return;
-        }
-        if pending.complete_attachment(path, success) {
-            self.finish_pending_send(chat);
-        }
-    }
-
-    fn send_completed(&mut self, chat: String, success: bool) {
-        let Some(pending) = self.pending_send.as_mut() else {
-            return;
-        };
-        if pending.chat != chat {
-            return;
-        }
-        if !pending.complete(success) {
-            return;
-        }
-        self.finish_pending_send(chat);
-    }
-
-    fn finish_pending_send(&mut self, chat: String) {
-        let Some(pending) = self.pending_send.take() else {
-            return;
-        };
-        let request = self.pending_composer_request.take();
-        if let Some(request) = request {
-            let text = request.text().to_owned();
-            self.composer.complete_send(&request);
-            if pending.failed && self.composer.draft(&chat).is_empty() {
-                self.composer.set_draft(&chat, text);
-            }
-        }
-        if !pending.failed {
-            if pending.clipboard_image {
-                self.pending_clipboard_images.remove(&chat);
-            }
-            let unchanged = self.drafts.get(&chat) == Some(&pending.text);
-            if unchanged && self.active_chat.as_deref() == Some(&chat) && self.draft == pending.text
-            {
-                self.draft.clear();
-                self.composer_buffer.set_text("");
-            }
-            if unchanged {
-                self.drafts.remove(&chat);
-            }
-            if self
-                .reply_to
-                .as_ref()
-                .is_some_and(|reply| Some(&reply.1) == pending.reply.as_ref())
-            {
-                self.reply_to = None;
-            }
-            self.status = "Message sent".into();
-        } else {
-            // Put the cleared text back; if the user already typed something
-            // new, keep the failed text ahead of it instead of dropping it.
-            let merge = |typed: &str| match (pending.text.is_empty(), typed.is_empty()) {
-                (true, _) => typed.to_owned(),
-                (false, true) => pending.text.clone(),
-                (false, false) => format!("{}\n{typed}", pending.text),
-            };
-            if self.active_chat.as_deref() == Some(&chat) {
-                if !pending.text.is_empty() {
-                    let merged = merge(&self.draft);
-                    self.composer_buffer.set_text(&merged);
-                }
-            } else {
-                let merged = merge(self.drafts.get(&chat).map_or("", String::as_str));
-                if !merged.is_empty() {
-                    self.drafts.insert(chat.clone(), merged);
-                }
-            }
-            if !pending.failed_attachments.is_empty() {
-                self.pending_attachments
-                    .entry(chat.clone())
-                    .or_default()
-                    .splice(0..0, pending.failed_attachments);
-            }
-            self.status = "Message could not be sent. Draft kept.".into();
-        }
-    }
-
     fn media_completed(
         &mut self,
         chat: &str,
@@ -6216,14 +2604,17 @@ impl NativeApplication {
         if self.active_chat.as_deref() != Some(chat) {
             return;
         }
-        if self.playing_audio.as_deref() == Some(id) {
-            self.media.stop_playback();
-            self.playing_audio = None;
+        if self.audio.playing_audio.as_deref() == Some(id) {
+            self.audio.media.stop_playback();
+            self.audio.playing_audio = None;
         }
-        self.audio_waveforms
+        self.audio
+            .audio_waveforms
             .remove(&(chat.to_owned(), id.to_owned()));
-        self.audio_errors.remove(&(chat.to_owned(), id.to_owned()));
-        self.audio_registry.borrow_mut().remove(id);
+        self.audio
+            .audio_errors
+            .remove(&(chat.to_owned(), id.to_owned()));
+        self.audio.audio_registry.borrow_mut().remove(id);
         let Some(position) = self.message_ids.iter().position(|known| known == id) else {
             return;
         };
@@ -6248,8 +2639,8 @@ impl NativeApplication {
         }
         self.sync_transcript();
         if self.selected_message_id().is_none() {
-            self.selected_voice = None;
-            self.selected_voice_message = None;
+            self.audio.selected_voice = None;
+            self.audio.selected_voice_message = None;
         } else {
             self.refresh_selected_voice();
         }
@@ -6257,16 +2648,16 @@ impl NativeApplication {
     }
 
     fn clear_active_chat(&mut self) {
-        self.media.stop_playback();
-        self.playing_audio = None;
-        self.waveform_queue.clear();
-        if let Some(cancel) = self.waveform_cancel.take() {
+        self.audio.media.stop_playback();
+        self.audio.playing_audio = None;
+        self.audio.waveform_queue.clear();
+        if let Some(cancel) = self.audio.waveform_cancel.take() {
             cancel.store(true, std::sync::atomic::Ordering::Release);
         }
-        self.audio_waveforms.clear();
-        self.waveform_attempted.clear();
-        self.audio_errors.clear();
-        self.audio_registry.borrow_mut().clear();
+        self.audio.audio_waveforms.clear();
+        self.audio.waveform_attempted.clear();
+        self.audio.audio_errors.clear();
+        self.audio.audio_registry.borrow_mut().clear();
         self.active_chat = None;
         self.pending_send = None;
         self.pending_edit = None;
@@ -6276,8 +2667,8 @@ impl NativeApplication {
         self.message_snapshots.clear();
         self.editable_messages.clear();
         self.transcript.clear();
-        self.selected_voice = None;
-        self.selected_voice_message = None;
+        self.audio.selected_voice = None;
+        self.audio.selected_voice_message = None;
         self.messages.clear();
         self.page_title = "Conversation unavailable".into();
         self.status = "This chat is no longer available.".into();
@@ -6321,540 +2712,6 @@ impl NativeApplication {
                 self.link,
                 LinkStatus::Connecting | LinkStatus::Disconnected { .. }
             )
-    }
-
-    /// Title and one-line preview for the bar above the composer: the message
-    /// being edited, or the one being replied to and who wrote it.
-    fn composer_context(&self) -> (String, String) {
-        if let Some((_, id)) = &self.editing {
-            let preview = self.message_snapshots.get(id).map(|m| m.summary());
-            return ("Editing message".into(), preview.unwrap_or_default());
-        }
-        let Some(message) = self
-            .reply_to
-            .as_ref()
-            .and_then(|(_, id)| self.message_snapshots.get(id))
-        else {
-            return ("Replying to message".into(), String::new());
-        };
-        let who = if message.from_me {
-            "yourself".to_owned()
-        } else {
-            sender_label(message.sender_name.as_deref(), &message.sender)
-        };
-        (format!("Replying to {who}"), message.summary())
-    }
-
-    fn can_attach(&self) -> bool {
-        self.editing.is_none()
-            && self.pending_send.is_none()
-            && self
-                .active_chat
-                .as_deref()
-                .and_then(|id| self.chat_snapshots.iter().find(|chat| chat.id == id))
-                .is_some_and(crate::model::Chat::can_send)
-    }
-
-    fn sync_transcript(&mut self) {
-        let rows = self
-            .message_ids
-            .iter()
-            .filter_map(|id| self.message_snapshots.get(id))
-            .map(|message| transcript_row(message, &self.contacts))
-            .collect();
-        self.transcript = rows;
-        if self
-            .selected_voice_message
-            .as_ref()
-            .is_some_and(|id| !self.message_snapshots.contains_key(id))
-        {
-            self.selected_voice = None;
-            self.selected_voice_message = None;
-        }
-    }
-
-    fn rebuild_message_rows(&mut self) {
-        let len = self.message_ids.len();
-        if self.opened_unread > 0 && len > 0 {
-            let first_unread = len - self.opened_unread.min(len);
-            self.unread_marker = Some(self.message_ids[first_unread].clone());
-            self.opened_unread = 0;
-        }
-        let unread = self
-            .unread_marker
-            .as_ref()
-            .and_then(|marker| self.message_ids.iter().position(|id| id == marker))
-            .map_or(0, |position| len - position);
-        let messages = self
-            .message_ids
-            .iter()
-            .filter_map(|id| self.message_snapshots.get(id).cloned())
-            .collect::<Vec<_>>();
-        let timeline = messages
-            .iter()
-            .map(|message| (message.timestamp, message.from_me))
-            .collect::<Vec<_>>();
-        let prefixes = conversation_prefixes(&timeline, unread);
-        let boundaries = message_group_boundaries(&messages);
-        let separated = prefixes
-            .iter()
-            .map(|prefix| !prefix.is_empty())
-            .collect::<Vec<_>>();
-        let roles = album_roles(&messages, &separated);
-        let mut albums = roles
-            .iter()
-            .enumerate()
-            .map(|(index, role)| match role {
-                AlbumRole::Leader(count) => messages[index..index + count].to_vec(),
-                _ => Vec::new(),
-            })
-            .collect::<Vec<_>>();
-        let rows = messages
-            .into_iter()
-            .enumerate()
-            .map(|(index, mut message)| {
-                let audio = self.project_voice(&message);
-                let (show_sender, mut show_timestamp) = boundaries[index];
-                let album = std::mem::take(&mut albums[index]);
-                // The album's delivery mark and spacing follow its last photo.
-                if let Some(last) = album.last() {
-                    message.status = last.status;
-                    show_timestamp = boundaries[index + album.len() - 1].1;
-                }
-                let avatar = (!message.from_me)
-                    .then(|| self.avatars.get(&message.sender).cloned())
-                    .flatten();
-                let mut row = message_row(
-                    message,
-                    &self.contacts,
-                    self.pointer_sender.clone(),
-                    &prefixes[index],
-                    avatar,
-                    (show_sender, show_timestamp),
-                    self.audio_registry.clone(),
-                );
-                row.audio = audio;
-                row.album = album;
-                row.collapsed = roles[index] == AlbumRole::Follower;
-                row
-            })
-            .collect::<Vec<_>>();
-        // A glide still under way counts as the end: a covered window gets no
-        // frames, so the glide waits there and finishes once it is shown.
-        let at_bottom = gliding()
-            || self.messages.view.vadjustment().is_none_or(|adjustment| {
-                adjustment.value() + adjustment.page_size() >= adjustment.upper() - 48.0
-            });
-        // Rebinding only the changed span keeps the reader's scroll position
-        // through receipts, reactions, and incoming messages.
-        let old_len = self.messages.len() as usize;
-        let (prefix, removed, inserted) = changed_span(old_len, &rows, |position, row| {
-            self.messages
-                .get(position as u32)
-                .is_some_and(|item| item.borrow().renders_like(row))
-        });
-        let count = rows.len();
-        // Rows that only changed (delivery, reactions, grouping) keep their
-        // widget; replacing them re-creates it, which blanks media and shifts
-        // the scroll anchor.
-        let in_place = removed.min(inserted);
-        let reusable = (0..in_place).all(|offset| {
-            self.messages
-                .get((prefix + offset) as u32)
-                .is_some_and(|item| item.borrow().id == rows[prefix + offset].id)
-        });
-        if !reusable && removed + inserted > old_len.max(count) / 2 {
-            self.messages.clear();
-            self.messages.extend_from_iter(rows);
-        } else {
-            let mut span = rows.into_iter().skip(prefix).take(inserted);
-            let mut position = prefix;
-            if reusable {
-                for row in span.by_ref().take(in_place) {
-                    self.rebind_message(position, row);
-                    position += 1;
-                }
-                for _ in in_place..removed {
-                    self.messages.remove(position as u32);
-                }
-            } else {
-                for _ in 0..removed {
-                    self.messages.remove(prefix as u32);
-                }
-            }
-            for row in span {
-                self.messages.insert(position as u32, row);
-                position += 1;
-            }
-        }
-        // Follow the conversation only when the reader is already at its end.
-        if at_bottom && count > 0 && (removed > 0 || inserted > 0) {
-            if old_len == 0 {
-                scroll_to_end(&self.messages.view);
-            } else {
-                glide_to_end(&self.messages.view);
-            }
-        }
-    }
-
-    /// Swaps the row at `position` and redraws its widget in place, if shown.
-    fn rebind_message(&mut self, position: usize, row: MessageRow) {
-        let Some(item) = self.messages.get(position as u32) else {
-            return;
-        };
-        let id = row.id.clone();
-        *item.borrow_mut() = row;
-        let mut child = self.messages.view.first_child();
-        while let Some(current) = child {
-            if let Some(mut root) = current.first_child().and_downcast::<gtk::Box>()
-                && root.widget_name() == id.as_str()
-            {
-                // relm4's list factory keeps each row's widgets under this key.
-                if let Some(mut widgets) =
-                    unsafe { root.steal_data::<MessageRowWidgets>("widgets") }
-                {
-                    item.borrow_mut().bind(&mut widgets, &mut root);
-                    unsafe { root.set_data("widgets", widgets) };
-                }
-                return;
-            }
-            child = current.next_sibling();
-        }
-    }
-
-    fn copy_transcript(&mut self) {
-        if let Some(text) = crate::native_transcript::copied_text(&self.transcript) {
-            crate::native_portals::NativePortals::write_clipboard_text(
-                &self.window.clipboard(),
-                &text,
-            );
-            self.status = "Transcript copied".into();
-        }
-    }
-
-    fn queue_waveforms(&mut self) {
-        let Some(chat) = &self.active_chat else {
-            return;
-        };
-        for id in &self.message_ids {
-            let Some(message) = self.message_snapshots.get(id) else {
-                continue;
-            };
-            let crate::model::Content::Audio {
-                media, waveform, ..
-            } = &message.content
-            else {
-                continue;
-            };
-            let Some(path) = &media.path else { continue };
-            if !waveform.is_empty()
-                || self
-                    .audio_waveforms
-                    .contains_key(&(chat.clone(), id.clone()))
-                || self
-                    .waveform_attempted
-                    .contains(&(chat.clone(), id.clone()))
-                || self
-                    .waveform_queue
-                    .iter()
-                    .any(|(queued_chat, queued_id, _)| queued_chat == chat && queued_id == id)
-                || !path.is_file()
-            {
-                continue;
-            }
-            self.waveform_queue
-                .push_back((chat.clone(), id.clone(), path.clone()));
-        }
-        self.pump_waveforms(&self.pointer_sender.clone());
-    }
-
-    fn pump_waveforms(&mut self, sender: &ComponentSender<Self>) {
-        if self.waveform_busy {
-            return;
-        }
-        while let Some((chat, id, path)) = self.waveform_queue.pop_front() {
-            if self.active_chat.as_deref() != Some(&chat)
-                || self
-                    .audio_waveforms
-                    .contains_key(&(chat.clone(), id.clone()))
-            {
-                continue;
-            }
-            let sender = sender.clone();
-            self.waveform_busy = true;
-            self.waveform_attempted.insert((chat.clone(), id.clone()));
-            let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            self.waveform_cancel = Some(cancel.clone());
-            if std::thread::Builder::new()
-                .name("audio-waveform".into())
-                .spawn(move || {
-                    let bars = crate::audio::waveform_file_cancellable(&path, &cancel).ok();
-                    sender.input(Input::AudioWaveformReady { chat, id, bars });
-                })
-                .is_err()
-            {
-                self.waveform_busy = false;
-                self.waveform_cancel = None;
-            }
-            break;
-        }
-    }
-
-    fn audio_control(
-        &mut self,
-        id: &str,
-        intent: crate::native_voice::VoiceIntent,
-        sender: &ComponentSender<Self>,
-    ) {
-        let Some(audio_message) = self
-            .message_snapshots
-            .get(id)
-            .cloned()
-            .filter(|message| self.active_chat.as_deref() == Some(&message.chat))
-        else {
-            return;
-        };
-        let Some(voice) = self.project_voice(&audio_message) else {
-            return;
-        };
-        let Some(action) = voice.action(intent) else {
-            return;
-        };
-        match action {
-            crate::model::Action::Download { chat, message } => {
-                if let Some(backend) = &self.backend {
-                    if let Some(media) = self
-                        .message_snapshots
-                        .get_mut(&message)
-                        .and_then(|message| message.content.media_mut())
-                    {
-                        media.state = crate::model::MediaState::Downloading;
-                    }
-                    backend.send(crate::backend::Command::Download {
-                        chat,
-                        message: message.clone(),
-                    });
-                    self.refresh_message_row(&message);
-                }
-            }
-            crate::model::Action::PlayVoice { message, path } => {
-                let voice_note = matches!(
-                    self.message_snapshots
-                        .get(&message)
-                        .map(|message| &message.content),
-                    Some(crate::model::Content::Audio {
-                        voice_note: true,
-                        ..
-                    })
-                );
-                self.media.set_speed(if voice_note {
-                    self.settings.voice_speed
-                } else {
-                    1.0
-                });
-                self.audio_errors
-                    .remove(&(audio_message.chat.clone(), message.clone()));
-                let previous = self.playing_audio.replace(message.clone());
-                if let Err(error) = self.media.toggle_playback(&message, &path) {
-                    self.audio_errors.insert(
-                        (
-                            self.active_chat.clone().unwrap_or_default(),
-                            message.clone(),
-                        ),
-                        error,
-                    );
-                }
-                if let Some(previous) = previous {
-                    self.refresh_message_row(&previous);
-                }
-                self.refresh_message_row(&message);
-                self.schedule_voice_poll(sender);
-            }
-            crate::model::Action::SeekVoice {
-                message,
-                path,
-                fraction,
-            } => {
-                if matches!(
-                    audio_message.content,
-                    crate::model::Content::Audio {
-                        voice_note: false,
-                        ..
-                    }
-                ) {
-                    self.media.set_speed(1.0);
-                }
-                let previous = self.playing_audio.replace(message.clone());
-                if let Err(error) = self.media.seek(&message, &path, fraction) {
-                    self.audio_errors.insert(
-                        (
-                            self.active_chat.clone().unwrap_or_default(),
-                            message.clone(),
-                        ),
-                        error,
-                    );
-                }
-                if let Some(previous) = previous {
-                    self.refresh_message_row(&previous);
-                }
-                self.refresh_message_row(&message);
-                self.schedule_voice_poll(sender);
-            }
-            crate::model::Action::CycleVoiceSpeed => {
-                self.settings.voice_speed = self.media.cycle_speed();
-                if self.settings.save(&self.settings_path).is_err() {
-                    self.status = "Could not save voice playback speed".into();
-                }
-                if let Some(id) = self.playing_audio.clone() {
-                    self.refresh_message_row(&id);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn project_voice(
-        &self,
-        message: &crate::model::Message,
-    ) -> Option<crate::native_voice::VoiceMessage> {
-        let crate::model::Content::Audio {
-            media,
-            seconds,
-            voice_note,
-            waveform,
-        } = &message.content
-        else {
-            return None;
-        };
-        if message.from_me && !voice_note {
-            return None;
-        }
-        let mut projected = crate::native_voice::project(crate::native_voice::VoiceMessageInput {
-            chat: &message.chat,
-            message: &message.id,
-            media,
-            seconds: *seconds,
-            waveform,
-            generated_waveform: self
-                .audio_waveforms
-                .get(&(message.chat.clone(), message.id.clone()))
-                .map(Vec::as_slice)
-                .or_else(|| self.media.waveform(&message.id)),
-            playback: self.media.playback_status(&message.id),
-            speed: if *voice_note { self.media.speed() } else { 1.0 },
-        });
-        if let Some(error) = self
-            .audio_errors
-            .get(&(message.chat.clone(), message.id.clone()))
-        {
-            projected.error = Some(error.clone());
-        }
-        Some(projected)
-    }
-
-    fn refresh_selected_voice(&mut self) {
-        self.selected_voice = self
-            .selected_voice_message
-            .as_ref()
-            .and_then(|id| self.message_snapshots.get(id))
-            .and_then(|message| self.project_voice(message));
-        if self.selected_voice.is_none() {
-            self.selected_voice_message = None;
-        }
-    }
-
-    fn activate_voice(&mut self, sender: &ComponentSender<Self>) {
-        let Some(action) = self
-            .selected_voice
-            .as_ref()
-            .and_then(|voice| voice.action(crate::native_voice::VoiceIntent::Activate))
-        else {
-            return;
-        };
-        match action {
-            crate::model::Action::Download { chat, message } => {
-                if let Some(backend) = &self.backend {
-                    if let Some(media) = self
-                        .message_snapshots
-                        .get_mut(&message)
-                        .and_then(|message| message.content.media_mut())
-                    {
-                        media.state = crate::model::MediaState::Downloading;
-                    }
-                    backend.send(crate::backend::Command::Download { chat, message });
-                    self.status = "Downloading voice".into();
-                    self.refresh_selected_voice();
-                }
-            }
-            crate::model::Action::PlayVoice { message, path } => {
-                if self.media.toggle_playback(&message, &path).is_err() {
-                    self.status = "Voice playback could not start.".into();
-                } else if self.media.is_playing() {
-                    self.playing_audio = Some(message.clone());
-                }
-                self.refresh_selected_voice();
-                self.schedule_voice_poll(sender);
-            }
-            _ => {}
-        }
-    }
-
-    fn tell_played(&mut self, id: &str) {
-        let Some((chat, message)) = self
-            .active_chat
-            .as_ref()
-            .zip(self.message_snapshots.get(id))
-            .filter(|(_, message)| {
-                !message.from_me
-                    && matches!(
-                        message.content,
-                        crate::model::Content::Audio {
-                            voice_note: true,
-                            ..
-                        }
-                    )
-            })
-            .map(|(chat, message)| (chat.clone(), message.clone()))
-        else {
-            return;
-        };
-        if !self.played_voice.insert((chat.clone(), message.id.clone())) {
-            return;
-        }
-        if let Some(backend) = &self.backend {
-            backend.send(crate::backend::Command::MarkPlayed {
-                chat,
-                message: message.id,
-                sender: message.sender,
-                receipts: self.settings.send_read_receipts && !self.account_receipts_off,
-            });
-        }
-    }
-
-    fn cycle_voice_speed(&mut self) {
-        let Some(action) = self
-            .selected_voice
-            .as_ref()
-            .and_then(|voice| voice.action(crate::native_voice::VoiceIntent::CycleSpeed))
-        else {
-            return;
-        };
-        if matches!(action, crate::model::Action::CycleVoiceSpeed) {
-            self.settings.voice_speed = self.media.cycle_speed();
-            if let Err(_error) = self.settings.save(&self.settings_path) {
-                self.status = "Could not save voice playback speed".into();
-            }
-            self.refresh_selected_voice();
-        }
-    }
-
-    fn schedule_voice_poll(&self, sender: &ComponentSender<Self>) {
-        if self.media.is_playing() || self.media.is_recording() {
-            let sender = sender.clone();
-            gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(100), move || {
-                sender.input(Input::PollVoice);
-            });
-        }
     }
 
     fn request_shutdown(&mut self, sender: ComponentSender<Self>) {
@@ -7016,174 +2873,11 @@ fn install_window_actions(
     add("copy-transcript", input(|| Input::CopyTranscript));
     add("quit", input(|| Input::Quit));
     add("new-chat", input(|| Input::ShowNewChat));
-    let (parent, dialog_sender) = (window.clone(), sender.clone());
+    let (parent, on_action) = (window.clone(), dialog_action_callback(sender));
     add(
         "unlink",
-        Box::new(move || show_unlink_confirmation(&parent, &dialog_sender)),
+        Box::new(move || show_unlink_confirmation(&parent, &on_action)),
     );
-}
-
-/// New Poll: a question, 2–12 answers added or removed in place, and a
-/// multiple-answer switch. Create stays disabled until the draft is valid.
-fn show_poll_dialog(parent: &adw::ApplicationWindow, sender: &ComponentSender<NativeApplication>) {
-    use std::{cell::RefCell, rc::Rc};
-    const MAX_OPTIONS: usize = 12;
-    let dialog = adw::Dialog::builder()
-        .title("New Poll")
-        .content_width(420)
-        .content_height(560)
-        .build();
-    let question = adw::EntryRow::builder()
-        .title("Question")
-        .activates_default(true)
-        .build();
-    let options_list = gtk::ListBox::builder()
-        .selection_mode(gtk::SelectionMode::None)
-        .css_classes(["boxed-list"])
-        .build();
-    let add = adw::ButtonRow::builder()
-        .title("Add Option")
-        .start_icon_name("list-add-symbolic")
-        .build();
-    options_list.append(&add);
-    let multiple = adw::SwitchRow::builder()
-        .title("Allow Multiple Answers")
-        .build();
-    let create = gtk::Button::builder()
-        .label("Create")
-        .css_classes(["suggested-action"])
-        .sensitive(false)
-        .build();
-    let options: Rc<RefCell<Vec<(adw::EntryRow, gtk::Button)>>> = Rc::default();
-
-    // Closures below hold widgets weakly and `options` is emptied when the
-    // dialog closes, so no reference cycle keeps the dialog alive.
-    let draft = {
-        let (question, options, multiple) =
-            (question.downgrade(), options.clone(), multiple.downgrade());
-        move || crate::model::PollDraft {
-            question: question
-                .upgrade()
-                .map_or_else(String::new, |question| question.text().into()),
-            options: options
-                .borrow()
-                .iter()
-                .map(|(row, _)| row.text().into())
-                .collect(),
-            multiple: multiple
-                .upgrade()
-                .is_some_and(|multiple| multiple.is_active()),
-        }
-    };
-    let refresh: Rc<dyn Fn()> = {
-        let (draft, options, create, add) = (
-            draft.clone(),
-            options.clone(),
-            create.downgrade(),
-            add.downgrade(),
-        );
-        Rc::new(move || {
-            let (Some(create), Some(add)) = (create.upgrade(), add.upgrade()) else {
-                return;
-            };
-            let rows = options.borrow();
-            for (index, (row, remove)) in rows.iter().enumerate() {
-                row.set_title(&format!("Option {}", index + 1));
-                remove.set_visible(rows.len() > 2);
-            }
-            add.set_visible(rows.len() < MAX_OPTIONS);
-            let valid = draft().validated();
-            create.set_sensitive(valid.is_ok());
-            create.set_tooltip_text(valid.err());
-        })
-    };
-    let add_option: Rc<dyn Fn()> = {
-        let (list, options, refresh) = (options_list.downgrade(), options.clone(), refresh.clone());
-        Rc::new(move || {
-            let Some(list) = list.upgrade() else {
-                return;
-            };
-            let row = adw::EntryRow::builder().activates_default(true).build();
-            let remove = gtk::Button::builder()
-                .icon_name("list-remove-symbolic")
-                .tooltip_text("Remove option")
-                .valign(gtk::Align::Center)
-                .css_classes(["flat", "circular"])
-                .build();
-            row.add_suffix(&remove);
-            let refresh_on_edit = refresh.clone();
-            row.connect_changed(move |_| refresh_on_edit());
-            let (list_ref, options_ref, refresh_ref, target) = (
-                list.downgrade(),
-                options.clone(),
-                refresh.clone(),
-                row.downgrade(),
-            );
-            remove.connect_clicked(move |_| {
-                let (Some(list), Some(target)) = (list_ref.upgrade(), target.upgrade()) else {
-                    return;
-                };
-                options_ref.borrow_mut().retain(|(row, _)| row != &target);
-                list.remove(&target);
-                refresh_ref();
-            });
-            let position = options.borrow().len() as i32;
-            list.insert(&row, position);
-            options.borrow_mut().push((row.clone(), remove));
-            refresh();
-            row.grab_focus();
-        })
-    };
-    add_option();
-    add_option();
-    let add_clicked = add_option.clone();
-    add.connect_activated(move |_| add_clicked());
-    let refresh_question = refresh.clone();
-    question.connect_changed(move |_| refresh_question());
-    let refresh_multiple = refresh.clone();
-    multiple.connect_active_notify(move |_| refresh_multiple());
-
-    let page = adw::PreferencesPage::new();
-    let group = adw::PreferencesGroup::new();
-    group.add(&question);
-    page.add(&group);
-    let group = adw::PreferencesGroup::builder().title("Options").build();
-    group.add(&options_list);
-    page.add(&group);
-    let group = adw::PreferencesGroup::new();
-    group.add(&multiple);
-    page.add(&group);
-
-    let cancel = gtk::Button::with_label("Cancel");
-    let close = dialog.downgrade();
-    cancel.connect_clicked(move |_| {
-        if let Some(close) = close.upgrade() {
-            close.close();
-        }
-    });
-    let (close, sender) = (dialog.downgrade(), sender.clone());
-    create.connect_clicked(move |_| {
-        if let Ok(draft) = draft().validated() {
-            sender.input(Input::CreatePoll(draft));
-            if let Some(close) = close.upgrade() {
-                close.close();
-            }
-        }
-    });
-    dialog.connect_closed(move |_| options.borrow_mut().clear());
-    let header = adw::HeaderBar::builder()
-        .show_start_title_buttons(false)
-        .show_end_title_buttons(false)
-        .build();
-    header.pack_start(&cancel);
-    header.pack_end(&create);
-    let view = adw::ToolbarView::new();
-    view.add_top_bar(&header);
-    view.set_content(Some(&page));
-    dialog.set_child(Some(&view));
-    dialog.set_default_widget(Some(&create));
-    dialog.set_focus(Some(&question));
-    dialog.present(Some(parent));
 }
 
 /// Contacts offered in New Chat as (id, name, formatted phone): only people
@@ -7204,600 +2898,8 @@ fn new_chat_contacts(
     rows
 }
 
-/// Picks a contact to message, or adds a number through New Contact.
-fn show_new_chat_dialog(
-    parent: &adw::ApplicationWindow,
-    sender: &ComponentSender<NativeApplication>,
-    contacts: Vec<(String, String, String)>,
-) {
-    let dialog = adw::Dialog::builder()
-        .title("New Chat")
-        .content_width(400)
-        .content_height(560)
-        .build();
-    let search = gtk::SearchEntry::builder()
-        .placeholder_text("Search contacts")
-        .margin_start(12)
-        .margin_end(12)
-        .margin_bottom(6)
-        .build();
-    let content = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(18)
-        .margin_top(6)
-        .margin_bottom(12)
-        .margin_start(12)
-        .margin_end(12)
-        .build();
-
-    let actions = gtk::ListBox::builder()
-        .selection_mode(gtk::SelectionMode::None)
-        .css_classes(["boxed-list"])
-        .build();
-    let add = adw::ActionRow::builder()
-        .title("New Contact")
-        .subtitle("Message a phone number")
-        .activatable(true)
-        .build();
-    add.add_prefix(&gtk::Image::from_icon_name("contact-new-symbolic"));
-    add.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
-    let (close, window, input) = (dialog.clone(), parent.clone(), sender.clone());
-    add.connect_activated(move |_| {
-        close.close();
-        show_new_contact_dialog(&window, &input);
-    });
-    actions.append(&add);
-    content.append(&actions);
-
-    let list = gtk::ListBox::builder()
-        .selection_mode(gtk::SelectionMode::None)
-        .css_classes(["boxed-list"])
-        .build();
-    let placeholder = gtk::Label::builder()
-        .label(if contacts.is_empty() {
-            "Contacts from your phone appear here once they sync."
-        } else {
-            "No contacts match this search."
-        })
-        .wrap(true)
-        .margin_top(18)
-        .margin_bottom(18)
-        .margin_start(12)
-        .margin_end(12)
-        .css_classes(["dim-label"])
-        .build();
-    list.set_placeholder(Some(&placeholder));
-    let rows = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-    for (id, name, phone) in contacts {
-        let row = adw::ActionRow::builder()
-            .title(&name)
-            .use_markup(false)
-            .title_lines(1)
-            .activatable(true)
-            .build();
-        if name != phone {
-            row.set_subtitle(&phone);
-        }
-        row.add_prefix(&adw::Avatar::new(32, Some(&name), true));
-        let digits: String = phone.chars().filter(char::is_ascii_digit).collect();
-        rows.borrow_mut()
-            .push((row.clone(), format!("{} {digits}", name.to_lowercase())));
-        let (close, input) = (dialog.clone(), sender.clone());
-        row.connect_activated(move |_| {
-            input.input(Input::StartChat {
-                id: id.clone(),
-                name: name.clone(),
-            });
-            close.close();
-        });
-        list.append(&row);
-    }
-    search.connect_search_changed(move |entry| {
-        let needle = entry.text().trim().to_lowercase();
-        for (row, key) in rows.borrow().iter() {
-            row.set_visible(needle.is_empty() || key.contains(&needle));
-        }
-    });
-    content.append(&list);
-
-    let scroll = gtk::ScrolledWindow::builder()
-        .hscrollbar_policy(gtk::PolicyType::Never)
-        .vexpand(true)
-        .child(&content)
-        .build();
-    let view = adw::ToolbarView::new();
-    view.add_top_bar(&adw::HeaderBar::new());
-    view.add_top_bar(&search);
-    view.set_content(Some(&scroll));
-    dialog.set_child(Some(&view));
-    dialog.set_focus(Some(&search));
-    dialog.present(Some(parent));
-}
-
-fn show_new_contact_dialog(
-    parent: &adw::ApplicationWindow,
-    sender: &ComponentSender<NativeApplication>,
-) {
-    let dialog = gtk::Window::builder()
-        .title("New contact")
-        .transient_for(parent)
-        .modal(true)
-        .default_width(380)
-        .build();
-    let content = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(12)
-        .margin_top(18)
-        .margin_bottom(18)
-        .margin_start(18)
-        .margin_end(18)
-        .build();
-    let phone = gtk::Entry::builder()
-        .placeholder_text("Phone number, including country code")
-        .input_purpose(gtk::InputPurpose::Phone)
-        .activates_default(true)
-        .build();
-    let name = gtk::Entry::builder()
-        .placeholder_text("Name (optional)")
-        .activates_default(true)
-        .build();
-    let buttons = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(8)
-        .halign(gtk::Align::End)
-        .build();
-    let cancel = gtk::Button::with_label("Cancel");
-    let add = gtk::Button::with_label("Add contact");
-    add.add_css_class("suggested-action");
-    buttons.append(&cancel);
-    buttons.append(&add);
-    content.append(&phone);
-    content.append(&name);
-    content.append(&buttons);
-    dialog.set_child(Some(&content));
-    dialog.set_default_widget(Some(&add));
-    let close = dialog.clone();
-    cancel.connect_clicked(move |_| close.close());
-    let close = dialog.clone();
-    let sender = sender.clone();
-    let phone_input = phone.clone();
-    add.connect_clicked(move |_| {
-        sender.input(Input::NewContact {
-            phone: phone_input.text().to_string(),
-            name: Some(name.text().to_string()),
-        });
-        close.close();
-    });
-    phone.connect_map(|entry| {
-        entry.grab_focus();
-    });
-    dialog.present();
-}
-
-/// Searchable participant list; picking one inserts the mention.
-fn show_mention_dialog(
-    parent: &adw::ApplicationWindow,
-    sender: &ComponentSender<NativeApplication>,
-    people: Vec<(String, String, Option<String>)>,
-    avatars: &std::collections::HashMap<String, std::path::PathBuf>,
-) {
-    let dialog = adw::Dialog::builder()
-        .title("Mention")
-        .content_width(380)
-        .content_height(520)
-        .build();
-    let search = gtk::SearchEntry::builder()
-        .placeholder_text("Search participants")
-        .margin_start(12)
-        .margin_end(12)
-        .margin_bottom(6)
-        .build();
-    let list = gtk::ListBox::builder()
-        .selection_mode(gtk::SelectionMode::None)
-        .css_classes(["boxed-list"])
-        .margin_top(6)
-        .margin_bottom(12)
-        .margin_start(12)
-        .margin_end(12)
-        .valign(gtk::Align::Start)
-        .build();
-    list.set_placeholder(Some(
-        &gtk::Label::builder()
-            .label("No participants match this search.")
-            .margin_top(18)
-            .margin_bottom(18)
-            .css_classes(["dim-label"])
-            .build(),
-    ));
-    let rows = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-    // Photos are decoded in small idle batches so a large group opens at once.
-    let mut photos = Vec::new();
-    for (id, name, phone) in people {
-        let row = adw::ActionRow::builder()
-            .title(&name)
-            .use_markup(false)
-            .title_lines(1)
-            .activatable(true)
-            .build();
-        let digits = phone
-            .as_deref()
-            .unwrap_or_default()
-            .replace(|c: char| !c.is_ascii_digit(), "");
-        if let Some(phone) = phone.filter(|phone| phone != &name) {
-            row.set_subtitle(&phone);
-        }
-        let avatar = adw::Avatar::new(32, Some(&name), true);
-        if let Some(path) = avatars.get(&id) {
-            photos.push((avatar.downgrade(), path.clone()));
-        }
-        row.add_prefix(&avatar);
-        rows.borrow_mut()
-            .push((row.clone(), format!("{} {digits}", name.to_lowercase())));
-        let (close, input) = (dialog.downgrade(), sender.clone());
-        row.connect_activated(move |_| {
-            input.input(Input::InsertMentionId(id.clone()));
-            if let Some(close) = close.upgrade() {
-                close.close();
-            }
-        });
-        list.append(&row);
-    }
-    search.connect_search_changed(move |entry| {
-        let needle = entry.text().trim().to_lowercase();
-        for (row, key) in rows.borrow().iter() {
-            row.set_visible(needle.is_empty() || key.contains(&needle));
-        }
-    });
-    // Enter picks the first visible match.
-    let first = list.clone();
-    search.connect_activate(move |_| {
-        let mut child = first.first_child();
-        while let Some(widget) = child {
-            if widget.is_visible()
-                && let Some(row) = widget.downcast_ref::<adw::ActionRow>()
-            {
-                adw::prelude::ActionRowExt::activate(row);
-                break;
-            }
-            child = widget.next_sibling();
-        }
-    });
-    let scroll = gtk::ScrolledWindow::builder()
-        .hscrollbar_policy(gtk::PolicyType::Never)
-        .vexpand(true)
-        .child(&list)
-        .build();
-    let view = adw::ToolbarView::new();
-    view.add_top_bar(&adw::HeaderBar::new());
-    view.add_top_bar(&search);
-    view.set_content(Some(&scroll));
-    dialog.set_child(Some(&view));
-    dialog.set_focus(Some(&search));
-    dialog.present(Some(parent));
-    photos.reverse();
-    gtk::glib::idle_add_local(move || {
-        for _ in 0..8 {
-            let Some((avatar, path)) = photos.pop() else {
-                return gtk::glib::ControlFlow::Break;
-            };
-            if let Some(avatar) = avatar.upgrade() {
-                avatar.set_custom_image(cached_texture(&path).as_ref());
-            }
-        }
-        gtk::glib::ControlFlow::Continue
-    });
-}
-
-/// Saved photo for a path, decoded once.
-fn cached_texture(path: &std::path::Path) -> Option<gtk::gdk::Texture> {
-    AVATAR_TEXTURES.with_borrow_mut(|cache| {
-        if !cache.contains_key(path) {
-            cache.insert(
-                path.to_path_buf(),
-                gtk::gdk::Texture::from_filename(path).ok()?,
-            );
-        }
-        cache.get(path).cloned()
-    })
-}
-
-/// Saved photo for a chat or participant, decoded once per path.
-fn cached_avatar(
-    avatars: &std::collections::HashMap<String, std::path::PathBuf>,
-    id: &str,
-) -> Option<gtk::gdk::Texture> {
-    cached_texture(avatars.get(id)?)
-}
-
-/// Picks the chat to forward the selected message to.
-fn show_forward_dialog(
-    parent: &adw::ApplicationWindow,
-    sender: &ComponentSender<NativeApplication>,
-    summary: &str,
-    chats: Vec<crate::model::Chat>,
-    avatars: &std::collections::HashMap<String, std::path::PathBuf>,
-) {
-    let dialog = adw::Dialog::builder()
-        .title("Forward To")
-        .content_width(400)
-        .content_height(560)
-        .build();
-    let search = gtk::SearchEntry::builder()
-        .placeholder_text("Search chats")
-        .margin_start(12)
-        .margin_end(12)
-        .margin_bottom(6)
-        .build();
-    let content = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(12)
-        .margin_top(6)
-        .margin_bottom(12)
-        .margin_start(12)
-        .margin_end(12)
-        .build();
-    if !summary.is_empty() {
-        let card = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(3)
-            .margin_top(9)
-            .margin_bottom(9)
-            .margin_start(12)
-            .margin_end(12)
-            .build();
-        card.append(
-            &gtk::Label::builder()
-                .label("Forwarding")
-                .xalign(0.0)
-                .css_classes(["caption-heading", "dim-label"])
-                .build(),
-        );
-        card.append(
-            &gtk::Label::builder()
-                .label(summary)
-                .xalign(0.0)
-                .lines(2)
-                .wrap(true)
-                .ellipsize(gtk::pango::EllipsizeMode::End)
-                .build(),
-        );
-        content.append(
-            &gtk::Frame::builder()
-                .child(&card)
-                .css_classes(["card"])
-                .build(),
-        );
-    }
-
-    let list = gtk::ListBox::builder()
-        .selection_mode(gtk::SelectionMode::None)
-        .css_classes(["boxed-list"])
-        .build();
-    list.set_placeholder(Some(
-        &gtk::Label::builder()
-            .label(if chats.is_empty() {
-                "No chats to forward to."
-            } else {
-                "No chats match this search."
-            })
-            .wrap(true)
-            .margin_top(18)
-            .margin_bottom(18)
-            .css_classes(["dim-label"])
-            .build(),
-    ));
-    let rows = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-    for chat in chats {
-        let row = adw::ActionRow::builder()
-            .title(&chat.name)
-            .use_markup(false)
-            .title_lines(1)
-            .subtitle(forward_chat_detail(&chat))
-            .activatable(true)
-            .build();
-        let avatar = adw::Avatar::new(32, Some(&chat.name), true);
-        avatar.set_custom_image(cached_avatar(avatars, &chat.id).as_ref());
-        row.add_prefix(&avatar);
-        rows.borrow_mut()
-            .push((row.clone(), forward_search_key(&chat)));
-        let (close, input) = (dialog.clone(), sender.clone());
-        row.connect_activated(move |_| {
-            input.input(Input::ForwardSelected(chat.id.clone()));
-            close.close();
-        });
-        list.append(&row);
-    }
-    search.connect_search_changed(move |entry| {
-        let needle = entry.text().trim().to_lowercase();
-        for (row, key) in rows.borrow().iter() {
-            row.set_visible(needle.is_empty() || key.contains(&needle));
-        }
-    });
-    content.append(&list);
-
-    let view = adw::ToolbarView::new();
-    view.add_top_bar(&adw::HeaderBar::new());
-    view.add_top_bar(&search);
-    view.set_content(Some(
-        &gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .vexpand(true)
-            .child(&content)
-            .build(),
-    ));
-    dialog.set_child(Some(&view));
-    dialog.set_focus(Some(&search));
-    dialog.present(Some(parent));
-}
-
 fn forwardable_chat(chat: &crate::model::Chat) -> bool {
     chat.kind != crate::model::ChatKind::Broadcast && chat.can_send()
-}
-
-thread_local! {
-    /// Small sticker previews by file, so picker rebuilds draw instantly.
-    static STICKER_TEXTURES: std::cell::RefCell<
-        std::collections::HashMap<std::path::PathBuf, gtk::gdk::Texture>,
-    > = std::cell::RefCell::default();
-}
-
-/// Loads a sticker preview into `button` off the main thread, once mapped.
-fn load_sticker_preview(button: &gtk::Button, path: &std::path::Path, size: i32) {
-    let show = move |button: &gtk::Button, texture: Option<&gtk::gdk::Texture>| {
-        let image = match texture {
-            Some(texture) => gtk::Image::from_paintable(Some(texture)),
-            None => gtk::Image::from_icon_name("image-missing-symbolic"),
-        };
-        image.set_pixel_size(size);
-        button.set_child(Some(&image));
-    };
-    if let Some(texture) = STICKER_TEXTURES.with_borrow(|cache| cache.get(path).cloned()) {
-        show(button, Some(&texture));
-        return;
-    }
-    button.set_child(Some(&adw::Spinner::new()));
-    let path = path.to_path_buf();
-    let started = std::cell::Cell::new(false);
-    button.connect_map(move |button| {
-        if started.replace(true) {
-            return;
-        }
-        let path = path.clone();
-        let button = button.downgrade();
-        gtk::glib::spawn_future_local(async move {
-            let source = path.clone();
-            // Decoded to a small RGBA preview; full-size WebP textures made the
-            // picker slow and heavy.
-            let decoded = gtk::gio::spawn_blocking(move || {
-                let bytes = std::fs::read(&source).ok()?;
-                let image = image::load_from_memory(&bytes)
-                    .ok()?
-                    .thumbnail(144, 144)
-                    .to_rgba8();
-                Some((image.width(), image.height(), image.into_raw()))
-            })
-            .await
-            .ok()
-            .flatten();
-            let texture = decoded.map(|(width, height, rgba)| {
-                gtk::gdk::MemoryTexture::new(
-                    width as i32,
-                    height as i32,
-                    gtk::gdk::MemoryFormat::R8g8b8a8,
-                    &gtk::glib::Bytes::from_owned(rgba),
-                    width as usize * 4,
-                )
-                .upcast::<gtk::gdk::Texture>()
-            });
-            if let Some(texture) = &texture {
-                STICKER_TEXTURES.with_borrow_mut(|cache| {
-                    // ponytail: wholesale reset at ~40 MB of previews; an LRU if
-                    // large libraries make reopening noticeably slower.
-                    if cache.len() >= 500 {
-                        cache.clear();
-                    }
-                    cache.insert(path, texture.clone());
-                });
-            }
-            if let Some(button) = button.upgrade() {
-                show(&button, texture.as_ref());
-            }
-        });
-    });
-}
-
-/// Plays an animated sticker while the pointer is over its picker button,
-/// and puts the still preview back when it leaves.
-fn animate_sticker_on_hover(button: &gtk::Button, path: &std::path::Path) {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    let hovering = std::sync::Arc::new(AtomicBool::new(false));
-    // Known after the first decode; still stickers are not decoded again.
-    let still = std::rc::Rc::new(std::cell::Cell::new(false));
-    let playing: std::rc::Rc<
-        std::cell::RefCell<
-            Option<(
-                crate::native_media_widgets::StickerAnimation,
-                gtk::gdk::Paintable,
-            )>,
-        >,
-    > = Default::default();
-    let hover = gtk::EventControllerMotion::new();
-    {
-        let (hovering, playing, path) = (hovering.clone(), playing.clone(), path.to_path_buf());
-        let button = button.downgrade();
-        hover.connect_enter(move |_, _, _| {
-            if still.get() || hovering.swap(true, Ordering::AcqRel) {
-                return;
-            }
-            let (hovering, playing, still, path) = (
-                hovering.clone(),
-                playing.clone(),
-                still.clone(),
-                path.clone(),
-            );
-            let button = button.clone();
-            gtk::glib::spawn_future_local(async move {
-                let current = hovering.clone();
-                // ponytail: decoded again on every hover, and dropped on leave, so
-                // an open picker holds one sticker's frames at most.
-                let frames = gtk::gio::spawn_blocking(move || {
-                    crate::native_media_widgets::decode_sticker_file(&path, || {
-                        current.load(Ordering::Acquire)
-                    })
-                })
-                .await
-                .ok()
-                .flatten();
-                // Undecodable while still pointed at, not cancelled: treat as still.
-                let Some(frames) = frames else {
-                    still.set(hovering.load(Ordering::Acquire));
-                    return;
-                };
-                if frames.len() < 2 {
-                    still.set(true);
-                    return;
-                }
-                let Some(image) = button
-                    .upgrade()
-                    .and_then(|button| button.child())
-                    .and_downcast::<gtk::Image>()
-                else {
-                    return;
-                };
-                // A quick leave and return starts a second decode; the first
-                // to finish plays.
-                if !hovering.load(Ordering::Acquire) || playing.borrow().is_some() {
-                    return;
-                }
-                let Some(preview) = image.paintable() else {
-                    return;
-                };
-                let animation = crate::native_media_widgets::StickerAnimation::new(&image, frames);
-                animation.play(None);
-                *playing.borrow_mut() = Some((animation, preview));
-            });
-        });
-    }
-    // Closing the picker under the pointer sends no leave; stop there too.
-    let rest = std::rc::Rc::new(move |button: &gtk::Button| {
-        hovering.store(false, Ordering::Release);
-        if let Some((animation, preview)) = playing.borrow_mut().take() {
-            animation.stop();
-            if let Some(image) = button.child().and_downcast::<gtk::Image>() {
-                image.set_paintable(Some(&preview));
-            }
-        }
-    });
-    {
-        let rest = rest.clone();
-        hover.connect_leave(move |controller| {
-            if let Some(button) = controller.widget().and_downcast::<gtk::Button>() {
-                rest(&button);
-            }
-        });
-    }
-    button.connect_unmap(move |button| rest(button));
-    button.add_controller(hover);
 }
 
 /// Text a message shows, if any: its body or a media caption.
@@ -7871,507 +2973,6 @@ fn reaction_bar(
     bar
 }
 
-/// Shows recently used own stickers, followed by locally saved stickers.
-fn sticker_picker_content(
-    recent: &[std::path::PathBuf],
-    favorites: &[std::path::PathBuf],
-    sender: &ComponentSender<NativeApplication>,
-) -> (gtk::Box, gtk::Stack) {
-    let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    content.set_size_request(380, 440);
-    let stack = gtk::Stack::builder()
-        .vexpand(true)
-        .transition_type(gtk::StackTransitionType::Crossfade)
-        .build();
-    let stickers = recent
-        .iter()
-        .chain(favorites)
-        .cloned()
-        .fold(Vec::new(), |mut paths, path| {
-            if !paths.contains(&path) {
-                paths.push(path);
-            }
-            paths
-        });
-    if stickers.is_empty() {
-        let empty = adw::StatusPage::builder()
-            .icon_name("emoji-nature-symbolic")
-            .title("No Stickers Yet")
-            .description("Your recently used stickers appear here.")
-            .vexpand(true)
-            .build();
-        empty.add_css_class("compact");
-        content.append(&empty);
-    } else {
-        let grid = gtk::FlowBox::builder()
-            .selection_mode(gtk::SelectionMode::None)
-            .homogeneous(true)
-            .min_children_per_line(4)
-            .max_children_per_line(4)
-            .column_spacing(4)
-            .row_spacing(4)
-            .margin_start(8)
-            .margin_end(8)
-            .margin_top(8)
-            .margin_bottom(8)
-            .valign(gtk::Align::Start)
-            .build();
-        for path in &stickers {
-            let button = gtk::Button::builder()
-                .css_classes(["flat", "zaptide-sticker"])
-                .tooltip_text("Send sticker")
-                .build();
-            button.update_property(&[gtk::accessible::Property::Label("Sticker")]);
-            load_sticker_preview(&button, path, 72);
-            animate_sticker_on_hover(&button, path);
-            let path = path.clone();
-            let sender = sender.clone();
-            button.connect_clicked(move |_| sender.input(Input::SendSticker(path.clone())));
-            grid.append(&button);
-        }
-        let scroller = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .child(&grid)
-            .build();
-        stack.add_titled(&scroller, Some("recent"), "Stickers");
-        content.append(&stack);
-    }
-    (content, stack)
-}
-
-fn forward_search_key(chat: &crate::model::Chat) -> String {
-    format!("{} {}", chat.name, chat.phone().unwrap_or_default()).to_lowercase()
-}
-
-fn forward_chat_detail(chat: &crate::model::Chat) -> String {
-    if chat.is_group() {
-        format!("Group · {} participants", chat.participants.len())
-    } else {
-        chat.phone()
-            .map(crate::util::phone)
-            .unwrap_or_else(|| "Direct chat".into())
-    }
-}
-
-/// Contact or group details: photo, name, number, and group members.
-fn show_chat_info_dialog(
-    parent: &adw::ApplicationWindow,
-    chat: &crate::model::Chat,
-    contacts: &std::collections::HashMap<String, crate::model::Contact>,
-    avatar: Option<&std::path::Path>,
-    presence: Option<(bool, Option<i64>)>,
-    chats: &[crate::model::Chat],
-    avatars: &std::collections::HashMap<String, std::path::PathBuf>,
-) -> Option<(String, adw::ActionRow)> {
-    let name_of = |id: &str| {
-        sender_label(
-            contacts
-                .get(id)
-                .and_then(crate::model::Contact::display_name),
-            id,
-        )
-    };
-    let page = adw::PreferencesPage::new();
-
-    let header = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(6)
-        .build();
-    let picture = adw::Avatar::new(96, Some(&chat.name), true);
-    let image = avatar.and_then(|path| gtk::gdk::Texture::from_filename(path).ok());
-    picture.set_custom_image(image.as_ref());
-    picture.set_margin_bottom(6);
-    header.append(&picture);
-    header.append(
-        &gtk::Label::builder()
-            .label(&chat.name)
-            .wrap(true)
-            .justify(gtk::Justification::Center)
-            .css_classes(["title-2"])
-            .build(),
-    );
-    let detail = if chat.is_group() {
-        format!("Group · {} participants", chat.participants.len())
-    } else {
-        chat.phone()
-            .map(crate::util::phone)
-            .unwrap_or_else(|| "Phone number unavailable".into())
-    };
-    header.append(
-        &gtk::Label::builder()
-            .label(&detail)
-            .css_classes(["dim-label"])
-            .build(),
-    );
-    let group = adw::PreferencesGroup::new();
-    group.add(&header);
-    page.add(&group);
-
-    let group = adw::PreferencesGroup::new();
-    if let Some(phone) = chat.phone() {
-        let phone = crate::util::phone(phone);
-        let row = adw::ActionRow::builder()
-            .title("Phone")
-            .use_markup(false)
-            .subtitle(&phone)
-            .subtitle_selectable(true)
-            .css_classes(["property"])
-            .build();
-        let copy = gtk::Button::builder()
-            .icon_name("edit-copy-symbolic")
-            .tooltip_text("Copy phone number")
-            .valign(gtk::Align::Center)
-            .css_classes(["flat"])
-            .build();
-        copy.connect_clicked(move |button| {
-            crate::native_portals::NativePortals::write_clipboard_text(&button.clipboard(), &phone);
-            button.set_icon_name("object-select-symbolic");
-        });
-        row.add_suffix(&copy);
-        group.add(&row);
-    }
-    let contact = contacts.get(&chat.id);
-    let property = |title: &str, value: &str| {
-        let row = adw::ActionRow::builder()
-            .title(title)
-            .use_markup(false)
-            .subtitle_selectable(true)
-            .css_classes(["property"])
-            .build();
-        // Set after `use-markup` is off: names such as "DNC&G" are not markup.
-        row.set_subtitle(value);
-        row
-    };
-    if let Some(saved) = contact
-        .and_then(|contact| contact.full_name.as_deref())
-        .filter(|saved| !saved.is_empty())
-    {
-        group.add(&property("Saved as", saved));
-    }
-    if let Some(push) = contact
-        .and_then(|contact| contact.push_name.as_deref())
-        .filter(|push| !push.is_empty())
-    {
-        group.add(&property("Name on WhatsApp", &format!("~{push}")));
-    }
-    let about = property("About", "");
-    about.set_visible(false);
-    if chat.phone().is_some() {
-        group.add(&about);
-    }
-    match presence {
-        Some((true, _)) => group.add(&property("Status", "Online")),
-        Some((false, Some(at))) => {
-            group.add(&property("Last seen", &crate::util::moment_stamp(at)))
-        }
-        _ => {}
-    }
-    if chat.phone().is_some() {
-        page.add(&group);
-    }
-
-    let settings = adw::PreferencesGroup::new();
-    let now = crate::util::now();
-    settings.add(&property(
-        "Notifications",
-        match chat.muted_until {
-            // Muting from the app stores `i64::MAX`, which has no date.
-            Some(until) if until > now && !crate::util::moment_stamp(until).is_empty() => {
-                format!("Muted until {}", crate::util::moment_stamp(until))
-            }
-            _ if chat.muted(now) => "Muted".to_owned(),
-            _ => "On".to_owned(),
-        }
-        .as_str(),
-    ));
-    if let Some(seconds) = chat.ephemeral_expiration.filter(|seconds| *seconds > 0) {
-        let label = match seconds {
-            86_400 => "24 hours".to_owned(),
-            604_800 => "7 days".to_owned(),
-            7_776_000 => "90 days".to_owned(),
-            other => format!("{other} seconds"),
-        };
-        settings.add(&property("Disappearing messages", &label));
-    }
-    let flags: Vec<&str> = [(chat.pinned, "Pinned"), (chat.archived, "Archived")]
-        .into_iter()
-        .filter_map(|(on, label)| on.then_some(label))
-        .collect();
-    if !flags.is_empty() {
-        settings.add(&property("Chat", &flags.join(" · ")));
-    }
-    page.add(&settings);
-
-    if !chat.is_group() {
-        let mut shared: Vec<&crate::model::Chat> = chats
-            .iter()
-            .filter(|other| other.is_group() && other.participants.contains(&chat.id))
-            .collect();
-        if !shared.is_empty() {
-            shared.sort_by_cached_key(|other| other.name.to_lowercase());
-            let group = adw::PreferencesGroup::builder()
-                .title(format!("Groups in common ({})", shared.len()))
-                .build();
-            for other in shared {
-                let row = adw::ActionRow::builder()
-                    .title(&other.name)
-                    .use_markup(false)
-                    .title_lines(1)
-                    .build();
-                row.set_subtitle(&format!("{} participants", other.participants.len()));
-                let photo = adw::Avatar::new(32, Some(&other.name), true);
-                photo.set_custom_image(cached_avatar(avatars, &other.id).as_ref());
-                row.add_prefix(&photo);
-                group.add(&row);
-            }
-            page.add(&group);
-        }
-    }
-
-    if chat.is_group() && !chat.participants.is_empty() {
-        let group = adw::PreferencesGroup::builder()
-            .title("Participants")
-            .build();
-        let mut members: Vec<_> = chat
-            .participants
-            .iter()
-            .map(|id| (name_of(id), id))
-            .collect();
-        members.sort_by_cached_key(|(name, _)| name.to_lowercase());
-        for (name, id) in members {
-            let row = adw::ActionRow::builder()
-                .title(&name)
-                .use_markup(false)
-                .build();
-            if let Some(phone) = crate::model::phone_of(id).map(crate::util::phone)
-                && phone != name
-            {
-                row.set_subtitle(&phone);
-            }
-            row.add_prefix(&adw::Avatar::new(32, Some(&name), true));
-            group.add(&row);
-        }
-        page.add(&group);
-    }
-
-    let view = adw::ToolbarView::new();
-    view.add_top_bar(&adw::HeaderBar::new());
-    view.set_content(Some(&page));
-    let dialog = adw::Dialog::builder()
-        .title(if chat.is_group() {
-            "Group Info"
-        } else {
-            "Contact Info"
-        })
-        .content_width(400)
-        .content_height(if chat.is_group() { 600 } else { 560 })
-        .child(&view)
-        .build();
-    dialog.present(Some(parent));
-    chat.phone().map(|_| (chat.id.clone(), about))
-}
-
-/// Colored round icon over a caption for one tile of the attach grid.
-fn attach_tile(icon: &str, label: &str, tone: &str) -> gtk::Box {
-    let tile = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(6)
-        .build();
-    let image = gtk::Image::builder()
-        .icon_name(icon)
-        .pixel_size(20)
-        .halign(gtk::Align::Center)
-        .css_classes(["zaptide-attach-icon", tone])
-        .build();
-    tile.append(&image);
-    tile.append(
-        &gtk::Label::builder()
-            .label(label)
-            .css_classes(["caption"])
-            .build(),
-    );
-    tile
-}
-
-/// "Send Image", "Send 3 Files": images when every item is one.
-fn attachment_preview_title(count: usize, images: bool) -> String {
-    let noun = if images { "Image" } else { "File" };
-    if count == 1 {
-        format!("Send {noun}")
-    } else {
-        format!("Send {count} {noun}s")
-    }
-}
-
-fn is_image_file(path: &std::path::Path) -> bool {
-    gtk::gio::content_type_guess(Some(path), None)
-        .0
-        .starts_with("image/")
-}
-
-fn show_attachment_preview_dialog(
-    parent: &adw::ApplicationWindow,
-    sender: &ComponentSender<NativeApplication>,
-    image: Option<gtk::gdk::Texture>,
-    paths: &[std::path::PathBuf],
-    draft: &str,
-) {
-    let carousel = adw::Carousel::builder().vexpand(true).spacing(12).build();
-    let picture = |picture: gtk::Picture| {
-        picture.set_content_fit(gtk::ContentFit::Contain);
-        picture.set_can_shrink(true);
-        picture.set_hexpand(true);
-        picture.set_vexpand(true);
-        picture
-    };
-    if let Some(texture) = &image {
-        carousel.append(&picture(gtk::Picture::for_paintable(texture)));
-    }
-    for path in paths {
-        // ponytail: decodes on the main thread; fine for a few photos, move
-        // to glycin like the timeline if large batches stall the window.
-        if is_image_file(path) {
-            carousel.append(&picture(gtk::Picture::for_filename(path)));
-            continue;
-        }
-        let page = adw::StatusPage::builder()
-            .icon_name("text-x-generic-symbolic")
-            .title(
-                path.file_name()
-                    .map(|name| name.to_string_lossy())
-                    .unwrap_or_default(),
-            )
-            .hexpand(true)
-            .build();
-        page.add_css_class("compact");
-        carousel.append(&page);
-    }
-    let count = carousel.n_pages() as usize;
-    let dots = adw::CarouselIndicatorDots::builder()
-        .carousel(&carousel)
-        .visible(count > 1)
-        .build();
-
-    let caption = gtk::Entry::builder()
-        .placeholder_text("Add a caption")
-        .text(draft)
-        .hexpand(true)
-        .build();
-    let send = gtk::Button::builder()
-        .child(&paper_plane_icon())
-        .tooltip_text("Send")
-        .valign(gtk::Align::Center)
-        .css_classes(["circular", "suggested-action"])
-        .build();
-    send.update_property(&[gtk::accessible::Property::Label("Send")]);
-    let bar = gtk::Box::builder()
-        .spacing(6)
-        .margin_top(6)
-        .margin_bottom(12)
-        .margin_start(12)
-        .margin_end(12)
-        .build();
-    bar.append(&caption);
-    bar.append(&send);
-
-    let content = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(6)
-        .margin_start(12)
-        .margin_end(12)
-        .build();
-    content.append(&carousel);
-    content.append(&dots);
-    let view = adw::ToolbarView::new();
-    view.add_top_bar(&adw::HeaderBar::new());
-    view.set_content(Some(&content));
-    view.add_bottom_bar(&bar);
-    let dialog = adw::Dialog::builder()
-        .title(attachment_preview_title(
-            count,
-            image.is_some() || paths.iter().all(|path| is_image_file(path)),
-        ))
-        .content_width(520)
-        .content_height(560)
-        .child(&view)
-        .build();
-
-    let sent = std::rc::Rc::new(std::cell::Cell::new(false));
-    let (close, input, sending) = (dialog.clone(), sender.clone(), sent.clone());
-    let entry = caption.clone();
-    send.connect_clicked(move |_| {
-        sending.set(true);
-        input.input(Input::SendText(entry.text().to_string()));
-        close.close();
-    });
-    let button = send.clone();
-    caption.connect_activate(move |_| button.emit_clicked());
-    let input = sender.clone();
-    dialog.connect_closed(move |_| {
-        if !sent.get() {
-            input.input(Input::ClearAttachments);
-        }
-    });
-    // Keep the draft that became the caption instead of selecting it, so
-    // typing adds to it.
-    caption.connect_has_focus_notify(|entry| {
-        let entry = entry.clone();
-        gtk::glib::idle_add_local_once(move || entry.set_position(-1));
-    });
-    dialog.set_focus(Some(&caption));
-    dialog.present(Some(parent));
-}
-
-fn show_archive_confirmation(
-    parent: &adw::ApplicationWindow,
-    sender: &ComponentSender<NativeApplication>,
-    chat: &crate::model::Chat,
-) {
-    let dialog = adw::AlertDialog::builder()
-        .heading("Archive Chat?")
-        .body(format!(
-            "{} moves to your archived chats. You can unarchive it at any time.",
-            chat.name
-        ))
-        .build();
-    dialog.add_response("cancel", "Cancel");
-    dialog.add_response("archive", "Archive");
-    dialog.set_response_appearance("archive", adw::ResponseAppearance::Suggested);
-    dialog.set_default_response(Some("archive"));
-    dialog.set_close_response("cancel");
-    let (sender, id) = (sender.clone(), chat.id.clone());
-    dialog.connect_response(None, move |_, response| {
-        if response == "archive" {
-            sender.input(Input::ArchiveChat(id.clone()));
-        }
-    });
-    dialog.present(Some(parent));
-}
-
-fn show_unlink_confirmation(
-    parent: &adw::ApplicationWindow,
-    sender: &ComponentSender<NativeApplication>,
-) {
-    let dialog = adw::AlertDialog::builder()
-        .heading("Unlink this computer?")
-        .body(
-            "This removes this device from your linked devices and clears its local conversations.",
-        )
-        .build();
-    dialog.add_response("cancel", "Cancel");
-    dialog.add_response("unlink", "Unlink");
-    dialog.set_response_appearance("unlink", adw::ResponseAppearance::Destructive);
-    dialog.set_default_response(Some("cancel"));
-    dialog.set_close_response("cancel");
-    let sender = sender.clone();
-    dialog.connect_response(None, move |_, response| {
-        if response == "unlink" {
-            sender.input(Input::UnlinkConfirmed);
-        }
-    });
-    dialog.present(Some(parent));
-}
-
 /// Runs the native shell and starts the backend only after the first main-context turn.
 pub fn run(dirs: AppDirs) {
     let application_id =
@@ -8382,6 +2983,14 @@ pub fn run(dirs: AppDirs) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn composer_sync_only_changes_when_draft_empty_state_changes() {
+        assert!(!composer_draft_state_changed(false, false));
+        assert!(!composer_draft_state_changed(true, true));
+        assert!(composer_draft_state_changed(true, false));
+        assert!(composer_draft_state_changed(false, true));
+    }
 
     #[test]
     fn attachment_summary_names_staged_files() {
@@ -8417,13 +3026,6 @@ mod tests {
             forwarded: false,
             thumbnail: None,
         }
-    }
-
-    #[test]
-    fn attachment_preview_titles_count_images_and_files() {
-        assert_eq!(attachment_preview_title(1, true), "Send Image");
-        assert_eq!(attachment_preview_title(3, true), "Send 3 Images");
-        assert_eq!(attachment_preview_title(2, false), "Send 2 Files");
     }
 
     #[test]
@@ -8552,14 +3154,14 @@ mod tests {
         let mut chat =
             crate::model::Chat::new("15551234567@s.whatsapp.net".into(), "Ada Lovelace".into());
         assert!(forwardable_chat(&chat));
-        assert!(forward_search_key(&chat).contains("ada lovelace"));
-        assert!(forward_search_key(&chat).contains("15551234567"));
+        assert!(dialogs::forward_search_key(&chat).contains("ada lovelace"));
+        assert!(dialogs::forward_search_key(&chat).contains("15551234567"));
 
         let same_name =
             crate::model::Chat::new("15557654321@s.whatsapp.net".into(), "Ada Lovelace".into());
         assert_ne!(
-            forward_chat_detail(&chat),
-            forward_chat_detail(&same_name),
+            dialogs::forward_chat_detail(&chat),
+            dialogs::forward_chat_detail(&same_name),
             "duplicate chat names remain distinguishable to assistive technology"
         );
 

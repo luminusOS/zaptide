@@ -22,6 +22,26 @@ pub enum MutedFilter {
     Only,
 }
 
+/// Chat kinds included in the sidebar projection.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ChatKindFilter {
+    /// Show private chats and groups.
+    #[default]
+    All,
+    /// Show private chats only.
+    Private,
+    /// Show groups only.
+    Groups,
+}
+
+impl ChatKindFilter {
+    /// Applies chat-kind selection to projection filters.
+    pub fn apply(self, filters: &mut ChatListFilters) {
+        filters.private_only = matches!(self, Self::Private);
+        filters.groups_only = matches!(self, Self::Groups);
+    }
+}
+
 /// Optional predicates applied to the chat snapshot.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ChatListFilters {
@@ -263,6 +283,25 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(ids(&projection), ["123@g.us"]);
+    }
+
+    #[test]
+    fn chat_kind_filter_maps_to_projection_flags() {
+        let cases = [
+            (ChatKindFilter::All, false, false),
+            (ChatKindFilter::Private, true, false),
+            (ChatKindFilter::Groups, false, true),
+        ];
+        for (kind, private_only, groups_only) in cases {
+            let mut filters = ChatListFilters {
+                private_only: true,
+                groups_only: true,
+                ..Default::default()
+            };
+            kind.apply(&mut filters);
+            assert_eq!(filters.private_only, private_only);
+            assert_eq!(filters.groups_only, groups_only);
+        }
     }
 
     #[test]
