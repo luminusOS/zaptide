@@ -220,17 +220,19 @@ impl NativeApplication {
             .into_iter()
             .filter(|message| {
                 page_ids.insert(message.id.clone())
-                    && !self.message_ids.iter().any(|id| id == &message.id)
+                    && !self.message_snapshots.contains_key(&message.id)
             })
             .collect::<Vec<_>>();
         if older {
-            for message in messages.into_iter().rev() {
+            // One splice keeps a page of history linear instead of shifting
+            // the whole window per message.
+            self.message_ids
+                .splice(0..0, messages.iter().map(|message| message.id.clone()));
+            for message in messages {
                 if let Some(text) = editable_text(&message) {
                     self.editable_messages.insert(message.id.clone(), text);
                 }
-                self.message_ids.insert(0, message.id.clone());
-                self.message_snapshots
-                    .insert(message.id.clone(), message.clone());
+                self.message_snapshots.insert(message.id.clone(), message);
             }
         } else {
             for message in messages {
@@ -265,7 +267,7 @@ impl NativeApplication {
     pub(super) fn message_updated(&mut self, message: crate::model::Message) {
         let text = editable_text(&message);
         if self.active_chat.as_deref() == Some(&message.chat)
-            && self.message_ids.iter().any(|id| id == &message.id)
+            && self.message_snapshots.contains_key(&message.id)
         {
             if let Some(text) = &text {
                 self.editable_messages
@@ -578,6 +580,11 @@ impl NativeApplication {
                 scroll_to_end(&self.messages.view);
             } else {
                 glide_to_end(&self.messages.view);
+                if inserted > removed
+                    && let Some(id) = self.message_ids.last()
+                {
+                    fade_in_row(&self.messages.view, id.clone());
+                }
             }
         }
     }
