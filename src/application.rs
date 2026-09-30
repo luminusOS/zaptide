@@ -3577,4 +3577,97 @@ mod tests {
         assert_eq!(&pixels[..4], &[255, 0, 0, 128]);
         assert_eq!(&pixels[4..], &[0, 0, 0, 0]);
     }
+
+    /// Synthetic timings for the hot paths behind a long conversation and a
+    /// large chat list. Run with `cargo test --release bench_synthetic -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "benchmark"]
+    fn bench_synthetic() {
+        use std::time::Instant;
+        let time = |label: &str, run: &mut dyn FnMut()| {
+            let start = Instant::now();
+            for _ in 0..20 {
+                run();
+            }
+            println!("{label}: {:?} per run", start.elapsed() / 20);
+        };
+
+        let messages = (0..2000)
+            .map(|i| {
+                let from_me = i % 3 == 0;
+                grouping_message(
+                    &format!("m{i}"),
+                    if from_me { "me" } else { "them" },
+                    from_me,
+                    1_700_000_000 + i * 90,
+                )
+            })
+            .collect::<Vec<_>>();
+        let contacts = std::collections::HashMap::new();
+        let timeline = messages
+            .iter()
+            .map(|message| (message.timestamp, message.from_me))
+            .collect::<Vec<_>>();
+        time("2000 messages: prefixes", &mut || {
+            std::hint::black_box(conversation_prefixes(&timeline, 5));
+        });
+        time("2000 messages: group boundaries", &mut || {
+            std::hint::black_box(message_group_boundaries(&messages));
+        });
+        let separated = vec![false; messages.len()];
+        time("2000 messages: album roles", &mut || {
+            std::hint::black_box(album_roles(&messages, &separated));
+        });
+        time("2000 messages: clone snapshots", &mut || {
+            std::hint::black_box(messages.clone());
+        });
+        time("2000 messages: transcript rows", &mut || {
+            let rows = messages
+                .iter()
+                .map(|message| transcript_row(message, &contacts))
+                .collect::<Vec<_>>();
+            std::hint::black_box(rows);
+        });
+
+        let ids = messages.iter().map(|m| m.id.clone()).collect::<Vec<_>>();
+        let snapshots = messages
+            .iter()
+            .map(|m| (m.id.clone(), ()))
+            .collect::<std::collections::HashMap<_, _>>();
+        let page = (0..50).map(|i| format!("m{}", i * 40)).collect::<Vec<_>>();
+        time("page dedupe, linear scan (old)", &mut || {
+            let kept = page
+                .iter()
+                .filter(|id| !ids.iter().any(|known| known == *id))
+                .count();
+            std::hint::black_box(kept);
+        });
+        time("page dedupe, map lookup (new)", &mut || {
+            let kept = page
+                .iter()
+                .filter(|id| !snapshots.contains_key(*id))
+                .count();
+            std::hint::black_box(kept);
+        });
+
+        let chats = (0..10_000)
+            .map(|i| {
+                let mut chat =
+                    crate::model::Chat::new(format!("c{i}@s.whatsapp.net"), format!("Chat {i}"));
+                chat.last_activity = 1_700_000_000 - i;
+                chat
+            })
+            .collect::<Vec<_>>();
+        let mut projection = crate::native_chat_list::ChatListProjection::default();
+        time("10000 chats: replace snapshot", &mut || {
+            projection.replace_snapshot(chats.clone());
+        });
+        time("10000 chats: visible", &mut || {
+            std::hint::black_box(projection.visible().count());
+        });
+        projection.set_query("chat 99");
+        time("10000 chats: visible with search", &mut || {
+            std::hint::black_box(projection.visible().count());
+        });
+    }
 }
