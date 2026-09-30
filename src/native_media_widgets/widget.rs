@@ -106,8 +106,14 @@ pub fn build_media_widget_with_action(
         };
     }
     let on_action = std::rc::Rc::new(on_action);
-    // A template is the message's own text and buttons; the bubble is its card.
-    if !matches!(projected.content, NativeMediaContent::Template { .. }) {
+    // Templates, quick replies and lists are the message's own text and
+    // buttons; the bubble is their card.
+    if !matches!(
+        projected.content,
+        NativeMediaContent::Template { .. }
+            | NativeMediaContent::Buttons { .. }
+            | NativeMediaContent::List { .. }
+    ) {
         root.add_css_class("card");
         root.add_css_class("zaptide-media-card");
     }
