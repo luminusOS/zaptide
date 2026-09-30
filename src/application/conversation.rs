@@ -589,7 +589,7 @@ impl NativeApplication {
                 if let Some(id) = self.message_ids.last()
                     && old_last.as_ref() != Some(id)
                 {
-                    fade_in_row(&self.messages.view, id.clone());
+                    mark_arriving(id.clone());
                 }
             }
         }

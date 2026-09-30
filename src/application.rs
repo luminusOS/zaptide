@@ -1246,29 +1246,40 @@ fn glide_to_end(view: &gtk::ListView) {
     animation.play();
 }
 
-/// Fades in the row of a message that just arrived. The widget only exists once
-/// the list lays it out, so this waits for idle. GTK drops CSS animations when
-/// the user asked for reduced motion.
-fn fade_in_row(view: &gtk::ListView, id: String) {
-    let view = view.clone();
-    gtk::glib::idle_add_local_once(move || {
-        let mut child = view.first_child();
-        while let Some(current) = child {
-            if let Some(root) = current.first_child()
-                && root.widget_name() == id.as_str()
-            {
-                root.add_css_class("zaptide-arrive");
-                gtk::glib::timeout_add_local_once(
-                    std::time::Duration::from_millis(400),
-                    move || {
-                        root.remove_css_class("zaptide-arrive");
-                    },
-                );
-                return;
+thread_local! {
+    static ARRIVING: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Names the message whose row should fade in when the list first binds it.
+/// Binding happens during layout, before the row's first frame, so nothing
+/// flashes at full opacity. The mark expires in case the row is never shown.
+fn mark_arriving(id: String) {
+    ARRIVING.set(Some(id.clone()));
+    gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(500), move || {
+        ARRIVING.with_borrow_mut(|arriving| {
+            if arriving.as_deref() == Some(id.as_str()) {
+                *arriving = None;
             }
-            child = current.next_sibling();
-        }
+        });
     });
+}
+
+/// Fades `row` in if its message was marked as arriving; otherwise makes sure a
+/// recycled widget is fully opaque. Adwaita animations honour reduced motion by
+/// jumping straight to the end value.
+fn fade_in_if_arriving(row: &gtk::Box, id: &str) {
+    if ARRIVING
+        .with_borrow_mut(|arriving| arriving.take_if(|marked| marked == id))
+        .is_none()
+    {
+        row.set_opacity(1.0);
+        return;
+    }
+    row.set_opacity(0.0);
+    let target = adw::PropertyAnimationTarget::new(row, "opacity");
+    let animation = adw::TimedAnimation::new(row, 0.0, 1.0, 220, target);
+    animation.set_easing(adw::Easing::EaseOutCubic);
+    animation.play();
 }
 
 /// Start, removed count, and inserted count of the span where `new` differs
@@ -1406,8 +1417,6 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
           .zaptide-audio-speed.compact { font-size: 0.85em; }\n\
           .zaptide-reaction { font-size: 1.4em; min-width: 40px; min-height: 40px; padding: 0; }\n\
          .zaptide-reaction.chosen { background-color: alpha(@accent_bg_color, 0.25); }\n\
-         @keyframes zaptide-arrive { from { opacity: 0; } to { opacity: 1; } }\n\
-         .zaptide-arrive { animation: zaptide-arrive 220ms ease-out; }\n\
          .zaptide-reaction > label { transition: transform 120ms ease-out; }\n\
          .zaptide-reaction:hover > label { transform: scale(1.25); }\n\
          .zaptide-reaction-chip { min-height: 0; min-width: 0; padding: 1px 8px; border-radius: 9999px; font-size: 0.9em; background-color: @window_bg_color; box-shadow: 0 0 0 1px alpha(currentColor, 0.12); }\n\
