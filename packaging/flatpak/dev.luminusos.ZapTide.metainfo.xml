@@ -36,6 +36,12 @@
     <control>keyboard</control>
   </supports>
   <releases>
+    <release version="0.4.0" date="2026-09-30">
+      <description>
+        <p>Group photos into albums, stage attachments above the composer, show
+        WhatsApp text formatting and business links, and reconnect after suspend.</p>
+      </description>
+    </release>
     <release version="0.3.0" date="2026-09-29">
       <description>
         <p>Answer quick-reply buttons and list messages, and see mentioned
