@@ -497,9 +497,12 @@ impl RelmListItem for MessageRow {
             .margin_end(6)
             .build();
         column.append(&reactions);
+        // Not expanding: an expanding attachment row would otherwise make the
+        // Clamp share the spacer's width and centre the bubble inside it.
         let clamp = adw::Clamp::builder()
             .maximum_size(480)
             .tightening_threshold(480)
+            .hexpand(false)
             .child(&column)
             .build();
         row.append(&clamp);
