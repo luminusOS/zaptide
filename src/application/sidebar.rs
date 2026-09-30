@@ -36,6 +36,7 @@ pub(super) struct SidebarInit {
 
 pub(super) struct Sidebar {
     state: SidebarState,
+    search_entry: Option<gtk::SearchEntry>,
 }
 
 #[derive(Debug)]
@@ -93,11 +94,10 @@ impl SimpleComponent for Sidebar {
                     set_margin_start: 12,
                     set_margin_end: 12,
                     set_margin_bottom: 6,
+                    #[name = "search_entry"]
                     append = &gtk::SearchEntry {
                         set_hexpand: true,
                         set_placeholder_text: Some("Search chats"),
-                        #[watch]
-                        set_text: &model.state.query,
                         connect_search_changed[sender] => move |entry| {
                             sender.output(SidebarOutput::SearchChats(entry.text().to_string())).unwrap();
                         },
@@ -247,15 +247,31 @@ impl SimpleComponent for Sidebar {
         _root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        let model = Self { state: init.state };
+        let mut model = Self {
+            state: init.state,
+            search_entry: None,
+        };
         let chat_view = &init.chat_view;
         let widgets = view_output!();
+        widgets.search_entry.set_text(&model.state.query);
+        model.search_entry = Some(widgets.search_entry.clone());
         ComponentParts { model, widgets }
     }
 
     fn update(&mut self, input: Self::Input, _sender: ComponentSender<Self>) {
         match input {
-            SidebarInput::Sync(state) => self.state = state,
+            SidebarInput::Sync(state) => {
+                // Only an outside change (such as a filter reset) rewrites the
+                // entry; search-changed is debounced, so writing the state back
+                // on every sync would erase what was typed since.
+                if let Some(entry) = &self.search_entry
+                    && state.query != self.state.query
+                    && entry.text() != state.query
+                {
+                    entry.set_text(&state.query);
+                }
+                self.state = state;
+            }
         }
     }
 }
