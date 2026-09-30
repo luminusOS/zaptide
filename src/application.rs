@@ -1276,6 +1276,27 @@ fn fade_in_if_arriving(row: &gtk::Box, id: &str) {
         return;
     }
     row.set_opacity(0.0);
+    // An animation on an unmapped widget jumps to its end, and a freshly bound
+    // row is not mapped yet; mapping still happens before its first frame.
+    if row.is_mapped() {
+        fade_in(row);
+        return;
+    }
+    let id = id.to_owned();
+    let handler = std::rc::Rc::new(std::cell::Cell::new(None));
+    let pending = handler.clone();
+    handler.set(Some(row.connect_map(move |row| {
+        if let Some(handler) = pending.take() {
+            row.disconnect(handler);
+        }
+        // The widget may have been recycled for another message meanwhile.
+        if row.widget_name() == id.as_str() {
+            fade_in(row);
+        }
+    })));
+}
+
+fn fade_in(row: &gtk::Box) {
     let target = adw::PropertyAnimationTarget::new(row, "opacity");
     let animation = adw::TimedAnimation::new(row, 0.0, 1.0, 220, target);
     animation.set_easing(adw::Easing::EaseOutCubic);
@@ -3585,6 +3606,94 @@ mod tests {
 
         assert_eq!(&pixels[..4], &[255, 0, 0, 128]);
         assert_eq!(&pixels[4..], &[0, 0, 0, 0]);
+    }
+
+    /// Appends a row to a real list view and samples its opacity frame by frame.
+    /// Run under a display: `xvfb-run -a cargo test arriving_row -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "needs a display"]
+    fn arriving_row_fades_in_on_first_bind() {
+        use relm4::typed_view::list::{RelmListItem, TypedListView};
+        use std::time::{Duration, Instant};
+
+        struct Probe(String);
+        impl RelmListItem for Probe {
+            type Root = gtk::Box;
+            type Widgets = ();
+            fn setup(_item: &gtk::ListItem) -> (gtk::Box, ()) {
+                let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+                root.set_height_request(40);
+                (root, ())
+            }
+            fn bind(&mut self, _widgets: &mut (), root: &mut gtk::Box) {
+                root.set_widget_name(&self.0);
+                fade_in_if_arriving(root, &self.0);
+            }
+        }
+
+        gtk::init().expect("display");
+        adw::init().expect("libadwaita");
+        // `REDUCED_MOTION=1` switches animations off and expects no fade.
+        let reduced = std::env::var_os("REDUCED_MOTION").is_some_and(|value| !value.is_empty());
+        if reduced && let Some(settings) = gtk::Settings::default() {
+            settings.set_gtk_enable_animations(false);
+        }
+        let context = gtk::glib::MainContext::default();
+        let spin = |duration: Duration, mut each: Box<dyn FnMut()>| {
+            let end = Instant::now() + duration;
+            while Instant::now() < end {
+                context.iteration(false);
+                each();
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        };
+
+        let mut list = TypedListView::<Probe, gtk::NoSelection>::new();
+        list.extend_from_iter((0..5).map(|i| Probe(format!("m{i}"))));
+        let window = gtk::Window::builder()
+            .default_width(300)
+            .default_height(400)
+            .child(&list.view)
+            .build();
+        window.present();
+        spin(Duration::from_millis(400), Box::new(|| {}));
+
+        mark_arriving("new".into());
+        list.append(Probe("new".into()));
+        let samples = std::rc::Rc::new(std::cell::RefCell::new(Vec::<(u128, f64)>::new()));
+        let start = Instant::now();
+        let view = list.view.clone();
+        let log = samples.clone();
+        spin(
+            Duration::from_millis(500),
+            Box::new(move || {
+                let mut child = view.first_child();
+                while let Some(current) = child {
+                    if let Some(root) = current.first_child()
+                        && root.widget_name() == "new"
+                    {
+                        log.borrow_mut()
+                            .push((start.elapsed().as_millis(), root.opacity()));
+                    }
+                    child = current.next_sibling();
+                }
+            }),
+        );
+        let samples = samples.borrow();
+        let line = samples
+            .iter()
+            .step_by(8)
+            .map(|(ms, opacity)| format!("{ms}ms:{opacity:.2}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        println!("new row opacity: {line}");
+        assert!(!samples.is_empty(), "new row was never bound");
+        assert_eq!(
+            samples.iter().any(|(_, opacity)| *opacity < 1.0),
+            !reduced,
+            "unexpected fade behaviour: {line}"
+        );
+        assert_eq!(samples.last().map(|(_, opacity)| *opacity), Some(1.0));
     }
 
     /// Synthetic timings for the hot paths behind a long conversation and a
