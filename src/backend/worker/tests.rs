@@ -1284,6 +1284,7 @@ pub(in crate::backend::worker) fn worker() -> (
         status: LinkStatus::Connected,
         session_generation: 0,
         session_generation_shared: Arc::new(AtomicU64::new(0)),
+        forward_tails: HashMap::new(),
         avatar_generation_shared: Arc::new(AtomicU64::new(0)),
         session_cache_lock: Arc::new(tokio::sync::Mutex::new(())),
         pairing_phone: None,

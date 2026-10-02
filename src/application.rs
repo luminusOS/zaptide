@@ -62,7 +62,7 @@ fn dialog_action_callback(
             dialogs::DialogAction::StartChat { id, name } => Input::StartChat { id, name },
             dialogs::DialogAction::NewContact { phone, name } => Input::NewContact { phone, name },
             dialogs::DialogAction::InsertMentionId(id) => Input::InsertMentionId(id),
-            dialogs::DialogAction::ForwardSelected(id) => Input::ForwardSelected(id),
+            dialogs::DialogAction::ForwardSelected(ids) => Input::ForwardSelected(ids),
             dialogs::DialogAction::SendSticker(path) => Input::SendSticker(path),
         });
     })
@@ -248,6 +248,8 @@ struct MessageRow {
     collapsed: bool,
     audio: Option<crate::native_voice::VoiceMessage>,
     audio_registry: AudioRegistry,
+    /// `None` outside selection mode; otherwise whether the row is picked.
+    selected: Option<bool>,
 }
 
 impl MessageRow {
@@ -262,6 +264,7 @@ impl MessageRow {
             && self.avatar == other.avatar
             && self.show_sender == other.show_sender
             && self.show_timestamp == other.show_timestamp
+            && self.selected == other.selected
     }
 }
 
@@ -439,6 +442,9 @@ pub struct NativeApplication {
     opened_unread: usize,
     unread_marker: Option<String>,
     recent_messages_pending: bool,
+    /// Messages picked for a batch forward, oldest first; `None` outside
+    /// selection mode.
+    message_selection: Option<Vec<String>>,
     message_menu: gtk::PopoverMenu,
     poll_choice: usize,
     sticker_packs: Vec<crate::model::StickerPack>,
@@ -562,7 +568,9 @@ pub enum Input {
     },
     CopySelectedText,
     ShowForward,
-    ForwardSelected(String),
+    ForwardSelected(Vec<String>),
+    StartSelection,
+    CancelSelection,
     DeleteSelected(bool),
     VoteOption(usize),
     CreatePoll(crate::model::PollDraft),
@@ -768,6 +776,41 @@ impl SimpleComponent for NativeApplication {
                                              },
                                          },
                                          append = model.composer_view.widget(),
+                                         // Replaces the composer while messages are picked.
+                                         append = &gtk::CenterBox {
+                                             add_css_class: "toolbar",
+                                             set_margin_start: 6,
+                                             set_margin_end: 6,
+                                             set_margin_top: 6,
+                                             set_margin_bottom: 6,
+                                             #[watch]
+                                             set_visible: model.message_selection.is_some(),
+                                             #[wrap(Some)]
+                                             set_start_widget = &gtk::Button {
+                                                 set_label: "Cancel",
+                                                 add_css_class: "flat",
+                                                 connect_clicked => Input::CancelSelection,
+                                             },
+                                             #[wrap(Some)]
+                                             set_center_widget = &gtk::Label {
+                                                 add_css_class: "heading",
+                                                 #[watch]
+                                                 set_label: &selection_title(model.selected_rows()),
+                                             },
+                                             #[wrap(Some)]
+                                             set_end_widget = &gtk::Button {
+                                                 add_css_class: "suggested-action",
+                                                 set_tooltip_text: Some("Forward selected messages"),
+                                                 #[wrap(Some)]
+                                                 set_child = &adw::ButtonContent {
+                                                     set_icon_name: "mail-forward-symbolic",
+                                                     set_label: "Forward",
+                                                 },
+                                                 #[watch]
+                                                 set_sensitive: model.message_selection.as_ref().is_some_and(|selection| !selection.is_empty()),
+                                                 connect_clicked => Input::ShowForward,
+                                             },
+                                         },
                                     },
                                     // Shown while files are dragged over the
                                     // conversation; it never takes the drag itself.
@@ -1060,6 +1103,7 @@ impl SimpleComponent for NativeApplication {
             opened_unread: 0,
             unread_marker: None,
             recent_messages_pending: false,
+            message_selection: None,
             message_menu: gtk::PopoverMenu::from_model(None::<&gtk::gio::MenuModel>),
             poll_choice: 0,
             sticker_packs: Vec::new(),
@@ -1134,6 +1178,15 @@ impl SimpleComponent for NativeApplication {
         model.message_menu.set_has_arrow(false);
         model.message_menu.set_halign(gtk::Align::Start);
         install_message_actions(&root, &sender);
+        let selection_keys = gtk::EventControllerKey::new();
+        let selection_sender = sender.clone();
+        selection_keys.connect_key_pressed(move |_, key, _, _| {
+            if key == gtk::gdk::Key::Escape {
+                selection_sender.input(Input::CancelSelection);
+            }
+            gtk::glib::Propagation::Proceed
+        });
+        widgets.conversation_body.add_controller(selection_keys);
         widgets
             .conversation_title
             .connect_notify_local(Some("subtitle"), |title, _| {
@@ -1273,6 +1326,14 @@ impl SimpleComponent for NativeApplication {
         }
         self.sync_chat_menu();
         self.sync_tray();
+    }
+}
+
+fn selection_title(count: usize) -> String {
+    match count {
+        0 => "Select Messages".to_owned(),
+        1 => "1 Selected".to_owned(),
+        count => format!("{count} Selected"),
     }
 }
 
@@ -1494,6 +1555,7 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
          .zaptide-bubble { padding: 8px 11px; border-radius: 13px; }\n\
          .zaptide-bubble.incoming { background-color: @zaptide_bubble_in; color: @zaptide_bubble_in_text; }\n\
           .zaptide-bubble.outgoing { background-color: @zaptide_bubble_out; color: @zaptide_bubble_out_text; }\n\
+          .zaptide-message-selected { border-radius: 12px; background-color: alpha(@accent_bg_color, 0.15); }\n\
           .zaptide-typing-bubble { padding: 13px 14px; border-bottom-left-radius: 4px; }\n\
           .zaptide-typing-dot { min-width: 7px; min-height: 7px; border-radius: 9999px; background-color: currentColor; opacity: 0.35; animation: zaptide-typing 1.2s ease-in-out infinite; }\n\
           .zaptide-typing-dot:nth-child(2) { animation-delay: 150ms; }\n\
@@ -1831,6 +1893,7 @@ fn message_row(
         collapsed: false,
         audio: None,
         audio_registry,
+        selected: None,
     }
 }
 
@@ -2050,6 +2113,10 @@ impl NativeApplication {
         y: f32,
         sender: &ComponentSender<NativeApplication>,
     ) {
+        // Selection mode acts on the picked set, not one message.
+        if self.message_selection.is_some() {
+            return;
+        }
         if !self.message_ids.contains(&id) {
             return;
         }
@@ -2132,6 +2199,7 @@ impl NativeApplication {
             respond.append(Some("Edit"), Some("message.edit"));
         }
         respond.append(Some("Forward…"), Some("message.forward"));
+        respond.append(Some("Select"), Some("message.select"));
         let vote = gtk::gio::Menu::new();
         if self.selected_poll_can_vote() {
             for (index, option) in self
@@ -2527,33 +2595,105 @@ impl NativeApplication {
         }
     }
 
-    fn forward_selected(&mut self, destination: String) {
-        let Some((source, message)) = self.active_chat.clone().zip(self.selected_message_id())
-        else {
+    /// Picked rows, counting an album once.
+    fn selected_rows(&self) -> usize {
+        (0..self.messages.len())
+            .filter_map(|position| self.messages.get(position))
+            .filter(|item| {
+                let row = item.borrow();
+                row.selected == Some(true) && !row.collapsed
+            })
+            .count()
+    }
+
+    /// Picks or drops the message at `position`; an album goes as a whole.
+    fn toggle_message_selection(&mut self, position: u32) {
+        let Some(item) = self.messages.get(position) else {
             return;
         };
-        let visible_destination = self
-            .chat_snapshots
-            .iter()
-            .any(|chat| chat.id == destination && !chat.archived && !chat.locked);
-        if !visible_destination || destination == source {
+        let ids: Vec<String> = {
+            let row = item.borrow();
+            if row.album.is_empty() {
+                vec![row.id.clone()]
+            } else {
+                row.album.iter().map(|message| message.id.clone()).collect()
+            }
+        };
+        let Some(selection) = self.message_selection.as_mut() else {
+            return;
+        };
+        if selection.contains(&ids[0]) {
+            selection.retain(|id| !ids.contains(id));
+        } else {
+            selection.extend(ids);
+            let order = &self.message_ids;
+            selection.sort_by_cached_key(|id| order.iter().position(|known| known == id));
+        }
+        self.rebuild_message_rows(false);
+    }
+
+    fn forward_selected(&mut self, destinations: Vec<String>) {
+        let Some(source) = self.active_chat.clone() else {
+            return;
+        };
+        let messages = match self.message_selection.as_ref() {
+            Some(selection) => selection.clone(),
+            None => self.selected_message_id().into_iter().collect(),
+        };
+        if messages.is_empty() {
+            return;
+        }
+        let destinations: Vec<_> = destinations
+            .into_iter()
+            .filter(|destination| {
+                *destination != source
+                    && self
+                        .chat_snapshots
+                        .iter()
+                        .any(|chat| chat.id == *destination && !chat.archived && !chat.locked)
+            })
+            .collect();
+        if destinations.is_empty() {
             self.status = "Choose another available conversation".into();
             return;
         }
-        let action = crate::native_actions::forward(source, message, destination);
-        if let crate::model::Action::Forward {
-            from_chat,
-            message,
-            to_chat,
-        } = action
-            && let Some(backend) = &self.backend
-        {
-            backend.send(crate::backend::Command::Forward {
-                from_chat,
-                message,
-                to_chat,
-            });
-            self.status = "Forwarding message".into();
+        let Some(backend) = &self.backend else {
+            return;
+        };
+        for destination in &destinations {
+            for message in &messages {
+                if let crate::model::Action::Forward {
+                    from_chat,
+                    message,
+                    to_chat,
+                } = crate::native_actions::forward(
+                    source.clone(),
+                    message.clone(),
+                    destination.clone(),
+                ) {
+                    backend.send(crate::backend::Command::Forward {
+                        from_chat,
+                        message,
+                        to_chat,
+                    });
+                }
+            }
+        }
+        let rows = if self.message_selection.is_some() {
+            self.selected_rows()
+        } else {
+            1
+        };
+        let what = match rows {
+            1 => "message".to_owned(),
+            count => format!("{count} messages"),
+        };
+        self.status = match destinations.len() {
+            1 => format!("Forwarding {what}"),
+            chats => format!("Forwarding {what} to {chats} chats"),
+        };
+        if self.message_selection.take().is_some() {
+            self.rebuild_message_rows(false);
         }
     }
 
@@ -2766,6 +2906,9 @@ impl NativeApplication {
             return;
         };
         self.message_ids.remove(position);
+        if let Some(selection) = self.message_selection.as_mut() {
+            selection.retain(|known| known != id);
+        }
         self.message_snapshots.remove(id);
         self.editable_messages.remove(id);
         self.rebuild_message_rows(false);
@@ -2967,7 +3110,7 @@ fn install_message_actions(
 ) {
     let group = gtk::gio::SimpleActionGroup::new();
     type MessageAction = (&'static str, fn() -> Input);
-    let actions: [MessageAction; 11] = [
+    let actions: [MessageAction; 12] = [
         ("copy", || Input::CopySelectedText),
         ("attachment", || Input::ActivateSelectedAttachment),
         ("folder", || Input::ShowSelectedInFolder),
@@ -2977,6 +3120,7 @@ fn install_message_actions(
         ("reply", || Input::ReplySelected),
         ("edit", || Input::EditSelected),
         ("forward", || Input::ShowForward),
+        ("select", || Input::StartSelection),
         ("delete", || Input::DeleteSelected(false)),
         ("delete-everyone", || Input::DeleteSelected(true)),
     ];

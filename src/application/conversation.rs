@@ -533,6 +533,10 @@ impl NativeApplication {
                 row.audio = audio;
                 row.album = album;
                 row.collapsed = roles[index] == AlbumRole::Follower;
+                row.selected = self
+                    .message_selection
+                    .as_ref()
+                    .map(|selection| selection.contains(&row.id));
                 row
             })
             .collect::<Vec<_>>();

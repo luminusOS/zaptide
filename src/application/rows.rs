@@ -152,6 +152,7 @@ pub(super) struct MessageRowWidgets {
     avatar: adw::Avatar,
     leading_space: gtk::Box,
     trailing_space: gtk::Box,
+    check: gtk::CheckButton,
     bubble: gtk::Box,
     header: gtk::Box,
     name: gtk::Label,
@@ -200,6 +201,15 @@ impl RelmListItem for MessageRow {
             .spacing(8)
             .build();
         row.add_css_class("zaptide-message-row");
+        // Selection mode marker; the row's own click toggles it.
+        let check = gtk::CheckButton::builder()
+            .valign(gtk::Align::Center)
+            .can_target(false)
+            .can_focus(false)
+            .visible(false)
+            .css_classes(["selection-mode"])
+            .build();
+        row.append(&check);
         let leading_space = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         leading_space.set_hexpand(true);
         row.append(&leading_space);
@@ -396,6 +406,7 @@ impl RelmListItem for MessageRow {
                 avatar,
                 leading_space,
                 trailing_space,
+                check,
                 bubble,
                 header,
                 name,
@@ -423,9 +434,23 @@ impl RelmListItem for MessageRow {
         root.set_visible(!self.collapsed);
         root.update_property(&[
             gtk::accessible::Property::Label(&self.accessible_label),
-            gtk::accessible::Property::Description("Press Menu or Shift+F10 for actions"),
+            gtk::accessible::Property::Description(match self.selected {
+                None => "Press Menu or Shift+F10 for actions",
+                Some(true) => "Selected. Press Enter to deselect",
+                Some(false) => "Not selected. Press Enter to select",
+            }),
         ]);
         let outgoing = self.message.from_me;
+        widgets.check.set_visible(self.selected.is_some());
+        widgets.check.set_active(self.selected == Some(true));
+        // While selecting, clicks reach the list row instead of the bubble's
+        // links, media and text selection.
+        widgets.bubble.set_can_target(self.selected.is_none());
+        if self.selected == Some(true) {
+            root.add_css_class("zaptide-message-selected");
+        } else {
+            root.remove_css_class("zaptide-message-selected");
+        }
         widgets.leading_space.set_visible(outgoing);
         widgets.trailing_space.set_visible(!outgoing);
         widgets.avatar.set_visible(!outgoing);

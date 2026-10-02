@@ -9,7 +9,7 @@ pub(super) enum DialogAction {
     StartChat { id: String, name: String },
     NewContact { phone: String, name: Option<String> },
     InsertMentionId(String),
-    ForwardSelected(String),
+    ForwardSelected(Vec<String>),
     SendSticker(std::path::PathBuf),
 }
 
@@ -557,6 +557,10 @@ fn cached_avatar(
     cached_texture(avatars.get(id)?)
 }
 
+/// WhatsApp's own clients forward to at most five chats at once; more looks
+/// like spam to its servers.
+const FORWARD_LIMIT: usize = 5;
+
 pub(super) fn show_forward_dialog(
     parent: &adw::ApplicationWindow,
     on_action: &DialogActionCallback,
@@ -633,37 +637,97 @@ pub(super) fn show_forward_dialog(
             .css_classes(["dim-label"])
             .build(),
     ));
+    // Destinations are ticked, then sent together from the header button.
+    let send = gtk::Button::builder()
+        .label("Forward")
+        .sensitive(false)
+        .halign(gtk::Align::Center)
+        .css_classes(["pill", "suggested-action"])
+        .build();
+    let picked = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
     let rows = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     for chat in chats {
+        let check = gtk::CheckButton::builder()
+            .valign(gtk::Align::Center)
+            .build();
         let row = adw::ActionRow::builder()
             .title(&chat.name)
             .use_markup(false)
             .title_lines(1)
             .subtitle(forward_chat_detail(&chat))
-            .activatable(true)
+            .activatable_widget(&check)
             .build();
         let avatar = adw::Avatar::new(32, Some(&chat.name), true);
         avatar.set_custom_image(cached_avatar(avatars, &chat.id).as_ref());
         row.add_prefix(&avatar);
+        row.add_suffix(&check);
         rows.borrow_mut()
-            .push((row.clone(), forward_search_key(&chat)));
-        let (close, on_action) = (dialog.clone(), on_action.clone());
-        row.connect_activated(move |_| {
-            on_action(DialogAction::ForwardSelected(chat.id.clone()));
-            close.close();
+            .push((row.clone(), check.clone(), forward_search_key(&chat)));
+        let (picked, send) = (picked.clone(), send.clone());
+        check.connect_toggled(move |check| {
+            // Checked before borrowing: unticking re-enters this handler.
+            if check.is_active() && picked.borrow().len() >= FORWARD_LIMIT {
+                check.set_active(false);
+                check.error_bell();
+                return;
+            }
+            let mut picked = picked.borrow_mut();
+            if check.is_active() {
+                picked.push(chat.id.clone());
+            } else {
+                picked.retain(|id| id != &chat.id);
+            }
+            send.set_label(&match picked.len() {
+                0 => "Forward".to_owned(),
+                1 => "Forward to 1 Chat".to_owned(),
+                count => format!("Forward to {count} Chats"),
+            });
+            send.set_sensitive(!picked.is_empty());
         });
         list.append(&row);
     }
+    let (close, on_action) = (dialog.clone(), on_action.clone());
+    send.connect_clicked(move |_| {
+        on_action(DialogAction::ForwardSelected(picked.borrow().clone()));
+        close.close();
+    });
+    let filter_rows = rows.clone();
     search.connect_search_changed(move |entry| {
         let needle = entry.text().trim().to_lowercase();
-        for (row, key) in rows.borrow().iter() {
-            row.set_visible(needle.is_empty() || key.contains(&needle));
+        // Ticked chats stay visible so nothing is sent to a hidden row.
+        for (row, check, key) in filter_rows.borrow().iter() {
+            row.set_visible(needle.is_empty() || key.contains(&needle) || check.is_active());
+        }
+    });
+    // Enter ticks the first visible match.
+    search.connect_activate(move |_| {
+        if let Some((_, check, _)) = rows
+            .borrow()
+            .iter()
+            .find(|(row, check, _)| row.is_visible() && !check.is_active())
+        {
+            check.set_active(true);
         }
     });
     content.append(&list);
 
-    let view = adw::ToolbarView::new();
-    view.add_top_bar(&adw::HeaderBar::new());
+    let header = adw::HeaderBar::builder()
+        .title_widget(&adw::WindowTitle::new(
+            "Forward To",
+            &format!("Choose up to {FORWARD_LIMIT} chats"),
+        ))
+        .build();
+    let actions = gtk::Box::builder()
+        .halign(gtk::Align::Center)
+        .margin_top(12)
+        .margin_bottom(12)
+        .build();
+    actions.append(&send);
+    let view = adw::ToolbarView::builder()
+        .bottom_bar_style(adw::ToolbarStyle::Raised)
+        .build();
+    view.add_top_bar(&header);
+    view.add_bottom_bar(&actions);
     view.add_top_bar(&search);
     view.set_content(Some(
         &gtk::ScrolledWindow::builder()

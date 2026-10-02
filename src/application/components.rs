@@ -22,7 +22,7 @@ impl NativeApplication {
             .as_deref()
             .and_then(|id| self.chat_snapshots.iter().find(|chat| chat.id == id));
         ComposerState {
-            active: self.active_chat.is_some(),
+            active: self.active_chat.is_some() && self.message_selection.is_none(),
             recording: self.recording_active(),
             recording_blink: self.recording_blink(),
             recording_time: self.recording_time(),

@@ -444,6 +444,10 @@ impl NativeApplication {
                 if self.active_chat.is_none() {
                     return;
                 }
+                if self.message_selection.is_some() {
+                    self.toggle_message_selection(position);
+                    return;
+                }
                 let Some(message) = self.message_ids.get(position as usize) else {
                     return;
                 };
@@ -762,10 +766,23 @@ impl NativeApplication {
                     .cloned()
                     .collect();
                 chats.sort_by_key(|chat| std::cmp::Reverse(chat.last_activity));
-                let summary = self
-                    .selected_message()
-                    .map(crate::model::Message::summary)
-                    .unwrap_or_default();
+                let summary = match self
+                    .message_selection
+                    .as_ref()
+                    .map(|_| self.selected_rows())
+                {
+                    Some(1) => self
+                        .message_selection
+                        .as_ref()
+                        .and_then(|selection| self.message_snapshots.get(&selection[0]))
+                        .map(crate::model::Message::summary)
+                        .unwrap_or_default(),
+                    Some(count) => format!("{count} messages"),
+                    None => self
+                        .selected_message()
+                        .map(crate::model::Message::summary)
+                        .unwrap_or_default(),
+                };
                 show_forward_dialog(
                     &self.window,
                     &dialog_action_callback(&sender),
@@ -775,6 +792,22 @@ impl NativeApplication {
                 );
             }
             Input::ForwardSelected(destination) => self.forward_selected(destination),
+            Input::StartSelection => {
+                let position = self
+                    .selected_message_id()
+                    .and_then(|id| self.message_ids.iter().position(|known| *known == id));
+                self.message_selection = Some(Vec::new());
+                match position {
+                    Some(position) => self.toggle_message_selection(position as u32),
+                    None => self.rebuild_message_rows(false),
+                }
+            }
+            Input::CancelSelection => {
+                if self.message_selection.take().is_some() {
+                    self.rebuild_message_rows(false);
+                    self.focus_composer();
+                }
+            }
             Input::DeleteSelected(everyone) => {
                 let dialog = adw::AlertDialog::builder()
                     .heading("Delete message?")

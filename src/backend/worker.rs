@@ -358,6 +358,7 @@ pub async fn run(
         status: LinkStatus::Starting,
         session_generation: 0,
         session_generation_shared: Arc::new(AtomicU64::new(0)),
+        forward_tails: HashMap::new(),
         avatar_generation_shared: Arc::new(AtomicU64::new(0)),
         session_cache_lock: Arc::new(tokio::sync::Mutex::new(())),
         pairing_phone: None,
@@ -473,6 +474,9 @@ struct Worker {
     status: LinkStatus,
     session_generation: u64,
     session_generation_shared: Arc<AtomicU64>,
+    /// Last forward still sending per destination; the next one to that chat
+    /// waits for it so a batch arrives in the order it was picked.
+    forward_tails: HashMap<ChatId, tokio::task::JoinHandle<bool>>,
     avatar_generation_shared: Arc<AtomicU64>,
     session_cache_lock: Arc<tokio::sync::Mutex<()>>,
     pairing_phone: Option<String>,
@@ -2323,7 +2327,10 @@ impl Worker {
             thumbnail,
         );
         self.store_message(row, Some(message.encode_to_vec()), None);
-        tokio::spawn(send_outgoing(
+        self.forward_tails.retain(|_, send| !send.is_finished());
+        let previous = self.forward_tails.remove(&to_chat);
+        let destination = to_chat.clone();
+        let send = send_outgoing(
             OutgoingSession {
                 client,
                 commands: self.commands.clone(),
@@ -2335,7 +2342,14 @@ impl Worker {
             id,
             message,
             expiration,
-        ));
+        );
+        let tail = tokio::spawn(async move {
+            if let Some(previous) = previous {
+                let _ = previous.await;
+            }
+            send.await
+        });
+        self.forward_tails.insert(destination, tail);
     }
 
     fn mark_read(&mut self, chat: ChatId, receipts: bool) {
