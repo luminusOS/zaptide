@@ -181,7 +181,6 @@ pub struct LinkPreview {
 }
 
 impl Message {
-    /// One-line summary used in chat rows and quotes.
     pub fn summary(&self) -> String {
         self.content.summary()
     }
@@ -298,7 +297,6 @@ pub enum Content {
     },
 }
 
-/// First non-blank line of `text`, trimmed.
 fn first_line(text: &str) -> Option<&str> {
     text.lines().map(str::trim).find(|line| !line.is_empty())
 }
@@ -455,7 +453,6 @@ impl Content {
         }
     }
 
-    /// Id of the button or list row already answered from this device.
     pub fn answer(&self) -> Option<&str> {
         match self {
             Self::Buttons { answered, .. } | Self::List { answered, .. } => answered.as_deref(),
@@ -463,7 +460,6 @@ impl Content {
         }
     }
 
-    /// The same buttons or list with the answer replaced; `None` for other content.
     pub fn with_answer(&self, answer: Option<String>) -> Option<Self> {
         let mut content = self.clone();
         match &mut content {

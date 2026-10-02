@@ -1,5 +1,3 @@
-//! Maps archive query rows into the app's chat and message models.
-
 use crate::model::{Chat, Content, LastMessage, Message};
 
 use super::{kind_from_name, status_from_rank};
@@ -10,7 +8,6 @@ fn content_from_json(json: &str) -> Content {
     })
 }
 
-/// Maps a row selected with the archive's message column list.
 pub(super) fn message_from_row(chat: &str, row: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
     let content: String = row.get(5)?;
     let quoted: Option<String> = row.get(7)?;

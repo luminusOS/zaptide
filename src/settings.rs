@@ -4,8 +4,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-/// Verifying the locked-chat code costs about 20 ms, paid once per distinct
-/// typed string. ponytail: fixed cost, revisit if it lags the search field.
+/// Verifying the locked-chat code costs about 20 ms per distinct typed string.
 const CHAT_LOCK_ROUNDS: std::num::NonZeroU32 = std::num::NonZeroU32::new(200_000).unwrap();
 
 fn hex(bytes: &[u8]) -> String {

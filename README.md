@@ -30,6 +30,8 @@ stored locally in an encrypted archive.
   copied transcripts; unknown contacts can show their WhatsApp name on hover.
 - Get desktop notifications, see typing and delivery status, and keep chat
   read state, mute settings and locks in sync with your phone.
+- When reading older messages, new arrivals keep your position and provide a
+  button to return to recent messages.
 - Use light, dark or custom themes. Navigate with keyboard shortcuts and use
   screen-reader labels; accessibility support is still incomplete.
 

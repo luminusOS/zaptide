@@ -339,28 +339,32 @@ pub fn project_content(message: &Message) -> NativeMessageContent {
         sender: quoted.sender_name.clone(),
         summary: quoted.summary.clone(),
     });
-    let mut reactions: Vec<ReactionPresentation> = Vec::new();
-    for reaction in &message.reactions {
-        if let Some(existing) = reactions
+    NativeMessageContent {
+        content,
+        reply,
+        forwarded: message.forwarded,
+        reactions: project_reactions(&message.reactions),
+    }
+}
+
+fn project_reactions(reactions: &[crate::model::Reaction]) -> Vec<ReactionPresentation> {
+    let mut projected: Vec<ReactionPresentation> = Vec::new();
+    for reaction in reactions {
+        if let Some(existing) = projected
             .iter_mut()
             .find(|entry| entry.emoji == reaction.emoji)
         {
             existing.count += 1;
             existing.selected |= reaction.from_me;
         } else {
-            reactions.push(ReactionPresentation {
+            projected.push(ReactionPresentation {
                 emoji: reaction.emoji.clone(),
                 count: 1,
                 selected: reaction.from_me,
             });
         }
     }
-    NativeMessageContent {
-        content,
-        reply,
-        forwarded: message.forwarded,
-        reactions,
-    }
+    projected
 }
 
 /// Keeps document labels to a filename component, even for Windows-style paths.

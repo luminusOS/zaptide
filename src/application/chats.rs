@@ -1,5 +1,3 @@
-//! Chat-list filtering, projection, and snapshot synchronization.
-
 use super::*;
 
 fn chat_row(chat: crate::model::Chat, avatar: Option<std::path::PathBuf>, open: bool) -> ChatRow {
@@ -31,7 +29,86 @@ fn chat_row(chat: crate::model::Chat, avatar: Option<std::path::PathBuf>, open: 
 }
 
 impl NativeApplication {
-    /// Clears search and filters; the sidebar is synchronized after input handling.
+    pub(super) fn select_chat(&mut self, position: u32) {
+        let Some(chat) = self.chat_ids.get(position as usize).cloned() else {
+            return;
+        };
+        if self
+            .split_view
+            .as_ref()
+            .is_some_and(adw::OverlaySplitView::is_collapsed)
+        {
+            self.sidebar_visible = false;
+        }
+        if self.active_chat.as_deref() != Some(&chat) {
+            self.cancel_portal_requests();
+            self.audio.media.stop_playback();
+            self.audio.playing_audio = None;
+            self.audio.waveform_queue.clear();
+            if let Some(cancel) = self.audio.waveform_cancel.take() {
+                cancel.store(true, std::sync::atomic::Ordering::Release);
+            }
+            self.audio.audio_waveforms.clear();
+            self.audio.waveform_attempted.clear();
+            self.audio.audio_errors.clear();
+            self.audio.audio_registry.borrow_mut().clear();
+        }
+        self.notifications.clear_chat(&chat);
+        if let Some(previous) = self.active_chat.as_deref() {
+            if self
+                .editing
+                .as_ref()
+                .is_some_and(|(editing_chat, _)| editing_chat == previous)
+            {
+                self.composer.set_draft(
+                    previous,
+                    self.drafts.get(previous).cloned().unwrap_or_default(),
+                );
+            }
+            self.composer.cancel_context(previous);
+        }
+        self.chat_projection.select(chat.clone());
+        self.active_chat = Some(chat.clone());
+        self.mark_open_chat();
+        self.reply_to = None;
+        self.editing = None;
+        self.pending_edit = None;
+        self.draft = self.composer.draft(&chat).to_owned();
+        self.composer_buffer.set_text(&self.draft);
+        self.messages.clear();
+        self.message_target = None;
+        self.opened_unread = self
+            .chat_snapshots
+            .iter()
+            .find(|known| known.id == chat)
+            .map_or(0, |known| known.unread as usize);
+        self.unread_marker = None;
+        self.recent_messages_pending = false;
+        self.history_complete = false;
+        self.loading_older = false;
+        self.message_ids.clear();
+        self.message_snapshots.clear();
+        self.editable_messages.clear();
+        self.transcript.clear();
+        self.audio.selected_voice = None;
+        self.audio.selected_voice_message = None;
+        self.page_title = self
+            .chat_snapshots
+            .iter()
+            .find(|known| known.id == chat)
+            .map(|known| known.name.clone())
+            .unwrap_or_else(|| "Conversation".into());
+        self.status = "Loading messages".into();
+        if let Some(backend) = &self.backend {
+            backend.send(crate::backend::Command::MarkRead {
+                chat: chat.clone(),
+                receipts: self.settings.send_read_receipts && !self.account_receipts_off,
+            });
+            backend.send(crate::backend::Command::LoadChat { chat, before: None });
+        }
+        self.focus_composer();
+    }
+
     pub(super) fn reset_chat_filters(&mut self, archived: bool) {
         self.chat_filters = crate::native_chat_list::ChatListFilters {
             archive: if archived {

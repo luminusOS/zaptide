@@ -713,7 +713,7 @@ mod tests {
 
     #[tokio::test]
     async fn stale_poll_results_cannot_save_or_decode_votes() {
-        let (mut worker, _events, _commands, _wa) = super::super::tests::receipt_tests::worker();
+        let (mut worker, _events, _commands, _wa) = super::super::tests::worker();
         let mut row = crate::archive::tests::message("chat", "poll", 1, false);
         row.content = content();
         worker.archive.insert_message(&row, None).unwrap();
@@ -774,7 +774,7 @@ mod tests {
 
     #[tokio::test]
     async fn stale_poll_creation_result_cannot_archive_into_relinked_session() {
-        let (mut worker, _events, _commands, _wa) = super::super::tests::receipt_tests::worker();
+        let (mut worker, _events, _commands, _wa) = super::super::tests::worker();
         worker.session_generation = 1;
         worker
             .handle_command(Command::PollCreated {
@@ -825,7 +825,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_encrypted_vote_before_its_poll_is_decrypted_without_network_access() {
-        let (mut worker, _events, mut commands, _wa) = super::super::tests::receipt_tests::worker();
+        let (mut worker, _events, mut commands, _wa) = super::super::tests::worker();
         let directory = tempfile::tempdir().unwrap();
         let session_path = directory.path().join("session.db");
         let bot = Bot::builder()
@@ -887,7 +887,7 @@ mod tests {
 
     #[test]
     fn privacy_id_re_votes_count_once_and_history_cannot_undo_them() {
-        let (mut worker, _events, _commands, _wa) = super::super::tests::receipt_tests::worker();
+        let (mut worker, _events, _commands, _wa) = super::super::tests::worker();
         let mut row = crate::archive::tests::message("chat", "poll", 1, false);
         row.content = content();
         worker.archive.insert_message(&row, None).unwrap();

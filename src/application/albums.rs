@@ -1,6 +1,5 @@
-//! Group consecutive eligible photo messages for the conversation view.
+//! Consecutive photos can render as one album while retaining individual rows.
 
-/// How a message takes part in an album of photos sent together.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum AlbumRole {
     Single,

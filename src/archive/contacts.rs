@@ -1,6 +1,14 @@
 use super::*;
 use crate::model::Contact;
 
+fn contact_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Contact> {
+    Ok(Contact {
+        id: row.get(0)?,
+        full_name: row.get(1)?,
+        push_name: row.get(2)?,
+    })
+}
+
 impl Archive {
     /// Stores a privacy id mapping and carries early mute/pin/lock sync to the
     /// canonical chat. Returns whether that chat's preferences were touched.
@@ -58,13 +66,7 @@ impl Archive {
             .query_row(
                 "SELECT id, full_name, push_name FROM contacts WHERE id = ?1",
                 params![id],
-                |row| {
-                    Ok(Contact {
-                        id: row.get(0)?,
-                        full_name: row.get(1)?,
-                        push_name: row.get(2)?,
-                    })
-                },
+                contact_from_row,
             )
             .optional()
     }
@@ -73,13 +75,7 @@ impl Archive {
         let mut statement = self
             .connection
             .prepare("SELECT id, full_name, push_name FROM contacts")?;
-        let rows = statement.query_map([], |row| {
-            Ok(Contact {
-                id: row.get(0)?,
-                full_name: row.get(1)?,
-                push_name: row.get(2)?,
-            })
-        })?;
+        let rows = statement.query_map([], contact_from_row)?;
         rows.collect()
     }
 

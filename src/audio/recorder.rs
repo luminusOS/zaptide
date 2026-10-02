@@ -1,7 +1,7 @@
 //! Microphone capture and live recording levels.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use rodio::Source;
@@ -10,6 +10,12 @@ use super::LONGEST_RECORDING;
 use crate::voice;
 
 type Outcome = Arc<Mutex<Option<Result<Vec<f32>, String>>>>;
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 /// Records from the default microphone until told to stop.
 pub struct Recorder {
@@ -34,13 +40,13 @@ impl Recorder {
                 .name("voice-record".to_owned())
                 .spawn(move || {
                     let result = record(&stop, &levels);
-                    *outcome.lock().unwrap_or_else(|p| p.into_inner()) = Some(result);
+                    *lock(&outcome) = Some(result);
                 })
         };
         let thread = match spawned {
             Ok(thread) => Some(thread),
             Err(error) => {
-                *outcome.lock().unwrap_or_else(|p| p.into_inner()) = Some(Err(error.to_string()));
+                *lock(&outcome) = Some(Err(error.to_string()));
                 None
             }
         };
@@ -58,26 +64,18 @@ impl Recorder {
     }
 
     pub fn levels(&self) -> Vec<f32> {
-        self.levels
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone()
+        lock(&self.levels).clone()
     }
 
     /// The newest `count` readings, without copying the whole recording.
     pub fn recent_levels(&self, count: usize) -> Vec<f32> {
-        let levels = self.levels.lock().unwrap_or_else(|p| p.into_inner());
+        let levels = lock(&self.levels);
         levels[levels.len().saturating_sub(count)..].to_vec()
     }
 
     /// Error that stopped recording early.
     pub fn failure(&self) -> Option<String> {
-        match self
-            .outcome
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .as_ref()
-        {
+        match lock(&self.outcome).as_ref() {
             Some(Err(error)) => Some(error.clone()),
             _ => None,
         }
@@ -89,9 +87,7 @@ impl Recorder {
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
-        self.outcome
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+        lock(&self.outcome)
             .take()
             .unwrap_or_else(|| Err("No audio was recorded".to_owned()))
     }
@@ -135,10 +131,7 @@ pub(super) fn record_with<I: Iterator<Item = f32>>(
             break;
         }
         let loudness = (taken.iter().map(|s| s * s).sum::<f32>() / taken.len() as f32).sqrt();
-        levels
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .push(loudness);
+        lock(levels).push(loudness);
         if taken.len() < chunk {
             // The device disappeared before recording stopped.
             break;

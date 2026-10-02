@@ -1,6 +1,3 @@
-//! Message labels and text projections shared by rows and transcript actions.
-
-/// Best label for a sender: saved or pushed name, else formatted phone number.
 pub(super) fn sender_label(name: Option<&str>, id: &str) -> String {
     if let Some(name) = name.filter(|name| !name.is_empty()) {
         return name.to_owned();
@@ -22,7 +19,6 @@ pub(super) fn delivery_label(delivery: crate::model::Delivery) -> &'static str {
     }
 }
 
-/// Compact delivery indicator: check glyphs, highlighted once read, or an icon.
 pub(super) fn delivery_mark(
     delivery: crate::model::Delivery,
 ) -> (&'static str, Option<&'static str>, bool) {

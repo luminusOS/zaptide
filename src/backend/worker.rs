@@ -204,6 +204,14 @@ fn remove_if_present(path: PathBuf) -> std::io::Result<()> {
     }
 }
 
+fn remove_dir_if_present(path: PathBuf) -> std::io::Result<()> {
+    match std::fs::remove_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
 fn clear_logged_out_data(dirs: &AppDirs, archive: &Archive) -> anyhow::Result<()> {
     archive.clear()?;
     let session = dirs.session_db();
@@ -217,13 +225,19 @@ fn clear_logged_out_data(dirs: &AppDirs, archive: &Archive) -> anyhow::Result<()
         dirs.media_cache_dir(),
         dirs.sticker_cache_dir(),
     ] {
-        match std::fs::remove_dir_all(directory) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
-        }
+        remove_dir_if_present(directory)?;
     }
     Ok(())
+}
+
+async fn wait_for_reconnect(inbox: &mut mpsc::UnboundedReceiver<Command>) -> bool {
+    loop {
+        match inbox.recv().await {
+            Some(Command::Reconnect) => return true,
+            Some(Command::Shutdown) | None => return false,
+            _ => {}
+        }
+    }
 }
 
 async fn write_session_cache_file(
@@ -290,12 +304,8 @@ pub async fn run(
                         "Local conversation cleanup could not be finalized".to_owned(),
                     )));
                     waker.wake();
-                    loop {
-                        match inbox.recv().await {
-                            Some(Command::Reconnect) => break,
-                            Some(Command::Shutdown) | None => return,
-                            _ => {}
-                        }
+                    if !wait_for_reconnect(&mut inbox).await {
+                        return;
                     }
                 } else {
                     break archive;
@@ -312,12 +322,8 @@ pub async fn run(
                 waker.wake();
                 // Do not connect with a disposable archive: history is replayed
                 // only once and would be lost if the keyring were locked.
-                loop {
-                    match inbox.recv().await {
-                        Some(Command::Reconnect) => break,
-                        Some(Command::Shutdown) | None => return,
-                        _ => {}
-                    }
+                if !wait_for_reconnect(&mut inbox).await {
+                    return;
                 }
             }
         }

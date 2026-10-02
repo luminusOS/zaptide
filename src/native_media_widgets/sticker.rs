@@ -32,8 +32,7 @@ pub(crate) struct StickerFrame {
 }
 
 pub(super) const STICKER_SIZE: u32 = 160;
-// ponytail: frames kept in memory per visible sticker (~100 KB each);
-// decimated past this cap. Stream frames from disk if long stickers matter.
+/// Caps retained frames per visible sticker.
 pub(super) const MAX_STICKER_FRAMES: usize = 64;
 
 /// Frames read from one sticker, merged or not; later frames are dropped.

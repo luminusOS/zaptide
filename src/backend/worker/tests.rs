@@ -1,5 +1,7 @@
 use super::*;
 
+mod session;
+
 #[test]
 fn fallback_names_read_as_phones_or_ids() {
     assert_eq!(
@@ -467,7 +469,7 @@ fn unsafe_preview_metadata_cannot_launch_a_desktop_handler() {
 
 #[tokio::test]
 async fn cancelling_phone_pairing_returns_to_the_qr_code() {
-    let (mut worker, _events, _, _) = receipt_tests::worker();
+    let (mut worker, _events, _, _) = worker();
     worker.qr = Some("qr".into());
     worker.pairing_phone = Some("15551234567".into());
     worker.pair_code = Some("ABCD-EFGH".into());
@@ -493,7 +495,7 @@ async fn cancelling_phone_pairing_returns_to_the_qr_code() {
 
 #[tokio::test]
 async fn a_failed_sticker_fetch_is_not_retried_in_the_same_session() {
-    let (mut worker, _events, _, _) = receipt_tests::worker();
+    let (mut worker, _events, _, _) = worker();
     worker.sticker_fetches.insert("expired".into());
     worker
         .handle_command(Command::StickerFetched {
@@ -507,7 +509,7 @@ async fn a_failed_sticker_fetch_is_not_retried_in_the_same_session() {
 
 #[tokio::test]
 async fn newsletter_sends_are_rejected_before_reaching_the_client() {
-    let (mut worker, events, _, _) = receipt_tests::worker();
+    let (mut worker, events, _, _) = worker();
     worker
         .handle_command(Command::SendText {
             chat: "fixture@newsletter".into(),
@@ -537,7 +539,7 @@ async fn newsletter_sends_are_rejected_before_reaching_the_client() {
 async fn button_answer_marks_only_on_success_and_removes_failed_reply() {
     use crate::model::QuickReply;
     const PEER: &str = "fixture@s.whatsapp.net";
-    let (mut worker, events, _, _) = receipt_tests::worker();
+    let (mut worker, events, _, _) = worker();
     worker.archive.ensure_chat(PEER, "Fixture").unwrap();
     let buttons = |answered: Option<&str>| Content::Buttons {
         text: "Pick".into(),
@@ -627,7 +629,7 @@ async fn button_answer_marks_only_on_success_and_removes_failed_reply() {
 async fn interrupted_answer_is_recovered_without_deleting_other_quoted_messages() {
     use crate::model::QuickReply;
     const PEER: &str = "fixture@s.whatsapp.net";
-    let (mut worker, _, _, _) = receipt_tests::worker();
+    let (mut worker, _, _, _) = worker();
     worker.archive.ensure_chat(PEER, "Fixture").unwrap();
     let mut parent = crate::archive::tests::message(PEER, "PARENT", 10, false);
     parent.content = Content::Buttons {
@@ -766,7 +768,7 @@ async fn interrupted_answer_is_recovered_without_deleting_other_quoted_messages(
 fn confirmed_answer_is_reconciled_when_question_arrives_later() {
     use crate::model::QuickReply;
     const PEER: &str = "fixture@s.whatsapp.net";
-    let (mut worker, _, _, _) = receipt_tests::worker();
+    let (mut worker, _, _, _) = worker();
     let mut answer = crate::archive::tests::message(PEER, "REPLY", 11, true);
     answer.status = Delivery::Sent;
     answer.content = Content::text("Yes");
@@ -809,7 +811,7 @@ fn confirmed_answer_is_reconciled_when_question_arrives_later() {
 fn version_three_archive_rederives_unsupported_buttons() {
     use whatsapp_rust::prelude::MessageField;
     const PEER: &str = "fixture@s.whatsapp.net";
-    let (mut worker, _, _, _) = receipt_tests::worker();
+    let (mut worker, _, _, _) = worker();
     worker.archive.ensure_chat(PEER, "Fixture").unwrap();
     let raw = wa::Message {
         buttons_message: MessageField::some(wa::message::ButtonsMessage {
@@ -845,7 +847,7 @@ fn version_three_archive_rederives_unsupported_buttons() {
 
 #[test]
 fn mentions_missing_from_the_message_are_recovered_for_known_people_only() {
-    let (mut worker, _, _, _) = receipt_tests::worker();
+    let (mut worker, _, _, _) = worker();
     worker
         .lid_to_pn
         .insert("15581".to_owned(), "5511912345678".to_owned());
@@ -892,7 +894,7 @@ fn mentions_missing_from_the_message_are_recovered_for_known_people_only() {
 
 #[tokio::test]
 async fn empty_id_send_failure_completes_once_without_exposing_details() {
-    let (mut worker, events, _, _) = receipt_tests::worker();
+    let (mut worker, events, _, _) = worker();
     worker
         .handle_command(Command::Sent {
             chat: "fixture@s.whatsapp.net".into(),
@@ -963,7 +965,7 @@ fn send_failure_text_is_generic_and_does_not_include_protocol_details() {
 
 #[test]
 fn privacy_recovery_hides_content_until_a_successful_replay() {
-    let (mut worker, events, _, _) = receipt_tests::worker();
+    let (mut worker, events, _, _) = worker();
     const PEER: &str = "fixture@s.whatsapp.net";
     worker.privacy_ready = false;
     worker.archive.ensure_chat(PEER, "Fixture").unwrap();
@@ -993,7 +995,7 @@ fn privacy_recovery_hides_content_until_a_successful_replay() {
 
 #[test]
 fn stale_privacy_recovery_cannot_expose_a_different_linked_account() {
-    let (mut worker, events, _, _) = receipt_tests::worker();
+    let (mut worker, events, _, _) = worker();
     worker.privacy_ready = false;
     worker.privacy_recovering = true;
     worker.privacy_generation = 1;
@@ -1248,6 +1250,69 @@ fn millisecond_timestamps_are_normalised() {
     assert_eq!(seconds(-1), 0);
 }
 
+pub(in crate::backend::worker) fn worker() -> (
+    Worker,
+    std::sync::mpsc::Receiver<Event>,
+    mpsc::UnboundedReceiver<Command>,
+    mpsc::UnboundedReceiver<RuntimeEvent>,
+) {
+    let (events, events_rx) = std::sync::mpsc::channel();
+    let (commands, inbox) = mpsc::unbounded_channel();
+    let (wa_sender, wa_events) = mpsc::unbounded_channel();
+    let (_test_wa_sender, test_wa_events) = mpsc::unbounded_channel();
+    let root = std::env::temp_dir().join(format!("zaptide-worker-test-{}", std::process::id()));
+    let worker = Worker {
+        privacy_ready: true,
+        privacy_recovering: false,
+        privacy_generation: 0,
+        privacy_retry: Instant::now(),
+        dirs: AppDirs::under(&root),
+        events,
+        commands,
+        waker: Arc::new(crate::backend::Waker),
+        archive: Archive::in_memory().expect("archive"),
+        client: None,
+        handle: None,
+        wa_sender,
+        wa_events,
+        me_pn: Some("15550001111@s.whatsapp.net".into()),
+        me_lid: None,
+        me_name: None,
+        me_about: None,
+        lid_to_pn: HashMap::new(),
+        contacts: HashMap::new(),
+        status: LinkStatus::Connected,
+        session_generation: 0,
+        session_generation_shared: Arc::new(AtomicU64::new(0)),
+        avatar_generation_shared: Arc::new(AtomicU64::new(0)),
+        session_cache_lock: Arc::new(tokio::sync::Mutex::new(())),
+        pairing_phone: None,
+        pair_code: None,
+        pair_request_id: 0,
+        archive_cleanup_failed: false,
+        qr: None,
+        syncing: false,
+        sync_deadline: None,
+        group_info_requested: HashSet::new(),
+        group_info_queue: std::collections::VecDeque::new(),
+        group_info_tries: HashMap::new(),
+        group_info_retry: Vec::new(),
+        presence_subscribed: HashSet::new(),
+        pending_older: HashMap::new(),
+        older_warned: HashSet::new(),
+        pending_avatars: HashMap::new(),
+        sticker_fetches: HashSet::new(),
+        sticker_downloads: HashSet::new(),
+        next_attachment_batch: 0,
+        read_sync: ReadSync::default(),
+        poll_decrypting: 0,
+        poll_history: Default::default(),
+        answer_sends: HashMap::new(),
+        poll_sending: HashSet::new(),
+    };
+    (worker, events_rx, inbox, test_wa_events)
+}
+
 pub(super) mod receipt_tests {
     use super::*;
     use crate::model::{Content, Delivery, Message};
@@ -1290,69 +1355,6 @@ pub(super) mod receipt_tests {
         assert_eq!(worker.group_info_tries.get("busy@g.us"), Some(&1));
     }
 
-    pub(in crate::backend::worker) fn worker() -> (
-        Worker,
-        std::sync::mpsc::Receiver<Event>,
-        mpsc::UnboundedReceiver<Command>,
-        mpsc::UnboundedReceiver<RuntimeEvent>,
-    ) {
-        let (events, events_rx) = std::sync::mpsc::channel();
-        let (commands, inbox) = mpsc::unbounded_channel();
-        let (wa_sender, wa_events) = mpsc::unbounded_channel();
-        let (_test_wa_sender, test_wa_events) = mpsc::unbounded_channel();
-        let root = std::env::temp_dir().join(format!("zaptide-worker-test-{}", std::process::id()));
-        let worker = Worker {
-            privacy_ready: true,
-            privacy_recovering: false,
-            privacy_generation: 0,
-            privacy_retry: Instant::now(),
-            dirs: AppDirs::under(&root),
-            events,
-            commands,
-            waker: Arc::new(crate::backend::Waker),
-            archive: Archive::in_memory().expect("archive"),
-            client: None,
-            handle: None,
-            wa_sender,
-            wa_events,
-            me_pn: Some(ME.to_owned()),
-            me_lid: None,
-            me_name: None,
-            me_about: None,
-            lid_to_pn: HashMap::new(),
-            contacts: HashMap::new(),
-            status: LinkStatus::Connected,
-            session_generation: 0,
-            session_generation_shared: Arc::new(AtomicU64::new(0)),
-            avatar_generation_shared: Arc::new(AtomicU64::new(0)),
-            session_cache_lock: Arc::new(tokio::sync::Mutex::new(())),
-            pairing_phone: None,
-            pair_code: None,
-            pair_request_id: 0,
-            archive_cleanup_failed: false,
-            qr: None,
-            syncing: false,
-            sync_deadline: None,
-            group_info_requested: HashSet::new(),
-            group_info_queue: std::collections::VecDeque::new(),
-            group_info_tries: HashMap::new(),
-            group_info_retry: Vec::new(),
-            presence_subscribed: HashSet::new(),
-            pending_older: HashMap::new(),
-            older_warned: HashSet::new(),
-            pending_avatars: HashMap::new(),
-            sticker_fetches: HashSet::new(),
-            sticker_downloads: HashSet::new(),
-            next_attachment_batch: 0,
-            read_sync: ReadSync::default(),
-            poll_decrypting: 0,
-            poll_history: Default::default(),
-            answer_sends: HashMap::new(),
-            poll_sending: HashSet::new(),
-        };
-        (worker, events_rx, inbox, test_wa_events)
-    }
-
     #[test]
     fn phone_recents_and_saved_stickers_keep_their_sources() {
         let (mut worker, events, _, _) = worker();
@@ -1384,190 +1386,6 @@ pub(super) mod receipt_tests {
         };
         assert_eq!(favorites, vec![saved]);
         assert_eq!(recent, vec![phone_recent]);
-    }
-
-    #[test]
-    fn logout_cleanup_removes_session_sidecars_and_account_caches() {
-        let root = tempfile::tempdir().expect("temporary account root");
-        let dirs = AppDirs::under(root.path());
-        dirs.ensure().expect("app directories");
-        let session = dirs.session_db();
-        for suffix in ["", "-wal", "-shm", "-journal"] {
-            let mut path = session.clone().into_os_string();
-            path.push(suffix);
-            std::fs::write(path, b"synthetic session fixture").expect("session fixture");
-        }
-        for directory in [
-            dirs.avatar_cache_dir(),
-            dirs.media_cache_dir(),
-            dirs.sticker_cache_dir(),
-        ] {
-            std::fs::create_dir_all(&directory).expect("cache directory");
-            std::fs::write(directory.join("fixture"), b"synthetic cache fixture")
-                .expect("cache fixture");
-        }
-        let saved_sticker = dirs.saved_sticker_dir().join("user-saved.webp");
-        std::fs::create_dir_all(dirs.saved_sticker_dir()).expect("saved sticker directory");
-        std::fs::write(&saved_sticker, b"user-owned sticker").expect("saved sticker fixture");
-        let archive = Archive::in_memory().expect("archive");
-        archive
-            .ensure_chat("synthetic@s.whatsapp.net", "Synthetic")
-            .expect("synthetic chat");
-
-        clear_logged_out_data(&dirs, &archive).expect("logout cleanup");
-
-        assert!(archive.chats().expect("empty archive").is_empty());
-        assert!(!session.exists());
-        assert!(!dirs.avatar_cache_dir().exists());
-        assert!(!dirs.media_cache_dir().exists());
-        assert!(!dirs.sticker_cache_dir().exists());
-        assert!(saved_sticker.exists(), "user-saved stickers are user data");
-    }
-
-    #[test]
-    fn stale_attachment_outbound_cannot_use_new_session_or_archive_content() {
-        let (mut worker, events, _, _) = worker();
-        worker.session_generation = 2;
-        let row = crate::archive::tests::message("chat", "old-account-message", 1, true);
-        worker.outbound("chat".into(), 1, row, Vec::new());
-
-        assert!(
-            worker
-                .archive
-                .message("chat", "old-account-message")
-                .expect("archive query")
-                .is_none()
-        );
-        assert!(events.try_iter().next().is_none());
-
-        let (sent, mut result) = mpsc::unbounded_channel();
-        worker.outbound_batch(
-            "chat".into(),
-            1,
-            crate::archive::tests::message("chat", "old-account-batch", 2, true),
-            Vec::new(),
-            sent,
-        );
-        assert_eq!(result.try_recv(), Ok(false));
-        assert!(
-            worker
-                .archive
-                .message("chat", "old-account-batch")
-                .expect("archive query")
-                .is_none()
-        );
-    }
-
-    #[tokio::test]
-    async fn stale_contact_lookup_cannot_write_into_a_new_session() {
-        let (mut worker, events, _, _) = worker();
-        worker.session_generation = 4;
-
-        worker
-            .handle_command(Command::ContactChecked {
-                session_generation: 3,
-                phone: "15551234567".into(),
-                full_name: Some("Old account contact".into()),
-                first_name: Some("Old".into()),
-                to_phone: true,
-                registered: true,
-            })
-            .await;
-
-        assert!(
-            worker
-                .archive
-                .contact("15551234567@s.whatsapp.net")
-                .expect("archive query")
-                .is_none()
-        );
-        assert!(events.try_iter().next().is_none());
-    }
-
-    #[tokio::test]
-    async fn stale_contact_save_and_me_info_cannot_repopulate_new_session() {
-        let (mut worker, events, _, _) = worker();
-        worker.session_generation = 7;
-
-        worker
-            .handle_command(Command::ContactSaved {
-                session_generation: 6,
-                id: "15551234567@s.whatsapp.net".into(),
-                name: "Old account contact".into(),
-                error: None,
-            })
-            .await;
-        worker
-            .handle_command(Command::MeInfo {
-                session_generation: 6,
-                about: Some("Old account status".into()),
-            })
-            .await;
-
-        assert!(
-            worker
-                .archive
-                .contact("15551234567@s.whatsapp.net")
-                .expect("archive query")
-                .is_none()
-        );
-        assert!(
-            worker
-                .archive
-                .meta("me_about")
-                .expect("archive metadata")
-                .is_none()
-        );
-        assert!(events.try_iter().next().is_none());
-    }
-
-    #[tokio::test]
-    async fn stale_download_cannot_recreate_cleared_account_cache() {
-        let root = tempfile::tempdir().expect("temporary cache root");
-        let cache = root.path().join("media");
-        let path = cache.join("old-account-image.jpg");
-        let session_generation = AtomicU64::new(9);
-        let cache_lock = tokio::sync::Mutex::new(());
-
-        let result = write_session_cache_file(
-            &cache,
-            &path,
-            b"fixture",
-            8,
-            &session_generation,
-            None,
-            &cache_lock,
-        )
-        .await;
-
-        assert!(result.is_err());
-        assert!(!path.exists());
-        assert!(!cache.exists());
-    }
-
-    #[tokio::test]
-    async fn invalidated_avatar_fetch_cannot_restore_old_profile_picture() {
-        let root = tempfile::tempdir().expect("temporary avatar cache");
-        let cache = root.path().join("avatars");
-        let path = cache.join("contact.jpg");
-        let session_generation = AtomicU64::new(5);
-        let avatar_generation = AtomicU64::new(8);
-        let cache_lock = tokio::sync::Mutex::new(());
-
-        let result = write_session_cache_file(
-            &cache,
-            &path,
-            b"old avatar",
-            5,
-            &session_generation,
-            Some((7, &avatar_generation)),
-            &cache_lock,
-        )
-        .await;
-
-        assert!(result.is_err());
-        assert!(!path.exists());
-        assert!(!cache.exists());
     }
 
     #[test]

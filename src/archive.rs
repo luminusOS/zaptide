@@ -17,7 +17,6 @@ mod receipts;
 mod row;
 pub use polls::PollVote;
 
-/// Recent phone sticker metadata, last-used time, and optional local file.
 #[derive(Clone, Debug)]
 pub struct PhoneSticker {
     pub hash: String,
@@ -26,7 +25,6 @@ pub struct PhoneSticker {
     pub path: Option<std::path::PathBuf>,
 }
 
-/// Downloaded chat sticker with its last-seen time and source message.
 #[derive(Clone, Debug)]
 pub struct ArchivedSticker {
     pub last_used: i64,
@@ -254,7 +252,6 @@ impl Archive {
         Ok(())
     }
 
-    /// Inserts a chat row only when missing.
     pub fn ensure_chat(&self, id: &str, name: &str) -> Result<()> {
         self.connection.execute(
             "INSERT OR IGNORE INTO chats (id, name, kind) VALUES (?1, ?2, ?3)",
@@ -263,7 +260,6 @@ impl Archive {
         Ok(())
     }
 
-    /// Updates group subject, members, and posting permission.
     pub fn set_group_info(
         &self,
         id: &str,
@@ -484,7 +480,6 @@ impl Archive {
         Ok(())
     }
 
-    /// Returns all chats with their latest message, newest first.
     pub fn chats(&self) -> Result<Vec<Chat>> {
         let mut statement = self.connection.prepare(&format!(
             "SELECT {CHAT_COLUMNS} {CHAT_JOIN} ORDER BY c.last_activity DESC"
@@ -510,7 +505,6 @@ impl Archive {
         Ok(())
     }
 
-    /// Returns recent incoming message ids and senders for read receipts.
     pub fn unread_incoming(&self, chat: &str, limit: u32) -> Result<Vec<(String, String)>> {
         let mut statement = self.connection.prepare(
             "SELECT id, sender FROM messages WHERE chat = ?1 AND from_me = 0

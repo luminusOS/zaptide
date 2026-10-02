@@ -5,7 +5,6 @@ impl Archive {
         self.put_media_path(chat, id, Some(path))
     }
 
-    /// Clears an attachment path so it can be downloaded again.
     pub fn clear_media_path(&self, chat: &str, id: &str) -> Result<Option<Message>> {
         self.put_media_path(chat, id, None)
     }
@@ -37,7 +36,6 @@ impl Archive {
         rows.collect()
     }
 
-    /// Returns downloaded stickers we sent for the picker, newest first.
     pub fn recent_stickers(&self, limit: usize) -> Result<Vec<ArchivedSticker>> {
         let mut statement = self.connection.prepare(
             "SELECT json_extract(content, '$.media.path') AS path, MAX(timestamp), raw
@@ -63,7 +61,6 @@ impl Archive {
             .collect())
     }
 
-    /// Returns undownloaded stickers we sent, newest first.
     pub fn stickers_without_file(&self, limit: usize) -> Result<Vec<(String, String)>> {
         let mut statement = self.connection.prepare(
             "SELECT chat, id FROM messages
@@ -99,7 +96,6 @@ impl Archive {
         Ok(())
     }
 
-    /// Returns recent phone stickers by latest use.
     pub fn phone_stickers(&self) -> Result<Vec<PhoneSticker>> {
         let mut statement = self.connection.prepare(
             "SELECT hash, raw, last_used, path FROM stickers
