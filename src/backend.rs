@@ -231,6 +231,7 @@ pub enum Command {
     /// Result of a private read-state update to the other linked devices.
     ReadSyncFinished {
         session_generation: u64,
+        attempt_id: u64,
         chat: ChatId,
         through: i64,
         success: bool,
@@ -260,8 +261,24 @@ pub enum Command {
     /// Internal result for a failed phone-history request.
     OlderFailed {
         session_generation: u64,
+        request_id: u64,
         chat: ChatId,
         error: String,
+    },
+    /// Correlates the phone's history response with the local fetch attempt.
+    OlderStarted {
+        session_generation: u64,
+        request_id: u64,
+        chat: ChatId,
+        protocol_id: String,
+    },
+    /// Completes one optimistic revoke attempt, unless the phone confirmed it first.
+    RevokeFinished {
+        session_generation: u64,
+        attempt_id: u64,
+        chat: ChatId,
+        message: String,
+        success: bool,
     },
     /// Internal group-metadata failure.
     GroupInfoFailed {
@@ -397,6 +414,8 @@ pub enum Command {
         chat: ChatId,
         id: String,
         session_generation: u64,
+        raw_fingerprint: [u8; 32],
+        destination: PathBuf,
         result: Result<PathBuf, String>,
     },
     /// Internal recent-sticker download result.

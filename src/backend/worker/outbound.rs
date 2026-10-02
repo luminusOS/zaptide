@@ -444,6 +444,14 @@ pub(super) fn media_path(
     dir.join(format!("{stem}.{extension}"))
 }
 
+/// Keep staging names short and independent for overlapping downloads, even
+/// when both attempts fetch the same message payload. Stay in the destination
+/// directory so promotion can use an atomic rename.
+pub(super) fn download_staging_path(dir: &Path) -> PathBuf {
+    let token = rand::random::<u128>();
+    dir.join(format!(".download-{token:032x}.tmp"))
+}
+
 impl Worker {
     pub(super) fn send_files(
         &mut self,

@@ -283,10 +283,12 @@ pub(super) fn show_new_chat_dialog(
         .build();
     add.add_prefix(&gtk::Image::from_icon_name("contact-new-symbolic"));
     add.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
-    let (close, window, contact_action) = (dialog.clone(), parent.clone(), on_action.clone());
+    let (close, window, contact_action) = (dialog.downgrade(), parent.clone(), on_action.clone());
     add.connect_activated(move |_| {
-        close.close();
-        show_new_contact_dialog(&window, &contact_action);
+        if let Some(close) = close.upgrade() {
+            close.close();
+            show_new_contact_dialog(&window, &contact_action);
+        }
     });
     actions.append(&add);
     content.append(&actions);
@@ -324,13 +326,15 @@ pub(super) fn show_new_chat_dialog(
         let digits: String = phone.chars().filter(char::is_ascii_digit).collect();
         rows.borrow_mut()
             .push((row.clone(), format!("{} {digits}", name.to_lowercase())));
-        let (close, on_action) = (dialog.clone(), on_action.clone());
+        let (close, on_action) = (dialog.downgrade(), on_action.clone());
         row.connect_activated(move |_| {
             on_action(DialogAction::StartChat {
                 id: id.clone(),
                 name: name.clone(),
             });
-            close.close();
+            if let Some(close) = close.upgrade() {
+                close.close();
+            }
         });
         list.append(&row);
     }
@@ -398,9 +402,13 @@ pub(super) fn show_new_contact_dialog(
     content.append(&buttons);
     dialog.set_child(Some(&content));
     dialog.set_default_widget(Some(&add));
-    let close = dialog.clone();
-    cancel.connect_clicked(move |_| close.close());
-    let close = dialog.clone();
+    let close = dialog.downgrade();
+    cancel.connect_clicked(move |_| {
+        if let Some(close) = close.upgrade() {
+            close.close();
+        }
+    });
+    let close = dialog.downgrade();
     let on_action = on_action.clone();
     let phone_input = phone.clone();
     add.connect_clicked(move |_| {
@@ -408,7 +416,9 @@ pub(super) fn show_new_contact_dialog(
             phone: phone_input.text().to_string(),
             name: Some(name.text().to_string()),
         });
-        close.close();
+        if let Some(close) = close.upgrade() {
+            close.close();
+        }
     });
     phone.connect_map(|entry| {
         entry.grab_focus();
@@ -538,6 +548,9 @@ pub(super) fn mention_row(name: &str, phone: Option<&str>) -> (adw::ActionRow, a
 
 /// Saved photo for a path, decoded once.
 pub(super) fn cached_texture(path: &std::path::Path) -> Option<gtk::gdk::Texture> {
+    if !avatar_texture_is_referenced(path) {
+        return None;
+    }
     AVATAR_TEXTURES.with_borrow_mut(|cache| {
         if !cache.contains_key(path) {
             cache.insert(
@@ -686,10 +699,12 @@ pub(super) fn show_forward_dialog(
         });
         list.append(&row);
     }
-    let (close, on_action) = (dialog.clone(), on_action.clone());
+    let (close, on_action) = (dialog.downgrade(), on_action.clone());
     send.connect_clicked(move |_| {
         on_action(DialogAction::ForwardSelected(picked.borrow().clone()));
-        close.close();
+        if let Some(close) = close.upgrade() {
+            close.close();
+        }
     });
     let filter_rows = rows.clone();
     search.connect_search_changed(move |entry| {
@@ -948,12 +963,13 @@ pub(super) fn sticker_picker_content(
             .margin_bottom(8)
             .valign(gtk::Align::Start)
             .build();
-        for path in &stickers {
+        for (index, path) in stickers.iter().enumerate() {
+            let accessible_name = format!("Sticker {}", index + 1);
             let button = gtk::Button::builder()
                 .css_classes(["flat", "zaptide-sticker"])
-                .tooltip_text("Send sticker")
+                .tooltip_text(&accessible_name)
                 .build();
-            button.update_property(&[gtk::accessible::Property::Label("Sticker")]);
+            button.update_property(&[gtk::accessible::Property::Label(&accessible_name)]);
             load_sticker_preview(&button, path, 72);
             animate_sticker_on_hover(&button, path);
             let path = path.clone();

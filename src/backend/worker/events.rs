@@ -297,8 +297,8 @@ impl Worker {
                 }
             }
             E::PictureUpdate(update) => {
-                self.avatar_generation_shared.fetch_add(1, Ordering::AcqRel);
                 let id = self.canonical(&update.jid);
+                self.invalidate_avatar_generations(&id);
                 {
                     let _cache_guard = self.session_cache_lock.lock().await;
                     let _ = std::fs::remove_file(self.avatar_file(&id, false));

@@ -555,9 +555,7 @@ impl Worker {
                 );
             }
             for revoked in chat.revoked {
-                let _ = self
-                    .archive
-                    .set_content(&id, &revoked, &Content::Revoked, false);
+                self.confirm_revoke(&id, &revoked);
             }
             if (metadata || existing.is_none())
                 && let Some(snapshot_unread) = chat.unread

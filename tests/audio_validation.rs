@@ -21,12 +21,21 @@
 //! | `flatpak_microphone_denial_*`                  | No            | Sandbox    | Yes     |
 //! | `flatpak_microphone_revocation_*`              | No            | Sandbox    | Yes     |
 
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use tempfile::NamedTempFile;
 
 use zaptide::audio::{Player, Recorder, State};
 use zaptide::voice;
+
+static AUDIO_DECODE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+fn decode_test_guard() -> MutexGuard<'static, ()> {
+    AUDIO_DECODE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 fn synthetic_tone(seconds: f32, frequency: f32, amplitude: f32) -> Vec<f32> {
     (0..(voice::RATE as f32 * seconds) as usize)
@@ -45,6 +54,7 @@ fn write_ogg_temp(samples: &[f32]) -> NamedTempFile {
 
 #[test]
 fn received_audio_without_sender_waveform_generates_bars_off_ui_thread() {
+    let _guard = decode_test_guard();
     let samples = synthetic_tone(0.5, 440.0, 0.4);
     let file = write_ogg_temp(&samples);
     let bars = std::thread::spawn(move || zaptide::audio::waveform_file(file.path()))
@@ -57,6 +67,7 @@ fn received_audio_without_sender_waveform_generates_bars_off_ui_thread() {
 
 #[test]
 fn ordinary_wav_attachment_generates_a_waveform() {
+    let _guard = decode_test_guard();
     let samples = synthetic_tone(0.25, 220.0, 0.4);
     let pcm: Vec<u8> = samples
         .iter()
@@ -103,6 +114,7 @@ fn poll_until_loaded(player: &mut Player, message: &str, timeout: Duration) -> R
 
 #[test]
 fn player_handles_missing_device_gracefully() {
+    let _guard = decode_test_guard();
     let file = write_ogg_temp(&synthetic_tone(0.5, 440.0, 0.3));
     let mut player = Player::default();
 
@@ -193,6 +205,7 @@ fn waveform_generation_is_64_bars() {
 
 #[test]
 fn player_respects_seek_within_bounds() {
+    let _guard = decode_test_guard();
     let file = write_ogg_temp(&synthetic_tone(2.0, 440.0, 0.3));
     let mut player = Player::default();
 
@@ -288,6 +301,7 @@ fn narrowest_audio_permissions_documented() {
 #[test]
 #[ignore = "requires ALSA output device; run with: cargo test --test audio_validation -- --ignored"]
 fn alsa_playback_reaches_completion_within_budget() {
+    let _guard = decode_test_guard();
     let file = write_ogg_temp(&synthetic_tone(1.0, 330.0, 0.3));
     let mut player = Player::default();
 

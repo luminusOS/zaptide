@@ -16,25 +16,31 @@ pub(super) const MAX_AUDIO_SAMPLES: usize =
 const SAMPLE_CAPACITY_CHUNK: usize = (4 * 1024 * 1024) / std::mem::size_of::<f32>();
 static ACTIVE_DECODE_JOBS: AtomicUsize = AtomicUsize::new(0);
 
-pub(super) struct DecodePermit;
+pub(super) struct DecodePermit {
+    active: &'static AtomicUsize,
+}
 
 impl DecodePermit {
     pub(super) fn acquire() -> Option<Self> {
-        try_acquire_decode_job(&ACTIVE_DECODE_JOBS, MAX_DECODE_JOBS).then_some(Self)
+        Self::acquire_from(&ACTIVE_DECODE_JOBS, MAX_DECODE_JOBS)
+    }
+
+    fn acquire_from(active: &'static AtomicUsize, limit: usize) -> Option<Self> {
+        try_acquire_decode_job(active, limit).then(|| Self { active })
     }
 }
 
 pub(super) fn try_acquire_decode_job(active: &AtomicUsize, limit: usize) -> bool {
     active
         .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
-            (count < limit).then_some(count + 1)
+            (count < limit).then(|| count + 1)
         })
         .is_ok()
 }
 
 impl Drop for DecodePermit {
     fn drop(&mut self) {
-        ACTIVE_DECODE_JOBS.fetch_sub(1, Ordering::AcqRel);
+        self.active.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
@@ -368,6 +374,18 @@ pub(super) fn collect_samples_with_limits<I: Iterator<Item = f32>>(
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
+
+    static TEST_ACTIVE_DECODE_JOBS: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn denied_decode_permit_does_not_release_unowned_slot() {
+        TEST_ACTIVE_DECODE_JOBS.store(1, Ordering::Release);
+
+        assert!(DecodePermit::acquire_from(&TEST_ACTIVE_DECODE_JOBS, 1).is_none());
+
+        assert_eq!(TEST_ACTIVE_DECODE_JOBS.load(Ordering::Acquire), 1);
+        TEST_ACTIVE_DECODE_JOBS.store(0, Ordering::Release);
+    }
 
     #[test]
     fn decode_completion_publishes_samples_and_waveform_together() {

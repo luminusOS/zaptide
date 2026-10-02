@@ -777,3 +777,233 @@ fn raw_bytes_survive_a_replay_without_them() {
         .expect("insert");
     assert_eq!(archive.raw(chat, "m1").expect("raw"), Some(vec![1, 2, 3]));
 }
+
+#[test]
+fn clear_removes_phone_sticker_metadata() {
+    let archive = Archive::in_memory().expect("opens");
+    archive
+        .mark_logout_cleanup_required()
+        .expect("marks cleanup required");
+    archive
+        .upsert_phone_sticker("phone-sticker", b"synthetic metadata", 100, 0.5)
+        .expect("stores phone sticker");
+
+    archive.clear().expect("clears account archive");
+
+    assert!(archive.phone_stickers().expect("lists stickers").is_empty());
+    assert!(archive.logout_cleanup_required().expect("reads marker"));
+    archive
+        .finish_logout_cleanup()
+        .expect("removes durable marker");
+    assert!(!archive.logout_cleanup_required().expect("reads marker"));
+}
+
+#[test]
+fn clear_rolls_back_all_rows_when_a_delete_fails() {
+    let archive = Archive::in_memory().expect("opens");
+    archive.ensure_chat("1@s.whatsapp.net", "A").expect("chat");
+    archive
+        .upsert_phone_sticker("phone-sticker", b"synthetic metadata", 100, 0.5)
+        .expect("stores phone sticker");
+    archive
+        .connection
+        .execute_batch(
+            "CREATE TRIGGER reject_sticker_clear BEFORE DELETE ON stickers
+             BEGIN SELECT RAISE(ABORT, 'synthetic delete failure'); END;",
+        )
+        .expect("installs fixture trigger");
+
+    assert!(archive.clear().is_err());
+    assert_eq!(archive.chats().expect("lists chats").len(), 1);
+    assert_eq!(archive.phone_stickers().expect("lists stickers").len(), 1);
+}
+
+#[test]
+fn failed_schema_upgrade_rolls_back_added_columns() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let path = directory.path().join("partial-schema.sqlite");
+    let connection = Connection::open(&path).expect("opens fixture");
+    connection
+        .execute_batch(
+            "CREATE TABLE messages (chat TEXT, id TEXT, timestamp INTEGER);
+             CREATE TABLE chats (id TEXT, name TEXT, kind TEXT, last_activity INTEGER);",
+        )
+        .expect("creates intentionally incomplete old schema");
+
+    assert!(Archive::prepare(connection).is_err());
+
+    let connection = Connection::open(path).expect("reopens unchanged database");
+    let columns = connection
+        .prepare("PRAGMA table_info(messages)")
+        .expect("reads schema")
+        .query_map([], |row| row.get::<_, String>(1))
+        .expect("lists columns")
+        .collect::<Result<Vec<_>>>()
+        .expect("collects columns");
+    assert!(!columns.iter().any(|column| column == "thumbnail"));
+}
+
+#[test]
+fn logout_cleanup_marker_survives_archive_reopen() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let path = directory.path().join("logout-marker.sqlite");
+    {
+        let archive = Archive::prepare(Connection::open(&path).expect("opens archive"))
+            .expect("prepares archive");
+        archive
+            .mark_logout_cleanup_required()
+            .expect("marks cleanup");
+        archive.clear().expect("clears archived rows");
+    }
+
+    let archive = Archive::prepare(Connection::open(&path).expect("reopens archive"))
+        .expect("prepares reopened archive");
+    assert!(archive.logout_cleanup_required().expect("reads marker"));
+    archive.finish_logout_cleanup().expect("finishes cleanup");
+    assert!(!archive.logout_cleanup_required().expect("reads marker"));
+}
+
+#[test]
+fn stale_history_replay_keeps_a_newer_edit() {
+    let archive = Archive::in_memory().expect("opens");
+    let chat = "1@s.whatsapp.net";
+    let original = message(chat, "edited", 100, true);
+    archive
+        .insert_message(&original, Some(b"same protocol message"))
+        .expect("inserts original");
+    archive
+        .set_edited_text(chat, "edited", &Content::text("newer edit"), &[])
+        .expect("edits text");
+
+    archive
+        .insert_message(&original, Some(b"same protocol message"))
+        .expect("replays older history");
+
+    let stored = archive
+        .message(chat, "edited")
+        .expect("reads")
+        .expect("message exists");
+    assert!(stored.edited);
+    assert_eq!(stored.content, Content::text("newer edit"));
+
+    archive
+        .insert_message(&original, Some(b"different authoritative payload"))
+        .expect("accepts different message payload");
+    let stored = archive
+        .message(chat, "edited")
+        .expect("reads")
+        .expect("message exists");
+    assert!(!stored.edited);
+    assert_eq!(stored.content, original.content);
+}
+
+#[test]
+fn stale_history_replay_keeps_edited_mention_additions_replacements_and_removals() {
+    let mention = |user: &str| crate::model::MentionRef {
+        user: user.into(),
+        id: format!("{user}@s.whatsapp.net"),
+        name: None,
+    };
+    for (old, new) in [
+        (Vec::new(), vec![mention("15550001111")]),
+        (vec![mention("15550001111")], vec![mention("15550002222")]),
+        (vec![mention("15550001111")], Vec::new()),
+    ] {
+        let archive = Archive::in_memory().unwrap();
+        let chat = "fixture@s.whatsapp.net";
+        let mut original = message(chat, "edited", 100, true);
+        original.mentions = old;
+        archive
+            .insert_message(&original, Some(b"original raw"))
+            .unwrap();
+        let content = Content::text("edited mention text");
+        archive
+            .set_edited_text(chat, "edited", &content, &new)
+            .unwrap();
+
+        archive
+            .insert_message(&original, Some(b"original raw"))
+            .unwrap();
+        let stored = archive.message(chat, "edited").unwrap().unwrap();
+        assert!(stored.edited);
+        assert_eq!(stored.content, content);
+        assert_eq!(stored.mentions, new);
+
+        archive
+            .insert_message(&original, Some(b"different authoritative raw"))
+            .unwrap();
+        let stored = archive.message(chat, "edited").unwrap().unwrap();
+        assert!(!stored.edited);
+        assert_eq!(stored.mentions, original.mentions);
+    }
+}
+
+#[test]
+fn history_replay_preserves_revocation_and_matching_download_path() {
+    let archive = Archive::in_memory().expect("opens");
+    let chat = "1@s.whatsapp.net";
+
+    let revoked = message(chat, "revoked", 100, false);
+    archive
+        .insert_message(&revoked, Some(b"revoked raw"))
+        .expect("inserts message");
+    archive
+        .set_content(chat, "revoked", &Content::Revoked, false)
+        .expect("revokes message");
+    archive
+        .insert_message(&revoked, Some(b"revoked raw"))
+        .expect("replays revoked message");
+    assert_eq!(
+        archive
+            .message(chat, "revoked")
+            .expect("reads")
+            .unwrap()
+            .content,
+        Content::Revoked
+    );
+
+    let mut picture = message(chat, "picture", 200, false);
+    picture.content = Content::Image {
+        caption: Some("caption".into()),
+        media: crate::model::Media {
+            mime: "image/jpeg".into(),
+            size: 12,
+            width: Some(2),
+            height: Some(2),
+            path: None,
+            state: Default::default(),
+        },
+    };
+    archive
+        .insert_message(&picture, Some(b"same image raw"))
+        .expect("inserts image");
+    archive
+        .set_media_path(chat, "picture", Path::new("/synthetic/image.jpg"))
+        .expect("sets downloaded path");
+    archive
+        .insert_message(&picture, Some(b"same image raw"))
+        .expect("replays same image");
+    let stored = archive
+        .message(chat, "picture")
+        .expect("reads")
+        .expect("image exists");
+    assert_eq!(
+        stored
+            .content
+            .media()
+            .and_then(|media| media.path.as_deref()),
+        Some(Path::new("/synthetic/image.jpg"))
+    );
+
+    archive
+        .insert_message(&picture, Some(b"different image raw"))
+        .expect("stores a different attachment payload");
+    let stored = archive
+        .message(chat, "picture")
+        .expect("reads")
+        .expect("image exists");
+    assert_eq!(
+        stored.content.media().and_then(|media| media.path.clone()),
+        None
+    );
+}

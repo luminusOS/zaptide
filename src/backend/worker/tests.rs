@@ -16,11 +16,11 @@ fn fallback_names_read_as_phones_or_ids() {
 fn media_paths_keep_document_names_and_map_mimes() {
     let dir = Path::new("/cache");
     assert_eq!(
-        media_path(dir, "1@s.whatsapp.net", "ABC", "image/jpeg", None),
+        outbound::media_path(dir, "1@s.whatsapp.net", "ABC", "image/jpeg", None),
         PathBuf::from("/cache/1_s_whatsapp_net-ABC.jpg")
     );
     assert_eq!(
-        media_path(
+        outbound::media_path(
             dir,
             "1@s.whatsapp.net",
             "ABC",
@@ -846,6 +846,62 @@ fn version_three_archive_rederives_unsupported_buttons() {
 }
 
 #[test]
+fn backfill_does_not_advance_checkpoint_when_a_row_write_fails() {
+    use whatsapp_rust::prelude::MessageField;
+    const PEER: &str = "fixture@s.whatsapp.net";
+    let (mut worker, _, _, _) = worker();
+    worker.archive.ensure_chat(PEER, "Fixture").unwrap();
+    let raw = wa::Message {
+        buttons_message: MessageField::some(wa::message::ButtonsMessage {
+            content_text: Some("Pick".into()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let mut row = crate::archive::tests::message(PEER, "OLD", 10, false);
+    row.content = Content::Unsupported {
+        what: "interactive message".into(),
+    };
+    worker
+        .archive
+        .insert_message(&row, Some(&raw.encode_to_vec()))
+        .unwrap();
+    worker.archive.set_meta("derived", "3").unwrap();
+    worker
+        .archive
+        .execute_batch_for_test(
+            "CREATE TRIGGER reject_derived_update BEFORE UPDATE ON messages
+             BEGIN SELECT RAISE(ABORT, 'synthetic update failure'); END;",
+        )
+        .unwrap();
+
+    worker.backfill();
+    assert_eq!(
+        worker.archive.meta("derived").unwrap().as_deref(),
+        Some("3")
+    );
+
+    worker
+        .archive
+        .execute_batch_for_test("DROP TRIGGER reject_derived_update;")
+        .unwrap();
+    worker.backfill();
+    assert_eq!(
+        worker.archive.meta("derived").unwrap().as_deref(),
+        Some("5")
+    );
+    assert!(matches!(
+        worker
+            .archive
+            .message(PEER, "OLD")
+            .unwrap()
+            .unwrap()
+            .content,
+        Content::Buttons { .. }
+    ));
+}
+
+#[test]
 fn mentions_missing_from_the_message_are_recovered_for_known_people_only() {
     let (mut worker, _, _, _) = worker();
     worker
@@ -1285,7 +1341,7 @@ pub(in crate::backend::worker) fn worker() -> (
         session_generation: 0,
         session_generation_shared: Arc::new(AtomicU64::new(0)),
         forward_tails: HashMap::new(),
-        avatar_generation_shared: Arc::new(AtomicU64::new(0)),
+        avatar_generations: HashMap::new(),
         session_cache_lock: Arc::new(tokio::sync::Mutex::new(())),
         pairing_phone: None,
         pair_code: None,
@@ -1300,18 +1356,772 @@ pub(in crate::backend::worker) fn worker() -> (
         group_info_retry: Vec::new(),
         presence_subscribed: HashSet::new(),
         pending_older: HashMap::new(),
+        next_older_request_id: 0,
         older_warned: HashSet::new(),
         pending_avatars: HashMap::new(),
         sticker_fetches: HashSet::new(),
         sticker_downloads: HashSet::new(),
+        deferred_downloads: Vec::new(),
         next_attachment_batch: 0,
         read_sync: ReadSync::default(),
         poll_decrypting: 0,
         poll_history: Default::default(),
         answer_sends: HashMap::new(),
+        pending_revokes: HashMap::new(),
+        next_revoke_attempt: 0,
         poll_sending: HashSet::new(),
     };
     (worker, events_rx, inbox, test_wa_events)
+}
+
+#[tokio::test]
+async fn older_failure_from_expired_attempt_does_not_finish_newer_request() {
+    let (mut worker, events, _inbox, _wa) = worker();
+    let chat = "1@s.whatsapp.net".to_owned();
+    let older_attempt = 40;
+    let newer_attempt = 41;
+    worker.pending_older.insert(
+        chat.clone(),
+        PendingOlder {
+            request_id: newer_attempt,
+            asked: Instant::now(),
+            before: (200, "new-boundary".to_owned()),
+            protocol_id: Some("new-protocol-id".to_owned()),
+            received_count: 0,
+            more_on_phone: None,
+            early_responses: HashMap::new(),
+        },
+    );
+
+    worker
+        .handle_command(Command::OlderFailed {
+            session_generation: worker.session_generation,
+            request_id: older_attempt,
+            chat: chat.clone(),
+            error: "synthetic stale failure".to_owned(),
+        })
+        .await;
+
+    assert_eq!(
+        worker
+            .pending_older
+            .get(&chat)
+            .map(|request| request.request_id),
+        Some(newer_attempt)
+    );
+    assert!(events.try_recv().is_err());
+}
+
+#[test]
+fn late_history_response_id_does_not_finish_newer_same_chat_request() {
+    let (mut worker, events, _inbox, _wa) = worker();
+    let chat = "1@s.whatsapp.net".to_owned();
+    worker.pending_older.insert(
+        chat.clone(),
+        PendingOlder {
+            request_id: 41,
+            asked: Instant::now(),
+            before: (200, "new-boundary".to_owned()),
+            protocol_id: Some("new-protocol-id".to_owned()),
+            received_count: 0,
+            more_on_phone: None,
+            early_responses: HashMap::new(),
+        },
+    );
+
+    worker.answer_older(
+        vec![(chat.clone(), 5, Some(false))],
+        Some("late-old-protocol-id".to_owned()),
+    );
+
+    assert_eq!(
+        worker
+            .pending_older
+            .get(&chat)
+            .map(|request| request.request_id),
+        Some(41)
+    );
+    assert!(events.try_recv().is_err());
+}
+
+#[test]
+fn history_response_before_send_completion_is_correlated_later() {
+    let (mut worker, events, _inbox, _wa) = worker();
+    let chat = "1@s.whatsapp.net".to_owned();
+    worker.pending_older.insert(
+        chat.clone(),
+        PendingOlder {
+            request_id: 42,
+            asked: Instant::now(),
+            before: (200, "boundary".to_owned()),
+            protocol_id: None,
+            received_count: 0,
+            more_on_phone: None,
+            early_responses: HashMap::new(),
+        },
+    );
+
+    worker.answer_older(
+        vec![(chat.clone(), 3, None)],
+        Some("matching-protocol-id".to_owned()),
+    );
+    worker.answer_older(
+        vec![(chat.clone(), 2, Some(false))],
+        Some("matching-protocol-id".to_owned()),
+    );
+    assert!(worker.pending_older.contains_key(&chat));
+    assert!(events.try_recv().is_err());
+
+    worker.older_request_started(chat.clone(), 42, "matching-protocol-id".to_owned());
+
+    assert!(!worker.pending_older.contains_key(&chat));
+    assert!(matches!(
+        events.try_recv(),
+        Ok(Event::Messages { older: true, .. })
+    ));
+    assert!(matches!(events.try_recv(), Ok(Event::OlderFetched { .. })));
+}
+
+#[test]
+fn multi_chunk_history_waits_for_transfer_completion_before_finishing_request() {
+    let (mut worker, events, _inbox, _wa) = worker();
+    let chat = "1@s.whatsapp.net".to_owned();
+    worker.pending_older.insert(
+        chat.clone(),
+        PendingOlder {
+            request_id: 43,
+            asked: Instant::now(),
+            before: (200, "boundary".to_owned()),
+            protocol_id: Some("multi-chunk-request".to_owned()),
+            received_count: 0,
+            more_on_phone: None,
+            early_responses: HashMap::new(),
+        },
+    );
+
+    worker.answer_older(
+        vec![(chat.clone(), 20, None)],
+        Some("multi-chunk-request".to_owned()),
+    );
+    assert_eq!(
+        worker
+            .pending_older
+            .get(&chat)
+            .map(|request| request.received_count),
+        Some(20)
+    );
+    assert!(events.try_recv().is_err());
+
+    worker.answer_older(
+        vec![(chat.clone(), 30, Some(true))],
+        Some("multi-chunk-request".to_owned()),
+    );
+    assert!(!worker.pending_older.contains_key(&chat));
+    assert!(matches!(
+        events.try_recv(),
+        Ok(Event::Messages { older: true, .. })
+    ));
+    assert!(matches!(
+        events.try_recv(),
+        Ok(Event::OlderFetched { more: true, .. })
+    ));
+}
+
+#[tokio::test]
+async fn failed_revoke_restores_the_optimistically_hidden_message() {
+    let (mut worker, events, _inbox, _wa) = worker();
+    let chat = "1@s.whatsapp.net";
+    let original = crate::archive::tests::message(chat, "message", 100, true);
+    worker.archive.ensure_chat(chat, "A").unwrap();
+    worker.archive.insert_message(&original, None).unwrap();
+    let attempt_id = worker.begin_revoke(chat, "message").unwrap().unwrap();
+    // Ignore the optimistic projection; inspect the completion's update below.
+    while events.try_recv().is_ok() {}
+
+    worker
+        .handle_command(Command::RevokeFinished {
+            session_generation: worker.session_generation,
+            attempt_id,
+            chat: chat.to_owned(),
+            message: "message".to_owned(),
+            success: false,
+        })
+        .await;
+
+    let restored = worker
+        .archive
+        .message(chat, "message")
+        .unwrap()
+        .expect("message exists");
+    assert_eq!(restored.content, original.content);
+    assert!(matches!(events.try_recv(), Ok(Event::MessageUpdated(_))));
+}
+
+#[tokio::test]
+async fn confirmed_revoke_cannot_be_undone_by_failed_request() {
+    use whatsapp_rust::prelude::MessageField;
+    for from_history in [false, true] {
+        let (mut worker, _events, _inbox, _wa) = worker();
+        let chat = "fixture@s.whatsapp.net";
+        let original = crate::archive::tests::message(chat, "message", 100, true);
+        worker.archive.ensure_chat(chat, "Fixture").unwrap();
+        worker.archive.insert_message(&original, None).unwrap();
+        let attempt_id = worker.begin_revoke(chat, "message").unwrap().unwrap();
+
+        if from_history {
+            let mut conversation = parse_conversation(wa::Conversation {
+                id: chat.into(),
+                ..Default::default()
+            });
+            conversation.revoked.push("message".into());
+            worker.apply_history(
+                ParsedHistory {
+                    chats: vec![conversation],
+                    push_names: Vec::new(),
+                    lids: Vec::new(),
+                    stickers: Vec::new(),
+                },
+                false,
+            );
+        } else {
+            let confirmation = wa::Message {
+                protocol_message: MessageField::some(wa::message::ProtocolMessage {
+                    r#type: Some(wa::message::protocol_message::Type::REVOKE),
+                    key: MessageField::some(wa::MessageKey {
+                        id: Some("message".into()),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let info = MessageInfo {
+                source: MessageSource {
+                    chat: chat.parse().unwrap(),
+                    sender: chat.parse().unwrap(),
+                    is_from_me: true,
+                    ..Default::default()
+                },
+                timestamp: whatsapp_rust::wacore::time::from_secs(200).unwrap(),
+                ..Default::default()
+            };
+            worker.ingest(&Arc::new(confirmation), &info);
+        }
+
+        assert!(
+            worker.pending_revokes.is_empty(),
+            "confirmation invalidates rollback"
+        );
+        worker
+            .handle_command(Command::RevokeFinished {
+                session_generation: worker.session_generation,
+                attempt_id,
+                chat: chat.into(),
+                message: "message".into(),
+                success: false,
+            })
+            .await;
+        let stored = worker.archive.message(chat, "message").unwrap().unwrap();
+        assert_eq!(stored.content, Content::Revoked, "history={from_history}");
+    }
+}
+
+#[tokio::test]
+async fn revoke_completion_is_scoped_to_its_attempt_and_session() {
+    let (mut worker, events, _inbox, _wa) = worker();
+    let chat = "fixture@s.whatsapp.net";
+    let original = crate::archive::tests::message(chat, "message", 100, true);
+    worker.archive.ensure_chat(chat, "Fixture").unwrap();
+    worker.archive.insert_message(&original, None).unwrap();
+    let first = worker.begin_revoke(chat, "message").unwrap().unwrap();
+    assert!(worker.begin_revoke(chat, "message").unwrap().is_none());
+    worker
+        .handle_command(Command::RevokeFinished {
+            session_generation: worker.session_generation,
+            attempt_id: first,
+            chat: chat.into(),
+            message: "message".into(),
+            success: false,
+        })
+        .await;
+    let retry = worker.begin_revoke(chat, "message").unwrap().unwrap();
+    assert_ne!(first, retry);
+    while events.try_recv().is_ok() {}
+
+    for (session_generation, attempt_id) in [(worker.session_generation, first), (1, retry)] {
+        worker
+            .handle_command(Command::RevokeFinished {
+                session_generation,
+                attempt_id,
+                chat: chat.into(),
+                message: "message".into(),
+                success: false,
+            })
+            .await;
+        assert!(events.try_recv().is_err());
+        assert_eq!(
+            worker
+                .archive
+                .message(chat, "message")
+                .unwrap()
+                .unwrap()
+                .content,
+            Content::Revoked
+        );
+        assert_eq!(worker.pending_revokes.len(), 1);
+    }
+
+    worker
+        .handle_command(Command::RevokeFinished {
+            session_generation: worker.session_generation,
+            attempt_id: retry,
+            chat: chat.into(),
+            message: "message".into(),
+            success: true,
+        })
+        .await;
+    assert!(worker.pending_revokes.is_empty());
+    assert!(events.try_recv().is_err());
+    assert_eq!(
+        worker
+            .archive
+            .message(chat, "message")
+            .unwrap()
+            .unwrap()
+            .content,
+        Content::Revoked
+    );
+}
+
+#[tokio::test]
+async fn downloaded_document_with_long_name_can_be_staged_and_saved() {
+    let directory = tempfile::tempdir().unwrap();
+    let chat = "1@s.whatsapp.net";
+    let id = "A".repeat(32);
+    let name = format!("{}.pdf", "x".repeat(160));
+    let destination = media_path(directory.path(), chat, &id, "application/pdf", Some(&name));
+    let staged = download_staging_path(directory.path());
+    let generation = AtomicU64::new(0);
+    let cache_lock = tokio::sync::Mutex::new(());
+    let bytes = b"synthetic document bytes";
+
+    write_session_cache_file(
+        directory.path(),
+        &staged,
+        bytes,
+        0,
+        &generation,
+        None,
+        &cache_lock,
+    )
+    .await
+    .expect("a valid document name must not prevent staging");
+    std::fs::rename(&staged, &destination).expect("saves the original document name");
+
+    assert_eq!(std::fs::read(&destination).unwrap(), bytes);
+    assert!(!staged.exists());
+}
+
+#[tokio::test]
+async fn simultaneous_download_completions_for_same_attachment_both_succeed() {
+    let (mut worker, events, _inbox, _wa) = worker();
+    let directory = tempfile::tempdir().unwrap();
+    let chat = "1@s.whatsapp.net";
+    let id = "message";
+    let raw = b"synthetic image raw";
+    let mut message = crate::archive::tests::message(chat, id, 100, false);
+    message.content = Content::Image {
+        caption: None,
+        media: crate::model::Media {
+            mime: "image/jpeg".into(),
+            size: 10,
+            width: Some(2),
+            height: Some(2),
+            path: None,
+            state: Default::default(),
+        },
+    };
+    worker.archive.ensure_chat(chat, "A").unwrap();
+    worker.archive.insert_message(&message, Some(raw)).unwrap();
+    let fingerprint = message_raw_fingerprint(raw);
+    let destination = media_path(directory.path(), chat, id, "image/jpeg", None);
+    let staged = std::array::from_fn::<_, 2, _>(|_| download_staging_path(directory.path()));
+    // Both writes finish before the worker processes either completion.
+    for path in &staged {
+        std::fs::write(path, b"synthetic image bytes").unwrap();
+    }
+    for path in &staged {
+        worker
+            .handle_command(Command::Downloaded {
+                chat: chat.to_owned(),
+                id: id.to_owned(),
+                session_generation: worker.session_generation,
+                raw_fingerprint: fingerprint,
+                destination: destination.clone(),
+                result: Ok(path.clone()),
+            })
+            .await;
+        assert!(matches!(
+            events.try_recv(),
+            Ok(Event::Media { result: Ok(path), .. }) if path == destination
+        ));
+    }
+
+    assert_eq!(
+        std::fs::read(&destination).unwrap(),
+        b"synthetic image bytes"
+    );
+    assert!(staged.iter().all(|path| !path.exists()));
+    let stored = worker.archive.message(chat, id).unwrap().unwrap();
+    assert_eq!(
+        stored.content.media().unwrap().path.as_ref(),
+        Some(&destination)
+    );
+}
+
+#[tokio::test]
+async fn archive_read_failure_preserves_download_until_revalidation() {
+    for resolution in ["retry", "replacement", "shutdown", "logout"] {
+        let (mut worker, events, _inbox, _wa) = worker();
+        let directory = tempfile::tempdir().unwrap();
+        worker.dirs = AppDirs::under(directory.path());
+        let chat = "fixture@s.whatsapp.net";
+        let id = "sticker";
+        let raw = b"current sticker raw";
+        let fingerprint = message_raw_fingerprint(raw);
+        let key = (chat.to_owned(), id.to_owned(), fingerprint);
+        let mut message = crate::archive::tests::message(chat, id, 100, true);
+        message.content = Content::Sticker {
+            media: crate::model::Media {
+                mime: "image/webp".into(),
+                size: 10,
+                width: Some(2),
+                height: Some(2),
+                path: None,
+                state: Default::default(),
+            },
+            animated: false,
+        };
+        worker.archive.ensure_chat(chat, "Fixture").unwrap();
+        worker.archive.insert_message(&message, Some(raw)).unwrap();
+        worker.sticker_downloads.insert(key.clone());
+        let staged = download_staging_path(directory.path());
+        let destination = directory.path().join("current.webp");
+        std::fs::write(&staged, b"current sticker bytes").unwrap();
+        worker.archive.execute_batch_for_test(
+            "ALTER TABLE messages RENAME TO messages_fixture;
+             CREATE VIEW messages AS SELECT chat, id, json_extract('invalid-json', '$') AS raw FROM messages_fixture;"
+        ).unwrap();
+        assert!(worker.archive.raw(chat, id).is_err());
+
+        worker
+            .handle_command(Command::Downloaded {
+                chat: chat.into(),
+                id: id.into(),
+                session_generation: worker.session_generation,
+                raw_fingerprint: fingerprint,
+                destination: destination.clone(),
+                result: Ok(staged.clone()),
+            })
+            .await;
+
+        assert!(staged.exists(), "read errors must not discard valid bytes");
+        assert!(worker.sticker_downloads.contains(&key));
+        assert!(events.try_recv().is_err());
+        assert_eq!(worker.deferred_downloads.len(), 1);
+        // Early ticks must not consume the completion. A repeated read error
+        // keeps the same bytes and exactly one pending validation.
+        worker.retry_deferred_downloads(Instant::now()).await;
+        assert_eq!(worker.deferred_downloads.len(), 1);
+        worker
+            .retry_deferred_downloads(Instant::now() + DOWNLOAD_VALIDATION_RETRY)
+            .await;
+        assert!(staged.exists());
+        assert!(worker.sticker_downloads.contains(&key));
+        assert_eq!(worker.deferred_downloads.len(), 1);
+        assert!(events.try_recv().is_err());
+        worker
+            .archive
+            .execute_batch_for_test(
+                "DROP VIEW messages; ALTER TABLE messages_fixture RENAME TO messages;",
+            )
+            .unwrap();
+
+        if resolution == "shutdown" {
+            drop(worker);
+            assert!(
+                !staged.exists(),
+                "shutdown must clean deferred temporary files"
+            );
+            continue;
+        }
+        if resolution == "logout" {
+            // Stop before reconnecting; this fixture must never start a bot.
+            worker
+                .archive
+                .execute_batch_for_test(
+                    "CREATE TRIGGER reject_logout_clear BEFORE DELETE ON messages
+                 BEGIN SELECT RAISE(ABORT, 'synthetic clear failure'); END;",
+                )
+                .unwrap();
+            worker.on_logged_out().await;
+            assert!(
+                !staged.exists(),
+                "logout must clean deferred temporary files"
+            );
+            assert!(worker.deferred_downloads.is_empty());
+            continue;
+        }
+
+        let replacement_key = (
+            chat.to_owned(),
+            id.to_owned(),
+            message_raw_fingerprint(b"replacement raw"),
+        );
+        if resolution == "replacement" {
+            worker
+                .archive
+                .insert_message(&message, Some(b"replacement raw"))
+                .unwrap();
+            worker.sticker_downloads.insert(replacement_key.clone());
+        }
+        worker
+            .retry_deferred_downloads(Instant::now() + DOWNLOAD_VALIDATION_RETRY)
+            .await;
+
+        assert!(!staged.exists());
+        assert!(worker.deferred_downloads.is_empty());
+        assert!(!worker.sticker_downloads.contains(&key));
+        if resolution == "replacement" {
+            assert!(!destination.exists());
+            assert!(worker.sticker_downloads.contains(&replacement_key));
+            assert!(events.try_recv().is_err());
+        } else {
+            assert!(
+                matches!(events.try_recv(), Ok(Event::Media { result: Ok(path), .. }) if path == destination)
+            );
+            assert!(
+                matches!(events.try_recv(), Ok(Event::Stickers { recent, .. }) if recent.contains(&destination))
+            );
+            assert_eq!(
+                std::fs::read(&destination).unwrap(),
+                b"current sticker bytes"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn stale_download_cannot_attach_file_to_replaced_message() {
+    let (mut worker, events, _inbox, _wa) = worker();
+    let directory = tempfile::tempdir().unwrap();
+    let staged = download_staging_path(directory.path());
+    let destination = directory.path().join("current-media.jpg");
+    std::fs::write(&staged, b"obsolete image bytes").unwrap();
+    let chat = "1@s.whatsapp.net";
+    let mut message = crate::archive::tests::message(chat, "message", 100, false);
+    message.content = Content::Image {
+        caption: None,
+        media: crate::model::Media {
+            mime: "image/jpeg".into(),
+            size: 10,
+            width: Some(2),
+            height: Some(2),
+            path: None,
+            state: Default::default(),
+        },
+    };
+    worker.archive.ensure_chat(chat, "A").unwrap();
+    worker
+        .archive
+        .insert_message(&message, Some(b"replacement raw"))
+        .unwrap();
+
+    worker
+        .handle_command(Command::Downloaded {
+            chat: chat.to_owned(),
+            id: "message".to_owned(),
+            session_generation: worker.session_generation,
+            raw_fingerprint: message_raw_fingerprint(b"original raw"),
+            destination: destination.clone(),
+            result: Ok(staged.clone()),
+        })
+        .await;
+
+    let stored = worker
+        .archive
+        .message(chat, "message")
+        .unwrap()
+        .expect("message exists");
+    assert_eq!(
+        stored.content.media().and_then(|media| media.path.clone()),
+        None
+    );
+    assert!(!staged.exists());
+    assert!(!destination.exists());
+    assert!(events.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn stale_download_does_not_release_replacement_picker_request() {
+    for (stale_success, current_success) in
+        [(false, false), (false, true), (true, false), (true, true)]
+    {
+        let (mut worker, events, _inbox, _wa) = worker();
+        let directory = tempfile::tempdir().unwrap();
+        let chat = "fixture@s.whatsapp.net";
+        let id = "sticker";
+        let raw = b"replacement sticker raw";
+        let current_fingerprint = message_raw_fingerprint(raw);
+        let old_fingerprint = message_raw_fingerprint(b"obsolete sticker raw");
+        let mut replacement = crate::archive::tests::message(chat, id, 100, true);
+        replacement.content = Content::Sticker {
+            media: crate::model::Media {
+                mime: "image/webp".into(),
+                size: 10,
+                width: Some(2),
+                height: Some(2),
+                path: None,
+                state: Default::default(),
+            },
+            animated: false,
+        };
+        worker.archive.ensure_chat(chat, "Fixture").unwrap();
+        worker
+            .archive
+            .insert_message(&replacement, Some(raw))
+            .unwrap();
+        let current_key = (chat.to_owned(), id.to_owned(), current_fingerprint);
+        let old_key = (chat.to_owned(), id.to_owned(), old_fingerprint);
+        worker.sticker_downloads.insert(current_key.clone());
+        worker.sticker_downloads.insert(old_key.clone());
+        let destination = directory.path().join("current.webp");
+        let old_staged = download_staging_path(directory.path());
+        let old_result = if stale_success {
+            std::fs::write(&old_staged, b"obsolete sticker bytes").unwrap();
+            Ok(old_staged.clone())
+        } else {
+            Err("obsolete download failure".to_owned())
+        };
+
+        worker
+            .handle_command(Command::Downloaded {
+                chat: chat.into(),
+                id: id.into(),
+                session_generation: worker.session_generation,
+                raw_fingerprint: old_fingerprint,
+                destination: destination.clone(),
+                result: old_result,
+            })
+            .await;
+
+        assert!(
+            events.try_recv().is_err(),
+            "obsolete results must not reach the replacement"
+        );
+        assert!(worker.sticker_downloads.contains(&current_key));
+        assert!(!worker.sticker_downloads.contains(&old_key));
+        assert!(!old_staged.exists());
+        assert!(!destination.exists());
+
+        let current_staged = download_staging_path(directory.path());
+        let current_result = if current_success {
+            std::fs::write(&current_staged, b"current sticker bytes").unwrap();
+            Ok(current_staged.clone())
+        } else {
+            Err("current download failure".to_owned())
+        };
+        worker
+            .handle_command(Command::Downloaded {
+                chat: chat.into(),
+                id: id.into(),
+                session_generation: worker.session_generation,
+                raw_fingerprint: current_fingerprint,
+                destination: destination.clone(),
+                result: current_result,
+            })
+            .await;
+
+        if current_success {
+            assert!(
+                matches!(events.try_recv(), Ok(Event::Media { result: Ok(path), .. }) if path == destination)
+            );
+            assert_eq!(
+                std::fs::read(&destination).unwrap(),
+                b"current sticker bytes"
+            );
+        } else {
+            assert!(
+                matches!(events.try_recv(), Ok(Event::Media { result: Err(error), .. }) if error == "current download failure")
+            );
+            assert!(!destination.exists());
+        }
+        assert!(
+            matches!(events.try_recv(), Ok(Event::Stickers { recent, .. }) if recent.contains(&destination) == current_success)
+        );
+        assert!(!worker.sticker_downloads.contains(&current_key));
+        assert!(!current_staged.exists());
+    }
+}
+
+#[tokio::test]
+async fn stalled_read_sync_future_times_out() {
+    let outcome = bounded_read_sync(
+        Duration::from_millis(1),
+        std::future::pending::<std::result::Result<(), ()>>(),
+    )
+    .await;
+
+    assert_eq!(outcome, ReadSyncOutcome::TimedOut);
+}
+
+#[tokio::test]
+async fn stalled_bot_shutdown_fails_closed_before_logout_cleanup() {
+    assert!(!wait_for_shutdown(Duration::from_millis(1), std::future::pending::<()>(),).await);
+    assert!(wait_for_shutdown(Duration::from_secs(1), async {}).await);
+}
+
+#[test]
+fn picture_update_invalidates_only_that_contacts_avatar_requests() {
+    let (mut worker, _, _, _) = worker();
+    let first = worker.avatar_generation("first@s.whatsapp.net", false);
+    let other = worker.avatar_generation("other@s.whatsapp.net", false);
+    let first_before = first.load(Ordering::Acquire);
+    let other_before = other.load(Ordering::Acquire);
+
+    worker.invalidate_avatar_generations("first@s.whatsapp.net");
+
+    assert_eq!(first.load(Ordering::Acquire), first_before + 1);
+    assert_eq!(other.load(Ordering::Acquire), other_before);
+}
+
+#[test]
+fn logout_clears_history_sync_deadlines_requests_and_warnings() {
+    let (mut worker, events, _inbox, _wa) = worker();
+    let chat = "1@s.whatsapp.net".to_owned();
+    worker.syncing = true;
+    worker.sync_deadline = Some(Instant::now());
+    worker.pending_older.insert(
+        chat.clone(),
+        PendingOlder {
+            request_id: 1,
+            asked: Instant::now(),
+            before: (100, "boundary".to_owned()),
+            protocol_id: None,
+            received_count: 0,
+            more_on_phone: None,
+            early_responses: HashMap::new(),
+        },
+    );
+    worker.older_warned.insert(chat);
+
+    worker.clear_history_sync_state();
+
+    assert!(!worker.syncing);
+    assert!(worker.sync_deadline.is_none());
+    assert!(worker.pending_older.is_empty());
+    assert!(worker.older_warned.is_empty());
+    assert!(matches!(events.try_recv(), Ok(Event::Syncing(false))));
 }
 
 pub(super) mod receipt_tests {
@@ -2270,10 +3080,11 @@ pub(super) mod receipt_tests {
         worker.store_message(incoming("a", 100), None, None);
         worker.mark_read(PEER.into(), false);
         let now = Instant::now();
-        assert!(worker.read_sync.start(PEER, 100, now));
+        let first_attempt = worker.read_sync.start(PEER, 100, now).unwrap();
         worker
             .handle_command(Command::ReadSyncFinished {
                 session_generation: worker.session_generation,
+                attempt_id: first_attempt,
                 chat: PEER.into(),
                 through: 100,
                 success: false,
@@ -2284,18 +3095,23 @@ pub(super) mod receipt_tests {
             vec![(PEER.into(), 100)]
         );
         assert!(!worker.read_sync.ready(Instant::now()));
-        assert!(!worker.read_sync.start("another-chat", 200, Instant::now()));
-        // A new local read stays queued while the shared collection backs off.
-        worker.store_message(incoming("b", 200), None, None);
-        worker.mark_read(PEER.into(), false);
         assert!(
             worker
                 .read_sync
-                .start(PEER, 100, now + Duration::from_secs(31))
+                .start("another-chat", 200, Instant::now())
+                .is_none()
         );
+        // A new local read stays queued while the shared collection backs off.
+        worker.store_message(incoming("b", 200), None, None);
+        worker.mark_read(PEER.into(), false);
+        let retry_attempt = worker
+            .read_sync
+            .start(PEER, 100, now + Duration::from_secs(31))
+            .unwrap();
         worker
             .handle_command(Command::ReadSyncFinished {
                 session_generation: worker.session_generation,
+                attempt_id: retry_attempt,
                 chat: PEER.into(),
                 through: 100,
                 success: true,
@@ -2305,10 +3121,11 @@ pub(super) mod receipt_tests {
             worker.archive.pending_reads().unwrap(),
             vec![(PEER.into(), 200)]
         );
-        assert!(worker.read_sync.start(PEER, 200, Instant::now()));
+        let final_attempt = worker.read_sync.start(PEER, 200, Instant::now()).unwrap();
         worker
             .handle_command(Command::ReadSyncFinished {
                 session_generation: worker.session_generation,
+                attempt_id: final_attempt,
                 chat: PEER.into(),
                 through: 200,
                 success: true,
@@ -2319,16 +3136,48 @@ pub(super) mod receipt_tests {
     }
 
     #[tokio::test]
+    async fn stale_read_sync_attempt_cannot_acknowledge_same_position_retry() {
+        let (mut worker, _events, _inbox, _wa) = worker();
+        worker.store_message(incoming("same-position", 100), None, None);
+        worker.mark_read(PEER.into(), false);
+        let now = Instant::now();
+        let old_attempt = worker.read_sync.start(PEER, 100, now).unwrap();
+        assert!(worker.read_sync.finish(old_attempt, PEER, 100, false, now));
+        let new_attempt = worker
+            .read_sync
+            .start(PEER, 100, now + Duration::from_secs(31))
+            .unwrap();
+        assert_ne!(old_attempt, new_attempt);
+
+        worker
+            .handle_command(Command::ReadSyncFinished {
+                session_generation: worker.session_generation,
+                attempt_id: old_attempt,
+                chat: PEER.into(),
+                through: 100,
+                success: true,
+            })
+            .await;
+
+        assert_eq!(
+            worker.archive.pending_reads().unwrap(),
+            vec![(PEER.into(), 100)]
+        );
+        assert!(!worker.read_sync.ready(now + Duration::from_secs(31)));
+    }
+
+    #[tokio::test]
     async fn stale_read_sync_result_cannot_acknowledge_current_archive_position() {
         let (mut worker, _events, _inbox, _wa) = worker();
         worker.store_message(incoming("read-sync", 100), None, None);
         worker.mark_read(PEER.into(), false);
-        assert!(worker.read_sync.start(PEER, 100, Instant::now()));
+        let attempt_id = worker.read_sync.start(PEER, 100, Instant::now()).unwrap();
         worker.session_generation = 1;
 
         worker
             .handle_command(Command::ReadSyncFinished {
                 session_generation: 0,
+                attempt_id,
                 chat: PEER.into(),
                 through: 100,
                 success: true,

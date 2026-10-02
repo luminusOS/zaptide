@@ -132,6 +132,7 @@ impl Worker {
             Command::MarkRead { chat, receipts } => self.mark_read(chat, receipts),
             Command::ReadSyncFinished {
                 session_generation,
+                attempt_id,
                 chat,
                 through,
                 success,
@@ -141,7 +142,7 @@ impl Worker {
                 }
                 if !self
                     .read_sync
-                    .finish(&chat, through, success, Instant::now())
+                    .finish(attempt_id, &chat, through, success, Instant::now())
                 {
                     return;
                 }
@@ -612,17 +613,79 @@ impl Worker {
                 }
             }
             Command::Shutdown => {}
+            Command::OlderStarted {
+                session_generation,
+                request_id,
+                chat,
+                protocol_id,
+            } => {
+                if session_generation == self.session_generation {
+                    self.older_request_started(chat, request_id, protocol_id);
+                }
+            }
             Command::OlderFailed {
                 session_generation,
+                request_id,
                 chat,
                 error,
             } => {
                 if session_generation != self.session_generation {
                     return;
                 }
+                if !self
+                    .pending_older
+                    .get(&chat)
+                    .is_some_and(|request| request.request_id == request_id)
+                {
+                    return;
+                }
                 self.pending_older.remove(&chat);
                 self.emit(Event::OlderFetched { chat, more: true });
                 self.emit(Event::Error(error));
+            }
+            Command::RevokeFinished {
+                session_generation,
+                attempt_id,
+                chat,
+                message,
+                success,
+            } => {
+                if session_generation != self.session_generation {
+                    return;
+                }
+                let key = (chat.clone(), message.clone());
+                if !self
+                    .pending_revokes
+                    .get(&key)
+                    .is_some_and(|pending| pending.attempt_id == attempt_id)
+                {
+                    return;
+                }
+                let pending = self
+                    .pending_revokes
+                    .remove(&key)
+                    .expect("matching revoke attempt");
+                if success {
+                    return;
+                }
+                let still_optimistically_revoked = self
+                    .archive
+                    .message(&chat, &message)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|row| matches!(row.content, Content::Revoked));
+                if still_optimistically_revoked
+                    && self
+                        .archive
+                        .set_content(&chat, &message, &pending.content, pending.edited)
+                        .is_ok_and(|updated| updated)
+                {
+                    self.emit_message(&chat, &message);
+                    self.emit_chat(&chat);
+                }
+                self.emit(Event::Error(
+                    "Could not delete the message for everyone".to_owned(),
+                ));
             }
             Command::GroupInfoFailed {
                 session_generation,
@@ -744,15 +807,62 @@ impl Worker {
                 chat,
                 id,
                 session_generation,
-                result,
+                raw_fingerprint,
+                destination,
+                mut result,
             } => {
                 if session_generation != self.session_generation {
+                    if let Ok(path) = &result {
+                        let _ = std::fs::remove_file(path);
+                    }
                     return;
                 }
-                if let Ok(path) = &result {
-                    let _ = self.archive.set_media_path(&chat, &id, path);
+                let current_raw = match self.archive.raw(&chat, &id) {
+                    Ok(raw) => raw,
+                    Err(_) => {
+                        log::warn!(
+                            "attachment validation deferred because the archive could not be read"
+                        );
+                        self.deferred_downloads.push(DeferredDownload {
+                            retry_at: Instant::now() + DOWNLOAD_VALIDATION_RETRY,
+                            completion: Some(Command::Downloaded {
+                                chat,
+                                id,
+                                session_generation,
+                                raw_fingerprint,
+                                destination,
+                                result,
+                            }),
+                        });
+                        return;
+                    }
+                };
+                let for_picker =
+                    self.sticker_downloads
+                        .remove(&(chat.clone(), id.clone(), raw_fingerprint));
+                if !current_raw
+                    .as_deref()
+                    .is_some_and(|raw| super::message_raw_fingerprint(raw) == raw_fingerprint)
+                {
+                    if let Ok(path) = &result {
+                        let _ = std::fs::remove_file(path);
+                    }
+                    // This completion belongs to an obsolete payload. Do not fail
+                    // its replacement or release that payload's picker request.
+                    return;
                 }
-                let for_picker = self.sticker_downloads.remove(&(chat.clone(), id.clone()));
+                if let Ok(staged) = &result {
+                    match std::fs::rename(staged, &destination) {
+                        Ok(()) => {
+                            let _ = self.archive.set_media_path(&chat, &id, &destination);
+                            result = Ok(destination);
+                        }
+                        Err(_error) => {
+                            let _ = std::fs::remove_file(staged);
+                            result = Err("The attachment could not be saved".to_owned());
+                        }
+                    }
+                }
                 self.emit(Event::Media {
                     chat,
                     message: id,
@@ -770,7 +880,12 @@ impl Worker {
                 path,
             } => {
                 if session_generation == self.session_generation
-                    && avatar_generation == self.avatar_generation_shared.load(Ordering::Acquire)
+                    && self
+                        .avatar_generations
+                        .get(&(id.clone(), full))
+                        .is_some_and(|generation| {
+                            avatar_generation == generation.load(Ordering::Acquire)
+                        })
                 {
                     self.emit(Event::Avatar { id, full, path });
                 }
@@ -782,7 +897,12 @@ impl Worker {
                 avatar_generation,
             } => {
                 if session_generation == self.session_generation
-                    && avatar_generation == self.avatar_generation_shared.load(Ordering::Acquire)
+                    && self
+                        .avatar_generations
+                        .get(&(id.clone(), full))
+                        .is_some_and(|generation| {
+                            avatar_generation == generation.load(Ordering::Acquire)
+                        })
                 {
                     *self.pending_avatars.entry((id, full)).or_insert(0) += 1;
                 }

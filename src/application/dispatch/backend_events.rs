@@ -112,6 +112,7 @@ pub(super) fn handle_backend_ready(
         match event {
             NativeEvent::Link(link) => {
                 if matches!(link, LinkStatus::LoggedOut) {
+                    clear_avatar_textures();
                     app.audio.media.stop_playback();
                     app.audio.playing_audio = None;
                     app.audio.waveform_queue.clear();
@@ -401,11 +402,13 @@ pub(super) fn handle_backend_ready(
                 app.presence.insert(id, (online, last_seen));
             }
             NativeEvent::Avatar { id, path } => {
-                if let Some(path) = path {
-                    app.avatars.insert(id, path);
+                let previous = app.avatars.get(&id).cloned();
+                if let Some(current) = &path {
+                    app.avatars.insert(id.clone(), current.clone());
                 } else {
                     app.avatars.remove(&id);
                 }
+                update_avatar_texture_reference(previous, path);
                 app.chats_dirty = true;
             }
             NativeEvent::ReceiptsPrivacy { disabled } => app.account_receipts_off = disabled,

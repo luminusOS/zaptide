@@ -17,6 +17,7 @@ pub(super) fn append_sticker(
     let sticker = gtk::Image::new();
     sticker.set_pixel_size(160);
     sticker.set_halign(gtk::Align::Start);
+    sticker.update_property(&[gtk::accessible::Property::Label("Sticker")]);
     // Keep the space reserved while decoding so the transcript does not jump.
     sticker.set_tooltip_text(Some("Sticker"));
     parent.append(&sticker);

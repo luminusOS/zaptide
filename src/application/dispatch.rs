@@ -20,13 +20,13 @@ impl NativeApplication {
                     .picker_themes()
                     .map(|theme| theme.filename.clone())
                     .collect();
+                let input_sender = sender.clone();
                 let dialog = crate::native_preferences::NativePreferencesDialog::new(
                     &preferences,
                     &theme_choices,
+                    move || input_sender.input(Input::ApplyPreferences),
                 );
                 dialog.present(&self.window);
-                let input_sender = sender.clone();
-                connect_widget_changes(dialog.dialog().upcast_ref(), &input_sender);
                 let input_sender = sender.clone();
                 dialog
                     .open_themes_folder_button()

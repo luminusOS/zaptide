@@ -40,6 +40,28 @@ pub type Result<T> = std::result::Result<T, rusqlite::Error>;
 type PendingQuotedMessage = (String, String, String, Vec<u8>);
 type FailedQuotedMessage = (String, Vec<u8>);
 
+struct StoredMessageProjection {
+    status: i64,
+    content: String,
+    edited: bool,
+    raw: Option<Vec<u8>>,
+    mentions: String,
+}
+
+fn preserve_media_path(existing: &Content, incoming: &mut Content) {
+    let (existing_media, incoming_media) = match (existing, incoming) {
+        (Content::Image { media: old, .. }, Content::Image { media: new, .. })
+        | (Content::Video { media: old, .. }, Content::Video { media: new, .. })
+        | (Content::Audio { media: old, .. }, Content::Audio { media: new, .. })
+        | (Content::Document { media: old, .. }, Content::Document { media: new, .. })
+        | (Content::Sticker { media: old, .. }, Content::Sticker { media: new, .. }) => (old, new),
+        _ => return,
+    };
+    if existing_media.path.is_some() {
+        incoming_media.path = existing_media.path.clone();
+    }
+}
+
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS chats (
     id TEXT PRIMARY KEY,
@@ -200,28 +222,36 @@ impl Archive {
         Self::prepare(Connection::open_in_memory()?)
     }
 
+    #[cfg(test)]
+    pub(crate) fn execute_batch_for_test(&self, sql: &str) -> Result<()> {
+        self.connection.execute_batch(sql)
+    }
+
     fn prepare(connection: Connection) -> Result<Self> {
         connection.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")?;
-        connection.execute_batch(SCHEMA)?;
-        connection.execute_batch(polls::SCHEMA)?;
+        let transaction = connection.unchecked_transaction()?;
+        transaction.execute_batch(SCHEMA)?;
+        transaction.execute_batch(polls::SCHEMA)?;
         for (table, column, definition) in MIGRATIONS {
-            let exists = connection
+            let columns = transaction
                 .prepare(&format!("PRAGMA table_info({table})"))?
                 .query_map([], |row| row.get::<_, String>(1))?
-                .any(|name| name.as_deref() == Ok(*column));
+                .collect::<Result<Vec<_>>>()?;
+            let exists = columns.iter().any(|name| name == column);
             if !exists {
-                connection.execute_batch(&format!(
+                transaction.execute_batch(&format!(
                     "ALTER TABLE {table} ADD COLUMN {column} {definition}"
                 ))?;
             }
         }
-        connection.execute_batch(
+        transaction.execute_batch(
             "CREATE INDEX IF NOT EXISTS messages_quoted_status ON messages(status, from_me)
              WHERE quoted IS NOT NULL AND raw IS NOT NULL;
              CREATE INDEX IF NOT EXISTS messages_answer_parent ON messages(
                  chat, (CASE WHEN json_valid(quoted) THEN json_extract(quoted, '$.id') END), status)
              WHERE from_me = 1 AND quoted IS NOT NULL AND raw IS NOT NULL;",
         )?;
+        transaction.commit()?;
         Ok(Self { connection })
     }
 
@@ -520,15 +550,23 @@ impl Archive {
     /// Upserts a message, preserves the furthest delivery state, and updates
     /// chat activity. `raw` contains attachment metadata.
     pub fn insert_message(&self, message: &Message, raw: Option<&[u8]>) -> Result<()> {
-        let existing: Option<i64> = self
+        let existing: Option<StoredMessageProjection> = self
             .connection
             .query_row(
-                "SELECT status FROM messages WHERE chat = ?1 AND id = ?2",
+                "SELECT status, content, edited, raw, mentions FROM messages WHERE chat = ?1 AND id = ?2",
                 params![message.chat, message.id],
-                |row| row.get(0),
+                |row| {
+                    Ok(StoredMessageProjection {
+                        status: row.get(0)?,
+                        content: row.get(1)?,
+                        edited: row.get(2)?,
+                        raw: row.get(3)?,
+                        mentions: row.get(4)?,
+                    })
+                },
             )
             .optional()?;
-        let status = match existing {
+        let status = match existing.as_ref().map(|row| row.status) {
             Some(rank)
                 if rank == status_rank(Delivery::Failed)
                     && matches!(
@@ -546,7 +584,31 @@ impl Archive {
             _ => status_rank(message.status),
         };
         let reactions = self.merged_reactions(message)?;
-        let content = self.keep_answer(&message.chat, &message.id, &message.content);
+        let mut content = self
+            .keep_answer(&message.chat, &message.id, &message.content)
+            .into_owned();
+        let mut edited = message.edited;
+        let mut mentions = serde_json::to_string(&message.mentions).unwrap_or_default();
+        let same_raw = existing
+            .as_ref()
+            .and_then(|row| row.raw.as_deref())
+            .zip(raw)
+            .is_some_and(|(old, new)| old == new);
+        if let Some(existing) = existing
+            && let Ok(existing_content) = serde_json::from_str::<Content>(&existing.content)
+        {
+            if same_raw
+                && (matches!(&existing_content, Content::Revoked)
+                    || existing.edited && !message.edited)
+                && !matches!(&content, Content::Revoked)
+            {
+                content = existing_content;
+                edited = existing.edited;
+                mentions = existing.mentions;
+            } else if same_raw {
+                preserve_media_path(&existing_content, &mut content);
+            }
+        }
         self.connection.execute(
             "INSERT INTO messages (chat, id, sender, sender_name, from_me, timestamp, content, status, quoted, reactions, edited, raw, thumbnail, mentions, forwarded, delivered_at, read_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
@@ -556,7 +618,7 @@ impl Archive {
                 status = excluded.status,
                 quoted = COALESCE(excluded.quoted, quoted),
                 reactions = excluded.reactions,
-                edited = excluded.edited,
+                edited = ?18,
                 raw = COALESCE(excluded.raw, raw),
                 thumbnail = COALESCE(excluded.thumbnail, thumbnail),
                 mentions = excluded.mentions,
@@ -577,13 +639,14 @@ impl Archive {
                     .as_ref()
                     .map(|quoted| serde_json::to_string(quoted).unwrap_or_default()),
                 serde_json::to_string(&reactions).unwrap_or_default(),
-                message.edited,
+                edited,
                 raw,
                 message.thumbnail.as_deref(),
-                serde_json::to_string(&message.mentions).unwrap_or_default(),
+                mentions,
                 message.forwarded,
                 message.delivered_at,
                 message.read_at,
+                edited,
             ],
         )?;
         self.connection.execute(
@@ -988,9 +1051,21 @@ impl Archive {
 
     /// Clears all archived data during unlinking.
     pub fn clear(&self) -> Result<()> {
-        self.connection.execute_batch(
-            "DELETE FROM poll_history; DELETE FROM poll_votes; DELETE FROM polls; DELETE FROM group_receipts; DELETE FROM messages; DELETE FROM chats; DELETE FROM contacts; DELETE FROM meta; DELETE FROM lids;",
-        )
+        self.connection
+            .execute_batch("PRAGMA synchronous = FULL;")?;
+        let clear = (|| {
+            let transaction = self.connection.unchecked_transaction()?;
+            transaction.execute_batch(
+                "DELETE FROM poll_history; DELETE FROM poll_votes; DELETE FROM polls; DELETE FROM group_receipts; DELETE FROM messages; DELETE FROM chats; DELETE FROM contacts; DELETE FROM meta WHERE key <> 'logout_cleanup_required'; DELETE FROM lids; DELETE FROM stickers;",
+            )?;
+            transaction.commit()
+        })();
+        let restore = self
+            .connection
+            .execute_batch("PRAGMA synchronous = NORMAL;");
+        clear?;
+        restore?;
+        Ok(())
     }
 }
 

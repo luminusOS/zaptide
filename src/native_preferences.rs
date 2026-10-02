@@ -257,9 +257,26 @@ pub struct NativePreferencesDialog {
     errors: std::rc::Rc<std::cell::RefCell<Vec<ValidationError>>>,
 }
 
+#[derive(Clone)]
+struct PreferenceChangeSink {
+    changes: std::rc::Rc<std::cell::RefCell<Vec<PreferenceChange>>>,
+    errors: std::rc::Rc<std::cell::RefCell<Vec<ValidationError>>>,
+    on_change: std::rc::Rc<dyn Fn()>,
+}
+
+impl PreferenceChangeSink {
+    fn push(&self, change: PreferenceChange) {
+        push_change(&self.changes, &self.errors, &self.on_change, change);
+    }
+}
+
 impl NativePreferencesDialog {
     /// Create dialog initialized from secret-free native preference snapshot.
-    pub fn new(preferences: &NativePreferences, theme_choices: &[String]) -> Self {
+    pub fn new(
+        preferences: &NativePreferences,
+        theme_choices: &[String],
+        on_change: impl Fn() + 'static,
+    ) -> Self {
         use gtk4::prelude::*;
         use libadwaita::prelude::*;
 
@@ -269,6 +286,12 @@ impl NativePreferencesDialog {
         dialog.set_search_enabled(true);
         let changes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let errors = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let on_change: std::rc::Rc<dyn Fn()> = std::rc::Rc::new(on_change);
+        let change_sink = PreferenceChangeSink {
+            changes: changes.clone(),
+            errors: errors.clone(),
+            on_change: on_change.clone(),
+        };
         let appearance = libadwaita::PreferencesPage::new();
         appearance.set_title("Appearance");
         appearance.set_icon_name(Some("preferences-desktop-appearance-symbolic"));
@@ -288,15 +311,14 @@ impl NativePreferencesDialog {
             ThemeChoice::Dark => 2,
         });
         {
-            let changes = changes.clone();
-            let errors = errors.clone();
+            let change_sink = change_sink.clone();
             theme_row.connect_selected_notify(move |row| {
                 let value = match row.selected() {
                     0 => ThemeChoice::System,
                     1 => ThemeChoice::Light,
                     _ => ThemeChoice::Dark,
                 };
-                push_change(&changes, &errors, PreferenceChange::SetTheme(value));
+                change_sink.push(PreferenceChange::SetTheme(value));
             });
         }
         appearance_group.add(&theme_row);
@@ -323,19 +345,14 @@ impl NativePreferencesDialog {
             })
             .map_or(0, |index| index as u32 + 1);
         custom_theme_row.set_selected(selected_custom_theme);
-        let choice_changes = changes.clone();
-        let choice_errors = errors.clone();
+        let choice_sink = change_sink.clone();
         let choice_names = custom_theme_choices.clone();
         let custom_theme_handler = custom_theme_row.connect_selected_notify(move |row| {
             let value = row
                 .selected()
                 .checked_sub(1)
                 .and_then(|index| choice_names.borrow().get(index as usize).cloned());
-            push_change(
-                &choice_changes,
-                &choice_errors,
-                PreferenceChange::SetCustomTheme(value),
-            );
+            choice_sink.push(PreferenceChange::SetCustomTheme(value));
         });
         appearance_group.add(&custom_theme_row);
 
@@ -353,8 +370,7 @@ impl NativePreferencesDialog {
             "Zoom",
             "UI scale, from 0.6× to 2.0×",
             (f64::from(preferences.appearance.zoom), 0.6, 2.0, 0.05, 2),
-            changes.clone(),
-            errors.clone(),
+            change_sink.clone(),
             PreferenceChange::SetZoom,
         );
         add_numeric_row(
@@ -368,8 +384,7 @@ impl NativePreferencesDialog {
                 10.0,
                 0,
             ),
-            changes.clone(),
-            errors.clone(),
+            change_sink.clone(),
             PreferenceChange::SetSidebarWidth,
         );
         add_switch(
@@ -377,8 +392,7 @@ impl NativePreferencesDialog {
             "Send messages with Enter",
             "Shift+Enter inserts a new line",
             preferences.appearance.enter_sends,
-            changes.clone(),
-            errors.clone(),
+            change_sink.clone(),
             PreferenceChange::SetEnterSends,
         );
         add_switch(
@@ -386,8 +400,7 @@ impl NativePreferencesDialog {
             "Show sender pictures",
             "Show avatars next to messages",
             preferences.appearance.show_sender_pictures,
-            changes.clone(),
-            errors.clone(),
+            change_sink.clone(),
             PreferenceChange::SetShowSenderPictures,
         );
         add_switch(
@@ -395,8 +408,7 @@ impl NativePreferencesDialog {
             "Show shortcut hints",
             "Show keyboard shortcut hints",
             preferences.appearance.show_shortcut_hints,
-            changes.clone(),
-            errors.clone(),
+            change_sink.clone(),
             PreferenceChange::SetShowShortcutHints,
         );
 
@@ -412,8 +424,7 @@ impl NativePreferencesDialog {
             "Prefer contact names",
             "Use address-book names instead of profile names",
             preferences.account.names_from_contacts,
-            changes.clone(),
-            errors.clone(),
+            change_sink.clone(),
             PreferenceChange::SetNamesFromContacts,
         );
         add_switch(
@@ -421,8 +432,7 @@ impl NativePreferencesDialog {
             "Save contacts to phone",
             "Also add saved contacts to the device address book",
             preferences.account.save_contacts_to_phone,
-            changes.clone(),
-            errors.clone(),
+            change_sink.clone(),
             PreferenceChange::SetSaveContactsToPhone,
         );
 
@@ -438,8 +448,7 @@ impl NativePreferencesDialog {
             "Send read receipts",
             "Let contacts know when messages are read",
             preferences.privacy.send_read_receipts,
-            changes.clone(),
-            errors.clone(),
+            change_sink.clone(),
             PreferenceChange::SetSendReadReceipts,
         );
         let lock_row = libadwaita::ActionRow::new();
@@ -455,23 +464,20 @@ impl NativePreferencesDialog {
         lock_set.set_tooltip_text(Some("Set or change locked chats code"));
         lock_row.add_suffix(&lock_set);
         {
-            let changes = changes.clone();
-            let errors = errors.clone();
-            let parent = dialog.clone();
+            let change_sink = change_sink.clone();
+            let parent = dialog.downgrade();
             lock_set.connect_clicked(move |_| {
-                let changes = changes.clone();
-                let errors = errors.clone();
+                let Some(parent) = parent.upgrade() else {
+                    return;
+                };
+                let change_sink = change_sink.clone();
                 present_secret_entry(
                     &parent,
                     "Set locked chats code",
                     "Enter a code. The saved code cannot be viewed.",
                     "Locked chats code",
                     move |text| {
-                        push_change(
-                            &changes,
-                            &errors,
-                            PreferenceChange::SetChatLockCode(Some(text)),
-                        );
+                        change_sink.push(PreferenceChange::SetChatLockCode(Some(text)));
                     },
                 );
             });
@@ -482,10 +488,12 @@ impl NativePreferencesDialog {
             clear.add_css_class("destructive-action");
             set_accessible_label(&clear, "Remove locked chats code");
             clear.set_tooltip_text(Some("Remove locked chats code"));
-            let changes = changes.clone();
-            let errors = errors.clone();
-            let parent = dialog.clone();
+            let change_sink = change_sink.clone();
+            let parent = dialog.downgrade();
             clear.connect_clicked(move |_| {
+                let Some(parent) = parent.upgrade() else {
+                    return;
+                };
                 let alert = libadwaita::AlertDialog::new(
                     Some("Remove locked chats code?"),
                     Some("Locked chats will no longer require this code."),
@@ -496,11 +504,10 @@ impl NativePreferencesDialog {
                     .set_response_appearance("remove", libadwaita::ResponseAppearance::Destructive);
                 alert.set_close_response("cancel");
                 alert.set_default_response(Some("cancel"));
-                let changes = changes.clone();
-                let errors = errors.clone();
+                let change_sink = change_sink.clone();
                 alert.connect_response(None, move |_, response| {
                     if response == "remove" {
-                        push_change(&changes, &errors, PreferenceChange::SetChatLockCode(None));
+                        change_sink.push(PreferenceChange::SetChatLockCode(None));
                     }
                 });
                 alert.present(Some(&parent));
@@ -521,8 +528,7 @@ impl NativePreferencesDialog {
             "Desktop notifications",
             "Notify when messages arrive while away",
             preferences.notifications.enabled,
-            changes.clone(),
-            errors.clone(),
+            change_sink.clone(),
             PreferenceChange::SetNotifications,
         );
         add_switch(
@@ -530,8 +536,7 @@ impl NativePreferencesDialog {
             "Show previews",
             "Include the sender and message text",
             preferences.notifications.previews,
-            changes.clone(),
-            errors.clone(),
+            change_sink.clone(),
             PreferenceChange::SetNotificationPreviews,
         );
 
@@ -547,8 +552,7 @@ impl NativePreferencesDialog {
             "Automatically download attachments",
             "Download attachments when they enter view",
             preferences.storage.auto_download,
-            changes.clone(),
-            errors.clone(),
+            change_sink.clone(),
             PreferenceChange::SetAutoDownload,
         );
 
@@ -564,8 +568,7 @@ impl NativePreferencesDialog {
             "Keep running in background",
             "Keep ZapTide available after closing its window",
             preferences.background.keep_running,
-            changes.clone(),
-            errors.clone(),
+            change_sink.clone(),
             PreferenceChange::SetKeepRunningInBackground,
         );
 
@@ -581,8 +584,7 @@ impl NativePreferencesDialog {
             "Send typing status",
             "Let contacts know while you are typing",
             preferences.protocol.send_typing,
-            changes.clone(),
-            errors.clone(),
+            change_sink.clone(),
             PreferenceChange::SetSendTyping,
         );
         let voice_row = libadwaita::ComboRow::new();
@@ -594,14 +596,13 @@ impl NativePreferencesDialog {
             _ => 0,
         });
         {
-            let changes = changes.clone();
-            let errors = errors.clone();
+            let change_sink = change_sink.clone();
             voice_row.connect_selected_notify(move |row| {
                 let value = [1.0, 1.5, 2.0]
                     .get(row.selected() as usize)
                     .copied()
                     .unwrap_or(1.0);
-                push_change(&changes, &errors, PreferenceChange::SetVoiceSpeed(value));
+                change_sink.push(PreferenceChange::SetVoiceSpeed(value));
             });
         }
         protocol_group.add(&voice_row);
@@ -667,6 +668,7 @@ impl NativePreferencesDialog {
 fn push_change(
     changes: &std::rc::Rc<std::cell::RefCell<Vec<PreferenceChange>>>,
     errors: &std::rc::Rc<std::cell::RefCell<Vec<ValidationError>>>,
+    on_change: &std::rc::Rc<dyn Fn()>,
     change: PreferenceChange,
 ) {
     // Secret mutation paths deliberately avoid applying against temporary settings:
@@ -699,6 +701,7 @@ fn push_change(
     } else {
         changes.borrow_mut().push(change);
     }
+    on_change();
 }
 
 fn add_switch(
@@ -706,8 +709,7 @@ fn add_switch(
     title: &str,
     subtitle: &str,
     active: bool,
-    changes: std::rc::Rc<std::cell::RefCell<Vec<PreferenceChange>>>,
-    errors: std::rc::Rc<std::cell::RefCell<Vec<ValidationError>>>,
+    change_sink: PreferenceChangeSink,
     make_change: fn(bool) -> PreferenceChange,
 ) {
     use libadwaita::prelude::*;
@@ -715,9 +717,7 @@ fn add_switch(
     row.set_title(title);
     row.set_subtitle(subtitle);
     row.set_active(active);
-    row.connect_active_notify(move |row| {
-        push_change(&changes, &errors, make_change(row.is_active()))
-    });
+    row.connect_active_notify(move |row| change_sink.push(make_change(row.is_active())));
     group.add(&row);
 }
 
@@ -748,15 +748,23 @@ fn present_secret_entry(
     alert.set_default_response(Some("save"));
     alert.set_response_enabled("save", false);
     {
-        let alert = alert.clone();
+        let alert = alert.downgrade();
         entry.connect_changed(move |entry| {
-            alert.set_response_enabled("save", !entry.text().is_empty());
+            if let Some(alert) = alert.upgrade() {
+                alert.set_response_enabled("save", !entry.text().is_empty());
+            }
         });
     }
+    let entry_ref = entry.downgrade();
     alert.connect_response(None, move |_, response| {
-        if let Some(value) = secret_value_for_response(response, entry.text().as_str()) {
-            on_save(value);
+        let value = entry_ref
+            .upgrade()
+            .and_then(|entry| secret_value_for_response(response, entry.text().as_str()));
+        if let Some(entry) = entry_ref.upgrade() {
             entry.set_text("");
+        }
+        if let Some(value) = value {
+            on_save(value);
         }
     });
     alert.present(Some(parent));
@@ -772,8 +780,7 @@ fn add_numeric_row(
     subtitle: &str,
     // Value, minimum, maximum, step, and decimal places shown.
     range: (f64, f64, f64, f64, u32),
-    changes: std::rc::Rc<std::cell::RefCell<Vec<PreferenceChange>>>,
-    errors: std::rc::Rc<std::cell::RefCell<Vec<ValidationError>>>,
+    change_sink: PreferenceChangeSink,
     make_change: fn(f32) -> PreferenceChange,
 ) {
     use libadwaita::prelude::*;
@@ -783,9 +790,7 @@ fn add_numeric_row(
     row.set_title(title);
     row.set_subtitle(subtitle);
     row.set_numeric(true);
-    row.connect_value_notify(move |row| {
-        push_change(&changes, &errors, make_change(row.value() as f32));
-    });
+    row.connect_value_notify(move |row| change_sink.push(make_change(row.value() as f32)));
     group.add(&row);
 }
 
@@ -904,6 +909,34 @@ mod tests {
     }
 
     #[test]
+    fn preference_change_notifies_parent_for_valid_and_invalid_edits() {
+        let changes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let errors = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let notifications = std::rc::Rc::new(std::cell::Cell::new(0));
+        let notified = notifications.clone();
+        let on_change: std::rc::Rc<dyn Fn()> = std::rc::Rc::new(move || {
+            notified.set(notified.get() + 1);
+        });
+
+        push_change(
+            &changes,
+            &errors,
+            &on_change,
+            PreferenceChange::SetNotifications(false),
+        );
+        push_change(
+            &changes,
+            &errors,
+            &on_change,
+            PreferenceChange::SetZoom(3.0),
+        );
+
+        assert_eq!(changes.borrow().len(), 1);
+        assert_eq!(errors.borrow().len(), 1);
+        assert_eq!(notifications.get(), 2);
+    }
+
+    #[test]
     fn validated_ranges_and_write_only_secret_clear_are_supported() {
         let mut settings = Settings::default();
         PreferenceChange::SetZoom(2.0).apply(&mut settings).unwrap();
@@ -934,6 +967,27 @@ mod tests {
         assert_eq!(
             secret_value_for_response("save", "private").as_deref(),
             Some("private")
+        );
+    }
+
+    #[test]
+    #[ignore = "requires a display; run with xvfb-run -a cargo test native_preferences::tests::dropped_preferences_dialog_releases_widget_tree -- --ignored"]
+    fn dropped_preferences_dialog_releases_widget_tree() {
+        use gtk4::prelude::*;
+
+        gtk4::init().expect("GTK display");
+        libadwaita::init().expect("libadwaita");
+        let settings = Settings::default();
+        let snapshot = NativePreferences::from(&settings);
+        let dialog = NativePreferencesDialog::new(&snapshot, &[], || {});
+        let weak = dialog.dialog().downgrade();
+
+        drop(dialog);
+        while gtk4::glib::MainContext::default().iteration(false) {}
+
+        assert!(
+            weak.upgrade().is_none(),
+            "unpresented dialog must be released"
         );
     }
 }

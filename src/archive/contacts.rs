@@ -96,4 +96,26 @@ impl Archive {
         )?;
         Ok(())
     }
+
+    pub(crate) fn mark_logout_cleanup_required(&self) -> Result<()> {
+        self.connection
+            .execute_batch("PRAGMA synchronous = FULL;")?;
+        let marker = self.set_meta("logout_cleanup_required", "1");
+        let restore = self
+            .connection
+            .execute_batch("PRAGMA synchronous = NORMAL;");
+        marker?;
+        restore?;
+        Ok(())
+    }
+
+    pub(crate) fn logout_cleanup_required(&self) -> Result<bool> {
+        Ok(self.meta("logout_cleanup_required")?.as_deref() == Some("1"))
+    }
+
+    pub(crate) fn finish_logout_cleanup(&self) -> Result<()> {
+        self.connection
+            .execute("DELETE FROM meta WHERE key = 'logout_cleanup_required'", [])?;
+        Ok(())
+    }
 }

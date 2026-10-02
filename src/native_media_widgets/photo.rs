@@ -432,8 +432,9 @@ fn show_video(
     )
     .dialog;
     *target.borrow_mut() = dialog.downgrade();
+    let video = video.downgrade();
     dialog.connect_closed(move |_| {
-        if let Some(stream) = video.media_stream() {
+        if let Some(stream) = video.upgrade().and_then(|video| video.media_stream()) {
             stream.pause();
         }
     });
@@ -709,6 +710,7 @@ fn show_photo(
         .icon_name("zoom-original-symbolic")
         .tooltip_text("Actual Size")
         .build();
+    zoom.update_property(&[gtk::accessible::Property::Label("Actual Size")]);
     {
         let (picture, scroller) = (picture.clone(), scroller.clone());
         zoom.connect_toggled(move |zoom| {
@@ -730,6 +732,11 @@ fn show_photo(
             } else {
                 "Actual Size"
             }));
+            zoom.update_property(&[gtk::accessible::Property::Label(if actual {
+                "Fit to Window"
+            } else {
+                "Actual Size"
+            })]);
         });
     }
     let double_click = gtk::GestureClick::new();
@@ -766,6 +773,7 @@ fn show_photo(
         .icon_name("edit-copy-symbolic")
         .tooltip_text("Copy Image")
         .build();
+    copy.update_property(&[gtk::accessible::Property::Label("Copy Image")]);
     {
         let picture = picture.clone();
         copy.connect_clicked(move |button| {
@@ -782,6 +790,7 @@ fn show_photo(
         .icon_name("adw-external-link-symbolic")
         .tooltip_text("Open With Another App")
         .build();
+    open.update_property(&[gtk::accessible::Property::Label("Open With Another App")]);
     {
         let (items, current, dialog_ref) = (items.clone(), current.clone(), dialog_ref.clone());
         open.connect_clicked(move |_| {
@@ -796,6 +805,7 @@ fn show_photo(
         .tooltip_text("Show in Folder")
         .valign(gtk::Align::Center)
         .build();
+    folder.update_property(&[gtk::accessible::Property::Label("Show in Folder")]);
     {
         let (items, current) = (items.clone(), current.clone());
         folder.connect_clicked(move |button| show_in_folder(button, &items[current.get()].path));
@@ -825,11 +835,35 @@ fn show_photo(
     let shown = current.clone();
     let show: std::rc::Rc<dyn Fn(usize)> = {
         let items = items.clone();
-        let (picture, previous, next) = (picture.clone(), previous.clone(), next.clone());
+        let (picture, zoom, previous, next) = (
+            picture.downgrade(),
+            zoom.downgrade(),
+            previous.downgrade(),
+            next.downgrade(),
+        );
+        let (title, caption, view) = (
+            viewer.title.downgrade(),
+            viewer.caption.downgrade(),
+            viewer.view.downgrade(),
+        );
         std::rc::Rc::new(move |index: usize| {
+            let (Some(picture), Some(zoom), Some(previous), Some(next)) = (
+                picture.upgrade(),
+                zoom.upgrade(),
+                previous.upgrade(),
+                next.upgrade(),
+            ) else {
+                return;
+            };
+            let (Some(title), Some(caption), Some(view)) =
+                (title.upgrade(), caption.upgrade(), view.upgrade())
+            else {
+                return;
+            };
             current.set(index);
             let item = &items[index];
             zoom.set_active(false);
+            picture.update_property(&[gtk::accessible::Property::Label(&item.details.title)]);
             // The sender's thumbnail shows at once, until the file loads.
             picture.set_paintable(
                 item.details
@@ -840,8 +874,8 @@ fn show_photo(
             );
             // Full size up to a large screen; the view fits it to the dialog.
             load_photo(&picture, item.path.clone(), 3840, 3840, &token);
-            viewer.title.set_title(&item.details.title);
-            viewer.title.set_subtitle(&if items.len() > 1 {
+            title.set_title(&item.details.title);
+            title.set_subtitle(&if items.len() > 1 {
                 format!(
                     "{} · {} of {}",
                     item.details.subtitle,
@@ -851,12 +885,8 @@ fn show_photo(
             } else {
                 item.details.subtitle.clone()
             });
-            viewer
-                .caption
-                .set_label(item.details.caption.as_deref().unwrap_or_default());
-            viewer
-                .view
-                .set_reveal_bottom_bars(item.details.caption.is_some());
+            caption.set_label(item.details.caption.as_deref().unwrap_or_default());
+            view.set_reveal_bottom_bars(item.details.caption.is_some());
             previous.set_sensitive(index > 0);
             next.set_sensitive(index + 1 < items.len());
         })

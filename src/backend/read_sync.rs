@@ -8,7 +8,8 @@ use crate::model::ChatId;
 /// The archive owns the durable queue; this only limits work on the connection.
 #[derive(Default)]
 pub(super) struct ReadSync {
-    in_flight: Option<(ChatId, i64)>,
+    in_flight: Option<(u64, ChatId, i64)>,
+    next_attempt: u64,
     retry_at: Option<Instant>,
     failures: u32,
 }
@@ -18,20 +19,31 @@ impl ReadSync {
         self.in_flight.is_none() && self.retry_at.is_none_or(|retry| now >= retry)
     }
 
-    pub fn start(&mut self, chat: &str, through: i64, now: Instant) -> bool {
+    pub fn start(&mut self, chat: &str, through: i64, now: Instant) -> Option<u64> {
         if !self.ready(now) {
-            return false;
+            return None;
         }
-        self.in_flight = Some((chat.to_owned(), through));
-        true
+        self.next_attempt = self.next_attempt.wrapping_add(1);
+        let attempt = self.next_attempt;
+        self.in_flight = Some((attempt, chat.to_owned(), through));
+        Some(attempt)
     }
 
     /// Ignore a completion from a request which is no longer ours.
-    pub fn finish(&mut self, chat: &str, through: i64, success: bool, now: Instant) -> bool {
+    pub fn finish(
+        &mut self,
+        attempt: u64,
+        chat: &str,
+        through: i64,
+        success: bool,
+        now: Instant,
+    ) -> bool {
         if !self
             .in_flight
             .as_ref()
-            .is_some_and(|(active, position)| active == chat && *position == through)
+            .is_some_and(|(active_attempt, active_chat, position)| {
+                *active_attempt == attempt && active_chat == chat && *position == through
+            })
         {
             return false;
         }
@@ -58,18 +70,24 @@ mod tests {
         let mut sync = ReadSync::default();
         let mut now = Instant::now();
         for delay in [30, 60, 120, 240, 480, 900, 900] {
-            assert!(sync.start("first", 100, now));
-            assert!(!sync.start("second", 200, now + Duration::from_secs(3600)));
-            assert!(sync.finish("first", 100, false, now));
+            let attempt = sync.start("first", 100, now).expect("starts");
+            assert!(
+                sync.start("second", 200, now + Duration::from_secs(3600))
+                    .is_none()
+            );
+            assert!(sync.finish(attempt, "first", 100, false, now));
             let deadline = now + Duration::from_secs(delay);
-            assert!(!sync.start("second", 200, deadline - Duration::from_nanos(1)));
+            assert!(
+                sync.start("second", 200, deadline - Duration::from_nanos(1))
+                    .is_none()
+            );
             assert!(sync.ready(deadline));
             now = deadline;
         }
-        assert!(sync.start("second", 200, now));
-        assert!(sync.finish("second", 200, true, now));
-        assert!(sync.start("third", 300, now));
-        assert!(sync.finish("third", 300, false, now));
+        let attempt = sync.start("second", 200, now).expect("starts");
+        assert!(sync.finish(attempt, "second", 200, true, now));
+        let attempt = sync.start("third", 300, now).expect("starts");
+        assert!(sync.finish(attempt, "third", 300, false, now));
         assert!(
             sync.ready(now + Duration::from_secs(30)),
             "success resets the backoff"
@@ -80,11 +98,27 @@ mod tests {
     fn an_unrelated_completion_cannot_release_the_active_request() {
         let mut sync = ReadSync::default();
         let now = Instant::now();
-        assert!(sync.start("current", 200, now));
-        assert!(!sync.finish("old", 200, true, now));
-        assert!(!sync.finish("current", 100, true, now));
+        let attempt = sync.start("current", 200, now).expect("starts");
+        assert!(!sync.finish(attempt, "old", 200, true, now));
+        assert!(!sync.finish(attempt, "current", 100, true, now));
         assert!(!sync.ready(now));
-        assert!(sync.finish("current", 200, true, now));
+        assert!(sync.finish(attempt, "current", 200, true, now));
         assert!(sync.ready(now));
+    }
+
+    #[test]
+    fn stale_attempt_with_same_chat_and_position_cannot_finish_retry() {
+        let mut sync = ReadSync::default();
+        let now = Instant::now();
+        let first = sync.start("chat", 100, now).expect("first attempt");
+        assert!(sync.finish(first, "chat", 100, false, now));
+        let retry = sync
+            .start("chat", 100, now + Duration::from_secs(30))
+            .expect("retry");
+        assert_ne!(first, retry);
+
+        assert!(!sync.finish(first, "chat", 100, true, now));
+        assert!(!sync.ready(now));
+        assert!(sync.finish(retry, "chat", 100, true, now));
     }
 }

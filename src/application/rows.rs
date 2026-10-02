@@ -135,14 +135,10 @@ impl RelmListItem for ChatRow {
             widgets.unread.set_label(unread);
         }
         widgets.avatar.set_text(Some(&self.name));
-        let image = self.avatar.as_ref().and_then(|path| {
-            AVATAR_TEXTURES.with_borrow_mut(|cache| {
-                if !cache.contains_key(path) {
-                    cache.insert(path.clone(), gtk::gdk::Texture::from_filename(path).ok()?);
-                }
-                cache.get(path).cloned()
-            })
-        });
+        let image = self
+            .avatar
+            .as_deref()
+            .and_then(super::dialogs::cached_texture);
         widgets.avatar.set_custom_image(image.as_ref());
     }
 }
@@ -469,14 +465,10 @@ impl RelmListItem for MessageRow {
             .avatar
             .set_opacity(if self.show_sender { 1.0 } else { 0.0 });
         widgets.avatar.set_text(Some(&self.sender));
-        let image = self.avatar.as_ref().and_then(|path| {
-            AVATAR_TEXTURES.with_borrow_mut(|cache| {
-                if !cache.contains_key(path) {
-                    cache.insert(path.clone(), gtk::gdk::Texture::from_filename(path).ok()?);
-                }
-                cache.get(path).cloned()
-            })
-        });
+        let image = self
+            .avatar
+            .as_deref()
+            .and_then(super::dialogs::cached_texture);
         widgets.avatar.set_custom_image(image.as_ref());
         widgets.header.set_visible(self.show_sender && !outgoing);
         widgets.name.set_label(&self.sender);
