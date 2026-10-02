@@ -65,27 +65,76 @@ struct PendingCompletion {
     revision: u64,
 }
 
-/// Resolves literal `@user` tokens against current group participants.
-/// Returns canonical participant IDs once each, in text order.
-pub fn mention_ids(text: &str, participants: &[String]) -> Vec<String> {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MentionCandidate {
+    pub id: String,
+    pub label: String,
+    pub avatar: Option<std::path::PathBuf>,
+}
+
+/// Returns query after a currently typed `@`, if it can still be completed.
+pub fn active_mention_query(text: &str) -> Option<&str> {
+    let start = text.rfind('@')?;
+    let before = &text[..start];
+    if before
+        .chars()
+        .next_back()
+        .is_some_and(|character| !character.is_whitespace())
+    {
+        return None;
+    }
+    let query = &text[start + 1..];
+    (!query.chars().any(char::is_whitespace)).then_some(query)
+}
+
+/// Resolves visible labels and literal numeric tokens against group participants.
+/// WhatsApp clients only render mentions written as `@<user>`, so visible
+/// labels are rewritten to that form. Returns the wire text and canonical
+/// participant IDs once each, in text order.
+pub fn encode_mentions(
+    text: &str,
+    participants: &[String],
+    candidates: &[MentionCandidate],
+) -> (String, Vec<String>) {
+    let mut wire = String::with_capacity(text.len());
     let mut found = Vec::new();
-    for (start, _) in text.match_indices('@') {
-        let end = text[start + 1..]
-            .find(|character: char| !character.is_ascii_alphanumeric())
-            .map_or(text.len(), |offset| start + 1 + offset);
-        let token = &text[start + 1..end];
-        if token.is_empty() {
-            continue;
-        }
-        if let Some(id) = participants
+    let mut rest = text;
+    while let Some(at) = rest.find('@') {
+        wire.push_str(&rest[..=at]);
+        rest = &rest[at + 1..];
+        let labelled = candidates
             .iter()
-            .find(|id| id.split('@').next() == Some(token))
-            && !found.contains(id)
+            .filter(|candidate| participants.contains(&candidate.id))
+            .filter(|candidate| rest.starts_with(&candidate.label))
+            .filter(|candidate| {
+                rest[candidate.label.len()..]
+                    .chars()
+                    .next()
+                    .is_none_or(|character| !character.is_alphanumeric())
+            })
+            .max_by_key(|candidate| candidate.label.len());
+        let id = if let Some(candidate) = labelled {
+            wire.push_str(candidate.id.split('@').next().unwrap_or_default());
+            rest = &rest[candidate.label.len()..];
+            Some(candidate.id.clone())
+        } else {
+            let token = rest
+                .split(|character: char| !character.is_ascii_alphanumeric())
+                .next()
+                .unwrap_or_default();
+            participants
+                .iter()
+                .find(|id| id.split('@').next() == Some(token))
+                .cloned()
+        };
+        if let Some(id) = id
+            && !found.contains(&id)
         {
-            found.push(id.clone());
+            found.push(id);
         }
     }
-    found
+    wire.push_str(rest);
+    (wire, found)
 }
 
 /// Work handed to the application layer for sending or editing.
@@ -274,13 +323,40 @@ mod tests {
             "491700000001@s.whatsapp.net".to_owned(),
             "491700000002@s.whatsapp.net".to_owned(),
         ];
-        assert_eq!(
-            mention_ids(
-                "Hi @491700000002, @unknown and @491700000002!",
-                &participants
-            ),
-            ["491700000002@s.whatsapp.net"]
-        );
+        let text = "Hi @491700000002, @unknown and @491700000002!";
+        let (wire, ids) = encode_mentions(text, &participants, &[]);
+        assert_eq!(wire, text);
+        assert_eq!(ids, ["491700000002@s.whatsapp.net"]);
+    }
+
+    #[test]
+    fn named_mentions_prefer_the_longest_visible_label() {
+        let participants: Vec<String> =
+            vec!["one@s.whatsapp.net".into(), "two@s.whatsapp.net".into()];
+        let candidates = vec![
+            MentionCandidate {
+                id: participants[0].clone(),
+                label: "Lucas".into(),
+                avatar: None,
+            },
+            MentionCandidate {
+                id: participants[1].clone(),
+                label: "Lucas Ribeiro".into(),
+                avatar: None,
+            },
+        ];
+
+        let (wire, ids) =
+            encode_mentions("Hi @Lucas Ribeiro and @Lucas!", &participants, &candidates);
+        assert_eq!(wire, "Hi @two and @one!");
+        assert_eq!(ids, [participants[1].clone(), participants[0].clone()]);
+    }
+
+    #[test]
+    fn active_query_requires_a_standalone_unfinished_mention() {
+        assert_eq!(active_mention_query("Hi @Lucas"), Some("Lucas"));
+        assert_eq!(active_mention_query("mail@Lucas"), None);
+        assert_eq!(active_mention_query("Hi @Lucas Ribeiro"), None);
     }
 
     #[test]

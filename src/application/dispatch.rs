@@ -138,419 +138,13 @@ impl NativeApplication {
                     self.status = "Starting backend".into();
                 }
             }
-            Input::BackendReady => {
-                let events =
-                    backend_events::drain_and_convert(self.backend.as_ref(), &self.notifier);
-                for event in events {
-                    match event {
-                        NativeEvent::Link(link) => {
-                            if matches!(link, LinkStatus::LoggedOut) {
-                                self.audio.media.stop_playback();
-                                self.audio.playing_audio = None;
-                                self.audio.waveform_queue.clear();
-                                if let Some(cancel) = self.audio.waveform_cancel.take() {
-                                    cancel.store(true, std::sync::atomic::Ordering::Release);
-                                }
-                                self.audio.audio_waveforms.clear();
-                                self.audio.waveform_attempted.clear();
-                                self.audio.audio_errors.clear();
-                                self.audio.audio_registry.borrow_mut().clear();
-                                for chat in &self.chat_snapshots {
-                                    self.notifications.clear_chat(&chat.id);
-                                }
-                                self.active_chat = None;
-                                self.chat_snapshots.clear();
-                                self.chat_ids.clear();
-                                self.reset_chat_filters(false);
-                                self.message_ids.clear();
-                                self.message_snapshots.clear();
-                                self.editable_messages.clear();
-                                self.messages.clear();
-                                self.contacts.clear();
-                                self.avatars.clear();
-                                self.presence.clear();
-                                self.typing.clear();
-                                self.typing_until.clear();
-                                self.composing_until.clear();
-                                self.drafts.clear();
-                                self.composer =
-                                    crate::native_composer::NativeComposerState::default();
-                                self.composer_buffer.set_text("");
-                                self.draft.clear();
-                                self.editing = None;
-                                self.reply_to = None;
-                                self.pending_edit = None;
-                                self.pending_composer_request = None;
-                                self.pending_send = None;
-                                self.audio.voice_send_pending = false;
-                                self.account_receipts_off = false;
-                                self.audio.played_voice.clear();
-                                self.avatar_requests.clear();
-                                self.pending_attachments.clear();
-                                self.document_attachments.clear();
-                                self.pending_clipboard_images.clear();
-                                self.audio.selected_voice = None;
-                                self.audio.selected_voice_message = None;
-                                self.pending_quote_navigation = None;
-                                self.history_complete = false;
-                                self.loading_older = false;
-                                self.transcript.clear();
-                                self.chats_dirty = true;
-                                self.sync_chat_projection();
-                            }
-                            self.qr_texture = match &link {
-                                LinkStatus::Unlinked { qr: Some(qr), .. } => qr_texture(qr),
-                                _ => None,
-                            };
-                            if self.resuming {
-                                if link.is_connected() {
-                                    self.resuming = !self.resume_dropped;
-                                } else {
-                                    self.resume_dropped = true;
-                                }
-                            }
-                            self.link = link;
-                            (self.page_title, self.status) = link_page(&self.link);
-                        }
-                        NativeEvent::Syncing(syncing) => self.syncing = syncing,
-                        NativeEvent::Chats(chats) => {
-                            self.apply_chat_changes(vec![ChatChange::Snapshot(chats)]);
-                        }
-                        NativeEvent::ChatUpdated(chat) => {
-                            self.apply_chat_changes(vec![ChatChange::Update(*chat)]);
-                            self.read_open_chat();
-                        }
-                        // An empty list clears contacts on logout; otherwise
-                        // the backend sends the full set or single updates.
-                        NativeEvent::Contacts(contacts) => {
-                            if contacts.is_empty() {
-                                self.contacts.clear();
-                            }
-                            self.contacts.extend(
-                                contacts
-                                    .into_iter()
-                                    .map(|contact| (contact.id.clone(), contact)),
-                            );
-                            if !self.message_ids.is_empty() {
-                                self.sync_transcript();
-                                self.rebuild_message_rows();
-                            }
-                        }
-                        NativeEvent::Messages {
-                            chat,
-                            messages,
-                            older,
-                            complete,
-                        } => {
-                            if self.active_chat.as_deref() == Some(&chat) {
-                                self.history_complete = complete;
-                                self.loading_older = false;
-                            }
-                            self.apply_messages(chat.clone(), messages, older);
-                            if let Some((target_chat, target_id)) =
-                                self.pending_quote_navigation.clone()
-                                && target_chat == chat
-                                && self.message_ids.contains(&target_id)
-                            {
-                                self.pending_quote_navigation = None;
-                                self.scroll_message_into_view(&target_id);
-                            }
-                        }
-                        NativeEvent::OlderFetched { chat, more } => {
-                            if self.active_chat.as_deref() == Some(&chat) {
-                                self.loading_older = false;
-                                self.history_complete = !more;
-                                if !more {
-                                    self.status = "No older messages available".into();
-                                }
-                            }
-                        }
-                        NativeEvent::Stickers {
-                            saved,
-                            packs,
-                            recent,
-                        } => {
-                            let changed = saved != self.favorite_stickers
-                                || packs != self.sticker_packs
-                                || recent != self.recent_stickers;
-                            let packs_changed = packs != self.sticker_packs;
-                            self.favorite_stickers = saved;
-                            self.sticker_packs = packs;
-                            self.recent_stickers = recent;
-                            if changed {
-                                self.refresh_sticker_picker(&sender);
-                            }
-                            if !packs_changed {
-                                continue;
-                            }
-                            self.sticker_emojis.clear();
-                            for pack in &self.sticker_packs {
-                                for sticker in &pack.stickers {
-                                    if let Ok(bytes) = std::fs::read(sticker) {
-                                        let emojis = crate::sticker_meta::emojis(&bytes);
-                                        if !emojis.is_empty() {
-                                            self.sticker_emojis.insert(sticker.clone(), emojis);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        NativeEvent::MessageUpdated(message) => self.message_updated(*message),
-                        NativeEvent::Edited { chat, id, success } => self.edited(chat, id, success),
-                        NativeEvent::Sent { chat, success } => {
-                            if self.audio.voice_send_pending {
-                                self.audio.voice_send_pending = false;
-                                self.status = if success {
-                                    "Voice message sent".into()
-                                } else {
-                                    "Voice message could not be sent".into()
-                                };
-                            } else {
-                                self.sent(chat, success);
-                            }
-                        }
-                        NativeEvent::AttachmentCompleted {
-                            chat,
-                            path,
-                            success,
-                        } => self.attachment_completed(chat, path, success),
-                        NativeEvent::Media {
-                            chat,
-                            message,
-                            result,
-                        } => self.media_completed(&chat, &message, result),
-                        NativeEvent::MessageDeleted { chat, id } => {
-                            self.message_deleted(&chat, &id)
-                        }
-                        NativeEvent::Incoming { chat, message } => {
-                            if self.settings.auto_download
-                                && should_auto_download(message.content.media())
-                                && let Some(backend) = &self.backend
-                            {
-                                backend.send(crate::backend::Command::Download {
-                                    chat: chat.clone(),
-                                    message: message.id.clone(),
-                                });
-                                if let Some(media) = self
-                                    .message_snapshots
-                                    .get_mut(&message.id)
-                                    .and_then(|known| known.content.media_mut())
-                                {
-                                    media.state = crate::model::MediaState::Downloading;
-                                }
-                            }
-                            let known = self.chat_snapshots.iter().find(|known| known.id == chat);
-                            if notification_should_show(
-                                self.settings.notifications,
-                                self.window.is_active(),
-                                self.active_chat.as_deref(),
-                                &chat,
-                                known,
-                            ) {
-                                let title = known.map_or_else(
-                                    || {
-                                        sender_label(
-                                            message.sender_name.as_deref(),
-                                            &message.sender,
-                                        )
-                                    },
-                                    |known| known.name.clone(),
-                                );
-                                let body = if !self.settings.notification_previews {
-                                    "New message".to_owned()
-                                } else if known.is_some_and(crate::model::Chat::is_group) {
-                                    format!(
-                                        "{}: {}",
-                                        sender_label(
-                                            message.sender_name.as_deref(),
-                                            &message.sender
-                                        ),
-                                        message.summary()
-                                    )
-                                } else {
-                                    message.summary()
-                                };
-                                if let Err(error) = self.notifications.show(
-                                    &chat,
-                                    &title,
-                                    &body,
-                                    self.avatars.get(&chat).map(std::path::PathBuf::as_path),
-                                ) {
-                                    log::warn!("could not show a notification: {error}");
-                                }
-                            }
-                        }
-                        NativeEvent::Typing {
-                            chat,
-                            sender: typing_sender,
-                            composing,
-                        } => {
-                            if composing {
-                                let name = self
-                                    .chat_snapshots
-                                    .iter()
-                                    .find(|known| known.id == typing_sender)
-                                    .map(|known| known.name.clone())
-                                    .unwrap_or_else(|| "Someone".into());
-                                self.typing.insert(chat.clone(), name);
-                                self.typing_until.insert(
-                                    chat.clone(),
-                                    std::time::Instant::now() + std::time::Duration::from_secs(5),
-                                );
-                                let input = sender.clone();
-                                gtk::glib::timeout_add_local_once(
-                                    std::time::Duration::from_secs(5),
-                                    move || {
-                                        input.input(Input::ClearTyping(chat));
-                                    },
-                                );
-                            } else {
-                                self.typing.remove(&chat);
-                                self.typing_until.remove(&chat);
-                            }
-                        }
-                        NativeEvent::Presence {
-                            id,
-                            online,
-                            last_seen,
-                        } => {
-                            self.presence.insert(id, (online, last_seen));
-                        }
-                        NativeEvent::Avatar { id, path } => {
-                            if let Some(path) = path {
-                                self.avatars.insert(id, path);
-                            } else {
-                                self.avatars.remove(&id);
-                            }
-                            self.chats_dirty = true;
-                        }
-                        NativeEvent::ReceiptsPrivacy { disabled } => {
-                            self.account_receipts_off = disabled
-                        }
-                        NativeEvent::ContactAbout { id, about } => {
-                            if let Some((chat, row)) = &self.info_about
-                                && chat == &id
-                                && let Some(about) = about
-                            {
-                                row.set_subtitle(&about);
-                                row.set_visible(true);
-                            }
-                        }
-                        NativeEvent::ContactReady { id, name } => {
-                            let display_name = name
-                                .filter(|name| !name.trim().is_empty())
-                                .unwrap_or_else(|| crate::util::phone(&id));
-                            self.apply_chat_changes(vec![ChatChange::Update(
-                                crate::model::Chat::new(id.clone(), display_name),
-                            )]);
-                            self.status = "Contact is on WhatsApp".into();
-                            sender.input(Input::OpenChatId(id));
-                        }
-                        NativeEvent::Info(message) => {
-                            self.status = message.clone();
-                            self.toast(&message);
-                        }
-                        NativeEvent::Error(error) => {
-                            self.loading_older = false;
-                            log::warn!("native backend operation failed");
-                            let feedback = sanitized_error_feedback(&error);
-                            self.status = feedback.into();
-                            self.toast(feedback);
-                        }
-                    }
-                }
-                if self.chats_dirty && self.chat_ids.is_empty() {
-                    self.flush_chats();
-                } else if self.chats_dirty && !self.chats_flush_scheduled {
-                    // ponytail: fixed 200 ms coalescing window; make it adaptive if
-                    // very large archives still stutter during sync.
-                    self.chats_flush_scheduled = true;
-                    let flush = sender.clone();
-                    gtk::glib::timeout_add_local_once(
-                        std::time::Duration::from_millis(200),
-                        move || flush.input(Input::FlushChats),
-                    );
-                }
-                self.poll_theme_catalog();
+            Input::BackendReady => backend_events::handle_backend_ready(self, sender),
+            Input::SelectChat(position) => self.select_chat(position),
+            Input::ScrollToRecentMessages => {
+                self.recent_messages_pending = false;
+                scroll_to_end(&self.messages.view);
             }
-            Input::SelectChat(position) => {
-                let Some(chat) = self.chat_ids.get(position as usize).cloned() else {
-                    return;
-                };
-                if self
-                    .split_view
-                    .as_ref()
-                    .is_some_and(adw::OverlaySplitView::is_collapsed)
-                {
-                    self.sidebar_visible = false;
-                }
-                if self.active_chat.as_deref() != Some(&chat) {
-                    self.cancel_portal_requests();
-                    self.audio.media.stop_playback();
-                    self.audio.playing_audio = None;
-                    self.audio.waveform_queue.clear();
-                    if let Some(cancel) = self.audio.waveform_cancel.take() {
-                        cancel.store(true, std::sync::atomic::Ordering::Release);
-                    }
-                    self.audio.audio_waveforms.clear();
-                    self.audio.waveform_attempted.clear();
-                    self.audio.audio_errors.clear();
-                    self.audio.audio_registry.borrow_mut().clear();
-                }
-                self.notifications.clear_chat(&chat);
-                if let Some(previous) = self.active_chat.as_deref() {
-                    if self
-                        .editing
-                        .as_ref()
-                        .is_some_and(|(editing_chat, _)| editing_chat == previous)
-                    {
-                        self.composer.set_draft(
-                            previous,
-                            self.drafts.get(previous).cloned().unwrap_or_default(),
-                        );
-                    }
-                    self.composer.cancel_context(previous);
-                }
-                self.chat_projection.select(chat.clone());
-                self.active_chat = Some(chat.clone());
-                self.mark_open_chat();
-                self.reply_to = None;
-                self.editing = None;
-                self.pending_edit = None;
-                self.draft = self.composer.draft(&chat).to_owned();
-                self.composer_buffer.set_text(&self.draft);
-                self.messages.clear();
-                self.message_target = None;
-                self.opened_unread = self
-                    .chat_snapshots
-                    .iter()
-                    .find(|known| known.id == chat)
-                    .map_or(0, |known| known.unread as usize);
-                self.unread_marker = None;
-                self.history_complete = false;
-                self.loading_older = false;
-                self.message_ids.clear();
-                self.message_snapshots.clear();
-                self.editable_messages.clear();
-                self.transcript.clear();
-                self.audio.selected_voice = None;
-                self.audio.selected_voice_message = None;
-                self.page_title = self
-                    .chat_snapshots
-                    .iter()
-                    .find(|known| known.id == chat)
-                    .map(|known| known.name.clone())
-                    .unwrap_or_else(|| "Conversation".into());
-                self.status = "Loading messages".into();
-                if let Some(backend) = &self.backend {
-                    backend.send(crate::backend::Command::MarkRead {
-                        chat: chat.clone(),
-                        receipts: self.settings.send_read_receipts && !self.account_receipts_off,
-                    });
-                    backend.send(crate::backend::Command::LoadChat { chat, before: None });
-                }
-                self.focus_composer();
-            }
+            Input::TranscriptAtEnd => self.recent_messages_pending = false,
             Input::HighlightChat(position) => {
                 if let Some(chat) = self.chat_ids.get(position as usize) {
                     self.chat_projection.select(chat.clone());
@@ -976,15 +570,59 @@ impl NativeApplication {
                 );
             }
             Input::InsertMentionId(participant) => {
+                let label = self
+                    .active_chat
+                    .as_deref()
+                    .and_then(|chat| self.chat_snapshots.iter().find(|known| known.id == chat))
+                    .and_then(|chat| {
+                        self.mention_labels(chat)
+                            .into_iter()
+                            .find(|candidate| candidate.id == participant)
+                    })
+                    .map(|candidate| candidate.label);
+                if let Some(label) = label {
+                    let mut end = self.composer_buffer.end_iter();
+                    self.insert_mention(&mut end, &label);
+                    self.composer_buffer.place_cursor(&end);
+                    self.focus_composer();
+                }
+            }
+            Input::SelectMention(candidate) => {
                 let known = self
                     .active_chat
                     .as_deref()
                     .and_then(|chat| self.chat_snapshots.iter().find(|known| known.id == chat))
-                    .is_some_and(|chat| chat.participants.contains(&participant));
-                if known {
-                    let token = participant.split('@').next().unwrap_or_default();
-                    let mut end = self.composer_buffer.end_iter();
-                    self.composer_buffer.insert(&mut end, &format!("@{token} "));
+                    .is_some_and(|chat| chat.participants.contains(&candidate.id));
+                let cursor = self.composer_buffer.iter_at_mark(
+                    &self
+                        .composer_buffer
+                        .mark("insert")
+                        .expect("insert mark exists"),
+                );
+                let before = self
+                    .composer_buffer
+                    .text(&self.composer_buffer.start_iter(), &cursor, true)
+                    .to_string();
+                let after = self
+                    .composer_buffer
+                    .text(&cursor, &self.composer_buffer.end_iter(), true)
+                    .to_string();
+                if known && let Some(query) = crate::native_composer::active_mention_query(&before)
+                {
+                    let prefix = &before[..before.len() - query.len() - 1];
+                    let mut start = self.composer_buffer.start_iter();
+                    start.forward_chars(prefix.chars().count() as i32);
+                    let mut end = cursor;
+                    end.forward_chars(
+                        after
+                            .chars()
+                            .take_while(|character| !character.is_whitespace())
+                            .count() as i32,
+                    );
+                    self.composer_buffer.delete(&mut start, &mut end);
+                    self.insert_mention(&mut start, &candidate.label);
+                    self.composer_buffer.place_cursor(&start);
+                    self.focus_composer();
                 }
             }
             Input::PasteClipboardImage => self.paste_clipboard_image(&sender),

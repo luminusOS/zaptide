@@ -14,6 +14,7 @@ pub(super) struct ComposerState {
     pub(super) clipboard_preview: Option<gtk::gdk::Texture>,
     pub(super) can_attach: bool,
     pub(super) can_mention: bool,
+    pub(super) mention_candidates: Vec<crate::native_composer::MentionCandidate>,
     pub(super) editable: bool,
     pub(super) editing: bool,
     pub(super) draft_empty: bool,
@@ -35,6 +36,7 @@ impl Default for ComposerState {
             clipboard_preview: None,
             can_attach: false,
             can_mention: false,
+            mention_candidates: Vec::new(),
             editable: false,
             editing: false,
             draft_empty: true,
@@ -57,6 +59,8 @@ pub(super) struct ComposerView {
     text_view: Option<gtk::TextView>,
     sticker_button: Option<gtk::Button>,
     attachment_list: Option<gtk::Box>,
+    mention_popover: gtk::Popover,
+    mention_list: gtk::ListBox,
 }
 
 #[derive(Debug)]
@@ -75,6 +79,7 @@ pub(super) enum ComposerViewOutput {
     CancelEdit,
     Recording(crate::native_voice::RecordingIntent),
     InsertMention,
+    SelectMention(crate::native_composer::MentionCandidate),
     ShowStickerPicker,
     ShowPollCreator,
     InsertEmoji(String),
@@ -398,12 +403,36 @@ impl SimpleComponent for ComposerView {
         _root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
+        let mention_scroll = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .propagate_natural_height(true)
+            .propagate_natural_width(true)
+            .max_content_height(320)
+            .build();
+        let mention_list = gtk::ListBox::builder()
+            .selection_mode(gtk::SelectionMode::Single)
+            .css_classes(["navigation-sidebar"])
+            .width_request(300)
+            .build();
+        mention_list.update_property(&[gtk::accessible::Property::Label("Mention suggestions")]);
+        // Not autohide and not focusable, so typing stays in the composer.
+        let mention_popover = gtk::Popover::builder()
+            .position(gtk::PositionType::Top)
+            .autohide(false)
+            .can_focus(false)
+            .css_classes(["zaptide-mention-popover"])
+            .child(&mention_scroll)
+            .build();
+        mention_scroll.set_child(Some(&mention_list));
+        mention_list.set_adjustment(Some(&mention_scroll.vadjustment()));
         let mut model = Self {
             state: init.state,
             buffer: init.buffer,
             text_view: None,
             sticker_button: None,
             attachment_list: None,
+            mention_popover,
+            mention_list,
         };
         let enter_setting = init.enter_sends;
         let input = sender.clone();
@@ -417,6 +446,66 @@ impl SimpleComponent for ComposerView {
         });
         let enter_buffer = model.buffer.clone();
         let enter_sender = sender.clone();
+        let (key_popover, key_list) = (model.mention_popover.clone(), model.mention_list.clone());
+        // Escape hides suggestions until the text before the caret changes.
+        let dismissed = std::rc::Rc::new(std::cell::RefCell::new(None::<String>));
+        let key_dismissed = dismissed.clone();
+        // Capture phase: the text view would otherwise take arrows and Return.
+        let mention_buffer = model.buffer.clone();
+        let mention_keys = gtk::EventControllerKey::new();
+        mention_keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        mention_keys.connect_key_pressed(move |controller, key, _, modifiers| {
+            let cursor = mention_buffer.iter_at_mark(&mention_buffer.get_insert());
+            let before = mention_buffer
+                .text(&mention_buffer.start_iter(), &cursor, true)
+                .to_string();
+            if key_popover.is_visible()
+                && modifiers
+                    .difference(gtk::gdk::ModifierType::LOCK_MASK)
+                    .is_empty()
+                && crate::native_composer::active_mention_query(&before).is_some()
+            {
+                let selected = key_list.selected_row().map_or(0, |row| row.index());
+                match key {
+                    gtk::gdk::Key::Up | gtk::gdk::Key::Down => {
+                        let step = if key == gtk::gdk::Key::Up { -1 } else { 1 };
+                        if let Some(row) = key_list.row_at_index(selected + step) {
+                            key_list.select_row(Some(&row));
+                            if let Some(view) = controller.widget() {
+                                view.update_relation(&[
+                                    gtk::accessible::Relation::ActiveDescendant(row.upcast_ref()),
+                                ]);
+                            }
+                            if let Some(bounds) = row.compute_bounds(&key_list)
+                                && let Some(adjustment) = key_list.adjustment()
+                            {
+                                adjustment.clamp_page(
+                                    f64::from(bounds.y()),
+                                    f64::from(bounds.y() + bounds.height()),
+                                );
+                            }
+                        }
+                        return gtk::glib::Propagation::Stop;
+                    }
+                    gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter | gtk::gdk::Key::Tab => {
+                        if let Some(row) = key_list
+                            .row_at_index(selected)
+                            .and_downcast::<adw::ActionRow>()
+                        {
+                            adw::prelude::ActionRowExt::activate(&row);
+                        }
+                        return gtk::glib::Propagation::Stop;
+                    }
+                    gtk::gdk::Key::Escape => {
+                        key_dismissed.replace(Some(before));
+                        key_popover.popdown();
+                        return gtk::glib::Propagation::Stop;
+                    }
+                    _ => {}
+                }
+            }
+            gtk::glib::Propagation::Proceed
+        });
         let composer_keys = gtk::EventControllerKey::new();
         composer_keys.set_propagation_phase(gtk::PropagationPhase::Bubble);
         composer_keys.connect_key_pressed(move |_, key, _, modifiers| {
@@ -439,10 +528,50 @@ impl SimpleComponent for ComposerView {
         });
         let recording_meter_area = &init.recording_meter_area;
         let widgets = view_output!();
+        widgets.composer.add_controller(mention_keys);
+        // Suggestions follow the caret and close once it leaves the `@query`
+        // or the composer loses focus.
+        let follow_caret = {
+            let (popover, list, view) = (
+                model.mention_popover.clone(),
+                model.mention_list.clone(),
+                widgets.composer.clone(),
+            );
+            let dismissed = dismissed.clone();
+            move |buffer: &gtk::TextBuffer, caret: &gtk::TextIter| {
+                let before = buffer.text(&buffer.start_iter(), caret, true).to_string();
+                if crate::native_composer::active_mention_query(&before).is_none() {
+                    popover.popdown();
+                } else if list.row_at_index(0).is_some()
+                    && dismissed.borrow().as_deref() != Some(before.as_str())
+                {
+                    point_at_caret(&popover, &view, caret);
+                    popover.popup();
+                }
+            }
+        };
+        let caret_follow = follow_caret.clone();
+        model.buffer.connect_mark_set(move |buffer, iter, mark| {
+            if mark == &buffer.get_insert() {
+                caret_follow(buffer, iter);
+            }
+        });
+        let focus = gtk::EventControllerFocus::new();
+        let focus_popover = model.mention_popover.clone();
+        focus.connect_leave(move |_| focus_popover.popdown());
+        let focus_buffer = model.buffer.clone();
+        focus.connect_enter(move |_| {
+            follow_caret(
+                &focus_buffer,
+                &focus_buffer.iter_at_mark(&focus_buffer.get_insert()),
+            );
+        });
+        widgets.composer.add_controller(focus);
         widgets.composer.add_controller(composer_keys);
         model.text_view = Some(widgets.composer.clone());
         model.sticker_button = Some(widgets.sticker_button.clone());
         model.attachment_list = Some(widgets.attachment_list.clone());
+        model.mention_popover.set_parent(&widgets.composer);
         model.rebuild_attachments(&sender);
         ComponentParts { model, widgets }
     }
@@ -452,19 +581,76 @@ impl SimpleComponent for ComposerView {
             ComposerViewInput::Sync(state) => {
                 let staged_changed = state.attachment_paths != self.state.attachment_paths
                     || state.clipboard_preview != self.state.clipboard_preview;
+                let mentions_changed = state.mention_candidates != self.state.mention_candidates;
                 self.state = state;
                 if staged_changed {
                     self.rebuild_attachments(&sender);
                 }
+                if mentions_changed {
+                    self.rebuild_mentions(&sender);
+                }
             }
         }
     }
+
+    fn shutdown(&mut self, _widgets: &mut Self::Widgets, _output: relm4::Sender<Self::Output>) {
+        self.mention_popover.unparent();
+    }
 }
 
-/// Side of an attachment card in the tray above the composer.
 const CARD_EDGE: i32 = 72;
 
+// ponytail: re-presented on caret moves only; a window resize while the
+// popover is open keeps the old position until the next keystroke.
+fn point_at_caret(popover: &gtk::Popover, view: &gtk::TextView, caret: &gtk::TextIter) {
+    let rect = view.iter_location(caret);
+    let (x, y) = view.buffer_to_window_coords(gtk::TextWindowType::Widget, rect.x(), rect.y());
+    popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x, y, 1, rect.height())));
+    if popover.is_visible() {
+        popover.present();
+    }
+}
+
 impl ComposerView {
+    /// Suggestion popover anchored at the caret, reusing the mention dialog rows.
+    fn rebuild_mentions(&self, sender: &ComponentSender<Self>) {
+        let list = &self.mention_list;
+        list.remove_all();
+        let candidates = &self.state.mention_candidates;
+        let Some(text_view) = self.text_view.as_ref().filter(|_| !candidates.is_empty()) else {
+            self.mention_popover.popdown();
+            return;
+        };
+        for candidate in candidates {
+            let phone = crate::model::phone_of(&candidate.id).map(crate::util::phone);
+            let (row, avatar) = super::dialogs::mention_row(&candidate.label, phone.as_deref());
+            if let Some(path) = &candidate.avatar {
+                avatar.set_custom_image(super::dialogs::cached_texture(path).as_ref());
+            }
+            row.set_focusable(false);
+            let candidate = candidate.clone();
+            let sender = sender.clone();
+            adw::prelude::ActionRowExt::connect_activated(&row, move |_| {
+                sender
+                    .output(ComposerViewOutput::SelectMention(candidate.clone()))
+                    .unwrap();
+            });
+            list.append(&row);
+        }
+        if let Some(first) = list.row_at_index(0) {
+            list.select_row(Some(&first));
+            text_view.update_relation(&[gtk::accessible::Relation::ActiveDescendant(
+                first.upcast_ref(),
+            )]);
+        }
+        point_at_caret(
+            &self.mention_popover,
+            text_view,
+            &self.buffer.iter_at_mark(&self.buffer.get_insert()),
+        );
+        self.mention_popover.popup();
+    }
+
     /// One card per staged item; rebuilt only when the staged set changes.
     fn rebuild_attachments(&self, sender: &ComponentSender<Self>) {
         let Some(list) = &self.attachment_list else {
@@ -490,8 +676,6 @@ impl ComposerView {
             );
             let content_type = gtk::gio::content_type_guess(Some(path), None).0;
             let content = if content_type.starts_with("image/") {
-                // ponytail: decodes on the main thread; fine for a few photos,
-                // move to glycin like the timeline if large batches stall.
                 let picture = gtk::Picture::for_filename(path);
                 picture.set_alternative_text(Some(&name));
                 thumbnail(picture)

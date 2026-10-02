@@ -85,6 +85,21 @@ impl NativeApplication {
     }
 
     pub(super) fn send_text(&mut self, text: String) {
+        // The draft keeps visible labels; only the backend gets `@<user>` tokens.
+        let (wire, mentions) = self
+            .active_chat
+            .as_deref()
+            .and_then(|chat| self.chat_snapshots.iter().find(|known| known.id == chat))
+            .map_or_else(
+                || (text.clone(), Vec::new()),
+                |known| {
+                    crate::native_composer::encode_mentions(
+                        &text,
+                        &known.participants,
+                        &self.mention_labels(known),
+                    )
+                },
+            );
         self.draft = text;
         if let Some(chat) = &self.active_chat {
             self.composer.set_draft(chat, self.draft.clone());
@@ -96,12 +111,6 @@ impl NativeApplication {
         let Some(chat) = self.active_chat.clone() else {
             return;
         };
-        let mentions = self
-            .chat_snapshots
-            .iter()
-            .find(|known| known.id == chat)
-            .map(|known| crate::native_composer::mention_ids(&self.draft, &known.participants))
-            .unwrap_or_default();
         let attachment_count = self.pending_attachment_count();
         if self.draft.trim().is_empty() && attachment_count == 0 {
             return;
@@ -132,7 +141,7 @@ impl NativeApplication {
                 backend.send(crate::backend::Command::EditText {
                     chat,
                     id: id.clone(),
-                    text: self.draft.clone(),
+                    text: wire.clone(),
                     mentions: mentions.clone(),
                 });
                 self.status = "Saving edit".into();
@@ -172,7 +181,7 @@ impl NativeApplication {
                     chat,
                     paths: pending.attachments.clone(),
                     documents,
-                    caption: caption(&self.draft),
+                    caption: caption(&wire),
                     quoting: quote,
                     mentions: mentions.clone(),
                 });
@@ -183,7 +192,7 @@ impl NativeApplication {
                     width: image.width,
                     height: image.height,
                     rgba: image.rgba.clone(),
-                    caption: caption(&self.draft),
+                    caption: caption(&wire),
                     quoting: quote,
                     mentions: mentions.clone(),
                 });
@@ -191,7 +200,7 @@ impl NativeApplication {
             } else {
                 backend.send(crate::backend::Command::SendText {
                     chat,
-                    text: self.draft.clone(),
+                    text: wire.clone(),
                     quoting: quote,
                     mentions,
                 });
@@ -223,6 +232,7 @@ impl NativeApplication {
                     && !self.message_snapshots.contains_key(&message.id)
             })
             .collect::<Vec<_>>();
+        let live_messages_appended = !older && !messages.is_empty();
         if older {
             // One splice keeps a page of history linear instead of shifting
             // the whole window per message.
@@ -250,7 +260,7 @@ impl NativeApplication {
         }
         self.download_missing_stickers();
         self.queue_waveforms();
-        self.rebuild_message_rows();
+        self.rebuild_message_rows(live_messages_appended);
         self.sync_transcript();
         if older
             && let Some(anchor) = anchor
@@ -277,7 +287,7 @@ impl NativeApplication {
             }
             self.message_snapshots
                 .insert(message.id.clone(), message.clone());
-            self.rebuild_message_rows();
+            self.rebuild_message_rows(false);
             self.sync_transcript();
             self.refresh_selected_voice();
         }
@@ -460,7 +470,7 @@ impl NativeApplication {
         self.clear_missing_selected_voice();
     }
 
-    pub(super) fn rebuild_message_rows(&mut self) {
+    pub(super) fn rebuild_message_rows(&mut self, live_messages_appended: bool) {
         let len = self.message_ids.len();
         if self.opened_unread > 0 && len > 0 {
             let first_unread = len - self.opened_unread.min(len);
@@ -545,6 +555,9 @@ impl NativeApplication {
                 .is_some_and(|item| item.borrow().renders_like(row))
         });
         let count = rows.len();
+        let new_tail_arrived = old_len > 0
+            && old_last.as_ref() != self.message_ids.last()
+            && new_messages_need_notice(at_bottom, live_messages_appended);
         // Rows that only changed (delivery, reactions, grouping) keep their
         // widget; replacing them re-creates it, which blanks media and shifts
         // the scroll anchor.
@@ -577,6 +590,9 @@ impl NativeApplication {
                 self.messages.insert(position as u32, row);
                 position += 1;
             }
+        }
+        if new_tail_arrived {
+            self.recent_messages_pending = true;
         }
         // Follow the conversation only when the reader is already at its end.
         if at_bottom && count > 0 && (removed > 0 || inserted > 0) {
@@ -628,5 +644,21 @@ impl NativeApplication {
             );
             self.status = "Transcript copied".into();
         }
+    }
+}
+
+fn new_messages_need_notice(at_bottom: bool, live_messages_appended: bool) -> bool {
+    !at_bottom && live_messages_appended
+}
+
+#[cfg(test)]
+mod tests {
+    use super::new_messages_need_notice;
+
+    #[test]
+    fn only_new_tail_messages_away_from_end_need_notice() {
+        assert!(new_messages_need_notice(false, true));
+        assert!(!new_messages_need_notice(true, true));
+        assert!(!new_messages_need_notice(false, false));
     }
 }

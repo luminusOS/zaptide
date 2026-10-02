@@ -1,5 +1,3 @@
-//! Standalone dialogs owned by the root UI component.
-
 use super::*;
 
 pub(super) type DialogActionCallback = std::rc::Rc<dyn Fn(DialogAction)>;
@@ -15,7 +13,6 @@ pub(super) enum DialogAction {
     SendSticker(std::path::PathBuf),
 }
 
-/// Colored round icon over a caption for one tile of the attach grid.
 pub(super) fn attach_tile(icon: &str, label: &str, tone: &str) -> gtk::Box {
     let tile = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -250,7 +247,6 @@ pub(super) fn show_poll_dialog(parent: &adw::ApplicationWindow, on_action: &Dial
     dialog.present(Some(parent));
 }
 
-/// Picks a contact to message, or adds a number through New Contact.
 pub(super) fn show_new_chat_dialog(
     parent: &adw::ApplicationWindow,
     on_action: &DialogActionCallback,
@@ -420,7 +416,6 @@ pub(super) fn show_new_contact_dialog(
     dialog.present();
 }
 
-/// Searchable participant list; picking one inserts the mention.
 pub(super) fn show_mention_dialog(
     parent: &adw::ApplicationWindow,
     on_action: &DialogActionCallback,
@@ -459,24 +454,14 @@ pub(super) fn show_mention_dialog(
     // Photos are decoded in small idle batches so a large group opens at once.
     let mut photos = Vec::new();
     for (id, name, phone) in people {
-        let row = adw::ActionRow::builder()
-            .title(&name)
-            .use_markup(false)
-            .title_lines(1)
-            .activatable(true)
-            .build();
+        let (row, avatar) = mention_row(&name, phone.as_deref());
         let digits = phone
             .as_deref()
             .unwrap_or_default()
             .replace(|c: char| !c.is_ascii_digit(), "");
-        if let Some(phone) = phone.filter(|phone| phone != &name) {
-            row.set_subtitle(&phone);
-        }
-        let avatar = adw::Avatar::new(32, Some(&name), true);
         if let Some(path) = avatars.get(&id) {
             photos.push((avatar.downgrade(), path.clone()));
         }
-        row.add_prefix(&avatar);
         rows.borrow_mut()
             .push((row.clone(), format!("{} {digits}", name.to_lowercase())));
         let (close, on_action) = (dialog.downgrade(), on_action.clone());
@@ -534,8 +519,25 @@ pub(super) fn show_mention_dialog(
     });
 }
 
+/// Participant row shared by the mention dialog and inline suggestions.
+pub(super) fn mention_row(name: &str, phone: Option<&str>) -> (adw::ActionRow, adw::Avatar) {
+    let row = adw::ActionRow::builder()
+        .title(name)
+        .use_markup(false)
+        .title_lines(1)
+        .subtitle_lines(1)
+        .activatable(true)
+        .build();
+    if let Some(phone) = phone.filter(|phone| *phone != name) {
+        row.set_subtitle(phone);
+    }
+    let avatar = adw::Avatar::new(32, Some(name), true);
+    row.add_prefix(&avatar);
+    (row, avatar)
+}
+
 /// Saved photo for a path, decoded once.
-fn cached_texture(path: &std::path::Path) -> Option<gtk::gdk::Texture> {
+pub(super) fn cached_texture(path: &std::path::Path) -> Option<gtk::gdk::Texture> {
     AVATAR_TEXTURES.with_borrow_mut(|cache| {
         if !cache.contains_key(path) {
             cache.insert(
@@ -555,7 +557,6 @@ fn cached_avatar(
     cached_texture(avatars.get(id)?)
 }
 
-/// Picks the chat to forward the selected message to.
 pub(super) fn show_forward_dialog(
     parent: &adw::ApplicationWindow,
     on_action: &DialogActionCallback,
@@ -733,8 +734,6 @@ fn load_sticker_preview(button: &gtk::Button, path: &std::path::Path, size: i32)
             });
             if let Some(texture) = &texture {
                 STICKER_TEXTURES.with_borrow_mut(|cache| {
-                    // ponytail: wholesale reset at ~40 MB of previews; an LRU if
-                    // large libraries make reopening noticeably slower.
                     if cache.len() >= 500 {
                         cache.clear();
                     }
@@ -780,8 +779,6 @@ fn animate_sticker_on_hover(button: &gtk::Button, path: &std::path::Path) {
             let button = button.clone();
             gtk::glib::spawn_future_local(async move {
                 let current = hovering.clone();
-                // ponytail: decoded again on every hover, and dropped on leave, so
-                // an open picker holds one sticker's frames at most.
                 let frames = gtk::gio::spawn_blocking(move || {
                     crate::native_media_widgets::decode_sticker_file(&path, || {
                         current.load(Ordering::Acquire)

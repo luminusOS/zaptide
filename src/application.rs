@@ -407,13 +407,13 @@ pub struct NativeApplication {
     /// (group, pinned, muted, archived) the chat menu was last labelled for.
     chat_menu_state: Option<(bool, bool, bool, bool)>,
     tray: Option<crate::native_tray::TrayHandle>,
-    /// Last state sent to the tray.
     tray_state: crate::native_tray::TrayState,
     /// Whether a tray host shows the icon, so closing can hide the window.
     tray_shown: bool,
     avatars: std::collections::HashMap<String, std::path::PathBuf>,
     avatar_requests: std::collections::HashSet<String>,
-    typing: std::collections::HashMap<String, String>,
+    /// Who is typing per chat: display name and sender ID.
+    typing: std::collections::HashMap<String, (String, String)>,
     typing_until: std::collections::HashMap<String, std::time::Instant>,
     composing_until: std::collections::HashMap<String, std::time::Instant>,
     presence: std::collections::HashMap<String, (bool, Option<i64>)>,
@@ -438,6 +438,7 @@ pub struct NativeApplication {
     /// to `unread_marker`, so live arrivals never move the "Unread" line.
     opened_unread: usize,
     unread_marker: Option<String>,
+    recent_messages_pending: bool,
     message_menu: gtk::PopoverMenu,
     poll_choice: usize,
     sticker_packs: Vec<crate::model::StickerPack>,
@@ -463,7 +464,6 @@ pub struct NativeApplication {
     editing: Option<(String, String)>,
     account_receipts_off: bool,
     link: LinkStatus,
-    /// The backend is syncing history or preferences.
     syncing: bool,
     /// Reconnecting after a suspend, until the link is back.
     resuming: bool,
@@ -485,7 +485,6 @@ pub struct NativeApplication {
     phone_linking: bool,
     /// Chat snapshots changed since the list widget was last rebuilt.
     chats_dirty: bool,
-    /// Bumped when search is cleared from outside the search entry.
     search_resets: u64,
     chats_flush_scheduled: bool,
     zoom_provider: gtk::CssProvider,
@@ -503,6 +502,8 @@ pub enum Input {
     SelectChat(u32),
     HighlightChat(u32),
     OpenChatId(String),
+    ScrollToRecentMessages,
+    TranscriptAtEnd,
     LoadOlder,
     SearchChats(String),
     SetUnreadFilter(bool),
@@ -575,6 +576,7 @@ pub enum Input {
     InsertEmoji(String),
     InsertMention,
     InsertMentionId(String),
+    SelectMention(crate::native_composer::MentionCandidate),
     PasteClipboardImage,
     AttachDropped(Vec<std::path::PathBuf>),
     ClipboardImageReady {
@@ -721,8 +723,50 @@ impl SimpleComponent for NativeApplication {
                                         set_orientation: gtk::Orientation::Vertical,
                                         add_css_class: "zaptide-conversation",
 
-                                        append = model.transcript_view.widget(),
-                                        append = model.composer_view.widget(),
+                                         append = model.transcript_view.widget(),
+                                         append = &gtk::Revealer {
+                                             // Laid out like an incoming message row so it
+                                             // reads as the last item of the conversation.
+                                             set_transition_type: gtk::RevealerTransitionType::Crossfade,
+                                             set_margin_start: 18,
+                                             set_margin_top: 2,
+                                             set_margin_bottom: 6,
+                                             set_halign: gtk::Align::Start,
+                                             // Crossfade keeps the child's height while hidden,
+                                             // so the row is removed from layout when idle.
+                                             #[watch]
+                                             set_visible: model.active_chat.as_ref().is_some_and(|chat| model.typing.contains_key(chat)),
+                                             #[watch]
+                                             set_reveal_child: model.active_chat.as_ref().is_some_and(|chat| model.typing.contains_key(chat)),
+                                             #[wrap(Some)]
+                                             set_child = &gtk::Box {
+                                                 set_spacing: 8,
+                                                 append = &adw::Avatar {
+                                                     set_size: 36,
+                                                     set_show_initials: true,
+                                                     set_valign: gtk::Align::End,
+                                                     #[watch]
+                                                     set_text: Some(&model.typing_name()),
+                                                     #[watch]
+                                                     set_custom_image: model.typing_avatar().as_ref(),
+                                                 },
+                                                 append = &gtk::Box {
+                                                     add_css_class: "zaptide-bubble",
+                                                     add_css_class: "incoming",
+                                                     add_css_class: "zaptide-typing-bubble",
+                                                     set_spacing: 4,
+                                                     set_accessible_role: gtk::AccessibleRole::Status,
+                                                     #[watch]
+                                                     set_tooltip_text: Some(&model.typing_label()),
+                                                     #[watch]
+                                                     update_property: &[gtk::accessible::Property::Label(&model.typing_label())],
+                                                     append = &gtk::Box { add_css_class: "zaptide-typing-dot", set_valign: gtk::Align::Center },
+                                                     append = &gtk::Box { add_css_class: "zaptide-typing-dot", set_valign: gtk::Align::Center },
+                                                     append = &gtk::Box { add_css_class: "zaptide-typing-dot", set_valign: gtk::Align::Center },
+                                                 },
+                                             },
+                                         },
+                                         append = model.composer_view.widget(),
                                     },
                                     // Shown while files are dragged over the
                                     // conversation; it never takes the drag itself.
@@ -922,12 +966,15 @@ impl SimpleComponent for NativeApplication {
                     has_messages: false,
                     history_complete: false,
                     loading_older: false,
+                    recent_messages_pending: false,
                 },
                 message_view: messages.view.clone(),
             })
             .forward(sender.input_sender(), |output| match output {
                 TranscriptViewOutput::LoadOlder => Input::LoadOlder,
                 TranscriptViewOutput::SelectMessage(position) => Input::SelectMessage(position),
+                TranscriptViewOutput::AtEnd => Input::TranscriptAtEnd,
+                TranscriptViewOutput::ScrollToRecentMessages => Input::ScrollToRecentMessages,
             });
         let recording_meter = crate::native_media_widgets::RecordingMeter::default();
         let composer_view = ComposerView::builder()
@@ -949,6 +996,7 @@ impl SimpleComponent for NativeApplication {
                 ComposerViewOutput::CancelEdit => Input::CancelEdit,
                 ComposerViewOutput::Recording(intent) => Input::Recording(intent),
                 ComposerViewOutput::InsertMention => Input::InsertMention,
+                ComposerViewOutput::SelectMention(candidate) => Input::SelectMention(candidate),
                 ComposerViewOutput::ShowStickerPicker => Input::ShowStickerPicker,
                 ComposerViewOutput::ShowPollCreator => Input::ShowPollCreator,
                 ComposerViewOutput::InsertEmoji(emoji) => Input::InsertEmoji(emoji),
@@ -1010,6 +1058,7 @@ impl SimpleComponent for NativeApplication {
             message_target: None,
             opened_unread: 0,
             unread_marker: None,
+            recent_messages_pending: false,
             message_menu: gtk::PopoverMenu::from_model(None::<&gtk::gio::MenuModel>),
             poll_choice: 0,
             sticker_packs: Vec::new(),
@@ -1204,7 +1253,6 @@ impl SimpleComponent for NativeApplication {
             });
         model.install_zoom_provider();
         model.apply_runtime_settings();
-
         ComponentParts { model, widgets }
     }
 
@@ -1215,8 +1263,13 @@ impl SimpleComponent for NativeApplication {
             }
             _ => None,
         };
+        let draft_changed = matches!(&input, Input::DraftChanged(_));
         self.handle_input(input, sender);
-        self.sync_components(draft_empty_before);
+        if draft_changed {
+            self.sync_composer_view();
+        } else {
+            self.sync_components(draft_empty_before);
+        }
         self.sync_chat_menu();
         self.sync_tray();
     }
@@ -1439,8 +1492,16 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
          .zaptide-chat-item.zaptide-chat-open { background-color: alpha(currentColor, 0.22); }\n\
          .zaptide-bubble { padding: 8px 11px; border-radius: 13px; }\n\
          .zaptide-bubble.incoming { background-color: @zaptide_bubble_in; color: @zaptide_bubble_in_text; }\n\
-         .zaptide-bubble.outgoing { background-color: @zaptide_bubble_out; color: @zaptide_bubble_out_text; }\n\
-         .zaptide-message-item:focus-visible .zaptide-bubble { outline: 2px solid @accent_color; outline-offset: 2px; }\n\
+          .zaptide-bubble.outgoing { background-color: @zaptide_bubble_out; color: @zaptide_bubble_out_text; }\n\
+          .zaptide-typing-bubble { padding: 13px 14px; border-bottom-left-radius: 4px; }\n\
+          .zaptide-typing-dot { min-width: 7px; min-height: 7px; border-radius: 9999px; background-color: currentColor; opacity: 0.35; animation: zaptide-typing 1.2s ease-in-out infinite; }\n\
+          .zaptide-typing-dot:nth-child(2) { animation-delay: 150ms; }\n\
+          .zaptide-typing-dot:nth-child(3) { animation-delay: 300ms; }\n\
+          @keyframes zaptide-typing { 0% { opacity: 0.35; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-3px); } 60% { opacity: 0.35; transform: translateY(0); } 100% { opacity: 0.35; transform: translateY(0); } }\n\
+          .zaptide-mention-popover > contents { padding: 0; }\n\
+          .zaptide-mention-popover list { background: none; }\n\
+          .zaptide-mention-popover row { border-radius: 8px; }\n\
+          .zaptide-message-item:focus-visible .zaptide-bubble { outline: 2px solid @accent_color; outline-offset: 2px; }\n\
          .zaptide-media-card { padding: 8px 12px; margin-top: 4px; background-color: color-mix(in srgb, currentColor 8%, transparent); }\n\
          .zaptide-link-card:hover { background-color: color-mix(in srgb, currentColor 12%, transparent); }\n\
          .zaptide-link-thumbnail { border-radius: 8px; }\n\
@@ -1841,7 +1902,7 @@ impl NativeApplication {
         let Some(chat) = &self.active_chat else {
             return String::new();
         };
-        if let Some(name) = self.typing.get(chat) {
+        if let Some((name, _)) = self.typing.get(chat) {
             return format!("{name} is typing…");
         }
         match self.presence.get(chat) {
@@ -1849,6 +1910,27 @@ impl NativeApplication {
             Some((false, Some(at))) => format!("Last seen {}", crate::util::moment_stamp(*at)),
             _ => self.status.clone(),
         }
+    }
+
+    fn typing_label(&self) -> String {
+        self.active_chat
+            .as_ref()
+            .and_then(|chat| self.typing.get(chat))
+            .map(|(name, _)| format!("{name} is typing"))
+            .unwrap_or_else(|| "Participant is typing".into())
+    }
+
+    fn typing_name(&self) -> String {
+        self.active_chat
+            .as_ref()
+            .and_then(|chat| self.typing.get(chat))
+            .map(|(name, _)| name.clone())
+            .unwrap_or_default()
+    }
+
+    fn typing_avatar(&self) -> Option<gtk::gdk::Texture> {
+        let (_, sender) = self.typing.get(self.active_chat.as_ref()?)?;
+        dialogs::cached_texture(self.avatars.get(sender)?)
     }
 
     fn focus_composer(&self) {
@@ -2088,6 +2170,7 @@ impl NativeApplication {
             .get(id)
             .and_then(crate::model::Contact::display_name)
             .map(str::to_owned)
+            .or_else(|| crate::model::phone_of(id).map(crate::util::phone))
             .unwrap_or_else(|| id.split('@').next().unwrap_or_default().to_owned());
         if name.is_empty() {
             format!("Participant {}", index + 1)
@@ -2419,7 +2502,7 @@ impl NativeApplication {
 
     fn refresh_message_row(&mut self, id: &str) {
         if self.message_ids.iter().any(|known| known == id) {
-            self.rebuild_message_rows();
+            self.rebuild_message_rows(false);
         }
     }
 
@@ -2684,7 +2767,7 @@ impl NativeApplication {
         self.message_ids.remove(position);
         self.message_snapshots.remove(id);
         self.editable_messages.remove(id);
-        self.rebuild_message_rows();
+        self.rebuild_message_rows(false);
         if self
             .editing
             .as_ref()

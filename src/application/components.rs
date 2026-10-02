@@ -42,6 +42,7 @@ impl NativeApplication {
                 .map(|image| image.preview.clone()),
             can_attach: self.can_attach(),
             can_mention: chat.is_some_and(|chat| !chat.participants.is_empty()),
+            mention_candidates: self.mention_candidates(chat),
             editable: !self.audio.voice_send_pending
                 && chat.is_some_and(crate::model::Chat::can_send),
             editing: self.editing.is_some(),
@@ -54,11 +55,92 @@ impl NativeApplication {
         }
     }
 
-    fn sync_composer_view(&self) {
+    pub(super) fn sync_composer_view(&self) {
         let state = self.composer_state();
         if !self.composer_view.model().is_synced(&state) {
             self.composer_view.emit(ComposerViewInput::Sync(state));
         }
+    }
+
+    fn mention_candidates(
+        &self,
+        chat: Option<&crate::model::Chat>,
+    ) -> Vec<crate::native_composer::MentionCandidate> {
+        let (Some(chat), Some(query)) = (
+            chat,
+            crate::native_composer::active_mention_query(&self.draft),
+        ) else {
+            return Vec::new();
+        };
+        let needle = query.to_lowercase();
+        let mut candidates: Vec<_> = self
+            .mention_labels(chat)
+            .into_iter()
+            .filter(|candidate| candidate.label.to_lowercase().contains(&needle))
+            .collect();
+        candidates.sort_by_cached_key(|candidate| candidate.label.to_lowercase());
+        candidates.truncate(8);
+        candidates
+    }
+
+    /// Inserts `@label ` with the mention highlighted in the accent colour.
+    pub(super) fn insert_mention(&self, at: &mut gtk::TextIter, label: &str) {
+        let buffer = &self.composer_buffer;
+        let tag = buffer.tag_table().lookup("mention").unwrap_or_else(|| {
+            let tag = buffer
+                .create_tag(Some("mention"), &[("weight", &700)])
+                .expect("mention tag is new");
+            let style = adw::StyleManager::default();
+            let recolor = tag.clone();
+            let paint = move |style: &adw::StyleManager| {
+                recolor.set_foreground_rgba(Some(
+                    &style.accent_color().to_standalone_rgba(style.is_dark()),
+                ));
+            };
+            paint(&style);
+            style.connect_dark_notify(paint.clone());
+            style.connect_accent_color_notify(paint);
+            tag
+        });
+        buffer.insert_with_tags(at, &format!("@{label}"), &[&tag]);
+        buffer.insert(at, " ");
+    }
+
+    /// Visible mention label per participant. Duplicate names get the phone
+    /// appended so each label resolves to one person when sending.
+    pub(super) fn mention_labels(
+        &self,
+        chat: &crate::model::Chat,
+    ) -> Vec<crate::native_composer::MentionCandidate> {
+        let mut candidates: Vec<_> = chat
+            .participants
+            .iter()
+            .enumerate()
+            .map(|(index, id)| crate::native_composer::MentionCandidate {
+                id: id.clone(),
+                label: self.participant_label(id, index),
+                avatar: self.avatars.get(id).cloned(),
+            })
+            .collect();
+        let duplicated: Vec<bool> = candidates
+            .iter()
+            .map(|candidate| {
+                candidates
+                    .iter()
+                    .filter(|other| other.label == candidate.label)
+                    .count()
+                    > 1
+            })
+            .collect();
+        for (candidate, duplicated) in candidates.iter_mut().zip(duplicated) {
+            if duplicated {
+                let phone = crate::model::phone_of(&candidate.id)
+                    .map(crate::util::phone)
+                    .unwrap_or_else(|| candidate.id.clone());
+                candidate.label = format!("{} ({phone})", candidate.label);
+            }
+        }
+        candidates
     }
 
     fn sync_transcript_view(&self) {
@@ -67,6 +149,7 @@ impl NativeApplication {
             has_messages: !self.message_ids.is_empty(),
             history_complete: self.history_complete,
             loading_older: self.loading_older,
+            recent_messages_pending: self.recent_messages_pending,
         };
         if !self.transcript_view.model().is_synced(&state) {
             self.transcript_view.emit(TranscriptViewInput::Sync(state));
