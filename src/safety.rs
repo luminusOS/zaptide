@@ -264,6 +264,9 @@ fn closing_marker(rest: &str, marker: char) -> Option<usize> {
     None
 }
 
+/// Monospace on a faint grey that reads on light and dark bubbles alike.
+const CODE_OPEN: &str = "<span font_family=\"monospace\" bgcolor=\"#808080\" bgalpha=\"22%\">";
+
 /// Appends the Pango markup of `text` to `out`: WhatsApp formatting (`*bold*`,
 /// `_italic_`, `~strike~`, `` `code` ``, code blocks, `>` quotes, `-` lists),
 /// links and mentions. Everything else is escaped.
@@ -295,7 +298,10 @@ fn render(text: &str, mentions: &[MentionLabel], mut line_start: bool, out: &mut
             && !code[..end].trim().is_empty()
         {
             out.push_str(&esc(&text[plain..index]));
-            out.push_str(&format!("<tt>{}</tt>", esc(code[..end].trim_matches('\n'))));
+            out.push_str(&format!(
+                "{CODE_OPEN}{}</span>",
+                esc(code[..end].trim_matches('\n'))
+            ));
             index += 6 + end;
             plain = index;
             boundary = false;
@@ -311,7 +317,7 @@ fn render(text: &str, mentions: &[MentionLabel], mut line_start: bool, out: &mut
             '*' => Some("b"),
             '_' => Some("i"),
             '~' => Some("s"),
-            '`' => Some("tt"),
+            '`' => Some("span"),
             _ => None,
         };
         if let (true, Some(tag), Some(end)) =
@@ -319,8 +325,12 @@ fn render(text: &str, mentions: &[MentionLabel], mut line_start: bool, out: &mut
         {
             out.push_str(&esc(&text[plain..index]));
             let inner = &rest[c.len_utf8()..end];
-            out.push_str(&format!("<{tag}>"));
-            if tag == "tt" {
+            if tag == "span" {
+                out.push_str(CODE_OPEN);
+            } else {
+                out.push_str(&format!("<{tag}>"));
+            }
+            if tag == "span" {
                 out.push_str(&esc(inner));
             } else {
                 render(inner, mentions, false, out);
@@ -363,7 +373,7 @@ fn render(text: &str, mentions: &[MentionLabel], mut line_start: bool, out: &mut
 
 #[cfg(test)]
 mod tests {
-    use super::linkify_markup;
+    use super::{CODE_OPEN, linkify_markup};
 
     #[test]
     fn links_web_addresses_and_escapes_the_rest() {
@@ -383,7 +393,7 @@ mod tests {
     fn whatsapp_formatting_becomes_markup() {
         assert_eq!(
             linkify_markup("Hello, *Name*! _hi_ ~no~ `a<b` ok"),
-            "Hello, <b>Name</b>! <i>hi</i> <s>no</s> <tt>a&lt;b</tt> ok"
+            format!("Hello, <b>Name</b>! <i>hi</i> <s>no</s> {CODE_OPEN}a&lt;b</span> ok")
         );
         // Spans nest, and links inside them stay links.
         assert_eq!(
@@ -391,8 +401,11 @@ mod tests {
             "<b>bold <i>both</i></b> <i>see <a href=\"https://a.io/\">https://a.io</a></i>"
         );
         // Code is literal.
-        assert_eq!(linkify_markup("`*x*`"), "<tt>*x*</tt>");
-        assert_eq!(linkify_markup("```\n*x*\nmore\n```"), "<tt>*x*\nmore</tt>");
+        assert_eq!(linkify_markup("`*x*`"), format!("{CODE_OPEN}*x*</span>"));
+        assert_eq!(
+            linkify_markup("```\n*x*\nmore\n```"),
+            format!("{CODE_OPEN}*x*\nmore</span>")
+        );
         // Not spans: spaces inside, empty, inside a word, unclosed, across lines.
         for plain in [
             "2 * 3 * 4",
@@ -417,6 +430,8 @@ mod tests {
             "<span alpha=\"60%\">▎</span> quoted\n• one\n• two\n1. three"
         );
         assert_eq!(linkify_markup("a - b"), "a - b");
+        // Pango accepts the code styling.
+        assert!(gtk4::pango::parse_markup(&linkify_markup("`a` ```\nb\n```"), '\0').is_ok());
         // Markup characters in the text stay escaped inside a span.
         assert_eq!(linkify_markup("*<b>*"), "<b>&lt;b&gt;</b>");
     }
