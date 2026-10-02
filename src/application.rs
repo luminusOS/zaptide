@@ -621,6 +621,7 @@ pub enum Input {
     PairWithPhone(String),
     TogglePhoneLinking,
     CopyPairCode,
+    CopyCode(String),
     FlushChats,
     NewContact {
         phone: String,

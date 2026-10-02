@@ -267,6 +267,20 @@ fn closing_marker(rest: &str, marker: char) -> Option<usize> {
 /// Monospace on a faint grey that reads on light and dark bubbles alike.
 const CODE_OPEN: &str = "<span font_family=\"monospace\" bgcolor=\"#808080\" bgalpha=\"22%\">";
 
+/// Byte range of the code span covering `index` in text laid out from
+/// [`linkify_markup`] markup. Code is the only markup with a background.
+pub fn code_range_at(
+    attrs: &gtk4::pango::AttrList,
+    index: usize,
+) -> Option<std::ops::Range<usize>> {
+    attrs
+        .attributes()
+        .into_iter()
+        .filter(|attr| attr.type_() == gtk4::pango::AttrType::Background)
+        .map(|attr| attr.start_index() as usize..attr.end_index() as usize)
+        .find(|range| range.contains(&index))
+}
+
 /// Appends the Pango markup of `text` to `out`: WhatsApp formatting (`*bold*`,
 /// `_italic_`, `~strike~`, `` `code` ``, code blocks, `>` quotes, `-` lists),
 /// links and mentions. Everything else is escaped.
@@ -387,6 +401,18 @@ mod tests {
             linkify_markup("(https://a.io)"),
             "(<a href=\"https://a.io/\">https://a.io</a>)"
         );
+    }
+
+    #[test]
+    fn code_spans_are_found_by_layout_index() {
+        let (attrs, text, _) =
+            gtk4::pango::parse_markup(&linkify_markup("ab `cd` *ef*\n```\ng h\n```"), '\0')
+                .expect("valid markup");
+        assert_eq!(text, "ab cd ef\ng h");
+        assert_eq!(super::code_range_at(&attrs, 3), Some(3..5));
+        assert_eq!(super::code_range_at(&attrs, 10), Some(9..12));
+        assert_eq!(super::code_range_at(&attrs, 0), None);
+        assert_eq!(super::code_range_at(&attrs, 6), None);
     }
 
     #[test]

@@ -300,6 +300,45 @@ impl RelmListItem for MessageRow {
             });
             gtk::glib::Propagation::Stop
         });
+        // Double-clicking code selects and copies the whole span, not one word.
+        let code_click = gtk::GestureClick::new();
+        code_click.set_button(gtk::gdk::BUTTON_PRIMARY);
+        code_click.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let code_target = menu_target.clone();
+        code_click.connect_pressed(move |gesture, presses, x, y| {
+            let Some(label) = gesture.widget().and_downcast::<gtk::Label>() else {
+                return;
+            };
+            if presses != 2 {
+                return;
+            }
+            let layout = label.layout();
+            let (left, top) = label.layout_offsets();
+            let (inside, index, _) = layout.xy_to_index(
+                (x as i32 - left) * gtk::pango::SCALE,
+                (y as i32 - top) * gtk::pango::SCALE,
+            );
+            let Some(range) = layout
+                .attributes()
+                .filter(|_| inside)
+                .and_then(|attrs| crate::safety::code_range_at(&attrs, index as usize))
+            else {
+                return;
+            };
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            let text = layout.text();
+            let Some(code) = text.get(range.clone()) else {
+                return;
+            };
+            label.select_region(
+                text[..range.start].chars().count() as i32,
+                text[..range.end].chars().count() as i32,
+            );
+            if let Some((_, sender)) = code_target.borrow().as_ref() {
+                sender.input(Input::CopyCode(code.to_owned()));
+            }
+        });
+        body.add_controller(code_click);
         let context_click = gtk::GestureClick::new();
         context_click.set_button(gtk::gdk::BUTTON_SECONDARY);
         context_click.set_propagation_phase(gtk::PropagationPhase::Capture);

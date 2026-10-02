@@ -390,6 +390,13 @@ impl NativeApplication {
                     self.toast("Code copied");
                 }
             }
+            Input::CopyCode(code) => {
+                crate::native_portals::NativePortals::write_clipboard_text(
+                    &self.window.clipboard(),
+                    &code,
+                );
+                self.toast("Code copied");
+            }
             Input::FlushChats => {
                 self.chats_flush_scheduled = false;
                 self.flush_chats();
