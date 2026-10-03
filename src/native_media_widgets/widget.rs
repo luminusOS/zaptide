@@ -10,6 +10,17 @@ pub fn build_media_widget_with_action(
     // The message row draws sender, quote, body, reactions, and forwarding;
     // this widget only adds what the content itself needs.
     let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    if let Content::Contact {
+        display_name,
+        vcard,
+    } = &message.content
+    {
+        contacts::append_contact_cards(&root, display_name, vcard, std::rc::Rc::new(on_action));
+        return NativeMediaWidget {
+            widget: root,
+            decode_token,
+        };
+    }
     if let Content::Text { preview, .. } = &message.content {
         if let Some(preview) = preview {
             root.append(&link_card(

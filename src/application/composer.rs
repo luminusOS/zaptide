@@ -82,6 +82,7 @@ pub(super) enum ComposerViewOutput {
     SelectMention(crate::native_composer::MentionCandidate),
     ShowStickerPicker,
     ShowPollCreator,
+    ShowContactPicker,
     InsertEmoji(String),
 }
 
@@ -310,6 +311,16 @@ impl SimpleComponent for ComposerView {
                                 #[watch]
                                 set_sensitive: model.state.can_mention,
                                 connect_clicked[sender, attach_popover] => move |_| { attach_popover.popdown(); sender.output(ComposerViewOutput::InsertMention).unwrap() },
+                            },
+                            attach[0, 2, 2, 1] = &gtk::Button {
+                                set_child: Some(&super::attach_tile("avatar-default-symbolic", "Contact", "contact")),
+                                set_tooltip_text: Some("Share a contact"),
+                                update_property: &[gtk::accessible::Property::Label("Share a contact")],
+                                add_css_class: "flat",
+                                add_css_class: "zaptide-attach-tile",
+                                #[watch]
+                                set_sensitive: model.state.can_attach,
+                                connect_clicked[sender, attach_popover] => move |_| { attach_popover.popdown(); sender.output(ComposerViewOutput::ShowContactPicker).unwrap() },
                             },
                         },
                     },

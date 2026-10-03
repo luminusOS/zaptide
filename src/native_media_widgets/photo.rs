@@ -265,7 +265,13 @@ fn append_photo_sized(
             }
             parent.append(&frame);
         }
-        Some(NativeMediaAction::AnswerButton { .. } | NativeMediaAction::AnswerListRow { .. })
+        Some(
+            NativeMediaAction::AnswerButton { .. }
+            | NativeMediaAction::AnswerListRow { .. }
+            | NativeMediaAction::CopyContactPhone(_)
+            | NativeMediaAction::OpenContact(_)
+            | NativeMediaAction::MessageContact { .. },
+        )
         | None => {
             let spinner = adw::Spinner::builder()
                 .width_request(32)
@@ -370,7 +376,13 @@ pub(super) fn append_video(
             frame.add_overlay(&button);
             parent.append(&frame);
         }
-        Some(NativeMediaAction::AnswerButton { .. } | NativeMediaAction::AnswerListRow { .. })
+        Some(
+            NativeMediaAction::AnswerButton { .. }
+            | NativeMediaAction::AnswerListRow { .. }
+            | NativeMediaAction::CopyContactPhone(_)
+            | NativeMediaAction::OpenContact(_)
+            | NativeMediaAction::MessageContact { .. },
+        )
         | None => {
             frame.add_overlay(
                 &adw::Spinner::builder()
@@ -542,7 +554,13 @@ pub(super) fn document_card(
             download.connect_clicked(move |_| on_action(action.clone()));
             actions.append(&download);
         }
-        Some(NativeMediaAction::AnswerButton { .. } | NativeMediaAction::AnswerListRow { .. })
+        Some(
+            NativeMediaAction::AnswerButton { .. }
+            | NativeMediaAction::AnswerListRow { .. }
+            | NativeMediaAction::CopyContactPhone(_)
+            | NativeMediaAction::OpenContact(_)
+            | NativeMediaAction::MessageContact { .. },
+        )
         | None => actions.append(
             &adw::Spinner::builder()
                 .width_request(24)

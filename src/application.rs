@@ -5,6 +5,7 @@ mod audio;
 mod chats;
 mod components;
 mod composer;
+mod contact_sharing;
 mod conversation;
 mod dialogs;
 mod dispatch;
@@ -452,6 +453,7 @@ pub struct NativeApplication {
     chat_ids: Vec<String>,
     chat_snapshots: Vec<crate::model::Chat>,
     contacts: std::collections::HashMap<String, crate::model::Contact>,
+    contact_share_generation: u64,
     /// Header menu for the open chat, relabelled by `sync_chat_menu`.
     chat_menu: gtk::gio::Menu,
     /// (group, pinned, muted, archived) the chat menu was last labelled for.
@@ -625,6 +627,17 @@ pub enum Input {
     PollVoice,
     ShowStickerPicker,
     ShowPollCreator,
+    ShowContactPicker,
+    ImportContact(contact_sharing::ShareTarget),
+    ContactFileReady {
+        target: contact_sharing::ShareTarget,
+        result: Result<Vec<crate::contact_cards::ContactCard>, String>,
+    },
+    SendContact {
+        target: contact_sharing::ShareTarget,
+        contact: crate::contact_cards::ContactCard,
+    },
+    ContactActionFinished(Result<(), String>),
     SendSticker(std::path::PathBuf),
     ClearTyping(String),
     StopComposing(String),
@@ -1092,6 +1105,7 @@ impl SimpleComponent for NativeApplication {
                 ComposerViewOutput::SelectMention(candidate) => Input::SelectMention(candidate),
                 ComposerViewOutput::ShowStickerPicker => Input::ShowStickerPicker,
                 ComposerViewOutput::ShowPollCreator => Input::ShowPollCreator,
+                ComposerViewOutput::ShowContactPicker => Input::ShowContactPicker,
                 ComposerViewOutput::InsertEmoji(emoji) => Input::InsertEmoji(emoji),
             });
         let mut model = Self {
@@ -1107,6 +1121,7 @@ impl SimpleComponent for NativeApplication {
             chat_ids: Vec::new(),
             chat_snapshots: Vec::new(),
             contacts: std::collections::HashMap::new(),
+            contact_share_generation: 0,
             chat_menu: gtk::gio::Menu::new(),
             chat_menu_state: None,
             tray: None,
@@ -1659,6 +1674,7 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
          .zaptide-attach-icon.files { background-color: #3584e4; }\n\
          .zaptide-attach-icon.poll { background-color: #e66100; }\n\
          .zaptide-attach-icon.mention { background-color: #26a269; }\n\
+         .zaptide-attach-icon.contact { color: @accent_fg_color; background-color: @accent_bg_color; }\n\
          .zaptide-qr { border-radius: 12px; }\n\
          .zaptide-document { padding: 10px 10px 10px 12px; }\n\
          .zaptide-pair-code { padding: 16px 16px 16px 28px; }\n\

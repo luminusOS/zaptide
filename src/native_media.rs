@@ -384,6 +384,12 @@ pub(crate) fn safe_file_name(file_name: &str) -> String {
 /// Typed activation result for a downloadable or already-local attachment.
 #[derive(Clone, Eq, PartialEq)]
 pub enum NativeMediaAction {
+    CopyContactPhone(String),
+    OpenContact(crate::contact_cards::ContactCard),
+    MessageContact {
+        id: String,
+        name: String,
+    },
     Open(PathBuf),
     Download {
         chat: String,
@@ -406,6 +412,9 @@ pub enum NativeMediaAction {
 impl fmt::Debug for NativeMediaAction {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::CopyContactPhone(_) => formatter.write_str("CopyContactPhone(..)"),
+            Self::OpenContact(_) => formatter.write_str("OpenContact(..)"),
+            Self::MessageContact { .. } => formatter.write_str("MessageContact { .. }"),
             Self::Open(_) => formatter.write_str("Open(..)"),
             Self::Download { .. } => formatter.write_str("Download { .. }"),
             Self::AnswerButton { .. } => formatter.write_str("AnswerButton { .. }"),

@@ -121,6 +121,93 @@ pub struct NativePortals {
 }
 
 impl NativePortals {
+    /// Selects one local file. Dismissing the chooser is a normal cancellation.
+    pub fn open_file(
+        &self,
+        parent: Option<&impl IsA<gtk::Window>>,
+        title: &str,
+        filter: &gtk::FileFilter,
+        complete: impl FnOnce(Result<Option<gio::File>, PortalError>) + 'static,
+    ) -> Option<RequestId> {
+        let filters = gio::ListStore::new::<gtk::FileFilter>();
+        filters.append(filter);
+        let dialog = gtk::FileDialog::builder()
+            .title(title)
+            .filters(&filters)
+            .default_filter(filter)
+            .build();
+        let (id, cancellable) = self.requests.borrow_mut().start()?;
+        let requests = self.requests.clone();
+        dialog.open(parent, Some(&cancellable), move |result| {
+            if !requests.borrow_mut().finish(id) {
+                return;
+            }
+            let result = match result {
+                Ok(file) if file.path().is_some_and(|path| path.is_absolute()) => Ok(Some(file)),
+                Err(error) if error.matches(gtk::DialogError::Dismissed) => Ok(None),
+                _ => Err(PortalError::Failed),
+            };
+            complete(result);
+        });
+        Some(id)
+    }
+
+    /// Saves small generated content through the system chooser, without a temporary copy.
+    pub fn save_bytes(
+        &self,
+        parent: Option<&impl IsA<gtk::Window>>,
+        title: &str,
+        suggested_name: &str,
+        contents: Vec<u8>,
+        complete: impl FnOnce(Result<Option<gio::File>, PortalError>) + 'static,
+    ) -> Option<RequestId> {
+        if !valid_filename(suggested_name) || contents.len() > crate::contact_cards::MAX_VCARD_BYTES
+        {
+            return None;
+        }
+        let dialog = gtk::FileDialog::builder()
+            .title(title)
+            .initial_name(suggested_name)
+            .build();
+        let (id, cancellable) = self.requests.borrow_mut().start()?;
+        let requests = self.requests.clone();
+        let write_cancel = cancellable.clone();
+        dialog.save(parent, Some(&cancellable), move |result| {
+            if !requests.borrow().pending.contains_key(&id) {
+                return;
+            }
+            let destination = match result {
+                Ok(file) if file.path().is_some_and(|path| path.is_absolute()) => file,
+                Err(error) if error.matches(gtk::DialogError::Dismissed) => {
+                    if requests.borrow_mut().finish(id) {
+                        complete(Ok(None));
+                    }
+                    return;
+                }
+                _ => {
+                    if requests.borrow_mut().finish(id) {
+                        complete(Err(PortalError::Failed));
+                    }
+                    return;
+                }
+            };
+            let saved = destination.clone();
+            destination.replace_contents_async(
+                contents,
+                None,
+                false,
+                gio::FileCreateFlags::PRIVATE,
+                Some(&write_cancel),
+                move |result| {
+                    if requests.borrow_mut().finish(id) {
+                        complete(result.map(|_| Some(saved)).map_err(|_| PortalError::Failed));
+                    }
+                },
+            );
+        });
+        Some(id)
+    }
+
     /// Starts asynchronous multi-file selection using `GtkFileDialog`.
     ///
     /// GTK routes this native chooser through `org.freedesktop.portal.FileChooser`

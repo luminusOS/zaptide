@@ -20,6 +20,10 @@ stored locally in an encrypted archive.
 
 - Chat, search and send text, replies, reactions, polls, voice notes, stickers
   and attachments. Older messages load from the archive or your phone.
+- Contact messages show names and phone numbers with actions to copy a number,
+  add the contact to your contacts app, or message it on WhatsApp.
+  Use **Attach → Contact** to share a saved WhatsApp contact or choose a `.vcf`
+  file through the system file chooser. Preview the contact before sending.
 - Photos sent together appear as one album in a single bubble, and files can be
   dropped anywhere in a conversation to attach them.
 - The sticker picker shows your recently used stickers from your phone and

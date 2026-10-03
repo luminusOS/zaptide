@@ -4,8 +4,10 @@ use super::*;
 
 impl Worker {
     pub(super) async fn handle_command(&mut self, command: Command) {
+        let contact_completion = matches!(&command, Command::ContactSent { .. });
         let destination = match &command {
             Command::SendText { chat, .. }
+            | Command::SendContact { chat, .. }
             | Command::SendVoice { chat, .. }
             | Command::SendFiles { chat, .. }
             | Command::SendImage { chat, .. }
@@ -103,6 +105,11 @@ impl Worker {
                 quoting,
                 mentions,
             } => self.send_text(chat, text, quoting, mentions),
+            Command::SendContact {
+                chat,
+                contact,
+                quoting,
+            } => self.send_contact(chat, contact, quoting),
             Command::AnswerButton {
                 chat,
                 message,
@@ -723,6 +730,12 @@ impl Worker {
                 id,
                 session_generation,
                 error,
+            }
+            | Command::ContactSent {
+                chat,
+                id,
+                session_generation,
+                error,
             } => {
                 if session_generation != self.session_generation {
                     return;
@@ -733,10 +746,12 @@ impl Worker {
                     if error.is_some() {
                         self.emit(Event::Error(sanitized_send_error().to_owned()));
                     }
-                    self.emit(Event::Sent {
-                        chat,
-                        success: false,
-                    });
+                    if !contact_completion {
+                        self.emit(Event::Sent {
+                            chat,
+                            success: false,
+                        });
+                    }
                     return;
                 }
                 // Server-confirmed echo wins over a late transport error.
@@ -794,10 +809,18 @@ impl Worker {
                         .set_status(&chat, &id, status, crate::util::now());
                     self.emit_message(&chat, &id);
                     self.emit_chat(&chat);
-                    self.emit(Event::Sent {
-                        chat: chat.clone(),
-                        success: error.is_none(),
-                    });
+                    // Contact sharing is independent of the text/attachment draft.
+                    // Its completion must not clear a simultaneous composer send.
+                    if contact_completion {
+                        if error.is_none() {
+                            self.emit(Event::Info("Contact sent".to_owned()));
+                        }
+                    } else {
+                        self.emit(Event::Sent {
+                            chat: chat.clone(),
+                            success: error.is_none(),
+                        });
+                    }
                 }
                 if let Some(error) = error {
                     self.emit(Event::Error(format!("Message not sent: {error}")));

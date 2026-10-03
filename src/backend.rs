@@ -200,6 +200,18 @@ pub enum Command {
         quoting: Option<String>,
         mentions: Vec<String>,
     },
+    SendContact {
+        chat: ChatId,
+        contact: crate::contact_cards::ContactCard,
+        quoting: Option<String>,
+    },
+    /// Contact sharing completes independently of the composer request.
+    ContactSent {
+        chat: ChatId,
+        id: String,
+        session_generation: u64,
+        error: Option<String>,
+    },
     /// Answers a quick-reply button message with one of its buttons.
     AnswerButton {
         chat: ChatId,

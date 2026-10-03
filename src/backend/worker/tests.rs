@@ -2,6 +2,134 @@ use super::*;
 
 mod session;
 
+#[tokio::test]
+async fn contact_sharing_rejects_read_only_chats_without_completing_a_composer_send() {
+    let (mut worker, events, _, _) = worker();
+    let contact =
+        crate::contact_cards::ContactCard::from_saved("15555550123@s.whatsapp.net", "Ada Example")
+            .unwrap();
+    worker
+        .handle_command(Command::SendContact {
+            chat: "fixture@newsletter".into(),
+            contact,
+            quoting: None,
+        })
+        .await;
+    let emitted: Vec<_> = events.try_iter().collect();
+    assert!(emitted.iter().any(|event| matches!(event, Event::Error(_))));
+    assert!(
+        !emitted
+            .iter()
+            .any(|event| matches!(event, Event::Sent { .. }))
+    );
+    assert!(
+        worker
+            .archive
+            .messages("fixture@newsletter", None, 10)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn contact_delivery_updates_only_its_own_row_and_never_finishes_a_text_send() {
+    const CHAT: &str = "15555550124@s.whatsapp.net";
+    let (mut worker, events, _, _) = worker();
+    worker.archive.ensure_chat(CHAT, "Fixture").unwrap();
+    let contact =
+        crate::contact_cards::ContactCard::from_saved("15555550123@s.whatsapp.net", "Ada Example")
+            .unwrap();
+    let mut row = crate::archive::tests::message(CHAT, "CONTACT", 10, true);
+    row.status = Delivery::Pending;
+    row.content = Content::Contact {
+        display_name: contact.name,
+        vcard: contact.vcard,
+    };
+    worker.archive.insert_message(&row, None).unwrap();
+    let mut text = crate::archive::tests::message(CHAT, "TEXT", 11, true);
+    text.status = Delivery::Pending;
+    worker.archive.insert_message(&text, None).unwrap();
+    worker
+        .handle_command(Command::ContactSent {
+            chat: CHAT.into(),
+            id: "CONTACT".into(),
+            session_generation: worker.session_generation,
+            error: None,
+        })
+        .await;
+    assert_eq!(
+        worker
+            .archive
+            .message(CHAT, "CONTACT")
+            .unwrap()
+            .unwrap()
+            .status,
+        Delivery::Sent
+    );
+    assert_eq!(
+        worker
+            .archive
+            .message(CHAT, "TEXT")
+            .unwrap()
+            .unwrap()
+            .status,
+        Delivery::Pending
+    );
+    let emitted: Vec<_> = events.try_iter().collect();
+    assert!(
+        !emitted
+            .iter()
+            .any(|event| matches!(event, Event::Sent { .. }))
+    );
+    assert!(
+        emitted
+            .iter()
+            .any(|event| matches!(event, Event::Info(info) if info == "Contact sent"))
+    );
+    worker
+        .handle_command(Command::ContactSent {
+            chat: CHAT.into(),
+            id: "CONTACT".into(),
+            session_generation: worker.session_generation.wrapping_add(1),
+            error: Some("fixture".into()),
+        })
+        .await;
+    assert_eq!(
+        worker
+            .archive
+            .message(CHAT, "CONTACT")
+            .unwrap()
+            .unwrap()
+            .status,
+        Delivery::Sent
+    );
+}
+
+#[tokio::test]
+async fn deleted_contact_completion_cannot_complete_a_later_text_send() {
+    const CHAT: &str = "15555550124@s.whatsapp.net";
+    let (mut worker, events, _, _) = worker();
+    worker.archive.ensure_chat(CHAT, "Fixture").unwrap();
+    let text = crate::archive::tests::message(CHAT, "TEXT", 11, true);
+    worker.archive.insert_message(&text, None).unwrap();
+    for error in [None, Some("fixture failure".to_owned())] {
+        worker
+            .handle_command(Command::ContactSent {
+                chat: CHAT.into(),
+                id: "DELETED-CONTACT".into(),
+                session_generation: worker.session_generation,
+                error,
+            })
+            .await;
+        assert!(
+            !events
+                .try_iter()
+                .any(|event| matches!(event, Event::Sent { .. }))
+        );
+        assert_eq!(worker.archive.message(CHAT, "TEXT").unwrap().unwrap(), text);
+    }
+}
+
 #[test]
 fn fallback_names_read_as_phones_or_ids() {
     assert_eq!(

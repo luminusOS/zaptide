@@ -36,6 +36,7 @@ use whatsapp_rust::waproto::buffa::Message as _;
 use whatsapp_rust::{MediaRetryResult, MediaReuploadRequest};
 
 mod commands;
+mod contacts;
 mod device_store;
 mod events;
 mod history;
@@ -3815,6 +3816,18 @@ async fn send_outgoing(
     message: wa::Message,
     ephemeral_expiration: Option<u32>,
 ) -> bool {
+    send_outgoing_with_kind(session, chat, jid, id, message, ephemeral_expiration, false).await
+}
+
+async fn send_outgoing_with_kind(
+    session: OutgoingSession,
+    chat: ChatId,
+    jid: Jid,
+    id: String,
+    message: wa::Message,
+    ephemeral_expiration: Option<u32>,
+    contact: bool,
+) -> bool {
     let OutgoingSession {
         client,
         commands,
@@ -3897,12 +3910,23 @@ async fn send_outgoing(
         return false;
     }
     let success = result.is_ok();
-    let _ = commands.send(Command::Sent {
-        chat,
-        id,
-        session_generation,
-        error: result.err().map(|_| sanitized_send_error().to_owned()),
-    });
+    let error = result.err().map(|_| sanitized_send_error().to_owned());
+    let completion = if contact {
+        Command::ContactSent {
+            chat,
+            id,
+            session_generation,
+            error,
+        }
+    } else {
+        Command::Sent {
+            chat,
+            id,
+            session_generation,
+            error,
+        }
+    };
+    let _ = commands.send(completion);
     success
 }
 

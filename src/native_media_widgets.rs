@@ -53,11 +53,13 @@ enum PlaybackProjection {
 
 mod audio;
 mod cards;
+mod contacts;
 mod photo;
 mod sticker;
 mod widget;
 
 pub use audio::{AudioControls, RecordingMeter};
+pub(crate) use contacts::contact_preview;
 pub use photo::{build_album_widget, show_in_folder};
 pub(crate) use sticker::{StickerAnimation, decode_sticker_file};
 pub use widget::build_media_widget_with_action;
@@ -194,6 +196,104 @@ mod tests {
             let projection = project_content(&message);
             assert!(!format!("{projection:?}").contains("private"));
         }
+    }
+
+    /// Fictional contact-card rendering and action checks, no account/backend access.
+    #[test]
+    #[ignore = "needs a display"]
+    fn render_contact_cards() {
+        use std::{cell::RefCell, rc::Rc};
+        gtk::init().unwrap();
+        adw::init().unwrap();
+        let dir = PathBuf::from(std::env::var("RENDER_DIR").unwrap());
+        let one = crate::contact_cards::ContactCard::from_saved(
+            "15555550123@s.whatsapp.net",
+            "Ada Example",
+        )
+        .unwrap();
+        let many = format!(
+            "{}BEGIN:VCARD\nVERSION:4.0\nFN:Éva Example with a long contact name that should wrap on narrow windows\nTEL;VALUE=uri:tel:+15555550124\nTEL;TYPE=HOME:555-0125\nEND:VCARD\n",
+            one.vcard
+        );
+        let actions = Rc::new(RefCell::new(Vec::new()));
+        let context = gtk::glib::MainContext::default();
+        for (name, scheme, vcard) in [
+            (
+                "contact-light",
+                adw::ColorScheme::ForceLight,
+                one.vcard.clone(),
+            ),
+            ("contact-dark", adw::ColorScheme::ForceDark, many),
+        ] {
+            adw::StyleManager::default().set_color_scheme(scheme);
+            let captured = actions.clone();
+            let rendered = build_media_widget_with_action(
+                &message(Content::Contact {
+                    display_name: "Fixture contact".into(),
+                    vcard,
+                }),
+                move |action| captured.borrow_mut().push(action),
+            );
+            let frame = gtk::Box::builder()
+                .orientation(gtk::Orientation::Vertical)
+                .margin_top(24)
+                .margin_bottom(24)
+                .margin_start(24)
+                .margin_end(24)
+                .build();
+            frame.append(&rendered.widget);
+            let window = adw::Window::builder()
+                // Narrow phone width: card actions must wrap rather than widen the bubble.
+                .default_width(300)
+                .default_height(500)
+                .content(&frame)
+                .build();
+            window.present();
+            let end = std::time::Instant::now() + std::time::Duration::from_millis(400);
+            while std::time::Instant::now() < end {
+                context.iteration(false);
+            }
+            let paintable = gtk::WidgetPaintable::new(Some(&window));
+            let snapshot = gtk::Snapshot::new();
+            paintable.snapshot(
+                &snapshot,
+                f64::from(window.width()),
+                f64::from(window.height()),
+            );
+            let node = snapshot.to_node().unwrap();
+            let texture = window
+                .native()
+                .unwrap()
+                .renderer()
+                .unwrap()
+                .render_texture(&node, None);
+            let path = dir.join(format!("{name}.png"));
+            std::fs::write(&path, texture.save_to_png_bytes()).unwrap();
+            assert!(path.is_file(), "render artifact must exist");
+            fn activate(widget: &gtk::Widget) {
+                if let Some(button) = widget.downcast_ref::<gtk::Button>() {
+                    button.emit_clicked();
+                }
+                let mut child = widget.first_child();
+                while let Some(widget) = child {
+                    activate(&widget);
+                    child = widget.next_sibling();
+                }
+            }
+            activate(rendered.widget.upcast_ref());
+            window.close();
+        }
+        let actions = actions.borrow();
+        assert!(actions.iter().any(|action| matches!(action, NativeMediaAction::CopyContactPhone(number) if number == "+15555550123")));
+        assert_eq!(
+            actions
+                .iter()
+                .filter(|action| matches!(action, NativeMediaAction::MessageContact { .. }))
+                .count(),
+            2,
+            "Only Ada's explicit WhatsApp ID gets a Message action, once per rendering"
+        );
+        assert!(actions.iter().any(|action| matches!(action, NativeMediaAction::OpenContact(card) if card.name == "Ada Example")));
     }
 
     /// Renders an album of seven photos and a store template to PNGs under

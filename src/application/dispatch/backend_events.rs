@@ -112,6 +112,7 @@ pub(super) fn handle_backend_ready(
         match event {
             NativeEvent::Link(link) => {
                 if matches!(link, LinkStatus::LoggedOut) {
+                    app.contact_share_generation = app.contact_share_generation.wrapping_add(1);
                     clear_avatar_textures();
                     app.audio.media.stop_playback();
                     app.audio.playing_audio = None;

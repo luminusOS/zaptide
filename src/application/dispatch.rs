@@ -542,6 +542,19 @@ impl NativeApplication {
             Input::ShowPollCreator => {
                 show_poll_dialog(&self.window, &dialog_action_callback(&sender))
             }
+            Input::ShowContactPicker => self.show_contact_picker(&sender),
+            Input::ImportContact(target) => self.import_contact(target, &sender),
+            Input::ContactFileReady { target, result } => {
+                self.contact_file_ready(target, result, &sender)
+            }
+            Input::SendContact { target, contact } => self.share_contact(target, contact),
+            Input::ContactActionFinished(result) => match result {
+                Ok(()) => self.toast("Contact opened"),
+                Err(error) => {
+                    self.status = error.clone();
+                    self.toast(&error);
+                }
+            },
             Input::SendSticker(path) => {
                 if let Some((popover, _)) = self.sticker_picker.take() {
                     popover.popdown();
@@ -702,6 +715,21 @@ impl NativeApplication {
                 self.waveform_ready(chat, id, bars, &sender);
             }
             Input::MediaAction(action) => match action {
+                crate::native_media::NativeMediaAction::CopyContactPhone(number) => {
+                    crate::native_portals::NativePortals::write_clipboard_text(
+                        &self.window.clipboard(),
+                        &number,
+                    );
+                    self.toast("Phone number copied");
+                }
+                crate::native_media::NativeMediaAction::OpenContact(contact) => {
+                    self.open_contact(contact, &sender)
+                }
+                crate::native_media::NativeMediaAction::MessageContact { id, name } => {
+                    if crate::contact_cards::ContactCard::from_saved(&id, &name).is_some() {
+                        sender.input(Input::StartChat { id, name });
+                    }
+                }
                 crate::native_media::NativeMediaAction::Download { message, .. } => {
                     self.activate_attachment(&message)
                 }
