@@ -58,15 +58,53 @@ impl SimpleComponent for TranscriptView {
                 set_orientation: gtk::Orientation::Vertical,
 
                 append = &gtk::Button {
-                    set_label: "Load Older Messages",
                     set_halign: gtk::Align::Center,
-                    set_margin_top: 6,
+                    set_margin_top: 4,
+                    set_margin_bottom: 4,
                     add_css_class: "flat",
+                    set_tooltip_text: Some("Show earlier messages from the archive or your phone"),
                     #[watch]
                     set_visible: model.state.has_messages && !model.state.history_complete,
+                    // Stay sensitive while loading: insensitive styling would dim the
+                    // spinner twice. `Input::LoadOlder` already ignores repeat clicks.
                     #[watch]
-                    set_sensitive: !model.state.loading_older,
+                    set_can_target: !model.state.loading_older,
+                    #[watch]
+                    update_state: &[gtk::accessible::State::Busy(model.state.loading_older)],
                     connect_clicked[sender] => move |_| sender.output(TranscriptViewOutput::LoadOlder).unwrap(),
+                    #[wrap(Some)]
+                    set_child = &gtk::Stack {
+                        // Reserve the same space for both states to avoid shifting the transcript.
+                        set_hhomogeneous: true,
+                        set_vhomogeneous: true,
+                        add_named[Some("ready")] = &gtk::Box {
+                            set_spacing: 6,
+                            set_halign: gtk::Align::Center,
+                            append = &gtk::Image {
+                                set_icon_name: Some("go-up-symbolic"),
+                                set_pixel_size: 16,
+                                add_css_class: "dim-label",
+                            },
+                            append = &gtk::Label {
+                                set_label: "Load older messages",
+                                add_css_class: "dim-label",
+                            },
+                        },
+                        add_named[Some("loading")] = &gtk::Box {
+                            set_spacing: 6,
+                            set_halign: gtk::Align::Center,
+                            append = &adw::Spinner {
+                                set_size_request: (16, 16),
+                                set_valign: gtk::Align::Center,
+                            },
+                            append = &gtk::Label {
+                                set_label: "Loading older messages…",
+                                add_css_class: "dim-label",
+                            },
+                        },
+                        #[watch]
+                        set_visible_child_name: if model.state.loading_older { "loading" } else { "ready" },
+                    },
                 },
 
                 append = &gtk::Overlay {
