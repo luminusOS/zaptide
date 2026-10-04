@@ -84,6 +84,17 @@ const ON_DEMAND: i32 = 6;
 const MAX_EARLY_HISTORY_IDS: usize = 16;
 /// Sticker download batch size for the picker.
 const STICKER_FETCH_LIMIT: usize = 40;
+/// How long private content waits for phone lock state before it is shown
+/// unconfirmed. A healthy sync answers well within this.
+const PRIVACY_GRACE: Duration = Duration::from_secs(10);
+
+/// Waits longer after each failed lock-state recovery, so a collection the
+/// server keeps refusing is not rebuilt every few seconds.
+fn privacy_backoff(attempts: u32) -> Duration {
+    Duration::from_secs(30)
+        .saturating_mul(1 << attempts.saturating_sub(1).min(5))
+        .min(Duration::from_secs(15 * 60))
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ReadSyncOutcome {
@@ -424,17 +435,28 @@ pub async fn run(
         }
     };
     let (wa_sender, wa_events) = mpsc::unbounded_channel();
-    let privacy_ready = archive
+    let privacy_confirmed = archive
         .meta("chat_privacy_ready_v1")
         .ok()
         .flatten()
         .as_deref()
         == Some("complete");
+    // Only an archive filled before lock state was mirrored needs its lock
+    // state rebuilt from a snapshot; a new link receives it with the first sync.
+    let privacy_snapshot =
+        !privacy_confirmed && archive.chats().is_ok_and(|chats| !chats.is_empty());
     let mut worker = Worker {
-        privacy_ready,
+        privacy_ready: privacy_confirmed,
+        privacy_confirmed,
+        privacy_snapshot,
+        // Content is shown even if lock state cannot be read from the phone.
+        privacy_reveal_at: (!privacy_confirmed).then(|| Instant::now() + PRIVACY_GRACE),
+        privacy_attempts: 0,
+        privacy_warned: false,
         privacy_recovering: false,
         privacy_generation: 0,
         privacy_retry: Instant::now(),
+        withheld_pages: Vec::new(),
         dirs,
         events,
         commands,
@@ -502,8 +524,12 @@ pub async fn run(
             }
             Some(event) = worker.wa_events.recv() => match event {
                 RuntimeEvent::WhatsApp(event) => worker.handle_wa_event(event).await,
-                RuntimeEvent::PreferencesRecovered { generation, success } => {
-                    worker.preferences_recovered(generation, success);
+                RuntimeEvent::PreferencesRecovered {
+                    generation,
+                    locks,
+                    complete,
+                } => {
+                    worker.preferences_recovered(generation, locks, complete);
                 }
             },
             _ = async {
@@ -518,6 +544,7 @@ pub async fn run(
             }
             _ = tick.tick() => {
                 worker.retry_deferred_downloads(Instant::now()).await;
+                worker.reveal_unconfirmed_after_grace();
                 worker.refresh_legacy_preferences();
                 worker.expire_older_requests();
                 worker.retry_avatars();
@@ -533,7 +560,11 @@ pub async fn run(
 
 enum RuntimeEvent {
     WhatsApp(Arc<wa_events::Event>),
-    PreferencesRecovered { generation: u64, success: bool },
+    PreferencesRecovered {
+        generation: u64,
+        locks: bool,
+        complete: bool,
+    },
 }
 
 struct PendingOlder {
@@ -583,11 +614,34 @@ struct PendingRevoke {
     edited: bool,
 }
 
+/// A transcript read whose answer was withheld with the rest of the private
+/// content, to be read again once content is shown.
+#[derive(Clone, Debug, PartialEq)]
+enum WithheldPage {
+    /// `Command::LoadChat`.
+    Page(ChatId, Option<super::PageKey>),
+    /// `Command::LoadUntil`.
+    Until(ChatId, String, super::PageKey),
+}
+
 struct Worker {
+    /// Private content may reach the UI.
     privacy_ready: bool,
+    /// Phone lock state is known to be mirrored in the archive.
+    privacy_confirmed: bool,
+    /// Lock state must be rebuilt from a snapshot rather than caught up.
+    privacy_snapshot: bool,
+    /// When content is shown even though lock state is still unconfirmed.
+    privacy_reveal_at: Option<Instant>,
+    privacy_attempts: u32,
+    privacy_warned: bool,
     privacy_recovering: bool,
     privacy_generation: u64,
     privacy_retry: Instant,
+    /// Transcript pages asked for while private content was withheld. Their
+    /// answers never reached the interface, which still waits for them, so
+    /// they are read again once content is shown.
+    withheld_pages: Vec<WithheldPage>,
     read_sync: ReadSync,
     poll_decrypting: usize,
     poll_history: poll_history::Requests,
@@ -971,7 +1025,7 @@ impl Worker {
     }
 
     fn refresh_legacy_preferences(&mut self) {
-        if self.privacy_ready
+        if self.privacy_confirmed
             || self.privacy_recovering
             || Instant::now() < self.privacy_retry
             || !matches!(self.status, LinkStatus::Connected)
@@ -981,47 +1035,138 @@ impl Worker {
         let Some(client) = self.client.clone() else {
             return;
         };
+        if !self.privacy_ready && self.privacy_reveal_at.is_none() {
+            self.privacy_reveal_at = Some(Instant::now() + PRIVACY_GRACE);
+        }
         self.privacy_recovering = true;
         let sender = self.wa_sender.clone();
         let generation = self.privacy_generation;
-        self.emit(Event::Syncing(true));
+        // Chat locks live in RegularLow. A snapshot discards and rebuilds the
+        // collection, which only an archive that predates lock mirroring needs;
+        // an incremental sync waits for the library's own first sync instead of
+        // racing it.
+        let mode = if self.privacy_snapshot {
+            whatsapp_rust::AppStateResyncMode::Snapshot
+        } else {
+            whatsapp_rust::AppStateResyncMode::Incremental
+        };
+        if !self.privacy_ready {
+            self.emit(Event::Syncing(true));
+        }
+        // An upgraded archive also recovers mute settings and pin order from
+        // RegularHigh once, but only the lock collection holds content back.
+        let mut collections = vec![whatsapp_rust::WAPatchName::RegularLow];
+        if self.privacy_snapshot {
+            collections.push(whatsapp_rust::WAPatchName::RegularHigh);
+        }
         tokio::spawn(async move {
             use whatsapp_rust::WAPatchName;
-            let mut success = true;
-            for name in [WAPatchName::RegularLow, WAPatchName::RegularHigh] {
-                match client.resync_app_state_collection(name).await {
-                    Ok(report) if report.all_synced() => {}
-                    _ => success = false,
+            let (locks, complete) = match client.resync_app_state(collections, mode).await {
+                Ok(report) => {
+                    if !report.all_synced() {
+                        log::warn!(
+                            "chat settings recovery incomplete ({mode:?}): fatal {:?}, retryable {:?}, skipped {:?}",
+                            report.fatal,
+                            report.retryable,
+                            report.skipped
+                        );
+                    }
+                    (
+                        report.synced.contains(&WAPatchName::RegularLow),
+                        report.all_synced(),
+                    )
                 }
-            }
+                Err(error) => {
+                    log::warn!("chat settings recovery failed ({mode:?}): {error}");
+                    (false, false)
+                }
+            };
             // Use the same queue as the replayed mutations, so lock updates
             // are applied before the completion marker can expose chat rows.
             let _ = sender.send(RuntimeEvent::PreferencesRecovered {
                 generation,
-                success,
+                locks,
+                complete,
             });
         });
     }
 
-    fn preferences_recovered(&mut self, generation: u64, success: bool) {
+    /// `locks` says the lock collection synced; `complete` that everything
+    /// requested did, so the one-time recovery need not run again.
+    fn preferences_recovered(&mut self, generation: u64, locks: bool, complete: bool) {
         // A completed task from an unlinked device cannot authorize showing
         // chats belonging to the next linked account.
         if generation != self.privacy_generation {
             return;
         }
         self.privacy_recovering = false;
-        if success
-            && self
-                .archive
-                .set_meta("chat_privacy_ready_v1", "complete")
-                .is_ok()
+        if locks
+            && (!complete
+                || self
+                    .archive
+                    .set_meta("chat_privacy_ready_v1", "complete")
+                    .is_ok())
         {
-            self.privacy_ready = true;
-            self.load_state();
-            self.emit(Event::Syncing(false));
+            // Without `complete` the marker stays unset, so the next start
+            // retries the settings this run could not recover.
+            self.privacy_confirmed = true;
+            self.privacy_snapshot = false;
+            self.privacy_reveal_at = None;
+            self.reveal_private_content();
         } else {
-            self.privacy_retry = Instant::now() + Duration::from_secs(30);
-            log::warn!("chat privacy recovery failed; retrying with chats hidden");
+            self.privacy_attempts = self.privacy_attempts.saturating_add(1);
+            self.privacy_retry = Instant::now() + privacy_backoff(self.privacy_attempts);
+            log::warn!(
+                "chat lock state recovery failed (attempt {}); retrying later",
+                self.privacy_attempts
+            );
+            // Waiting longer does not help a failed sync: show what is known.
+            self.reveal_unconfirmed();
+        }
+    }
+
+    fn reveal_unconfirmed_after_grace(&mut self) {
+        if self
+            .privacy_reveal_at
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            self.reveal_unconfirmed();
+        }
+    }
+
+    /// Shows chats whose lock state could not be confirmed yet. Chats already
+    /// known to be locked stay hidden, and later lock updates still apply.
+    fn reveal_unconfirmed(&mut self) {
+        self.privacy_reveal_at = None;
+        if self.privacy_ready {
+            return;
+        }
+        self.reveal_private_content();
+        if !self.privacy_warned {
+            self.privacy_warned = true;
+            self.emit(Event::Info(
+                "Chat settings could not be read from your phone yet. Some chats may show the settings stored on this computer."
+                    .to_owned(),
+            ));
+        }
+    }
+
+    fn reveal_private_content(&mut self) {
+        if self.privacy_ready {
+            return;
+        }
+        self.privacy_ready = true;
+        self.load_state();
+        self.emit(Event::Syncing(self.syncing));
+        // The picker may have been sent an empty Received shelf meanwhile.
+        self.emit_stickers();
+        // Answer the reads made while content was withheld, now that the
+        // chat list they belong to has been sent.
+        for page in std::mem::take(&mut self.withheld_pages) {
+            match page {
+                WithheldPage::Page(chat, before) => self.send_page(&chat, before),
+                WithheldPage::Until(chat, id, before) => self.load_until(chat, id, before),
+            }
         }
     }
 
@@ -1385,6 +1530,21 @@ impl Worker {
         }
     }
 
+    /// Content is hidden again and lock state must be read from the next
+    /// account: used whenever a link ends, however it ends.
+    fn reset_privacy(&mut self) {
+        self.privacy_ready = false;
+        self.privacy_confirmed = false;
+        self.privacy_snapshot = false;
+        self.privacy_reveal_at = None;
+        self.privacy_attempts = 0;
+        self.privacy_warned = false;
+        self.privacy_recovering = false;
+        self.privacy_retry = Instant::now();
+        // Reads for the unlinked account must not be answered for the next.
+        self.withheld_pages.clear();
+    }
+
     async fn on_logged_out(&mut self) {
         self.privacy_generation = self.privacy_generation.wrapping_add(1);
         self.pair_request_id = self.pair_request_id.wrapping_add(1);
@@ -1402,8 +1562,7 @@ impl Worker {
         if !archive_marker && !file_marker {
             log::error!("could not persist any logout cleanup marker");
             self.archive_cleanup_failed = true;
-            self.privacy_ready = false;
-            self.privacy_recovering = false;
+            self.reset_privacy();
             self.emit(Event::Link(LinkStatus::LoggedOut));
             self.emit(Event::Error(
                 "Local conversations could not be cleared. Restart is blocked to protect data."
@@ -1419,8 +1578,7 @@ impl Worker {
         self.wa_events = wa_events;
         if !self.stop_bot().await {
             self.archive_cleanup_failed = true;
-            self.privacy_ready = false;
-            self.privacy_recovering = false;
+            self.reset_privacy();
             self.emit(Event::Link(LinkStatus::LoggedOut));
             self.emit(Event::Chats(Vec::new()));
             self.emit(Event::Contacts(Vec::new()));
@@ -1440,8 +1598,7 @@ impl Worker {
         if let Err(error) = cleanup_result {
             log::warn!("could not clear account data: {error}");
             self.archive_cleanup_failed = true;
-            self.privacy_ready = false;
-            self.privacy_recovering = false;
+            self.reset_privacy();
             self.emit(Event::Link(LinkStatus::LoggedOut));
             self.emit(Event::Chats(Vec::new()));
             self.emit(Event::Contacts(Vec::new()));
@@ -1457,8 +1614,7 @@ impl Worker {
         if let Err(error) = remove_archive_cleanup_markers(&markers) {
             log::warn!("could not remove archive cleanup marker: {error}");
             self.archive_cleanup_failed = true;
-            self.privacy_ready = false;
-            self.privacy_recovering = false;
+            self.reset_privacy();
             self.emit(Event::Link(LinkStatus::LoggedOut));
             self.emit(Event::Chats(Vec::new()));
             self.emit(Event::Error(
@@ -1473,8 +1629,7 @@ impl Worker {
         if let Err(error) = self.archive.finish_logout_cleanup() {
             log::error!("could not finish the encrypted archive cleanup marker: {error}");
             self.archive_cleanup_failed = true;
-            self.privacy_ready = false;
-            self.privacy_recovering = false;
+            self.reset_privacy();
             self.emit(Event::Link(LinkStatus::LoggedOut));
             self.emit(Event::Error(
                 "Local conversations were cleared, but cleanup could not be finalized. Restart is blocked."
@@ -1509,9 +1664,7 @@ impl Worker {
         self.pairing_phone = None;
         self.emit(Event::Chats(Vec::new()));
         self.emit(Event::Contacts(Vec::new()));
-        self.privacy_ready = false;
-        self.privacy_recovering = false;
-        self.privacy_retry = Instant::now();
+        self.reset_privacy();
         self.set_status(LinkStatus::LoggedOut);
         // Recreate the store so the next connection starts linking.
         self.start_bot().await;
@@ -2848,6 +3001,30 @@ impl Worker {
     }
 
     fn load_chat(&mut self, chat: ChatId, before: Option<super::PageKey>) {
+        self.send_page(&chat, before.clone());
+        if before.is_none() && ChatKind::from_id(&chat) == ChatKind::Group {
+            self.request_group_info(&chat, false);
+        }
+        if before.is_none()
+            && ChatKind::from_id(&chat) == ChatKind::Direct
+            && chat != self.me()
+            && self.presence_subscribed.insert(chat.clone())
+            && let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&chat))
+        {
+            tokio::spawn(async move {
+                if let Err(error) = client.presence().subscribe(jid).await {
+                    log::debug!("presence not subscribed: {error}");
+                }
+            });
+        }
+    }
+
+    /// Sends one page of the archive, the newest one or the one before
+    /// `before`.
+    fn send_page(&mut self, chat: &ChatId, before: Option<super::PageKey>) {
+        if self.withhold(WithheldPage::Page(chat.clone(), before.clone())) {
+            return;
+        }
         if self.archive_cleanup_failed {
             self.emit(Event::Error(
                 "Local conversation cleanup must finish before chats can be opened.".to_owned(),
@@ -2855,7 +3032,7 @@ impl Worker {
             return;
         }
         match self.archive.messages(
-            &chat,
+            chat,
             before.as_ref().map(|(time, id)| (*time, id.as_str())),
             PAGE + 1,
         ) {
@@ -2876,21 +3053,20 @@ impl Worker {
             }
             Err(error) => self.emit(Event::Error(format!("Could not read the chat: {error}"))),
         }
-        if before.is_none() && ChatKind::from_id(&chat) == ChatKind::Group {
-            self.request_group_info(&chat, false);
+    }
+
+    /// Keeps a transcript read for later while private content is withheld.
+    /// Its answer would be dropped, and the interface, having asked once, would
+    /// wait for it forever: a chat opened then stayed empty until a new message
+    /// arrived.
+    fn withhold(&mut self, page: WithheldPage) -> bool {
+        if self.privacy_ready {
+            return false;
         }
-        if before.is_none()
-            && ChatKind::from_id(&chat) == ChatKind::Direct
-            && chat != self.me()
-            && self.presence_subscribed.insert(chat.clone())
-            && let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&chat))
-        {
-            tokio::spawn(async move {
-                if let Err(error) = client.presence().subscribe(jid).await {
-                    log::debug!("presence not subscribed: {error}");
-                }
-            });
+        if !self.withheld_pages.contains(&page) {
+            self.withheld_pages.push(page);
         }
+        true
     }
 
     async fn retry_deferred_downloads(&mut self, now: Instant) {
@@ -3489,6 +3665,13 @@ impl Worker {
     }
 
     fn load_until(&mut self, chat: ChatId, id: String, before: super::PageKey) {
+        if self.withhold(WithheldPage::Until(
+            chat.clone(),
+            id.clone(),
+            before.clone(),
+        )) {
+            return;
+        }
         if self.archive_cleanup_failed {
             return;
         }

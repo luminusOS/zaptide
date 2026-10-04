@@ -1147,26 +1147,34 @@ fn send_failure_text_is_generic_and_does_not_include_protocol_details() {
     assert!(!exposed.contains("credential"));
 }
 
+/// Puts the worker where a fresh archive starts: lock state has not been read
+/// from the phone yet, so private content waits for the grace period.
+fn unconfirmed(worker: &mut Worker) {
+    worker.privacy_ready = false;
+    worker.privacy_confirmed = false;
+    worker.privacy_reveal_at = Some(Instant::now() + PRIVACY_GRACE);
+}
+
 #[test]
 fn privacy_recovery_hides_content_until_a_successful_replay() {
     let (mut worker, events, _, _) = worker();
     const PEER: &str = "fixture@s.whatsapp.net";
-    worker.privacy_ready = false;
+    unconfirmed(&mut worker);
     worker.archive.ensure_chat(PEER, "Fixture").unwrap();
     worker.emit_chats();
     assert!(events.try_recv().is_err());
-    worker.preferences_recovered(0, false);
-    assert!(!worker.privacy_ready);
-    assert!(
+    worker.archive.set_locked_at(PEER, true, 100).unwrap();
+    worker.preferences_recovered(0, true, true);
+    assert!(worker.privacy_ready);
+    assert!(worker.privacy_confirmed);
+    assert_eq!(
         worker
             .archive
             .meta("chat_privacy_ready_v1")
             .unwrap()
-            .is_none()
+            .as_deref(),
+        Some("complete")
     );
-    worker.archive.set_locked_at(PEER, true, 100).unwrap();
-    worker.preferences_recovered(0, true);
-    assert!(worker.privacy_ready);
     let chats = events
         .try_iter()
         .find_map(|event| match event {
@@ -1177,13 +1185,60 @@ fn privacy_recovery_hides_content_until_a_successful_replay() {
     assert!(chats[0].locked);
 }
 
+/// A failed replay cannot keep private content hidden: the lock state stored on
+/// this computer is shown, the interface is warned once, and recovery keeps
+/// retrying on a backoff.
+#[test]
+fn failed_privacy_recovery_shows_known_state_and_keeps_retrying() {
+    let (mut worker, events, _, _) = worker();
+    const PEER: &str = "fixture@s.whatsapp.net";
+    unconfirmed(&mut worker);
+    worker.archive.ensure_chat(PEER, "Fixture").unwrap();
+    worker.archive.set_locked_at(PEER, true, 100).unwrap();
+    worker.preferences_recovered(0, false, false);
+    assert!(worker.privacy_ready);
+    assert!(!worker.privacy_confirmed);
+    assert!(worker.privacy_retry > Instant::now());
+    assert!(
+        worker
+            .archive
+            .meta("chat_privacy_ready_v1")
+            .unwrap()
+            .is_none()
+    );
+    let events: Vec<_> = events.try_iter().collect();
+    let chats = events
+        .iter()
+        .find_map(|event| match event {
+            Event::Chats(chats) => Some(chats),
+            _ => None,
+        })
+        .unwrap();
+    assert!(chats[0].locked);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::Info(_)))
+            .count(),
+        1
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::Syncing(true)))
+    );
+    // A second failure warns no further.
+    worker.preferences_recovered(0, false, false);
+    assert_eq!(worker.privacy_attempts, 2);
+}
+
 #[test]
 fn stale_privacy_recovery_cannot_expose_a_different_linked_account() {
     let (mut worker, events, _, _) = worker();
     worker.privacy_ready = false;
     worker.privacy_recovering = true;
     worker.privacy_generation = 1;
-    worker.preferences_recovered(0, true);
+    worker.preferences_recovered(0, true, true);
     assert!(!worker.privacy_ready);
     assert!(worker.privacy_recovering);
     assert!(events.try_recv().is_err());
@@ -1194,6 +1249,109 @@ fn stale_privacy_recovery_cannot_expose_a_different_linked_account() {
             .unwrap()
             .is_none()
     );
+}
+
+/// With nothing but the phone declining the lock collection, the settings that
+/// did sync are trusted now while the next start retries the rest.
+#[test]
+fn partial_settings_recovery_confirms_locks_but_retries_next_start() {
+    let (mut worker, _events, _, _) = worker();
+    unconfirmed(&mut worker);
+    worker.preferences_recovered(0, true, false);
+    assert!(worker.privacy_ready);
+    assert!(worker.privacy_confirmed);
+    assert!(
+        worker
+            .archive
+            .meta("chat_privacy_ready_v1")
+            .unwrap()
+            .is_none()
+    );
+}
+
+/// Content is not held back past the grace period, so a phone that never
+/// answers cannot leave the interface empty.
+#[test]
+fn unconfirmed_privacy_shows_content_after_the_grace_period() {
+    let (mut worker, events, _, _) = worker();
+    const PEER: &str = "fixture@s.whatsapp.net";
+    unconfirmed(&mut worker);
+    worker.archive.ensure_chat(PEER, "Fixture").unwrap();
+    worker.reveal_unconfirmed_after_grace();
+    assert!(!worker.privacy_ready);
+    assert!(events.try_recv().is_err());
+    worker.privacy_reveal_at = Some(Instant::now());
+    worker.reveal_unconfirmed_after_grace();
+    assert!(worker.privacy_ready);
+    assert!(worker.privacy_reveal_at.is_none());
+    assert!(
+        events
+            .try_iter()
+            .any(|event| matches!(event, Event::Info(_)))
+    );
+}
+
+/// A chat opened while lock state was still being recovered asked for its
+/// messages once. The answer was withheld with the rest of the private content,
+/// and the interface, having asked, never asked again.
+#[test]
+fn transcript_reads_withheld_during_privacy_recovery_are_answered_once_shown() {
+    let (mut worker, events, _, _) = worker();
+    const GROUP: &str = "120363000000000001@g.us";
+    worker.archive.ensure_chat(GROUP, "Fixture group").unwrap();
+    for (id, timestamp) in [("first", 100), ("second", 200), ("third", 300)] {
+        let row = crate::archive::tests::message(GROUP, id, timestamp, true);
+        worker.archive.insert_message(&row, None).unwrap();
+    }
+    unconfirmed(&mut worker);
+    worker.load_chat(GROUP.into(), None);
+    worker.load_chat(GROUP.into(), Some((300, "third".into())));
+    worker.load_until(GROUP.into(), "first".into(), (200, "second".into()));
+    // Asking twice keeps one read.
+    worker.load_chat(GROUP.into(), None);
+    assert!(
+        !events
+            .try_iter()
+            .any(|event| matches!(event, Event::Messages { .. })),
+        "nothing private is sent while lock state is unknown"
+    );
+    worker.preferences_recovered(0, false, false);
+    let pages: Vec<(Vec<String>, bool)> = events
+        .try_iter()
+        .filter_map(|event| match event {
+            Event::Messages {
+                chat,
+                messages,
+                older,
+                ..
+            } if chat == GROUP => Some((
+                messages.into_iter().map(|message| message.id).collect(),
+                older,
+            )),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        pages,
+        vec![
+            (vec!["first".into(), "second".into(), "third".into()], false),
+            (vec!["first".into(), "second".into()], true),
+            (vec!["first".into()], true),
+        ]
+    );
+    assert!(worker.withheld_pages.is_empty());
+}
+
+/// A collection the server keeps refusing is not rebuilt every few seconds.
+#[test]
+fn privacy_recovery_backs_off_after_each_failure() {
+    assert_eq!(privacy_backoff(1), Duration::from_secs(30));
+    assert_eq!(privacy_backoff(2), Duration::from_secs(60));
+    assert_eq!(privacy_backoff(3), Duration::from_secs(120));
+    assert_eq!(privacy_backoff(4), Duration::from_secs(240));
+    assert_eq!(privacy_backoff(5), Duration::from_secs(480));
+    assert_eq!(privacy_backoff(6), Duration::from_secs(900));
+    assert_eq!(privacy_backoff(30), Duration::from_secs(900));
 }
 
 #[test]
@@ -1447,9 +1605,15 @@ pub(in crate::backend::worker) fn worker() -> (
     let root = std::env::temp_dir().join(format!("zaptide-worker-test-{}", std::process::id()));
     let worker = Worker {
         privacy_ready: true,
+        privacy_confirmed: true,
+        privacy_snapshot: false,
+        privacy_reveal_at: None,
+        privacy_attempts: 0,
+        privacy_warned: false,
         privacy_recovering: false,
         privacy_generation: 0,
         privacy_retry: Instant::now(),
+        withheld_pages: Vec::new(),
         dirs: AppDirs::under(&root),
         events,
         commands,
