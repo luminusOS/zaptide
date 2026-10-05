@@ -33,7 +33,13 @@ stored locally in an encrypted archive.
   delivers them. Mentioned contacts show their saved names in messages and
   copied transcripts; unknown contacts can show their WhatsApp name on hover.
 - Get desktop notifications, see typing and delivery status, and keep chat
-  read state, mute settings and locks in sync with your phone.
+  read state, mute settings and locks in sync with your phone. Chats already
+  stored on this computer appear even when that settings sync cannot be read
+  from your phone, and a notice says so; locked chats stay locked until the
+  phone's settings arrive. Lock recovery runs separately from mute and pin
+  recovery, so a failure in those settings cannot hold back the phone's locks.
+  For a new link, the ten second grace period starts when settings recovery
+  begins; time spent waiting to pair does not count.
 - When reading older messages, new arrivals keep your position and provide a
   button to return to recent messages.
 - Use light, dark or custom themes. Navigate with keyboard shortcuts and use
