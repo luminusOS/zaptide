@@ -36,6 +36,12 @@
     <control>keyboard</control>
   </supports>
   <releases>
+    <release version="0.5.1" date="2026-10-05">
+      <description>
+        <p>Stored chats remain visible when WhatsApp cannot finish syncing the
+        phone's chat privacy settings.</p>
+      </description>
+    </release>
     <release version="0.5.0" date="2026-10-03">
       <description>
         <p>Forward messages to several chats, mention group members as you
