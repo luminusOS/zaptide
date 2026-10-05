@@ -96,6 +96,51 @@ fn privacy_backoff(attempts: u32) -> Duration {
         .min(Duration::from_secs(15 * 60))
 }
 
+/// Recover locks independently: a bad RegularHigh snapshot must not abort
+/// RegularLow before its lock mutations are applied.
+async fn recover_chat_preferences<F, Fut, E>(snapshot: bool, mut resync: F) -> (bool, bool)
+where
+    F: FnMut(Vec<whatsapp_rust::WAPatchName>, whatsapp_rust::AppStateResyncMode) -> Fut,
+    Fut: Future<Output = Result<whatsapp_rust::AppStateResyncReport, E>>,
+    E: std::fmt::Display,
+{
+    use whatsapp_rust::{AppStateResyncMode, WAPatchName};
+    let mode = if snapshot {
+        AppStateResyncMode::Snapshot
+    } else {
+        AppStateResyncMode::Incremental
+    };
+    let mut collections = vec![WAPatchName::RegularLow];
+    if snapshot {
+        collections.push(WAPatchName::RegularHigh);
+    }
+    let (mut locks, mut complete) = (false, true);
+    for name in collections {
+        let synced = match resync(vec![name], mode).await {
+            Ok(report) => {
+                if !report.all_synced() {
+                    log::warn!(
+                        "chat settings recovery incomplete ({name:?}, {mode:?}): fatal {:?}, retryable {:?}, skipped {:?}",
+                        report.fatal,
+                        report.retryable,
+                        report.skipped
+                    );
+                }
+                report.all_synced() && report.synced.contains(&name)
+            }
+            Err(error) => {
+                log::warn!("chat settings recovery failed ({name:?}, {mode:?}): {error}");
+                false
+            }
+        };
+        if name == WAPatchName::RegularLow {
+            locks = synced;
+        }
+        complete &= synced;
+    }
+    (locks, complete)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ReadSyncOutcome {
     Success,
@@ -449,8 +494,9 @@ pub async fn run(
         privacy_ready: privacy_confirmed,
         privacy_confirmed,
         privacy_snapshot,
-        // Content is shown even if lock state cannot be read from the phone.
-        privacy_reveal_at: (!privacy_confirmed).then(|| Instant::now() + PRIVACY_GRACE),
+        // Existing archives retain the offline fallback. A fresh link starts
+        // its grace only when recovery begins, not while waiting for pairing.
+        privacy_reveal_at: privacy_snapshot.then(|| Instant::now() + PRIVACY_GRACE),
         privacy_attempts: 0,
         privacy_warned: false,
         privacy_recovering: false,
@@ -1024,63 +1070,39 @@ impl Worker {
         }
     }
 
-    fn refresh_legacy_preferences(&mut self) {
+    fn begin_privacy_recovery(&mut self) -> bool {
         if self.privacy_confirmed
             || self.privacy_recovering
             || Instant::now() < self.privacy_retry
             || !matches!(self.status, LinkStatus::Connected)
         {
-            return;
+            return false;
         }
-        let Some(client) = self.client.clone() else {
-            return;
-        };
         if !self.privacy_ready && self.privacy_reveal_at.is_none() {
             self.privacy_reveal_at = Some(Instant::now() + PRIVACY_GRACE);
         }
         self.privacy_recovering = true;
+        true
+    }
+
+    fn refresh_legacy_preferences(&mut self) {
+        let Some(client) = self.client.clone() else {
+            return;
+        };
+        if !self.begin_privacy_recovery() {
+            return;
+        }
         let sender = self.wa_sender.clone();
         let generation = self.privacy_generation;
-        // Chat locks live in RegularLow. A snapshot discards and rebuilds the
-        // collection, which only an archive that predates lock mirroring needs;
-        // an incremental sync waits for the library's own first sync instead of
-        // racing it.
-        let mode = if self.privacy_snapshot {
-            whatsapp_rust::AppStateResyncMode::Snapshot
-        } else {
-            whatsapp_rust::AppStateResyncMode::Incremental
-        };
         if !self.privacy_ready {
             self.emit(Event::Syncing(true));
         }
-        // An upgraded archive also recovers mute settings and pin order from
-        // RegularHigh once, but only the lock collection holds content back.
-        let mut collections = vec![whatsapp_rust::WAPatchName::RegularLow];
-        if self.privacy_snapshot {
-            collections.push(whatsapp_rust::WAPatchName::RegularHigh);
-        }
+        let snapshot = self.privacy_snapshot;
         tokio::spawn(async move {
-            use whatsapp_rust::WAPatchName;
-            let (locks, complete) = match client.resync_app_state(collections, mode).await {
-                Ok(report) => {
-                    if !report.all_synced() {
-                        log::warn!(
-                            "chat settings recovery incomplete ({mode:?}): fatal {:?}, retryable {:?}, skipped {:?}",
-                            report.fatal,
-                            report.retryable,
-                            report.skipped
-                        );
-                    }
-                    (
-                        report.synced.contains(&WAPatchName::RegularLow),
-                        report.all_synced(),
-                    )
-                }
-                Err(error) => {
-                    log::warn!("chat settings recovery failed ({mode:?}): {error}");
-                    (false, false)
-                }
-            };
+            let (locks, complete) = recover_chat_preferences(snapshot, |collections, mode| {
+                client.resync_app_state(collections, mode)
+            })
+            .await;
             // Use the same queue as the replayed mutations, so lock updates
             // are applied before the completion marker can expose chat rows.
             let _ = sender.send(RuntimeEvent::PreferencesRecovered {
@@ -1113,6 +1135,9 @@ impl Worker {
             self.privacy_snapshot = false;
             self.privacy_reveal_at = None;
             self.reveal_private_content();
+            if !complete {
+                self.warn_unconfirmed_preferences();
+            }
         } else {
             self.privacy_attempts = self.privacy_attempts.saturating_add(1);
             self.privacy_retry = Instant::now() + privacy_backoff(self.privacy_attempts);
@@ -1126,6 +1151,14 @@ impl Worker {
     }
 
     fn reveal_unconfirmed_after_grace(&mut self) {
+        if !self.privacy_snapshot && !matches!(self.status, LinkStatus::Connected) {
+            // A pending resync survives reconnects. Keep its deadline so a
+            // silent attempt can still reveal once the link comes back.
+            if !self.privacy_recovering {
+                self.privacy_reveal_at = None;
+            }
+            return;
+        }
         if self
             .privacy_reveal_at
             .is_some_and(|deadline| Instant::now() >= deadline)
@@ -1142,6 +1175,10 @@ impl Worker {
             return;
         }
         self.reveal_private_content();
+        self.warn_unconfirmed_preferences();
+    }
+
+    fn warn_unconfirmed_preferences(&mut self) {
         if !self.privacy_warned {
             self.privacy_warned = true;
             self.emit(Event::Info(

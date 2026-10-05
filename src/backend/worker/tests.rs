@@ -1354,6 +1354,213 @@ fn privacy_recovery_backs_off_after_each_failure() {
     assert_eq!(privacy_backoff(30), Duration::from_secs(900));
 }
 
+#[tokio::test]
+async fn regular_high_failure_does_not_block_lock_recovery() {
+    use whatsapp_rust::{AppStateResyncMode, AppStateResyncReport, WAPatchName};
+    let (mut worker, events, _, _) = worker();
+    const PEER: &str = "fixture@s.whatsapp.net";
+    unconfirmed(&mut worker);
+    worker.archive.ensure_chat(PEER, "Fixture").unwrap();
+    let (locks, complete) = recover_chat_preferences(true, |collections, mode| {
+        assert_eq!(mode, AppStateResyncMode::Snapshot);
+        let result = if collections.contains(&WAPatchName::RegularHigh) {
+            Err("regular_high snapshot MAC mismatch")
+        } else {
+            worker.archive.set_locked_at(PEER, true, 100).unwrap();
+            let mut report = AppStateResyncReport::default();
+            report.synced = collections;
+            Ok(report)
+        };
+        std::future::ready(result)
+    })
+    .await;
+    worker.preferences_recovered(0, locks, complete);
+    assert!(
+        worker.privacy_confirmed,
+        "healthy lock sync must finish independently"
+    );
+    let chats = events
+        .try_iter()
+        .find_map(|event| match event {
+            Event::Chats(chats) => Some(chats),
+            _ => None,
+        })
+        .unwrap();
+    assert!(
+        chats[0].locked,
+        "the phone's recovered lock must reach the interface"
+    );
+    assert!(
+        worker
+            .archive
+            .meta("chat_privacy_ready_v1")
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn pairing_wait_does_not_reveal_unconfirmed_content() {
+    let (mut worker, events, _, _) = worker();
+    unconfirmed(&mut worker);
+    worker.status = LinkStatus::Unlinked {
+        qr: None,
+        pair_code: None,
+        pairing_phone: None,
+    };
+    worker.privacy_reveal_at = Some(Instant::now());
+    worker.reveal_unconfirmed_after_grace();
+    assert!(
+        !worker.privacy_ready,
+        "pairing must not consume the recovery grace"
+    );
+    assert!(
+        !events
+            .try_iter()
+            .any(|event| matches!(event, Event::Info(_)))
+    );
+}
+
+#[test]
+fn privacy_recovery_after_pairing_starts_a_full_grace() {
+    let (mut worker, _, _, _) = worker();
+    unconfirmed(&mut worker);
+    worker.status = LinkStatus::Unlinked {
+        qr: None,
+        pair_code: None,
+        pairing_phone: None,
+    };
+    worker.privacy_reveal_at = Some(Instant::now());
+    worker.reveal_unconfirmed_after_grace();
+    assert!(!worker.begin_privacy_recovery());
+    worker.status = LinkStatus::Connected;
+    let started = Instant::now();
+    assert!(worker.begin_privacy_recovery());
+    let deadline = worker.privacy_reveal_at.unwrap();
+    assert!(deadline >= started + PRIVACY_GRACE);
+    assert!(
+        !worker.begin_privacy_recovery(),
+        "an active attempt must not restart the clock"
+    );
+    assert_eq!(worker.privacy_reveal_at, Some(deadline));
+}
+
+#[test]
+fn existing_archive_can_reveal_after_grace_while_offline() {
+    let (mut worker, events, _, _) = worker();
+    unconfirmed(&mut worker);
+    worker.privacy_snapshot = true;
+    worker.status = LinkStatus::Disconnected {
+        reason: "fixture".into(),
+    };
+    worker
+        .archive
+        .ensure_chat("fixture@s.whatsapp.net", "Fixture")
+        .unwrap();
+    worker.privacy_reveal_at = Some(Instant::now());
+    worker.reveal_unconfirmed_after_grace();
+    assert!(worker.privacy_ready);
+    assert!(!worker.privacy_confirmed);
+    assert!(
+        events
+            .try_iter()
+            .any(|event| matches!(event, Event::Chats(chats) if chats.len() == 1))
+    );
+}
+
+#[test]
+fn fresh_link_pending_recovery_keeps_grace_across_reconnect() {
+    let (mut worker, _, _, _) = worker();
+    unconfirmed(&mut worker);
+    worker.privacy_reveal_at = None;
+    assert!(worker.begin_privacy_recovery());
+    worker.privacy_reveal_at = Some(Instant::now());
+    worker.status = LinkStatus::Disconnected {
+        reason: "fixture".into(),
+    };
+    worker.reveal_unconfirmed_after_grace();
+    assert!(
+        !worker.privacy_ready,
+        "a fresh link must not reveal while offline"
+    );
+    worker.status = LinkStatus::Connected;
+    assert!(
+        !worker.begin_privacy_recovery(),
+        "the original attempt is still pending"
+    );
+    worker.reveal_unconfirmed_after_grace();
+    assert!(
+        worker.privacy_ready,
+        "reconnect must retain the stalled recovery fallback"
+    );
+    assert!(!worker.privacy_confirmed);
+}
+
+#[tokio::test]
+async fn regular_low_failure_remains_unconfirmed_when_regular_high_succeeds() {
+    use whatsapp_rust::{AppStateResyncReport, WAPatchName};
+    let (mut worker, _, _, _) = worker();
+    unconfirmed(&mut worker);
+    let (locks, complete) = recover_chat_preferences(true, |collections, _| {
+        std::future::ready(if collections.contains(&WAPatchName::RegularLow) {
+            Err("regular_low snapshot MAC mismatch")
+        } else {
+            let mut report = AppStateResyncReport::default();
+            report.synced = collections;
+            Ok(report)
+        })
+    })
+    .await;
+    worker.preferences_recovered(0, locks, complete);
+    assert!(worker.privacy_ready);
+    assert!(!worker.privacy_confirmed);
+    assert_eq!(worker.privacy_attempts, 1);
+    assert!(
+        worker
+            .archive
+            .meta("chat_privacy_ready_v1")
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn fresh_link_recovers_only_locks_incrementally() {
+    use whatsapp_rust::{AppStateResyncMode, AppStateResyncReport, WAPatchName};
+    let (locks, complete) = recover_chat_preferences(false, |collections, mode| {
+        assert_eq!(mode, AppStateResyncMode::Incremental);
+        assert_eq!(collections, vec![WAPatchName::RegularLow]);
+        let mut report = AppStateResyncReport::default();
+        report.synced = collections;
+        std::future::ready(Ok::<_, &str>(report))
+    })
+    .await;
+    assert!(locks);
+    assert!(complete);
+}
+
+#[test]
+fn partial_settings_recovery_warns_once_about_stale_settings() {
+    let (mut worker, events, _, _) = worker();
+    unconfirmed(&mut worker);
+    worker.privacy_snapshot = true;
+    worker.preferences_recovered(0, true, false);
+    assert!(worker.privacy_confirmed);
+    assert_eq!(
+        events
+            .try_iter()
+            .filter(|event| matches!(event, Event::Info(_)))
+            .count(),
+        1
+    );
+    worker.preferences_recovered(0, true, false);
+    assert!(
+        !events
+            .try_iter()
+            .any(|event| matches!(event, Event::Info(_)))
+    );
+}
+
 #[test]
 fn link_previews_and_mentions_come_from_extended_text() {
     let message = wa::Message {
