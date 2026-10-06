@@ -32,6 +32,7 @@ pub fn unread_label(count: usize) -> Option<String> {
 
 mod imp {
     use super::{TrayAction, TrayState, unread_label};
+    use gtk4 as gtk;
     use ksni::blocking::TrayMethods;
     use ksni::menu::{CheckmarkItem, StandardItem};
     use ksni::{MenuItem, OfflineReason, ToolTip};
@@ -39,6 +40,7 @@ mod imp {
     struct Tray {
         state: TrayState,
         icon_dir: String,
+        sandboxed: bool,
         actions: relm4::Sender<TrayAction>,
     }
 
@@ -76,6 +78,16 @@ mod imp {
                 "zaptide-tray-unread-symbolic".into()
             } else {
                 "zaptide-tray-symbolic".into()
+            }
+        }
+
+        fn icon_pixmap(&self) -> Vec<ksni::Icon> {
+            // Hosts that ignore the theme path (Cinnamon, as a Flatpak) cannot
+            // find the named icon, so also ship the pixels.
+            if self.sandboxed {
+                pixmap(&self.icon_dir, &self.icon_name())
+            } else {
+                Vec::new()
             }
         }
 
@@ -147,6 +159,40 @@ mod imp {
         }
     }
 
+    /// The installed symbolic icon as light ARGB32, since panels are dark and
+    /// a pixmap cannot be recoloured by the host.
+    fn pixmap(dir: &str, name: &str) -> Vec<ksni::Icon> {
+        use gtk::gdk_pixbuf::{PixbufLoader, prelude::PixbufLoaderExt};
+        let render = || -> Option<ksni::Icon> {
+            let svg = std::fs::read_to_string(format!("{dir}/{name}.svg"))
+                .ok()?
+                .replace("#2e3436", "#eeeeec");
+            let loader = PixbufLoader::with_type("svg").ok()?;
+            loader.set_size(22, 22);
+            loader.write(svg.as_bytes()).ok()?;
+            loader.close().ok()?;
+            let pixbuf = loader.pixbuf()?;
+            let channels = pixbuf.n_channels() as usize;
+            let stride = pixbuf.rowstride() as usize;
+            let (width, height) = (pixbuf.width() as usize, pixbuf.height() as usize);
+            let bytes = pixbuf.read_pixel_bytes();
+            let mut data = Vec::with_capacity(width * height * 4);
+            for y in 0..height {
+                for x in 0..width {
+                    let px = &bytes[y * stride + x * channels..];
+                    let alpha = if channels == 4 { px[3] } else { 255 };
+                    data.extend_from_slice(&[alpha, px[0], px[1], px[2]]);
+                }
+            }
+            Some(ksni::Icon {
+                width: width as i32,
+                height: height as i32,
+                data,
+            })
+        };
+        render().into_iter().collect()
+    }
+
     pub struct TrayHandle(ksni::blocking::Handle<Tray>);
 
     impl TrayHandle {
@@ -156,13 +202,14 @@ mod imp {
             state: TrayState,
             actions: relm4::Sender<TrayAction>,
         ) -> Option<Self> {
+            // Flatpak cannot own the org.kde.StatusNotifierItem-* name.
+            let sandboxed = std::env::var_os("FLATPAK_ID").is_some();
             let tray = Tray {
                 state,
                 icon_dir: icon_dir.to_string_lossy().into_owned(),
+                sandboxed,
                 actions,
             };
-            // Flatpak cannot own the org.kde.StatusNotifierItem-* name.
-            let sandboxed = std::env::var_os("FLATPAK_ID").is_some();
             match tray
                 .disable_dbus_name(sandboxed)
                 .assume_sni_available(true)
