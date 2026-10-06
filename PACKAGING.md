@@ -48,17 +48,25 @@ both with `dev.luminusos.ZapTide.bundle.yml`, and lists every file in
 
 ## AppImage
 
-Both AppImages use the Fedora 45 release build environment. Each bundles
-the GTK and libadwaita libraries linked by ZapTide. To build it locally,
-install `cargo-appimage` 2.4.0 and `appimagetool`, then run:
+The x86_64 AppImage is built with
+[quick-sharun](https://github.com/pkgforge-dev/Anylinux-AppImages) in an Arch
+Linux container. It bundles glibc, GTK, libadwaita, GStreamer, the glycin
+loaders and bubblewrap, so it needs nothing from the host distribution. Arch
+stable has libadwaita 1.9, so `packaging/appimage/build.sh` enables the Arch
+testing repositories until 1.10 reaches `extra`. To build it locally:
+
+```sh
+podman run --rm -v "$PWD":/src -w /src -e VERSION=dev archlinux ./packaging/appimage/build.sh
+```
+
+The result is `dist/zaptide-dev-x86_64.AppImage`. The aarch64 AppImage still
+uses the Fedora 45 release environment with `cargo-appimage` 2.4.0 and
+`appimagetool`, and needs the GStreamer plugins, glycin loaders and bubblewrap
+on the host:
 
 ```sh
 APPIMAGE_EXTRACT_AND_RUN=1 cargo appimage --locked
 ```
-
-The result is `target/appimage/zaptide.AppImage` (or under `CARGO_TARGET_DIR`
-when set). Media playback and image loading also need GStreamer plugins,
-glycin loaders and bubblewrap on the host.
 
 ## Build dependencies
 

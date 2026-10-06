@@ -4,6 +4,45 @@ on:
   workflow_call:
 
 jobs:
+  # Arch container with quick-sharun: the bundle carries glibc, GTK, GStreamer and
+  # the glycin loaders, so it runs on any distro. See packaging/appimage/build.sh.
+  appimage-x86_64:
+    name: Build AppImage (x86_64)
+    runs-on: ubuntu-24.04
+    container: archlinux:latest
+    timeout-minutes: 90
+    steps:
+      - name: Git for checkout
+        run: pacman -Syu --noconfirm git
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v4
+        with:
+          path: |
+            /root/.cargo/registry
+            target
+          key: appimage-arch-${{ hashFiles('Cargo.lock') }}
+      - name: Build AppImage
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: ./packaging/appimage/build.sh
+      - name: Check the AppImage starts
+        run: |
+          set -eu
+          export HOME=/tmp/home XDG_RUNTIME_DIR=/tmp/xdg
+          mkdir -p "$HOME" "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          # 124 means it was still running when the timeout hit.
+          status=0
+          timeout 20 xvfb-run -a dbus-run-session -- \
+            ./dist/zaptide-${{ github.ref_name }}-x86_64.AppImage --appimage-extract-and-run || status=$?
+          test "$status" -eq 124
+      - uses: actions/upload-artifact@v7
+        with:
+          name: appimage-x86_64
+          path: dist/*.AppImage
+          if-no-files-found: error
+
+  # ponytail: aarch64 stays on cargo-appimage; Arch has no official ARM64 image.
   appimage:
     name: Build AppImage (${{ matrix.arch }})
     runs-on: ${{ matrix.os }}
@@ -13,8 +52,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-24.04
-            arch: x86_64
           - os: ubuntu-24.04-arm
             arch: aarch64
     steps:
