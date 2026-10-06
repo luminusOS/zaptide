@@ -36,6 +36,12 @@
     <control>keyboard</control>
   </supports>
   <releases>
+    <release version="0.5.2" date="2026-10-06">
+      <description>
+        <p>The tray icon shows on Linux Mint and other desktops that could not
+        load it from the Flatpak sandbox.</p>
+      </description>
+    </release>
     <release version="0.5.1" date="2026-10-05">
       <description>
         <p>Stored chats remain visible when WhatsApp cannot finish syncing the
