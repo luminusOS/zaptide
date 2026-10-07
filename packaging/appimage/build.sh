@@ -24,7 +24,7 @@ else
 		alsa-lib-devel gstreamer1-devel gstreamer1-plugins-base gstreamer1-plugins-good \
 		cmake libseccomp-devel fontconfig-devel glycin-loaders bubblewrap \
 		xorg-x11-server-Xvfb dbus-daemon patchelf strace \
-		mesa-dri-drivers mesa-vulkan-drivers vulkan-loader glibc-locale-source glibc-langpack-en
+		libglvnd-gles libglvnd-egl libglvnd-glx mesa-dri-drivers mesa-vulkan-drivers vulkan-loader glibc-locale-source glibc-langpack-en
 fi
 
 # ponytail: no get-debloated-pkgs; it downgrades gtk4 and libadwaita to builds for
