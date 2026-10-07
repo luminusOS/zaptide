@@ -8,14 +8,23 @@ set -eux
 ARCH="$(uname -m)"
 TOOLS="https://raw.githubusercontent.com/pkgforge-dev/Anylinux-AppImages/refs/heads/main/useful-tools"
 
-# libadwaita 1.10 (GNOME 51) is only in the testing repos until Arch promotes it;
-# drop this block once extra has it. They must precede core and extra to win.
-sed -i 's|^\[core\]|[core-testing]\nInclude = /etc/pacman.d/mirrorlist\n[extra-testing]\nInclude = /etc/pacman.d/mirrorlist\n\n[core]|' /etc/pacman.conf
+if command -v pacman >/dev/null; then
+	# libadwaita 1.10 (GNOME 51) is only in the testing repos until Arch promotes it;
+	# drop this block once extra has it. They must precede core and extra to win.
+	sed -i 's|^\[core\]|[core-testing]\nInclude = /etc/pacman.d/mirrorlist\n[extra-testing]\nInclude = /etc/pacman.d/mirrorlist\n\n[core]|' /etc/pacman.conf
 
-pacman -Syu --noconfirm base-devel git wget rustup gtk4 libadwaita alsa-lib \
-	gstreamer gst-plugins-base gst-plugins-good cmake libseccomp fontconfig \
-	glycin bubblewrap xorg-server-xvfb patchelf strace
-rustup default stable
+	pacman -Syu --noconfirm base-devel git wget rustup gtk4 libadwaita alsa-lib \
+		gstreamer gst-plugins-base gst-plugins-good cmake libseccomp fontconfig \
+		glycin bubblewrap xorg-server-xvfb patchelf strace
+	rustup default stable
+else
+	# Fedora 45 has libadwaita 1.10; used for aarch64, where Arch has no official image.
+	dnf install -y --setopt=install_weak_deps=False \
+		@development-tools git wget file xz rust cargo gtk4-devel libadwaita-devel \
+		alsa-lib-devel gstreamer1-devel gstreamer1-plugins-base gstreamer1-plugins-good \
+		cmake libseccomp-devel fontconfig-devel glycin-loaders bubblewrap \
+		xorg-x11-server-Xvfb dbus-daemon patchelf strace
+fi
 
 # ponytail: no get-debloated-pkgs; it downgrades gtk4 and libadwaita to builds for
 # Arch stable, which lack 1.10. Add it back once extra ships libadwaita 1.10.

@@ -42,6 +42,39 @@ jobs:
           path: dist/*.AppImage
           if-no-files-found: error
 
+  # Trial: quick-sharun on Fedora (libadwaita 1.10) for aarch64. It may fail without
+  # blocking the release; the file is renamed so it does not clash with the job below.
+  appimage-aarch64-sharun:
+    name: Build AppImage (aarch64, quick-sharun trial)
+    runs-on: ubuntu-24.04-arm
+    container: registry.fedoraproject.org/fedora:45
+    continue-on-error: true
+    timeout-minutes: 90
+    steps:
+      - name: Git for checkout
+        run: dnf install -y git
+      - uses: actions/checkout@v7
+      - name: Build AppImage
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: ./packaging/appimage/build.sh
+      - name: Check the AppImage starts
+        run: |
+          set -eu
+          export HOME=/tmp/home XDG_RUNTIME_DIR=/tmp/xdg
+          mkdir -p "$HOME" "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          status=0
+          timeout 20 xvfb-run -a dbus-run-session -- \
+            ./dist/zaptide-${{ github.ref_name }}-aarch64.AppImage --appimage-extract-and-run || status=$?
+          test "$status" -eq 124
+          mv dist/zaptide-${{ github.ref_name }}-aarch64.AppImage dist/zaptide-${{ github.ref_name }}-aarch64-sharun.AppImage
+      - uses: actions/upload-artifact@v7
+        with:
+          name: appimage-aarch64-sharun
+          path: dist/*.AppImage
+          if-no-files-found: error
+
   # ponytail: aarch64 stays on cargo-appimage; Arch has no official ARM64 image.
   appimage:
     name: Build AppImage (${{ matrix.arch }})
