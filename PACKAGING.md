@@ -59,13 +59,13 @@ testing repositories until 1.10 reaches `extra`. To build it locally:
 podman run --rm -v "$PWD":/src -w /src -e VERSION=dev archlinux ./packaging/appimage/build.sh
 ```
 
-The result is `dist/zaptide-dev-x86_64.AppImage`. The aarch64 AppImage still
-uses the Fedora 45 release environment with `cargo-appimage` 2.4.0 and
-`appimagetool`, and needs the GStreamer plugins, glycin loaders and bubblewrap
-on the host:
+The result is `dist/zaptide-dev-x86_64.AppImage`. The aarch64 AppImage uses the
+same script in a Fedora 45 container, because Arch has no official ARM64 image
+and Arch Linux ARM ships libadwaita 1.9. `build.sh` picks the `dnf` path when
+`pacman` is absent:
 
 ```sh
-APPIMAGE_EXTRACT_AND_RUN=1 cargo appimage --locked
+podman run --rm -v "$PWD":/src -w /src -e VERSION=dev registry.fedoraproject.org/fedora:45 ./packaging/appimage/build.sh
 ```
 
 ## Build dependencies

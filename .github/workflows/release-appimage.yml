@@ -42,13 +42,12 @@ jobs:
           path: dist/*.AppImage
           if-no-files-found: error
 
-  # Trial: quick-sharun on Fedora (libadwaita 1.10) for aarch64. It may fail without
-  # blocking the release; the file is renamed so it does not clash with the job below.
-  appimage-aarch64-sharun:
-    name: Build AppImage (aarch64, quick-sharun trial)
+  # Fedora container because Arch has no official ARM64 image and Arch Linux ARM lacks
+  # libadwaita 1.10. Same quick-sharun bundle as above. See packaging/appimage/build.sh.
+  appimage-aarch64:
+    name: Build AppImage (aarch64)
     runs-on: ubuntu-24.04-arm
     container: registry.fedoraproject.org/fedora:45
-    continue-on-error: true
     timeout-minutes: 90
     steps:
       - name: Git for checkout
@@ -68,65 +67,8 @@ jobs:
           timeout 20 xvfb-run -a dbus-run-session -- \
             ./dist/zaptide-${{ github.ref_name }}-aarch64.AppImage --appimage-extract-and-run || status=$?
           test "$status" -eq 124
-          mv dist/zaptide-${{ github.ref_name }}-aarch64.AppImage dist/zaptide-${{ github.ref_name }}-aarch64-sharun.AppImage
       - uses: actions/upload-artifact@v7
         with:
-          name: appimage-aarch64-sharun
-          path: dist/*.AppImage
-          if-no-files-found: error
-
-  # ponytail: aarch64 stays on cargo-appimage; Arch has no official ARM64 image.
-  appimage:
-    name: Build AppImage (${{ matrix.arch }})
-    runs-on: ${{ matrix.os }}
-    container: registry.fedoraproject.org/fedora:45
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-24.04-arm
-            arch: aarch64
-    steps:
-      - name: System dependencies
-        run: >-
-          dnf install -y --setopt=install_weak_deps=False
-          awk curl file gcc gcc-c++ git gtk4-devel libadwaita-devel
-          alsa-lib-devel gstreamer1-devel cmake libseccomp-devel
-          fontconfig-devel perl make patchelf
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: appimage-${{ matrix.arch }}
-      - name: Install AppImage tooling
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo install cargo-appimage --version 2.4.0 --locked
-          mkdir -p /usr/local/share/appimagetool
-          curl -fL "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-${{ matrix.arch }}.AppImage" -o /usr/local/bin/appimagetool-bin
-          curl -fL "https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-${{ matrix.arch }}" -o /usr/local/share/appimagetool/runtime
-          chmod +x /usr/local/bin/appimagetool-bin /usr/local/share/appimagetool/runtime
-          cat > /usr/local/bin/appimagetool <<'EOF'
-          #!/usr/bin/env bash
-          set -euo pipefail
-          exec /usr/local/bin/appimagetool-bin --runtime-file /usr/local/share/appimagetool/runtime "$@"
-          EOF
-          chmod +x /usr/local/bin/appimagetool
-      - name: Build AppImage
-        shell: bash
-        env:
-          APPIMAGE_EXTRACT_AND_RUN: "1"
-        run: |
-          set -euo pipefail
-          cargo appimage --locked
-          mkdir -p dist
-          cp "${CARGO_TARGET_DIR:-target}/appimage/zaptide.AppImage" "dist/zaptide-${GITHUB_REF_NAME}-${{ matrix.arch }}.AppImage"
-          chmod +x "dist/zaptide-${GITHUB_REF_NAME}-${{ matrix.arch }}.AppImage"
-          test -s "dist/zaptide-${GITHUB_REF_NAME}-${{ matrix.arch }}.AppImage"
-      - uses: actions/upload-artifact@v7
-        with:
-          name: appimage-${{ matrix.arch }}
+          name: appimage-aarch64
           path: dist/*.AppImage
           if-no-files-found: error
