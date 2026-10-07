@@ -20,7 +20,7 @@ if command -v pacman >/dev/null; then
 else
 	# Fedora 45 has libadwaita 1.10; used for aarch64, where Arch has no official image.
 	dnf install -y --setopt=install_weak_deps=False \
-		@development-tools git wget file xz rust cargo gtk4-devel libadwaita-devel \
+		@development-tools git wget file xz perl make rust cargo gtk4-devel libadwaita-devel \
 		alsa-lib-devel gstreamer1-devel gstreamer1-plugins-base gstreamer1-plugins-good \
 		cmake libseccomp-devel fontconfig-devel glycin-loaders bubblewrap \
 		xorg-x11-server-Xvfb dbus-daemon patchelf strace
