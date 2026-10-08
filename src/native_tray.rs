@@ -40,7 +40,6 @@ mod imp {
     struct Tray {
         state: TrayState,
         icon_dir: String,
-        sandboxed: bool,
         actions: relm4::Sender<TrayAction>,
     }
 
@@ -53,6 +52,14 @@ mod imp {
                 ..Default::default()
             }
             .into()
+        }
+
+        fn glyph(&self) -> &'static str {
+            if self.state.unread_chats > 0 {
+                "dev.luminusos.ZapTide-unread-symbolic"
+            } else {
+                "dev.luminusos.ZapTide-symbolic"
+            }
         }
     }
 
@@ -69,26 +76,15 @@ mod imp {
             ksni::Category::Communications
         }
 
-        fn icon_theme_path(&self) -> String {
-            self.icon_dir.clone()
-        }
-
         fn icon_name(&self) -> String {
-            if self.state.unread_chats > 0 {
-                "zaptide-tray-unread-symbolic".into()
-            } else {
-                "zaptide-tray-symbolic".into()
-            }
+            self.glyph().into()
         }
 
         fn icon_pixmap(&self) -> Vec<ksni::Icon> {
-            // Hosts that ignore the theme path (Cinnamon, as a Flatpak) cannot
-            // find the named icon, so also ship the pixels.
-            if self.sandboxed {
-                pixmap(&self.icon_dir, &self.icon_name())
-            } else {
-                Vec::new()
-            }
+            // The name resolves through the host's icon theme, where the
+            // Flatpak exports it and an AppImage installs it; when it is
+            // missing there (`cargo run`), hosts draw these pixels instead.
+            pixmap(&self.icon_dir, self.glyph())
         }
 
         fn tool_tip(&self) -> ToolTip {
@@ -162,27 +158,30 @@ mod imp {
     /// The installed symbolic icon as light ARGB32, since panels are dark and
     /// a pixmap cannot be recoloured by the host.
     fn pixmap(dir: &str, name: &str) -> Vec<ksni::Icon> {
-        use gtk::gdk_pixbuf::{PixbufLoader, prelude::PixbufLoaderExt};
+        use gtk::{gdk, gdk::prelude::TextureExt, glib};
+        // GTK's own loader (glycin) decodes the SVG; the bundled gdk-pixbuf
+        // has no SVG loader in an AppImage.
         let render = || -> Option<ksni::Icon> {
             let svg = std::fs::read_to_string(format!("{dir}/{name}.svg"))
                 .ok()?
-                .replace("#2e3436", "#eeeeec");
-            let loader = PixbufLoader::with_type("svg").ok()?;
-            loader.set_size(22, 22);
-            loader.write(svg.as_bytes()).ok()?;
-            loader.close().ok()?;
-            let pixbuf = loader.pixbuf()?;
-            let channels = pixbuf.n_channels() as usize;
-            let stride = pixbuf.rowstride() as usize;
-            let (width, height) = (pixbuf.width() as usize, pixbuf.height() as usize);
-            let bytes = pixbuf.read_pixel_bytes();
+                .replace("#2e3436", "#eeeeec")
+                // Pad the glyph inside the 22px canvas so it matches the
+                // visual size of other panel icons.
+                .replacen(
+                    r#"width="16" height="16" viewBox="0 0 16 16""#,
+                    r#"width="22" height="22" viewBox="-2.25 -2.25 20.5 20.5""#,
+                    1,
+                );
+            let texture = gdk::Texture::from_bytes(&glib::Bytes::from_owned(svg.into_bytes()))
+                .map_err(|error| log::warn!("tray pixmap: {error}"))
+                .ok()?;
+            let mut downloader = gdk::TextureDownloader::new(&texture);
+            downloader.set_format(gdk::MemoryFormat::A8r8g8b8);
+            let (bytes, stride) = downloader.download_bytes();
+            let (width, height) = (texture.width() as usize, texture.height() as usize);
             let mut data = Vec::with_capacity(width * height * 4);
-            for y in 0..height {
-                for x in 0..width {
-                    let px = &bytes[y * stride + x * channels..];
-                    let alpha = if channels == 4 { px[3] } else { 255 };
-                    data.extend_from_slice(&[alpha, px[0], px[1], px[2]]);
-                }
+            for row in bytes.chunks(stride).take(height) {
+                data.extend_from_slice(&row[..width * 4]);
             }
             Some(ksni::Icon {
                 width: width as i32,
@@ -207,7 +206,6 @@ mod imp {
             let tray = Tray {
                 state,
                 icon_dir: icon_dir.to_string_lossy().into_owned(),
-                sandboxed,
                 actions,
             };
             match tray

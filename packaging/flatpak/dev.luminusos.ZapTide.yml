@@ -48,6 +48,7 @@ modules:
       - sed -i 's/^Icon=zaptide$/Icon=dev.luminusos.ZapTide/' /app/share/applications/dev.luminusos.ZapTide.desktop
       - install -Dm644 packaging/icons/zaptide.svg /app/share/icons/hicolor/scalable/apps/dev.luminusos.ZapTide.svg
       - install -Dm644 packaging/icons/zaptide-symbolic.svg /app/share/icons/hicolor/symbolic/apps/dev.luminusos.ZapTide-symbolic.svg
+      - install -Dm644 packaging/icons/zaptide-unread-symbolic.svg /app/share/icons/hicolor/symbolic/apps/dev.luminusos.ZapTide-unread-symbolic.svg
       - install -Dm644 packaging/flatpak/dev.luminusos.ZapTide.metainfo.xml /app/share/metainfo/dev.luminusos.ZapTide.metainfo.xml
       - install -Dm644 LICENSE /app/share/licenses/zaptide/LICENSE
     sources:
