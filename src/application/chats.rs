@@ -127,9 +127,6 @@ impl NativeApplication {
     /// Sends the tray what changed: window visibility, unread chats that are
     /// not muted or archived, and whether notifications are on.
     pub(super) fn sync_tray(&mut self) {
-        let Some(tray) = &self.tray else {
-            return;
-        };
         let now = crate::util::now();
         let state = crate::native_tray::TrayState {
             unread_chats: self
@@ -141,10 +138,19 @@ impl NativeApplication {
                 .count(),
             notifications: self.settings.notifications,
         };
-        if state != self.tray_state {
-            tray.update(state.clone());
-            self.tray_state = state;
+        if state == self.tray_state {
+            return;
         }
+        if let Some(tray) = &self.tray {
+            tray.update(state.clone());
+        }
+        if crate::native_background::sandboxed() {
+            crate::native_background::set_status(
+                &crate::native_tray::unread_label(state.unread_chats)
+                    .unwrap_or_else(|| "No unread chats".into()),
+            );
+        }
+        self.tray_state = state;
     }
 
     /// Relabels the chat menu for the open chat. Rebuilt only when a label

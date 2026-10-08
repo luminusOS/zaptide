@@ -366,7 +366,7 @@ impl NativeApplication {
                         // unless the portal lists the app under Background Apps.
                         // GNOME turns the tray extension off while the screen is
                         // locked, which must not pull a hidden window back up.
-                        if !shown && !self.background_granted {
+                        if !shown && !crate::native_background::sandboxed() {
                             self.window.present();
                         }
                     }
@@ -869,20 +869,6 @@ impl NativeApplication {
             Input::SendText(text) => self.send_text(text),
             Input::Close => {
                 self.cancel_portal_requests();
-                if self.settings.keep_running_in_background
-                    && crate::native_background::sandboxed()
-                    && !self.background_granted
-                {
-                    let answer = sender.clone();
-                    crate::native_background::request(move |allowed| {
-                        answer.input(Input::BackgroundAnswer(allowed))
-                    });
-                } else {
-                    self.finish_close(sender);
-                }
-            }
-            Input::BackgroundAnswer(allowed) => {
-                self.background_granted = allowed;
                 self.finish_close(sender);
             }
             Input::Quit => {
