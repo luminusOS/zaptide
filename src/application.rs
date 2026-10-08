@@ -1646,6 +1646,7 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
           .zaptide-mention-popover > contents { padding: 0; }\n\
           .zaptide-mention-popover list { background: none; }\n\
           .zaptide-mention-popover row { border-radius: 8px; }\n\
+          .zaptide-message-flash .zaptide-bubble { outline: 2px solid @accent_color; outline-offset: 2px; }\n\
           .zaptide-message-item:focus-visible .zaptide-bubble { outline: 2px solid @accent_color; outline-offset: 2px; }\n\
          .zaptide-media-card { padding: 8px 12px; margin-top: 4px; background-color: color-mix(in srgb, currentColor 8%, transparent); }\n\
          .zaptide-link-card:hover { background-color: color-mix(in srgb, currentColor 12%, transparent); }\n\
@@ -2177,11 +2178,31 @@ impl NativeApplication {
         };
         self.message_target = Some(id.to_owned());
         let view = self.messages.view.clone();
+        let id = id.to_owned();
         gtk::glib::idle_add_local_once(move || {
             if let Some(window) = view.root().and_downcast::<gtk::Window>() {
                 window.set_focus_visible(true);
             }
             view.scroll_to(position as u32, gtk::ListScrollFlags::FOCUS, None);
+            // The row may not exist until the scroll lands; each row's root is
+            // named after its message id.
+            let id = id.clone();
+            gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(150), move || {
+                let mut child = view.first_child();
+                while let Some(item) = child {
+                    if let Some(root) = item.first_child()
+                        && root.widget_name() == id
+                    {
+                        root.add_css_class("zaptide-message-flash");
+                        gtk::glib::timeout_add_local_once(
+                            std::time::Duration::from_millis(1800),
+                            move || root.remove_css_class("zaptide-message-flash"),
+                        );
+                        return;
+                    }
+                    child = item.next_sibling();
+                }
+            });
         });
     }
 

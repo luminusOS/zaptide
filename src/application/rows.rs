@@ -439,6 +439,7 @@ impl RelmListItem for MessageRow {
     fn bind(&mut self, widgets: &mut Self::Widgets, root: &mut Self::Root) {
         root.set_widget_name(&self.id);
         fade_in_if_arriving(root, &self.id);
+        root.remove_css_class("zaptide-message-flash");
         root.set_visible(!self.collapsed);
         root.update_property(&[
             gtk::accessible::Property::Label(&self.accessible_label),
