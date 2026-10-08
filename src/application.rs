@@ -762,6 +762,11 @@ impl SimpleComponent for NativeApplication {
                     add_named[Some("chats")] = &adw::NavigationSplitView {
                         // Collapsed, the chat list and the conversation are two
                         // pages; the conversation's header gets a back button.
+                        // libadwaita's 180-280sp at 25% truncates chat names, so the
+                        // sidebar keeps scaling with the window from a wider floor.
+                        set_min_sidebar_width: 260.0,
+                        set_max_sidebar_width: 360.0,
+                        set_sidebar_width_fraction: 0.3,
                         #[watch]
                         set_show_content: !model.sidebar_visible,
 
