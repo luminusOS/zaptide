@@ -560,7 +560,7 @@ pub struct NativeApplication {
     preferences: Option<crate::native_preferences::NativePreferencesDialog>,
     sidebar: relm4::Controller<Sidebar>,
     sidebar_visible: bool,
-    split_view: Option<adw::OverlaySplitView>,
+    split_view: Option<adw::NavigationSplitView>,
     phone_linking: bool,
     /// Chat snapshots changed since the list widget was last rebuilt.
     chats_dirty: bool,
@@ -575,8 +575,8 @@ pub struct NativeApplication {
 pub enum Input {
     WindowMapped,
     WindowActivated,
-    ToggleSidebar,
-    /// The split view showed or hid its sidebar itself, e.g. a click on the content.
+    /// The split view moved between the chat list and the conversation itself,
+    /// as its back button does.
     SidebarShown(bool),
     StartBackend,
     BackendReady,
@@ -759,22 +759,20 @@ impl SimpleComponent for NativeApplication {
                     add_named[Some("link")] = model.link_page.widget(),
 
                     #[name = "main_split_view"]
-                    add_named[Some("chats")] = &adw::OverlaySplitView {
+                    add_named[Some("chats")] = &adw::NavigationSplitView {
+                        // Collapsed, the chat list and the conversation are two
+                        // pages; the conversation's header gets a back button.
                         #[watch]
-                        set_show_sidebar: model.sidebar_visible,
+                        set_show_content: !model.sidebar_visible,
 
-                        set_sidebar: Some(model.sidebar.widget()),
+                        set_sidebar: Some(&adw::NavigationPage::new(model.sidebar.widget(), "Chats")),
 
                         #[wrap(Some)]
-                        set_content = &adw::ToolbarView {
+                        set_content = &adw::NavigationPage {
+                            set_title: "Chat",
+                            #[wrap(Some)]
+                            set_child = &adw::ToolbarView {
                             add_top_bar = &adw::HeaderBar {
-                                pack_start = &gtk::Button {
-                                    set_icon_name: "sidebar-show-symbolic",
-                                    set_tooltip_text: Some("Show chats"),
-                                    #[watch]
-                                    set_visible: !model.sidebar_visible || model.split_view.as_ref().is_some_and(adw::OverlaySplitView::is_collapsed),
-                                    connect_clicked => Input::ToggleSidebar,
-                                },
                                 // The title opens the chat's details, as in GNOME's
                                 // chat apps.
                                 #[wrap(Some)]
@@ -924,6 +922,7 @@ impl SimpleComponent for NativeApplication {
                                         },
                                     },
                                 },
+                            },
                         },
                     },
 
@@ -1295,20 +1294,21 @@ impl SimpleComponent for NativeApplication {
         );
         root.add_breakpoint(breakpoint);
         model.split_view = Some(widgets.main_split_view.clone());
-        model.sidebar_visible = !widgets.main_split_view.is_collapsed();
+        // Collapsed, start on the chat list.
+        model.sidebar_visible = true;
         let split_sender = sender.clone();
         widgets
             .main_split_view
             .connect_notify_local(Some("collapsed"), move |split, _| {
                 split_sender.input(Input::SplitCollapsed(split.is_collapsed()));
             });
-        // A click on the content closes a collapsed sidebar without telling the
-        // model; the next view update would then reopen it.
+        // The back button changes the page without telling the model; the next
+        // view update would then undo it.
         let shown_sender = sender.clone();
         widgets
             .main_split_view
-            .connect_show_sidebar_notify(move |split| {
-                shown_sender.input(Input::SidebarShown(split.shows_sidebar()));
+            .connect_show_content_notify(move |split| {
+                shown_sender.input(Input::SidebarShown(!split.shows_content()));
             });
         // The whole conversation accepts dropped files, not only the composer.
         // Capture runs before the text view's own drop handling.

@@ -36,7 +36,7 @@ impl NativeApplication {
         if self
             .split_view
             .as_ref()
-            .is_some_and(adw::OverlaySplitView::is_collapsed)
+            .is_some_and(adw::NavigationSplitView::is_collapsed)
         {
             self.sidebar_visible = false;
         }

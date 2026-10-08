@@ -10,9 +10,11 @@ impl NativeApplication {
             Input::WindowMapped => {
                 gtk::glib::idle_add_local_once(move || sender.input(Input::StartBackend));
             }
-            Input::ToggleSidebar => self.sidebar_visible = !self.sidebar_visible,
             Input::SidebarShown(shown) => self.sidebar_visible = shown,
-            Input::SplitCollapsed(collapsed) => self.sidebar_visible = !collapsed,
+            // Collapsing keeps an open conversation on screen; widening resets.
+            Input::SplitCollapsed(collapsed) => {
+                self.sidebar_visible = !collapsed || self.active_chat.is_none()
+            }
             Input::ShowPreferences => {
                 let preferences =
                     crate::native_preferences::NativePreferences::from(&self.settings);
