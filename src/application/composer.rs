@@ -354,6 +354,9 @@ impl SimpleComponent for ComposerView {
                     add_css_class: "zaptide-composer",
                     set_hexpand: true,
                     set_hscrollbar_policy: gtk::PolicyType::Never,
+                    // An automatic scrollbar reserves its own minimum height,
+                    // which made the empty box about twice the buttons' height.
+                    set_vscrollbar_policy: gtk::PolicyType::External,
                     set_propagate_natural_height: true,
                     set_max_content_height: 160,
                     #[name = "composer"]
