@@ -1,6 +1,24 @@
 use super::*;
 
 impl NativeApplication {
+    /// Jumps to the message `message` quotes, loading older history if needed.
+    pub(super) fn open_quoted(&mut self, message: crate::model::Message) {
+        let Some(quoted_id) = message.quoted.map(|quoted| quoted.id) else {
+            return;
+        };
+        if self.message_ids.contains(&quoted_id) {
+            self.scroll_message_into_view(&quoted_id);
+        } else if let Some(backend) = &self.backend {
+            self.pending_quote_navigation = Some((message.chat.clone(), quoted_id.clone()));
+            backend.send(crate::backend::Command::LoadUntil {
+                chat: message.chat,
+                id: quoted_id,
+                before: (message.timestamp, message.id),
+            });
+            self.status = "Loading quoted message".into();
+        }
+    }
+
     pub(super) fn reply_selected(&mut self) {
         let Some((chat, message)) = self.active_chat.clone().zip(self.selected_message_id()) else {
             return;

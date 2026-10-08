@@ -345,6 +345,18 @@ impl RelmListItem for MessageRow {
             }
         });
         body.add_controller(code_click);
+        // Clicking a quote jumps to the message it quotes.
+        quote.set_cursor_from_name(Some("pointer"));
+        let quote_click = gtk::GestureClick::new();
+        quote_click.set_button(gtk::gdk::BUTTON_PRIMARY);
+        let quote_target = menu_target.clone();
+        quote_click.connect_pressed(move |gesture, _, _, _| {
+            if let Some((id, sender)) = quote_target.borrow().as_ref() {
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                sender.input(Input::OpenQuotedOf(id.clone()));
+            }
+        });
+        quote.add_controller(quote_click);
         let context_click = gtk::GestureClick::new();
         context_click.set_button(gtk::gdk::BUTTON_SECONDARY);
         context_click.set_propagation_phase(gtk::PropagationPhase::Capture);

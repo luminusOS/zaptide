@@ -461,22 +461,13 @@ impl NativeApplication {
                     .and_then(|message| self.project_voice(message));
             }
             Input::OpenQuoted => {
-                let Some(message) = self.selected_message().cloned() else {
-                    return;
-                };
-                let Some(quoted_id) = message.quoted.map(|quoted| quoted.id) else {
-                    return;
-                };
-                if self.message_ids.contains(&quoted_id) {
-                    self.scroll_message_into_view(&quoted_id);
-                } else if let Some(backend) = &self.backend {
-                    self.pending_quote_navigation = Some((message.chat.clone(), quoted_id.clone()));
-                    backend.send(crate::backend::Command::LoadUntil {
-                        chat: message.chat,
-                        id: quoted_id,
-                        before: (message.timestamp, message.id),
-                    });
-                    self.status = "Loading quoted message".into();
+                if let Some(message) = self.selected_message().cloned() {
+                    self.open_quoted(message);
+                }
+            }
+            Input::OpenQuotedOf(id) => {
+                if let Some(message) = self.message_snapshots.get(&id).cloned() {
+                    self.open_quoted(message);
                 }
             }
             Input::ReplySelected => self.reply_selected(),

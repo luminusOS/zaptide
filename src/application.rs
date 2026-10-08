@@ -598,6 +598,7 @@ pub enum Input {
         y: f32,
     },
     OpenQuoted,
+    OpenQuotedOf(String),
     ReplySelected,
     EditSelected,
     CancelReply,
@@ -2168,13 +2169,19 @@ impl NativeApplication {
         }
     }
 
-    fn scroll_message_into_view(&self, id: &str) {
+    /// Scrolls to a message and selects it: the row takes focus, with its
+    /// ring forced visible, and becomes the target of reply/copy actions.
+    fn scroll_message_into_view(&mut self, id: &str) {
         let Some(position) = self.message_ids.iter().position(|message| message == id) else {
             return;
         };
+        self.message_target = Some(id.to_owned());
         let view = self.messages.view.clone();
         gtk::glib::idle_add_local_once(move || {
-            view.scroll_to(position as u32, gtk::ListScrollFlags::NONE, None);
+            if let Some(window) = view.root().and_downcast::<gtk::Window>() {
+                window.set_focus_visible(true);
+            }
+            view.scroll_to(position as u32, gtk::ListScrollFlags::FOCUS, None);
         });
     }
 
