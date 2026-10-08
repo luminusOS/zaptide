@@ -17,11 +17,17 @@ pub(super) struct TranscriptViewInit {
 
 pub(super) struct TranscriptView {
     state: TranscriptState,
+    /// Scrolled far enough from the newest message to offer a way back.
+    away_from_end: bool,
 }
+
+/// How far above the end, in pixels, the way-back button appears.
+const AWAY_FROM_END: f64 = 240.0;
 
 #[derive(Debug)]
 pub(super) enum TranscriptViewInput {
     Sync(TranscriptState),
+    AwayFromEnd(bool),
 }
 
 #[derive(Debug)]
@@ -120,6 +126,20 @@ impl SimpleComponent for TranscriptView {
                             connect_activate[sender] => move |_, position| sender.output(TranscriptViewOutput::SelectMessage(position)).unwrap(),
                         },
                     },
+                    add_overlay = &gtk::Button {
+                        set_halign: gtk::Align::End,
+                        set_valign: gtk::Align::End,
+                        set_margin_end: 18,
+                        set_margin_bottom: 18,
+                        set_icon_name: "go-bottom-symbolic",
+                        set_tooltip_text: Some("Go to latest message"),
+                        update_property: &[gtk::accessible::Property::Label("Go to latest message")],
+                        add_css_class: "circular",
+                        add_css_class: "osd",
+                        #[watch]
+                        set_visible: model.away_from_end && !model.state.recent_messages_pending,
+                        connect_clicked[sender] => move |_| sender.output(TranscriptViewOutput::ScrollToRecentMessages).unwrap(),
+                    },
                     #[name = "recent_messages_button"]
                     add_overlay = &gtk::Button {
                         set_halign: gtk::Align::End,
@@ -156,14 +176,23 @@ impl SimpleComponent for TranscriptView {
         _root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        let model = Self { state: init.state };
+        let model = Self {
+            state: init.state,
+            away_from_end: false,
+        };
         let message_view = &init.message_view;
         let widgets = view_output!();
         let adjustment = widgets.message_scroller.vadjustment();
         let output = sender.clone();
+        let away = std::cell::Cell::new(false);
         adjustment.connect_value_changed(move |adjustment| {
-            if adjustment.value() + adjustment.page_size() >= adjustment.upper() - 48.0 {
+            let gap = adjustment.upper() - adjustment.value() - adjustment.page_size();
+            if gap <= 48.0 {
                 output.output(TranscriptViewOutput::AtEnd).unwrap();
+            }
+            let now_away = gap > AWAY_FROM_END;
+            if away.replace(now_away) != now_away {
+                output.input(TranscriptViewInput::AwayFromEnd(now_away));
             }
         });
         widgets
@@ -183,6 +212,7 @@ impl SimpleComponent for TranscriptView {
     fn update(&mut self, input: Self::Input, _sender: ComponentSender<Self>) {
         match input {
             TranscriptViewInput::Sync(state) => self.state = state,
+            TranscriptViewInput::AwayFromEnd(away) => self.away_from_end = away,
         }
     }
 }
