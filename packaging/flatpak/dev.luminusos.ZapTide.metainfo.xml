@@ -36,6 +36,14 @@
     <control>keyboard</control>
   </supports>
   <releases>
+    <release version="0.6.0" date="2026-10-08">
+      <description>
+        <p>Clicking a quoted message jumps to the original, and a button
+        returns to the latest message after scrolling up. The window keeps
+        running in the background without a tray on GNOME, and the chat list
+        fills a narrow window.</p>
+      </description>
+    </release>
     <release version="0.5.2" date="2026-10-06">
       <description>
         <p>The tray icon shows on Linux Mint and other desktops that could not
