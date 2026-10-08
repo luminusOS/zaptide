@@ -393,7 +393,11 @@ fn install_icons(dir: &std::path::Path) {
     // AppImage has to put them in the user's theme.
     if std::env::var_os("APPIMAGE").is_some() {
         let hicolor = gtk::glib::user_data_dir().join("icons/hicolor");
-        if write_icons(&hicolor.join("symbolic/apps"), tray.iter()) {
+        // The colour icon goes in the theme too: with only the symbolic one
+        // there, GTK resolves the app's name to it and About shows a bubble.
+        let app = [("dev.luminusos.ZapTide.svg", APP_ICON)];
+        let tray_changed = write_icons(&hicolor.join("symbolic/apps"), tray.iter());
+        if write_icons(&hicolor.join("scalable/apps"), app.iter()) | tray_changed {
             // Theme caches rescan only when the theme directory changes.
             let _ = std::fs::File::open(&hicolor)
                 .and_then(|theme| theme.set_modified(std::time::SystemTime::now()));
