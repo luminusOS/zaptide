@@ -26,6 +26,7 @@ pub mod native_portals;
 pub mod native_preferences;
 pub mod native_theme;
 pub mod native_transcript;
+pub mod native_background;
 pub mod native_tray;
 pub mod native_voice;
 pub mod notifier;

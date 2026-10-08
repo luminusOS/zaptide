@@ -362,8 +362,11 @@ impl NativeApplication {
                     TrayAction::Quit => sender.input(Input::Quit),
                     TrayAction::Shown(shown) => {
                         self.tray_shown = shown;
-                        // Without a tray there is no way back to a hidden window.
-                        if !shown {
+                        // Without a tray there is no way back to a hidden window,
+                        // unless the portal lists the app under Background Apps.
+                        // GNOME turns the tray extension off while the screen is
+                        // locked, which must not pull a hidden window back up.
+                        if !shown && !self.background_granted {
                             self.window.present();
                         }
                     }
@@ -866,13 +869,21 @@ impl NativeApplication {
             Input::SendText(text) => self.send_text(text),
             Input::Close => {
                 self.cancel_portal_requests();
-                if self.settings.keep_running_in_background && self.tray_shown {
-                    self.window.set_visible(false);
-                } else if self.settings.keep_running_in_background {
-                    self.present_quit_confirmation_dialog(sender);
+                if self.settings.keep_running_in_background
+                    && crate::native_background::sandboxed()
+                    && !self.background_granted
+                {
+                    let answer = sender.clone();
+                    crate::native_background::request(move |allowed| {
+                        answer.input(Input::BackgroundAnswer(allowed))
+                    });
                 } else {
-                    self.request_shutdown(sender);
+                    self.finish_close(sender);
                 }
+            }
+            Input::BackgroundAnswer(allowed) => {
+                self.background_granted = allowed;
+                self.finish_close(sender);
             }
             Input::Quit => {
                 self.cancel_portal_requests();

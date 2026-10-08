@@ -482,6 +482,8 @@ pub struct NativeApplication {
     chat_menu: gtk::gio::Menu,
     /// (group, pinned, muted, archived) the chat menu was last labelled for.
     chat_menu_state: Option<(bool, bool, bool, bool)>,
+    /// The portal allowed the app to run in the background (Flatpak).
+    background_granted: bool,
     tray: Option<crate::native_tray::TrayHandle>,
     tray_state: crate::native_tray::TrayState,
     /// Whether a tray host shows the icon, so closing can hide the window.
@@ -688,6 +690,8 @@ pub enum Input {
     ArchiveChat(String),
     ToggleSelectedMute,
     Close,
+    /// The Background Apps portal answered the request made on closing.
+    BackgroundAnswer(bool),
     Quit,
     ShutdownComplete,
     MediaAction(crate::native_media::NativeMediaAction),
@@ -1152,6 +1156,7 @@ impl SimpleComponent for NativeApplication {
             tray: None,
             tray_state: crate::native_tray::TrayState::default(),
             tray_shown: false,
+            background_granted: false,
             avatars: std::collections::HashMap::new(),
             avatar_requests: std::collections::HashSet::new(),
             typing: std::collections::HashMap::new(),
@@ -3125,6 +3130,18 @@ impl NativeApplication {
             });
         } else {
             sender.input(Input::ShutdownComplete);
+        }
+    }
+
+    /// Closing the window hides it when something can bring it back (a tray or
+    /// the Background Apps list), and otherwise asks before quitting.
+    fn finish_close(&mut self, sender: ComponentSender<Self>) {
+        if !self.settings.keep_running_in_background {
+            self.request_shutdown(sender);
+        } else if self.tray_shown || self.background_granted {
+            self.window.set_visible(false);
+        } else {
+            self.present_quit_confirmation_dialog(sender);
         }
     }
 
