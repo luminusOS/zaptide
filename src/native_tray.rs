@@ -165,13 +165,8 @@ mod imp {
             let svg = std::fs::read_to_string(format!("{dir}/{name}.svg"))
                 .ok()?
                 .replace("#2e3436", "#eeeeec")
-                // Pad the glyph inside the 22px canvas so it matches the
-                // visual size of other panel icons.
-                .replacen(
-                    r#"width="16" height="16" viewBox="0 0 16 16""#,
-                    r#"width="22" height="22" viewBox="-2.25 -2.25 20.5 20.5""#,
-                    1,
-                );
+                // The SVG already keeps its own margin; hosts scale 22px down.
+                .replacen(r#"width="16" height="16""#, r#"width="22" height="22""#, 1);
             let texture = gdk::Texture::from_bytes(&glib::Bytes::from_owned(svg.into_bytes()))
                 .map_err(|error| log::warn!("tray pixmap: {error}"))
                 .ok()?;
