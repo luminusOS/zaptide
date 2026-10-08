@@ -13,7 +13,6 @@ pub enum SettingsField {
     Theme,
     CustomTheme,
     Zoom,
-    SidebarWidth,
     EnterSends,
     SendReadReceipts,
     SendTyping,
@@ -48,7 +47,6 @@ pub struct AppearancePreferences {
     pub theme: ThemeChoice,
     pub custom_theme: Option<String>,
     pub zoom: f32,
-    pub sidebar_width: f32,
     pub enter_sends: bool,
     pub show_sender_pictures: bool,
     pub show_shortcut_hints: bool,
@@ -95,7 +93,6 @@ impl From<&Settings> for NativePreferences {
                 theme: settings.theme,
                 custom_theme: settings.custom_theme.clone(),
                 zoom: settings.zoom,
-                sidebar_width: settings.sidebar_width,
                 enter_sends: settings.enter_sends,
                 show_sender_pictures: settings.show_sender_pictures,
                 show_shortcut_hints: settings.show_shortcut_hints,
@@ -133,7 +130,6 @@ pub enum PreferenceChange {
     SetTheme(ThemeChoice),
     SetCustomTheme(Option<String>),
     SetZoom(f32),
-    SetSidebarWidth(f32),
     SetEnterSends(bool),
     SetSendReadReceipts(bool),
     SetSendTyping(bool),
@@ -160,10 +156,6 @@ impl std::fmt::Debug for PreferenceChange {
                 .field(value)
                 .finish(),
             Change::SetZoom(value) => formatter.debug_tuple("SetZoom").field(value).finish(),
-            Change::SetSidebarWidth(value) => formatter
-                .debug_tuple("SetSidebarWidth")
-                .field(value)
-                .finish(),
             Change::SetEnterSends(value) => {
                 formatter.debug_tuple("SetEnterSends").field(value).finish()
             }
@@ -224,7 +216,6 @@ impl PreferenceChange {
             Self::SetTheme(_) => SettingsField::Theme,
             Self::SetCustomTheme(_) => SettingsField::CustomTheme,
             Self::SetZoom(_) => SettingsField::Zoom,
-            Self::SetSidebarWidth(_) => SettingsField::SidebarWidth,
             Self::SetEnterSends(_) => SettingsField::EnterSends,
             Self::SetSendReadReceipts(_) => SettingsField::SendReadReceipts,
             Self::SetSendTyping(_) => SettingsField::SendTyping,
@@ -372,20 +363,6 @@ impl NativePreferencesDialog {
             (f64::from(preferences.appearance.zoom), 0.6, 2.0, 0.05, 2),
             change_sink.clone(),
             PreferenceChange::SetZoom,
-        );
-        add_numeric_row(
-            &appearance_group,
-            "Sidebar width",
-            "Sidebar width in pixels",
-            (
-                f64::from(preferences.appearance.sidebar_width),
-                260.0,
-                420.0,
-                10.0,
-                0,
-            ),
-            change_sink.clone(),
-            PreferenceChange::SetSidebarWidth,
         );
         add_switch(
             &appearance_group,
@@ -677,11 +654,6 @@ fn push_change(
         PreferenceChange::SetZoom(value) if !value.is_finite() || !(0.6..=2.0).contains(value) => {
             Some(ValidationError::ZoomOutOfRange)
         }
-        PreferenceChange::SetSidebarWidth(value)
-            if !value.is_finite() || !(260.0..=420.0).contains(value) =>
-        {
-            Some(ValidationError::SidebarWidthOutOfRange)
-        }
         PreferenceChange::SetCustomTheme(Some(filename))
             if filename.trim().is_empty()
                 || filename == "."
@@ -797,7 +769,6 @@ fn add_numeric_row(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ValidationError {
     ZoomOutOfRange,
-    SidebarWidthOutOfRange,
     InvalidCustomThemeFilename,
     UnsupportedVoiceSpeed,
 }
@@ -806,7 +777,6 @@ impl std::fmt::Display for ValidationError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let message = match self {
             Self::ZoomOutOfRange => "zoom must be finite and between 0.6 and 2.0",
-            Self::SidebarWidthOutOfRange => "sidebar width must be finite and between 260 and 420",
             Self::InvalidCustomThemeFilename => "custom theme must be a local filename",
             Self::UnsupportedVoiceSpeed => "voice speed must be 1.0, 1.5, or 2.0",
         };
@@ -839,12 +809,6 @@ impl PreferenceChange {
                     return Err(ValidationError::ZoomOutOfRange);
                 }
                 settings.zoom = value;
-            }
-            Self::SetSidebarWidth(value) => {
-                if !value.is_finite() || !(260.0..=420.0).contains(&value) {
-                    return Err(ValidationError::SidebarWidthOutOfRange);
-                }
-                settings.sidebar_width = value;
             }
             Self::SetEnterSends(value) => settings.enter_sends = value,
             Self::SetSendReadReceipts(value) => settings.send_read_receipts = value,
@@ -894,10 +858,6 @@ mod tests {
             Err(ValidationError::ZoomOutOfRange)
         );
         assert_eq!(
-            PreferenceChange::SetSidebarWidth(500.0).apply(&mut settings),
-            Err(ValidationError::SidebarWidthOutOfRange)
-        );
-        assert_eq!(
             PreferenceChange::SetCustomTheme(Some("../secret.json".into())).apply(&mut settings),
             Err(ValidationError::InvalidCustomThemeFilename)
         );
@@ -940,9 +900,6 @@ mod tests {
     fn validated_ranges_and_write_only_secret_clear_are_supported() {
         let mut settings = Settings::default();
         PreferenceChange::SetZoom(2.0).apply(&mut settings).unwrap();
-        PreferenceChange::SetSidebarWidth(260.0)
-            .apply(&mut settings)
-            .unwrap();
         PreferenceChange::SetVoiceSpeed(1.5)
             .apply(&mut settings)
             .unwrap();
@@ -954,7 +911,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(settings.zoom, 2.0);
-        assert_eq!(settings.sidebar_width, 260.0);
         assert_eq!(settings.voice_speed, 1.5);
         assert!(settings.chat_lock_code_hash.is_none());
     }

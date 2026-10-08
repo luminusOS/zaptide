@@ -576,6 +576,8 @@ pub enum Input {
     WindowMapped,
     WindowActivated,
     ToggleSidebar,
+    /// The split view showed or hid its sidebar itself, e.g. a click on the content.
+    SidebarShown(bool),
     StartBackend,
     BackendReady,
     SelectChat(u32),
@@ -758,8 +760,6 @@ impl SimpleComponent for NativeApplication {
 
                     #[name = "main_split_view"]
                     add_named[Some("chats")] = &adw::OverlaySplitView {
-                        set_min_sidebar_width: 260.0,
-                        set_max_sidebar_width: 420.0,
                         #[watch]
                         set_show_sidebar: model.sidebar_visible,
 
@@ -1301,6 +1301,14 @@ impl SimpleComponent for NativeApplication {
             .main_split_view
             .connect_notify_local(Some("collapsed"), move |split, _| {
                 split_sender.input(Input::SplitCollapsed(split.is_collapsed()));
+            });
+        // A click on the content closes a collapsed sidebar without telling the
+        // model; the next view update would then reopen it.
+        let shown_sender = sender.clone();
+        widgets
+            .main_split_view
+            .connect_show_sidebar_notify(move |split| {
+                shown_sender.input(Input::SidebarShown(split.shows_sidebar()));
             });
         // The whole conversation accepts dropped files, not only the composer.
         // Capture runs before the text view's own drop handling.
@@ -2161,9 +2169,6 @@ impl NativeApplication {
             "window {{ font-size: {:.0}%; }}",
             100.0 * self.settings.zoom
         ));
-        self.sidebar
-            .widget()
-            .set_width_request(self.settings.sidebar_width.round() as i32);
         self.enter_sends.set(self.settings.enter_sends);
         self.audio.media.set_speed(self.settings.voice_speed);
     }

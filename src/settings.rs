@@ -34,7 +34,6 @@ pub struct Settings {
     pub custom_theme_cache: Option<crate::theme::custom::CustomTheme>,
     /// Interface zoom factor.
     pub zoom: f32,
-    pub sidebar_width: f32,
     /// Whether Enter sends and Shift+Enter adds a line. Off swaps them.
     pub enter_sends: bool,
     /// Send read receipts, subject to the account privacy setting.
@@ -79,7 +78,6 @@ impl Default for Settings {
             custom_theme: None,
             custom_theme_cache: None,
             zoom: 1.0,
-            sidebar_width: 320.0,
             enter_sends: true,
             send_read_receipts: true,
             send_typing: true,

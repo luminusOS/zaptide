@@ -11,6 +11,7 @@ impl NativeApplication {
                 gtk::glib::idle_add_local_once(move || sender.input(Input::StartBackend));
             }
             Input::ToggleSidebar => self.sidebar_visible = !self.sidebar_visible,
+            Input::SidebarShown(shown) => self.sidebar_visible = shown,
             Input::SplitCollapsed(collapsed) => self.sidebar_visible = !collapsed,
             Input::ShowPreferences => {
                 let preferences =
