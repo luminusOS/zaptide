@@ -96,6 +96,7 @@ impl NativeApplication {
             self.composer.cancel_context(previous);
         }
         self.chat_projection.select(chat.clone());
+        self.chats.selection_model.set_selected(position);
         self.active_chat = Some(chat.clone());
         self.mark_open_chat();
         self.reply_to = None;
@@ -438,6 +439,10 @@ impl NativeApplication {
             .and_then(|id| self.chat_ids.iter().position(|known| known == id))
         {
             self.chats.selection_model.set_selected(position as u32);
+        } else {
+            self.chats
+                .selection_model
+                .set_selected(gtk::INVALID_LIST_POSITION);
         }
         if at_top && !self.chat_ids.is_empty() {
             self.chats

@@ -1005,6 +1005,9 @@ impl SimpleComponent for NativeApplication {
         let chats: TypedListView<ChatRow, gtk::SingleSelection> = TypedListView::new();
         let chat_targets = std::rc::Rc::new(std::cell::RefCell::new(chats::ChatTargets::default()));
         let chat_view = &chats.view.clone();
+        // Nothing is highlighted until a chat is opened or picked with the keys.
+        chats.selection_model.set_autoselect(false);
+        chats.selection_model.set_can_unselect(true);
         let selection_sender = sender.clone();
         let observed_selection = chats.selection_model.clone();
         chats
@@ -1059,6 +1062,10 @@ impl SimpleComponent for NativeApplication {
             }
         });
         chat_view.add_controller(chat_keys);
+        // Single-click activation makes GTK select whichever row the pointer
+        // last crossed, leaving a second highlight beside the open chat.
+        // Selection follows the open chat and the arrow keys only.
+        chat_view.action_set_enabled("list.select-item", false);
         let messages: TypedListView<MessageRow, gtk::NoSelection> = TypedListView::new();
         let composer_buffer = gtk::TextBuffer::new(None);
         let enter_sends = std::rc::Rc::new(std::cell::Cell::new(true));
