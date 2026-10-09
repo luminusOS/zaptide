@@ -124,18 +124,20 @@ impl NativeApplication {
         self.chat_projection.set_filters(self.chat_filters);
     }
 
+    /// Unread chats in the accounts that are not on screen.
+    pub(super) fn unread_elsewhere(&self) -> usize {
+        self.accounts
+            .values()
+            .map(|session| super::accounts::unread_chat_count(&session.chat_snapshots))
+            .sum()
+    }
+
     /// Sends the tray what changed: window visibility, unread chats that are
     /// not muted or archived, and whether notifications are on.
     pub(super) fn sync_tray(&mut self) {
-        let now = crate::util::now();
         let state = crate::native_tray::TrayState {
-            unread_chats: self
-                .chat_snapshots
-                .iter()
-                .filter(|chat| {
-                    chat.unread > 0 && !chat.archived && !chat.locked && !chat.muted(now)
-                })
-                .count(),
+            unread_chats: super::accounts::unread_chat_count(&self.chat_snapshots)
+                + self.unread_elsewhere(),
             notifications: self.settings.notifications,
         };
         if state == self.tray_state {

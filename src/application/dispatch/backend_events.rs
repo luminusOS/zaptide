@@ -7,6 +7,7 @@ pub(super) fn drain_and_convert(
     let mut events = Vec::new();
     if let Some(backend) = backend {
         drain_backend_events(backend, notifier, |event| match event {
+            Event::Profile { phone, name } => events.push(NativeEvent::Profile { phone, name }),
             Event::Link(status) => events.push(NativeEvent::Link(status)),
             Event::Syncing(syncing) => events.push(NativeEvent::Syncing(syncing)),
             Event::Chats(rows) => events.push(NativeEvent::Chats(rows)),
@@ -103,67 +104,38 @@ pub(super) fn drain_and_convert(
     events
 }
 
+pub(in crate::application) fn drain_hidden(
+    session: &crate::application::accounts::AccountSession,
+) -> Vec<NativeEvent> {
+    drain_and_convert(session.backend.as_ref(), &session.notifier)
+}
+
 pub(super) fn handle_backend_ready(
     app: &mut NativeApplication,
+    account: crate::account::AccountId,
     sender: ComponentSender<NativeApplication>,
 ) {
+    if account != app.active_account {
+        app.handle_hidden_events(account);
+        app.poll_theme_catalog();
+        return;
+    }
     let events = drain_and_convert(app.backend.as_ref(), &app.notifier);
     for event in events {
         match event {
             NativeEvent::Link(link) => {
                 if matches!(link, LinkStatus::LoggedOut) {
-                    app.contact_share_generation = app.contact_share_generation.wrapping_add(1);
+                    app.leave_screen();
                     clear_avatar_textures();
-                    app.audio.media.stop_playback();
-                    app.audio.playing_audio = None;
-                    app.audio.waveform_queue.clear();
-                    if let Some(cancel) = app.audio.waveform_cancel.take() {
-                        cancel.store(true, std::sync::atomic::Ordering::Release);
-                    }
-                    app.audio.audio_waveforms.clear();
-                    app.audio.waveform_attempted.clear();
-                    app.audio.audio_errors.clear();
-                    app.audio.audio_registry.borrow_mut().clear();
                     for chat in &app.chat_snapshots {
                         app.notifications.clear_chat(&chat.id);
                     }
-                    app.active_chat = None;
                     app.chat_snapshots.clear();
-                    app.chat_ids.clear();
-                    app.reset_chat_filters(false);
-                    app.message_ids.clear();
-                    app.message_snapshots.clear();
-                    app.editable_messages.clear();
-                    app.messages.clear();
                     app.contacts.clear();
                     app.avatars.clear();
-                    app.presence.clear();
-                    app.typing.clear();
-                    app.typing_until.clear();
-                    app.composing_until.clear();
                     app.drafts.clear();
-                    app.composer = crate::native_composer::NativeComposerState::default();
-                    app.composer_buffer.set_text("");
-                    app.draft.clear();
-                    app.editing = None;
-                    app.reply_to = None;
-                    app.pending_edit = None;
-                    app.pending_composer_request = None;
-                    app.pending_send = None;
-                    app.audio.voice_send_pending = false;
                     app.account_receipts_off = false;
-                    app.audio.played_voice.clear();
                     app.avatar_requests.clear();
-                    app.pending_attachments.clear();
-                    app.document_attachments.clear();
-                    app.pending_clipboard_images.clear();
-                    app.audio.selected_voice = None;
-                    app.audio.selected_voice_message = None;
-                    app.pending_quote_navigation = None;
-                    app.history_complete = false;
-                    app.loading_older = false;
-                    app.recent_messages_pending = false;
-                    app.transcript.clear();
                     app.chats_dirty = true;
                     app.sync_chat_projection();
                 }
@@ -181,6 +153,7 @@ pub(super) fn handle_backend_ready(
                 app.link = link;
                 (app.page_title, app.status) = link_page(&app.link);
             }
+            NativeEvent::Profile { phone, name } => app.remember_profile(account, phone, name),
             NativeEvent::Syncing(syncing) => app.syncing = syncing,
             NativeEvent::Chats(chats) => {
                 app.apply_chat_changes(vec![ChatChange::Snapshot(chats)]);
@@ -251,17 +224,7 @@ pub(super) fn handle_backend_ready(
                 if !packs_changed {
                     continue;
                 }
-                app.sticker_emojis.clear();
-                for pack in &app.sticker_packs {
-                    for sticker in &pack.stickers {
-                        if let Ok(bytes) = std::fs::read(sticker) {
-                            let emojis = crate::sticker_meta::emojis(&bytes);
-                            if !emojis.is_empty() {
-                                app.sticker_emojis.insert(sticker.clone(), emojis);
-                            }
-                        }
-                    }
-                }
+                app.rebuild_sticker_emojis();
             }
             NativeEvent::MessageUpdated(message) => app.message_updated(*message),
             NativeEvent::Edited { chat, id, success } => app.edited(chat, id, success),
@@ -313,21 +276,11 @@ pub(super) fn handle_backend_ready(
                     &chat,
                     known,
                 ) {
-                    let title = known.map_or_else(
-                        || sender_label(message.sender_name.as_deref(), &message.sender),
-                        |known| known.name.clone(),
+                    let (title, body) = super::super::accounts::notice_text(
+                        known,
+                        &message,
+                        app.settings.notification_previews,
                     );
-                    let body = if !app.settings.notification_previews {
-                        "New message".to_owned()
-                    } else if known.is_some_and(crate::model::Chat::is_group) {
-                        format!(
-                            "{}: {}",
-                            sender_label(message.sender_name.as_deref(), &message.sender),
-                            message.summary()
-                        )
-                    } else {
-                        message.summary()
-                    };
                     if let Err(error) = app.notifications.show(
                         &chat,
                         &title,

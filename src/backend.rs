@@ -524,6 +524,11 @@ pub enum Command {
 
 #[derive(Debug)]
 pub enum Event {
+    /// This account's own number and profile name, whenever either changes.
+    Profile {
+        phone: Option<String>,
+        name: Option<String>,
+    },
     PollCreated {
         chat: ChatId,
         error: Option<String>,

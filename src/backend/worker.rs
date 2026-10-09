@@ -766,6 +766,17 @@ impl Worker {
         apply_ephemeral_expiration(message, self.ephemeral_expiration(chat))
     }
 
+    fn emit_profile(&self) {
+        self.emit(Event::Profile {
+            phone: self
+                .me_pn
+                .as_deref()
+                .and_then(crate::model::phone_of)
+                .map(crate::util::phone),
+            name: self.me_name.clone(),
+        });
+    }
+
     fn emit(&self, mut event: Event) {
         if let Event::Syncing(syncing) = &mut event {
             *syncing |= !self.privacy_ready;
@@ -915,6 +926,7 @@ impl Worker {
         }
         self.emit(Event::Contacts(self.contacts.values().cloned().collect()));
         self.emit_chats();
+        self.emit_profile();
     }
 
     /// Re-derives archived rows from raw protobufs after parser changes. Also
@@ -1565,6 +1577,7 @@ impl Worker {
             let _ = self.archive.set_meta("me_name", &name);
             self.me_name = Some(name);
         }
+        self.emit_profile();
     }
 
     /// Content is hidden again and lock state must be read from the next
@@ -1695,6 +1708,7 @@ impl Worker {
         self.me_pn = None;
         self.me_lid = None;
         self.me_name = None;
+        self.emit_profile();
         self.me_about = None;
         self.qr = None;
         self.pair_code = None;

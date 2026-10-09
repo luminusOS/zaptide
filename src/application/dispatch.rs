@@ -2,6 +2,7 @@ use super::*;
 
 mod attachments;
 mod backend_events;
+pub(super) use backend_events::drain_hidden;
 
 impl NativeApplication {
     pub(super) fn handle_input(&mut self, input: Input, sender: ComponentSender<Self>) {
@@ -110,7 +111,7 @@ impl NativeApplication {
                     });
                     for change in changes {
                         if change.apply(&mut self.settings).is_ok() {
-                            if let Err(_error) = self.settings.save(&self.settings_path) {
+                            if let Err(_error) = self.save_settings() {
                                 self.status = "Could not save preferences".into();
                                 self.toast("Could not save preferences");
                             } else {
@@ -123,7 +124,7 @@ impl NativeApplication {
                     }
                     if custom_theme_changed {
                         self.sync_custom_theme_selection();
-                        if self.settings.save(&self.settings_path).is_err() {
+                        if self.save_settings().is_err() {
                             self.status = "Could not save preferences".into();
                             self.toast("Could not save preferences");
                         }
@@ -140,8 +141,17 @@ impl NativeApplication {
                     let _ = startup.send(());
                     self.status = "Starting backend".into();
                 }
+                for session in self.accounts.values_mut() {
+                    if let Some(startup) = session.backend.as_mut().and_then(Backend::take_startup)
+                    {
+                        let _ = startup.send(());
+                    }
+                }
             }
-            Input::BackendReady => backend_events::handle_backend_ready(self, sender),
+            Input::BackendReady(account) => {
+                backend_events::handle_backend_ready(self, account, sender)
+            }
+            Input::SwitchAccount(account) => self.switch_account(account, &sender),
             Input::SelectChat(position) => self.select_chat(position),
             Input::ScrollToRecentMessages => {
                 self.recent_messages_pending = false;
@@ -275,12 +285,15 @@ impl NativeApplication {
                 }
             }
             Input::Resumed => {
-                let linked = matches!(
-                    self.link,
-                    LinkStatus::Connecting
-                        | LinkStatus::Connected
-                        | LinkStatus::Disconnected { .. }
-                );
+                for session in self.accounts.values() {
+                    if let (true, Some(backend)) = (
+                        super::accounts::reconnects_after_resume(&session.link),
+                        &session.backend,
+                    ) {
+                        backend.send(crate::backend::Command::Reconnect);
+                    }
+                }
+                let linked = super::accounts::reconnects_after_resume(&self.link);
                 if let (true, Some(backend)) = (linked, &self.backend) {
                     // The socket died with the suspend but may not know yet;
                     // reconnecting now brings the missed messages in.
@@ -354,7 +367,7 @@ impl NativeApplication {
                     }
                     TrayAction::ToggleNotifications => {
                         self.settings.notifications = !self.settings.notifications;
-                        if self.settings.save(&self.settings_path).is_err() {
+                        if self.save_settings().is_err() {
                             self.status = "Could not save preferences".into();
                         }
                     }

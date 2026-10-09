@@ -1,5 +1,6 @@
 //! Relm4 root shell: link page, chat list, and conversation.
 
+mod accounts;
 mod albums;
 mod audio;
 mod chats;
@@ -148,6 +149,10 @@ enum ChatChange {
 }
 
 enum NativeEvent {
+    Profile {
+        phone: Option<String>,
+        name: Option<String>,
+    },
     Link(LinkStatus),
     Syncing(bool),
     Chats(Vec<crate::model::Chat>),
@@ -469,7 +474,16 @@ pub struct NativeApplication {
     backend: Option<Backend>,
     notifications: crate::native_notifications::NativeNotifications,
     notifier: EventNotifier,
-    _event_drain: GlibEventDrain,
+    /// The active account's event drain; hidden accounts keep their own.
+    active_drain: Option<GlibEventDrain>,
+    /// Linked accounts that are not on screen.
+    accounts: std::collections::HashMap<crate::account::AccountId, accounts::AccountSession>,
+    active_account: crate::account::AccountId,
+    active_dirs: AppDirs,
+    base_dirs: AppDirs,
+    registry: crate::account::Registry,
+    /// The single-account files could not move into their folder yet.
+    legacy_layout: bool,
     shutdown_started: bool,
     chats: TypedListView<ChatRow, gtk::SingleSelection>,
     chat_projection: crate::native_chat_list::ChatListProjection,
@@ -579,7 +593,8 @@ pub enum Input {
     /// as its back button does.
     SidebarShown(bool),
     StartBackend,
-    BackendReady,
+    BackendReady(crate::account::AccountId),
+    SwitchAccount(crate::account::AccountId),
     SelectChat(u32),
     HighlightChat(u32),
     OpenChatId(String),
@@ -944,13 +959,29 @@ impl SimpleComponent for NativeApplication {
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         let icon_dir = init.dirs.icon_dir();
+        let base_dirs = init.dirs.clone();
+        let prepared = crate::account::prepare(
+            &base_dirs,
+            &crate::settings::Settings::load(&base_dirs.settings_file()),
+        );
+        let legacy_layout = prepared.legacy;
+        let registry = prepared.registry;
+        let active_account = registry.active.unwrap_or(crate::account::AccountId::FIRST);
+        let active_dirs = if legacy_layout {
+            base_dirs.clone()
+        } else {
+            base_dirs.for_account(active_account)
+        };
+        if let Err(error) = active_dirs.ensure() {
+            log::error!("could not prepare the account folder: {error}");
+        }
         let (notifier, drain) = EventNotifier::new();
         let input = sender.clone();
         let event_drain = GlibEventDrain::install(
             &notifier,
             drain,
             gtk::glib::MainContext::default(),
-            move || input.input(Input::BackendReady),
+            move || input.input(Input::BackendReady(active_account)),
         );
         let notification_sender = sender.clone();
         let application: gtk::Application = relm4::main_application().upcast();
@@ -1015,7 +1046,14 @@ impl SimpleComponent for NativeApplication {
         let composer_buffer = gtk::TextBuffer::new(None);
         let enter_sends = std::rc::Rc::new(std::cell::Cell::new(true));
         let settings_path = init.dirs.settings_file();
-        let settings = crate::settings::Settings::load(&settings_path);
+        let mut settings = crate::settings::Settings::load(&settings_path);
+        if !legacy_layout {
+            crate::account::AccountSettings::load_or(
+                &active_dirs.account_settings_file(),
+                &settings,
+            )
+            .apply_to(&mut settings);
+        }
         enter_sends.set(settings.enter_sends);
         let mut theme_catalog = crate::theme::custom::Catalog::default();
         theme_catalog.enable_desktop_themes();
@@ -1030,7 +1068,7 @@ impl SimpleComponent for NativeApplication {
         let mut media = crate::services::media::MediaService::default();
         media.set_speed(settings.voice_speed);
         let (backend, page_title, status): (Option<Backend>, String, String) =
-            match Backend::try_spawn(init.dirs, notifier.clone()) {
+            match Backend::try_spawn(active_dirs.clone(), notifier.clone()) {
                 Ok(backend) => (
                     Some(backend),
                     "Starting ZapTide".into(),
@@ -1142,7 +1180,13 @@ impl SimpleComponent for NativeApplication {
             backend,
             notifications,
             notifier,
-            _event_drain: event_drain,
+            active_drain: Some(event_drain),
+            accounts: std::collections::HashMap::new(),
+            active_account,
+            active_dirs,
+            base_dirs,
+            registry,
+            legacy_layout,
             shutdown_started: false,
             chats,
             chat_projection: crate::native_chat_list::ChatListProjection::default(),
@@ -1241,6 +1285,7 @@ impl SimpleComponent for NativeApplication {
             custom_theme_provider: gtk::CssProvider::new(),
             enter_sends,
         };
+        model.spawn_hidden_accounts(&sender);
         install_window_actions(&root, &sender);
         install_icons(&icon_dir);
         let (tray_actions, tray_receiver) = relm4::channel();
@@ -2142,7 +2187,7 @@ impl NativeApplication {
 
         if self.settings.cached_palette() != previous_palette {
             self.apply_runtime_settings();
-            if self.settings.save(&self.settings_path).is_err() {
+            if self.save_settings().is_err() {
                 self.status = "Could not save theme preference".into();
             }
         }
@@ -3123,20 +3168,32 @@ impl NativeApplication {
         if std::mem::replace(&mut self.shutdown_started, true) {
             return;
         }
-        self._event_drain.close();
+        if let Some(drain) = &self.active_drain {
+            drain.close();
+        }
+        for session in self.accounts.values() {
+            if let Some(drain) = &session.drain {
+                drain.close();
+            }
+        }
         self.portals.cancel_all();
-        if let Err(_error) = self.settings.save(&self.settings_path) {
+        if self.save_settings().is_err() {
             self.status = "Could not save preferences".into();
         }
         self.status = "Shutdown requested".into();
-        if let Some(mut backend) = self.backend.take() {
-            std::thread::spawn(move || {
+        let mut backends: Vec<Backend> = self.backend.take().into_iter().collect();
+        backends.extend(
+            self.accounts
+                .values_mut()
+                .filter_map(|session| session.backend.take()),
+        );
+        // ponytail: one account after another; join in parallel if many accounts slow quitting
+        std::thread::spawn(move || {
+            for mut backend in backends {
                 backend.shutdown();
-                sender.input(Input::ShutdownComplete);
-            });
-        } else {
+            }
             sender.input(Input::ShutdownComplete);
-        }
+        });
     }
 
     /// Closing the window hides it when something can bring it back (a tray or
