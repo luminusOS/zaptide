@@ -84,21 +84,6 @@ impl ActivationTokens {
     }
 }
 
-/// Identifies the receiving account without changing single-account notifications.
-pub(crate) fn account_body(
-    registry: &crate::account::Registry,
-    account: AccountId,
-    body: &str,
-) -> String {
-    if registry.accounts.len() > 1
-        && let Some(entry) = registry.entry(account)
-    {
-        format!("{body}\nTo {}", entry.label())
-    } else {
-        body.to_owned()
-    }
-}
-
 /// GNOME notification sender that routes explicit notification activation to a chat.
 ///
 /// Construct and use on the GTK main thread. The callback runs on that same thread
@@ -279,31 +264,6 @@ mod tests {
             vec!["one".to_owned()]
         );
         assert_eq!(tokens.activate("two"), Some((AccountId(2), "chat".into())));
-    }
-
-    #[test]
-    fn notification_body_names_the_receiving_account_only_with_several_accounts() {
-        let mut registry = crate::account::Registry::default();
-        let work = registry.add();
-        registry.entry_mut(work).unwrap().name = Some("Work".into());
-        assert_eq!(
-            super::account_body(&registry, work, "New message"),
-            "New message"
-        );
-        let home = registry.add();
-        registry.entry_mut(home).unwrap().name = Some("Home".into());
-        assert_eq!(
-            super::account_body(&registry, work, "New message"),
-            "New message\nTo Work"
-        );
-        assert_eq!(
-            super::account_body(&registry, home, "Hello"),
-            "Hello\nTo Home"
-        );
-        assert_eq!(
-            super::account_body(&registry, AccountId(99), "Hello"),
-            "Hello"
-        );
     }
 
     #[test]

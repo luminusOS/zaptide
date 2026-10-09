@@ -233,7 +233,7 @@ impl NativeApplication {
                 id,
                 &notice.chat,
                 &notice.title,
-                &crate::native_notifications::account_body(&self.registry, id, &notice.body),
+                &notice.body,
                 notice.avatar.as_deref(),
             ) {
                 log::warn!("could not show a notification: {error}");

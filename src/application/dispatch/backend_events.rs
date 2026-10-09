@@ -296,7 +296,7 @@ pub(super) fn handle_backend_ready(
                         account,
                         &chat,
                         &title,
-                        &crate::native_notifications::account_body(&app.registry, account, &body),
+                        &body,
                         app.avatars.get(&chat).map(std::path::PathBuf::as_path),
                     ) {
                         log::warn!("could not show a notification: {error}");
