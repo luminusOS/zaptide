@@ -18,6 +18,12 @@ impl AccountId {
     pub const FIRST: Self = Self(1);
 }
 
+impl Default for AccountId {
+    fn default() -> Self {
+        AccountId::FIRST
+    }
+}
+
 impl std::fmt::Display for AccountId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)

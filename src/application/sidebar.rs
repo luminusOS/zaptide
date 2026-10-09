@@ -30,6 +30,7 @@ impl Default for SidebarState {
 }
 
 pub(super) struct SidebarInit {
+    pub(super) account_button: gtk::MenuButton,
     pub(super) state: SidebarState,
     pub(super) chat_view: gtk::ListView,
     pub(super) menu: gtk::gio::Menu,
@@ -70,6 +71,7 @@ impl SimpleComponent for Sidebar {
                 set_title_widget = &adw::WindowTitle {
                     set_title: "ZapTide",
                 },
+                pack_start: &init.account_button,
                 pack_start = &gtk::Button {
                     set_icon_name: "chat-message-new-symbolic",
                     set_tooltip_text: Some("New chat"),

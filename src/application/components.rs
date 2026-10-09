@@ -11,6 +11,24 @@ impl NativeApplication {
             self.sync_transcript_view();
             self.sync_composer_view();
             self.sync_sidebar();
+            let switcher = self.switcher_state();
+            let elsewhere = switcher
+                .rows
+                .iter()
+                .any(|row| Some(row.id) != switcher.active);
+            self.link_switcher
+                .button
+                .set_visible(elsewhere && self.pending_account.is_none());
+            // Nothing to remove from a first account that never linked.
+            if let Some(action) = self
+                .window
+                .lookup_action("unlink")
+                .and_then(|action| action.downcast::<gtk::gio::SimpleAction>().ok())
+            {
+                action.set_enabled(self.legacy_layout || !self.registry.linked_ids().is_empty());
+            }
+            self.link_switcher.sync(switcher.clone());
+            self.account_switcher.sync(switcher);
         }
     }
 
@@ -180,6 +198,7 @@ impl NativeApplication {
             qr_texture: self.qr_texture.clone(),
             phone_linking: self.phone_linking,
             busy: self.link_busy(),
+            can_cancel: self.pending_account.is_some(),
         };
         if !self.link_page.model().is_synced(&state) {
             self.link_page.emit(LinkPageInput::Sync(state));

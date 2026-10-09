@@ -1,5 +1,6 @@
 //! Relm4 root shell: link page, chat list, and conversation.
 
+mod account_switcher;
 mod accounts;
 mod albums;
 mod audio;
@@ -21,7 +22,7 @@ use albums::{AlbumRole, album_roles};
 use composer::{
     ComposerState, ComposerView, ComposerViewInit, ComposerViewInput, ComposerViewOutput,
 };
-use dialogs::{attach_tile, show_archive_confirmation, show_unlink_confirmation};
+use dialogs::{attach_tile, show_archive_confirmation, show_remove_account_confirmation};
 use dialogs::{
     show_chat_info_dialog, show_forward_dialog, show_mention_dialog, show_new_chat_dialog,
     show_poll_dialog, sticker_picker_content,
@@ -484,6 +485,13 @@ pub struct NativeApplication {
     registry: crate::account::Registry,
     /// The single-account files could not move into their folder yet.
     legacy_layout: bool,
+    account_switcher: account_switcher::AccountSwitcher,
+    /// The same, on the link page of an account that cannot be used.
+    link_switcher: account_switcher::AccountSwitcher,
+    /// An account being linked, and the one to return to if it is cancelled.
+    pending_account: Option<(crate::account::AccountId, crate::account::AccountId)>,
+    /// The account whose removal waits for its logout.
+    removing: Option<crate::account::AccountId>,
     shutdown_started: bool,
     chats: TypedListView<ChatRow, gtk::SingleSelection>,
     chat_projection: crate::native_chat_list::ChatListProjection,
@@ -595,6 +603,9 @@ pub enum Input {
     StartBackend,
     BackendReady(crate::account::AccountId),
     SwitchAccount(crate::account::AccountId),
+    AddAccount,
+    CancelAddAccount,
+    ConfirmRemoveAccount,
     SelectChat(u32),
     HighlightChat(u32),
     OpenChatId(String),
@@ -1084,11 +1095,19 @@ impl SimpleComponent for NativeApplication {
                 }
             };
         let link_menu = gtk::gio::Menu::new();
+        link_menu.append(Some("_Remove Account…"), Some("win.unlink"));
         link_menu.append(Some("_Preferences"), Some("win.preferences"));
         link_menu.append(Some("_About ZapTide"), Some("win.about"));
         link_menu.append(Some("_Quit"), Some("win.quit"));
+        let (switch_sender, add_sender) = (sender.clone(), sender.clone());
+        let link_switcher = account_switcher::AccountSwitcher::new(
+            move |account| switch_sender.input(Input::SwitchAccount(account)),
+            move || add_sender.input(Input::AddAccount),
+        );
+        link_switcher.button.set_visible(false);
         let link_page = LinkPage::builder()
             .launch(LinkPageInit {
+                account_button: link_switcher.button.clone(),
                 state: LinkPageState {
                     link: LinkStatus::Starting,
                     title: page_title.clone(),
@@ -1096,6 +1115,7 @@ impl SimpleComponent for NativeApplication {
                     qr_texture: None,
                     phone_linking: false,
                     busy: true,
+                    can_cancel: false,
                 },
                 menu: link_menu,
             })
@@ -1104,11 +1124,12 @@ impl SimpleComponent for NativeApplication {
                 LinkPageOutput::TogglePhoneLinking => Input::TogglePhoneLinking,
                 LinkPageOutput::CopyPairCode => Input::CopyPairCode,
                 LinkPageOutput::Reconnect => Input::Reconnect,
+                LinkPageOutput::Cancel => Input::CancelAddAccount,
             });
         let primary_menu = gtk::gio::Menu::new();
         let section = gtk::gio::Menu::new();
         section.append(Some("_New Chat"), Some("win.new-chat"));
-        section.append(Some("_Unlink This Computer"), Some("win.unlink"));
+        section.append(Some("_Remove Account…"), Some("win.unlink"));
         primary_menu.append_section(None, &section);
         let section = gtk::gio::Menu::new();
         section.append(Some("_Preferences"), Some("win.preferences"));
@@ -1116,8 +1137,14 @@ impl SimpleComponent for NativeApplication {
         section.append(Some("_About ZapTide"), Some("win.about"));
         section.append(Some("_Quit"), Some("win.quit"));
         primary_menu.append_section(None, &section);
+        let (switch_sender, add_sender) = (sender.clone(), sender.clone());
+        let account_switcher = account_switcher::AccountSwitcher::new(
+            move |account| switch_sender.input(Input::SwitchAccount(account)),
+            move || add_sender.input(Input::AddAccount),
+        );
         let sidebar = Sidebar::builder()
             .launch(SidebarInit {
+                account_button: account_switcher.button.clone(),
                 state: SidebarState::default(),
                 chat_view: chats.view.clone(),
                 menu: primary_menu.clone(),
@@ -1187,6 +1214,10 @@ impl SimpleComponent for NativeApplication {
             base_dirs,
             registry,
             legacy_layout,
+            account_switcher,
+            link_switcher,
+            pending_account: None,
+            removing: None,
             shutdown_started: false,
             chats,
             chat_projection: crate::native_chat_list::ChatListProjection::default(),
@@ -1753,6 +1784,7 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
          .zaptide-attachment-file { padding: 0 40px 0 12px; }\n\
          .zaptide-attachment-remove { min-width: 24px; min-height: 24px; padding: 0; }\n\
          .zaptide-tray-action { min-height: 24px; padding: 2px 10px; border-radius: 9999px; font-size: 0.9em; }\n\
+         .zaptide-account-dot { min-width: 8px; min-height: 8px; border-radius: 9999px; background: var(--accent-bg-color); box-shadow: 0 0 0 2px var(--headerbar-bg-color); }\n\
          .zaptide-attach-tile { padding: 10px 6px 8px; border-radius: 12px; min-width: 72px; }\n\
          .zaptide-attach-icon { min-width: 44px; min-height: 44px; border-radius: 9999px; color: white; }\n\
          .zaptide-attach-icon.gallery { background-color: #9141ac; }\n\
@@ -3348,11 +3380,7 @@ fn install_window_actions(
     add("copy-transcript", input(|| Input::CopyTranscript));
     add("quit", input(|| Input::Quit));
     add("new-chat", input(|| Input::ShowNewChat));
-    let (parent, on_action) = (window.clone(), dialog_action_callback(sender));
-    add(
-        "unlink",
-        Box::new(move || show_unlink_confirmation(&parent, &on_action)),
-    );
+    add("unlink", input(|| Input::ConfirmRemoveAccount));
 }
 
 /// Contacts offered in New Chat as (id, name, formatted phone): only people

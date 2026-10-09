@@ -154,22 +154,36 @@ impl NativeApplication {
         id: AccountId,
         phone: Option<String>,
         name: Option<String>,
+        sender: &ComponentSender<Self>,
     ) {
+        if let (Some(phone), Some((pending, _))) = (phone.as_deref(), self.pending_account)
+            && pending == id
+        {
+            if let Some(existing) = duplicate_of(&self.registry, id, phone) {
+                if let Some(backend) = &self.backend {
+                    backend.send(crate::backend::Command::Unlink);
+                }
+                self.toast("This account is already added");
+                self.cancel_add_account(existing, sender);
+                return;
+            }
+            self.pending_account = None;
+        }
+        if id == self.active_account
+            && let Some(phone) = phone.as_deref()
+        {
+            self.request_avatar(&own_jid(phone));
+        }
         let Some(entry) = self.registry.entry_mut(id) else {
             return;
         };
-        let linked = entry.linked || phone.is_some();
-        if entry.phone == phone && entry.name == name && entry.linked == linked {
-            return;
+        if record_profile(entry, phone, name) {
+            self.save_registry();
         }
-        entry.phone = phone;
-        entry.name = name;
-        entry.linked = linked;
-        self.save_registry();
     }
 
     /// Drains a hidden account's backend into its session.
-    pub(super) fn handle_hidden_events(&mut self, id: AccountId) {
+    pub(super) fn handle_hidden_events(&mut self, id: AccountId, sender: &ComponentSender<Self>) {
         let (notifications, previews) = (
             self.settings.notifications,
             self.settings.notification_previews,
@@ -193,10 +207,20 @@ impl NativeApplication {
             }
         }
         for (phone, name) in profiles {
-            self.remember_profile(id, phone, name);
+            self.remember_profile(id, phone, name, sender);
         }
         for chat in &withdrawn {
             self.notifications.clear_chat(chat);
+        }
+        if self.removing == Some(id)
+            && (!withdrawn.is_empty()
+                || matches!(session_link(self, id), Some(LinkStatus::LoggedOut)))
+        {
+            // Switched away before its logout arrived: finish removing it.
+            self.removing = None;
+            self.forget_account(id);
+            self.sync_tray();
+            return;
         }
         if !withdrawn.is_empty() || matches!(session_link(self, id), Some(LinkStatus::LoggedOut)) {
             notices.clear();
@@ -212,6 +236,160 @@ impl NativeApplication {
             }
         }
         self.sync_tray();
+    }
+
+    /// What the account button and its popover show.
+    pub(super) fn switcher_state(&self) -> super::account_switcher::SwitcherState {
+        use super::account_switcher::{RowState, SwitcherRow, SwitcherState};
+        let row_state = |backend: bool, link: &LinkStatus| {
+            if !backend {
+                RowState::Failed
+            } else if matches!(link, LinkStatus::LoggedOut) {
+                RowState::SignedOut
+            } else {
+                RowState::Ready
+            }
+        };
+        let own_avatar = |phone: &Option<String>| {
+            phone
+                .as_deref()
+                .and_then(|phone| self.avatars.get(&own_jid(phone)).cloned())
+        };
+        let rows = self
+            .registry
+            .accounts
+            .iter()
+            .filter(|entry| entry.linked)
+            .map(|entry| {
+                let (unread, state, avatar) = if entry.id == self.active_account {
+                    (
+                        unread_chat_count(&self.chat_snapshots),
+                        row_state(self.backend.is_some(), &self.link),
+                        own_avatar(&entry.phone),
+                    )
+                } else if let Some(session) = self.accounts.get(&entry.id) {
+                    (
+                        unread_chat_count(&session.chat_snapshots),
+                        row_state(session.backend.is_some(), &session.link),
+                        None,
+                    )
+                } else {
+                    (0, RowState::Failed, None)
+                };
+                SwitcherRow {
+                    id: entry.id,
+                    label: entry.label(),
+                    phone: entry.phone.clone(),
+                    avatar,
+                    unread,
+                    state,
+                }
+            })
+            .collect();
+        let active = self.registry.entry(self.active_account);
+        SwitcherState {
+            rows,
+            active: Some(self.active_account),
+            active_label: active.map(|entry| entry.label()).unwrap_or_default(),
+            active_avatar: active.and_then(|entry| own_avatar(&entry.phone)),
+            unread_elsewhere: self.unread_elsewhere(),
+            can_add: !self.legacy_layout && self.pending_account.is_none(),
+        }
+    }
+
+    /// Links another number: a new account comes on screen with the link page.
+    pub(super) fn add_account(&mut self, sender: &ComponentSender<Self>) {
+        if self.legacy_layout || self.pending_account.is_some() {
+            return;
+        }
+        let id = self.registry.add();
+        self.save_registry();
+        let mut session = AccountSession::spawn(&self.base_dirs, id, &self.settings, sender);
+        if let Some(startup) = session.backend.as_mut().and_then(Backend::take_startup) {
+            let _ = startup.send(());
+        }
+        self.accounts.insert(id, session);
+        self.pending_account = Some((id, self.active_account));
+        self.switch_account(id, sender);
+    }
+
+    /// Drops the account being added and returns to `to`.
+    pub(super) fn cancel_add_account(&mut self, to: AccountId, sender: &ComponentSender<Self>) {
+        let Some((pending, previous)) = self.pending_account.take() else {
+            return;
+        };
+        if pending == self.active_account
+            && matches!(
+                self.link,
+                LinkStatus::Connecting | LinkStatus::Connected | LinkStatus::Disconnected { .. }
+            )
+            && let Some(backend) = &self.backend
+        {
+            // The phone already lists this device.
+            backend.send(crate::backend::Command::Unlink);
+        }
+        let to = if self.accounts.contains_key(&to) {
+            to
+        } else {
+            previous
+        };
+        self.switch_account(to, sender);
+        self.forget_account(pending);
+    }
+
+    /// Stops a hidden account's backend and deletes everything it kept here.
+    pub(super) fn forget_account(&mut self, id: AccountId) {
+        if id == self.active_account {
+            return;
+        }
+        let backend = self.accounts.remove(&id).and_then(|mut session| {
+            if let Some(drain) = &session.drain {
+                drain.close();
+            }
+            session.backend.take()
+        });
+        self.registry.remove(id);
+        self.save_registry();
+        // Joining waits for queued commands such as a logout; never on the
+        // window's thread. Files go only once the backend let go of them.
+        let base = self.base_dirs.clone();
+        std::thread::spawn(move || {
+            if let Some(mut backend) = backend {
+                backend.shutdown();
+            }
+            crate::account::delete_account_data(&base, id);
+        });
+    }
+
+    /// The account being removed has logged out: show another one and
+    /// delete it, or keep the last one, reset, on the link page.
+    pub(super) fn finish_removal(&mut self, sender: &ComponentSender<Self>) {
+        let Some(removed) = self.removing.take() else {
+            return;
+        };
+        let works = |id: AccountId| {
+            self.accounts.get(&id).is_some_and(|session| {
+                session.backend.is_some() && !matches!(session.link, LinkStatus::LoggedOut)
+            })
+        };
+        match next_account_after_removal(&self.registry, removed, works) {
+            Some(next) => {
+                self.switch_account(next, sender);
+                self.forget_account(removed);
+            }
+            None => {
+                if self.backend.is_none() {
+                    // Nothing holds its files open: delete them as promised.
+                    crate::account::delete_account_data(&self.base_dirs, removed);
+                }
+                if let Some(entry) = self.registry.entry_mut(removed) {
+                    entry.linked = false;
+                    entry.name = None;
+                    entry.phone = None;
+                }
+                self.save_registry();
+            }
+        }
     }
 
     /// Puts another linked account on screen.
@@ -289,8 +467,19 @@ impl NativeApplication {
         // Pickers answer by chat id only; an answer must not land in another account.
         self.cancel_portal_requests();
         // A dialog acts on whichever account is on screen when it is confirmed.
-        if let Some(dialog) = self.window.visible_dialog() {
+        // Stacked dialogs close one at a time.
+        for _ in 0..8 {
+            let Some(dialog) = self.window.visible_dialog() else {
+                break;
+            };
             dialog.force_close();
+        }
+        for window in gtk::Window::list_toplevels() {
+            if let Ok(window) = window.downcast::<gtk::Window>()
+                && window.transient_for().as_ref() == Some(self.window.upcast_ref())
+            {
+                window.close();
+            }
         }
         self.preferences = None;
         if self.settings.send_typing
@@ -410,6 +599,63 @@ pub(super) fn reconnects_after_resume(link: &LinkStatus) -> bool {
 
 fn session_link(app: &NativeApplication, id: AccountId) -> Option<&LinkStatus> {
     app.accounts.get(&id).map(|session| &session.link)
+}
+
+/// Another account already linked to `phone`, when `id` links to it again.
+pub(super) fn duplicate_of(
+    registry: &crate::account::Registry,
+    id: AccountId,
+    phone: &str,
+) -> Option<AccountId> {
+    registry
+        .accounts
+        .iter()
+        .find(|entry| entry.id != id && entry.linked && entry.phone.as_deref() == Some(phone))
+        .map(|entry| entry.id)
+}
+
+/// The linked account to show once `removed` is gone, if any is left,
+/// preferring one that works over a signed-out or failed one.
+pub(super) fn next_account_after_removal(
+    registry: &crate::account::Registry,
+    removed: AccountId,
+    works: impl Fn(AccountId) -> bool,
+) -> Option<AccountId> {
+    let others: Vec<AccountId> = registry
+        .linked_ids()
+        .into_iter()
+        .filter(|id| *id != removed)
+        .collect();
+    others
+        .iter()
+        .copied()
+        .find(|id| works(*id))
+        .or_else(|| others.first().copied())
+}
+
+/// Stores what an account says about itself; true if anything changed. A
+/// logout says nothing, but the number stays known so linking it again is
+/// recognised as the same account.
+pub(super) fn record_profile(
+    entry: &mut crate::account::AccountEntry,
+    phone: Option<String>,
+    name: Option<String>,
+) -> bool {
+    let phone = phone.or_else(|| entry.phone.clone());
+    let linked = entry.linked || phone.is_some();
+    if entry.phone == phone && entry.name == name && entry.linked == linked {
+        return false;
+    }
+    entry.phone = phone;
+    entry.name = name;
+    entry.linked = linked;
+    true
+}
+
+/// The WhatsApp id of a formatted phone number, for our own picture.
+fn own_jid(phone: &str) -> String {
+    let digits: String = phone.chars().filter(char::is_ascii_digit).collect();
+    format!("{digits}@s.whatsapp.net")
 }
 
 /// A notification a hidden account wants shown.
@@ -691,6 +937,83 @@ mod tests {
         assert!(session.chat_snapshots.is_empty());
         assert!(session.drafts.is_empty());
         assert!(session.avatars.is_empty());
+    }
+
+    fn linked(registry: &mut crate::account::Registry, phone: &str) -> AccountId {
+        let id = registry.add();
+        let entry = registry.entry_mut(id).unwrap();
+        entry.phone = Some(phone.into());
+        entry.linked = true;
+        id
+    }
+
+    #[test]
+    fn duplicate_phone_is_detected() {
+        let mut registry = crate::account::Registry::default();
+        let first = linked(&mut registry, "+1 555 0100");
+        let pending = registry.add();
+        assert_eq!(duplicate_of(&registry, pending, "+1 555 0100"), Some(first));
+        assert_eq!(duplicate_of(&registry, pending, "+1 555 0199"), None);
+        assert_eq!(
+            duplicate_of(&registry, first, "+1 555 0100"),
+            None,
+            "an account is not its own duplicate"
+        );
+    }
+
+    #[test]
+    fn remove_active_account_moves_to_another_linked_one() {
+        let mut registry = crate::account::Registry::default();
+        let first = linked(&mut registry, "+1 555 0100");
+        let second = linked(&mut registry, "+1 555 0199");
+        registry.add();
+        assert_eq!(
+            next_account_after_removal(&registry, second, |_| true),
+            Some(first)
+        );
+        assert_eq!(
+            next_account_after_removal(&registry, first, |_| true),
+            Some(second)
+        );
+    }
+
+    #[test]
+    fn removal_prefers_an_account_that_works() {
+        let mut registry = crate::account::Registry::default();
+        let removed = linked(&mut registry, "+1 555 0100");
+        let signed_out = linked(&mut registry, "+1 555 0101");
+        let ready = linked(&mut registry, "+1 555 0102");
+        assert_eq!(
+            next_account_after_removal(&registry, removed, |id| id == ready),
+            Some(ready)
+        );
+        assert_eq!(
+            next_account_after_removal(&registry, removed, |_| false),
+            Some(signed_out),
+            "a signed-out account is still better than none"
+        );
+    }
+
+    #[test]
+    fn a_logout_keeps_the_known_number_for_duplicate_checks() {
+        let mut entry = crate::account::AccountEntry {
+            id: AccountId(1),
+            name: Some("Alice".into()),
+            phone: Some("+1 555 0100".into()),
+            linked: true,
+        };
+        assert!(record_profile(&mut entry, None, None));
+        assert_eq!(entry.phone.as_deref(), Some("+1 555 0100"));
+        assert_eq!(entry.name, None);
+        assert!(!record_profile(&mut entry, None, None));
+    }
+
+    #[test]
+    fn remove_last_account_leaves_none() {
+        let mut registry = crate::account::Registry::default();
+        let only = linked(&mut registry, "+1 555 0100");
+        registry.add();
+        assert_eq!(next_account_after_removal(&registry, only, |_| true), None);
     }
 
     #[test]

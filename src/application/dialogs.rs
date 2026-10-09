@@ -60,18 +60,19 @@ pub(super) fn show_archive_confirmation(
     dialog.present(Some(parent));
 }
 
-pub(super) fn show_unlink_confirmation(
+pub(super) fn show_remove_account_confirmation(
     parent: &adw::ApplicationWindow,
+    name: &str,
     on_action: &DialogActionCallback,
 ) {
     let dialog = adw::AlertDialog::builder()
-        .heading("Unlink this computer?")
+        .heading(format!("Remove {name}?"))
         .body(
-            "This removes this device from your linked devices and clears its local conversations.",
+            "Messages saved on this computer will be deleted. Your phone keeps them, and you can link this account again later.",
         )
         .build();
     dialog.add_response("cancel", "Cancel");
-    dialog.add_response("unlink", "Unlink");
+    dialog.add_response("unlink", "Remove");
     dialog.set_response_appearance("unlink", adw::ResponseAppearance::Destructive);
     dialog.set_default_response(Some("cancel"));
     dialog.set_close_response("cancel");

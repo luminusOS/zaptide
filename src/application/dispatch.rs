@@ -151,7 +151,39 @@ impl NativeApplication {
             Input::BackendReady(account) => {
                 backend_events::handle_backend_ready(self, account, sender)
             }
-            Input::SwitchAccount(account) => self.switch_account(account, &sender),
+            Input::SwitchAccount(account) => {
+                if self
+                    .pending_account
+                    .is_some_and(|(pending, _)| pending == self.active_account)
+                {
+                    self.cancel_add_account(account, &sender);
+                } else {
+                    self.switch_account(account, &sender);
+                }
+            }
+            Input::AddAccount => self.add_account(&sender),
+            Input::CancelAddAccount => {
+                if let Some((_, previous)) = self.pending_account {
+                    self.cancel_add_account(previous, &sender);
+                }
+            }
+            Input::ConfirmRemoveAccount if self.pending_account.is_some() => {
+                // An account still being added is simply dropped.
+                if let Some((_, previous)) = self.pending_account {
+                    self.cancel_add_account(previous, &sender);
+                }
+            }
+            Input::ConfirmRemoveAccount => {
+                let name = self
+                    .registry
+                    .entry(self.active_account)
+                    .map_or_else(|| "this account".to_owned(), |entry| entry.label());
+                show_remove_account_confirmation(
+                    &self.window,
+                    &name,
+                    &dialog_action_callback(&sender),
+                );
+            }
             Input::SelectChat(position) => self.select_chat(position),
             Input::ScrollToRecentMessages => {
                 self.recent_messages_pending = false;
@@ -309,6 +341,14 @@ impl NativeApplication {
             }
             Input::ResumeSettled => self.resuming = false,
             Input::UnlinkConfirmed => {
+                if !self.legacy_layout {
+                    self.removing = Some(self.active_account);
+                    if self.backend.is_none() {
+                        // Nothing to unlink: the account never started.
+                        self.finish_removal(&sender);
+                        return;
+                    }
+                }
                 if let Some(backend) = &self.backend {
                     backend.send(crate::backend::Command::Unlink);
                     self.status = "Unlinking this computer".into();

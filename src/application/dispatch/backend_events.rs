@@ -116,12 +116,17 @@ pub(super) fn handle_backend_ready(
     sender: ComponentSender<NativeApplication>,
 ) {
     if account != app.active_account {
-        app.handle_hidden_events(account);
+        app.handle_hidden_events(account, &sender);
         app.poll_theme_catalog();
         return;
     }
     let events = drain_and_convert(app.backend.as_ref(), &app.notifier);
     for event in events {
+        // A removal or a duplicate link can put another account on screen
+        // mid-batch; the rest of the batch belongs to the one that left.
+        if app.active_account != account {
+            break;
+        }
         match event {
             NativeEvent::Link(link) => {
                 if matches!(link, LinkStatus::LoggedOut) {
@@ -138,6 +143,12 @@ pub(super) fn handle_backend_ready(
                     app.avatar_requests.clear();
                     app.chats_dirty = true;
                     app.sync_chat_projection();
+                    if app.removing == Some(account) {
+                        app.finish_removal(&sender);
+                        if app.active_account != account {
+                            break;
+                        }
+                    }
                 }
                 app.qr_texture = match &link {
                     LinkStatus::Unlinked { qr: Some(qr), .. } => qr_texture(qr),
@@ -153,7 +164,9 @@ pub(super) fn handle_backend_ready(
                 app.link = link;
                 (app.page_title, app.status) = link_page(&app.link);
             }
-            NativeEvent::Profile { phone, name } => app.remember_profile(account, phone, name),
+            NativeEvent::Profile { phone, name } => {
+                app.remember_profile(account, phone, name, &sender)
+            }
             NativeEvent::Syncing(syncing) => app.syncing = syncing,
             NativeEvent::Chats(chats) => {
                 app.apply_chat_changes(vec![ChatChange::Snapshot(chats)]);
@@ -391,6 +404,10 @@ pub(super) fn handle_backend_ready(
                 app.toast(&message);
             }
             NativeEvent::Error(error) => {
+                if error.contains("remains linked") {
+                    // The removal did not happen; a later logout must not finish it.
+                    app.removing = None;
+                }
                 app.loading_older = false;
                 log::warn!("native backend operation failed");
                 let feedback = sanitized_error_feedback(&error);

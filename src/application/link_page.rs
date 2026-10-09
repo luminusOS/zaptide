@@ -10,15 +10,21 @@ pub(super) struct LinkPageState {
     pub(super) qr_texture: Option<gtk::gdk::Texture>,
     pub(super) phone_linking: bool,
     pub(super) busy: bool,
+    /// Another account exists to go back to.
+    pub(super) can_cancel: bool,
 }
 
 pub(super) struct LinkPageInit {
+    /// Reaches the other accounts when this one cannot be used.
+    pub(super) account_button: gtk::MenuButton,
     pub(super) state: LinkPageState,
     pub(super) menu: gtk::gio::Menu,
 }
 
 pub(super) struct LinkPage {
     state: LinkPageState,
+    /// Read by the Escape shortcut, which lives outside the model.
+    can_cancel: std::rc::Rc<std::cell::Cell<bool>>,
 }
 
 #[derive(Debug)]
@@ -32,6 +38,7 @@ pub(super) enum LinkPageOutput {
     TogglePhoneLinking,
     CopyPairCode,
     Reconnect,
+    Cancel,
 }
 
 impl LinkPageState {
@@ -72,6 +79,13 @@ impl SimpleComponent for LinkPage {
         adw::ToolbarView {
             add_top_bar = &adw::HeaderBar {
                 set_show_title: false,
+                pack_start: &init.account_button,
+                pack_start = &gtk::Button {
+                    set_label: "Cancel",
+                    #[watch]
+                    set_visible: model.state.can_cancel,
+                    connect_clicked[sender] => move |_| sender.output(LinkPageOutput::Cancel).unwrap(),
+                },
                 pack_end = &gtk::MenuButton {
                     set_icon_name: "open-menu-symbolic",
                     set_tooltip_text: Some("Main menu"),
@@ -207,11 +221,27 @@ impl SimpleComponent for LinkPage {
 
     fn init(
         init: Self::Init,
-        _root: Self::Root,
+        root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        let model = Self { state: init.state };
+        let can_cancel = std::rc::Rc::new(std::cell::Cell::new(init.state.can_cancel));
+        let model = Self {
+            state: init.state,
+            can_cancel: can_cancel.clone(),
+        };
         let widgets = view_output!();
+        let escape = gtk::EventControllerKey::new();
+        // Bubble: a focused field or open menu uses Escape first.
+        escape.set_propagation_phase(gtk::PropagationPhase::Bubble);
+        let escape_sender = sender.clone();
+        escape.connect_key_pressed(move |_, key, _, _| {
+            if key == gtk::gdk::Key::Escape && can_cancel.get() {
+                let _ = escape_sender.output(LinkPageOutput::Cancel);
+                return gtk::glib::Propagation::Stop;
+            }
+            gtk::glib::Propagation::Proceed
+        });
+        root.add_controller(escape);
         widgets
             .status_label
             .set_accessible_role(gtk::AccessibleRole::Status);
@@ -230,7 +260,10 @@ impl SimpleComponent for LinkPage {
 
     fn update(&mut self, input: Self::Input, _sender: ComponentSender<Self>) {
         match input {
-            LinkPageInput::Sync(state) => self.state = state,
+            LinkPageInput::Sync(state) => {
+                self.can_cancel.set(state.can_cancel);
+                self.state = state;
+            }
         }
     }
 }
