@@ -142,22 +142,46 @@ impl AccountSwitcher {
         let dot = gtk::Box::builder()
             .halign(gtk::Align::End)
             .valign(gtk::Align::Start)
+            // Keeps the dot and its ring inside the button's round hover.
+            .margin_top(1)
+            .margin_end(1)
             .can_target(false)
             .visible(false)
             .build();
         dot.add_css_class("zaptide-account-dot");
-        let overlay = gtk::Overlay::builder().child(&avatar).build();
+        let overlay = gtk::Overlay::builder()
+            .child(&avatar)
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::Center)
+            .build();
         overlay.add_overlay(&dot);
         let list = gtk::ListBox::builder()
             .selection_mode(gtk::SelectionMode::None)
             .build();
         list.add_css_class("navigation-sidebar");
-        let popover = gtk::Popover::builder().child(&list).build();
+        list.set_header_func(|row, _| {
+            let separator = row
+                .has_css_class("zaptide-add-account")
+                .then(|| gtk::Separator::new(gtk::Orientation::Horizontal));
+            row.set_header(separator.as_ref());
+        });
+        let scroller = gtk::ScrolledWindow::builder()
+            .child(&list)
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .propagate_natural_height(true)
+            .max_content_height(360)
+            .width_request(300)
+            .build();
+        let popover = gtk::Popover::builder().child(&scroller).build();
         let button = gtk::MenuButton::builder()
             .child(&overlay)
             .popover(&popover)
             .build();
-        button.add_css_class("flat");
+        button.add_css_class("zaptide-account-button");
+        button.set_halign(gtk::Align::Center);
+        button.set_valign(gtk::Align::Center);
+        button.add_css_class("circular");
+        button.add_css_class("image-button");
         let widgets = std::rc::Rc::new(Widgets {
             button: button.clone(),
             avatar,
@@ -170,6 +194,19 @@ impl AccountSwitcher {
         let shown = std::rc::Rc::new(std::cell::RefCell::new(None));
         let deferred: std::rc::Rc<std::cell::RefCell<Option<SwitcherState>>> =
             std::rc::Rc::default();
+        {
+            let list = list.clone();
+            popover.connect_show(move |_| {
+                let mut child = list.first_child();
+                while let Some(row) = child {
+                    if row.has_css_class("zaptide-active-account") {
+                        row.grab_focus();
+                        break;
+                    }
+                    child = row.next_sibling();
+                }
+            });
+        }
         {
             let (widgets, shown, deferred) = (
                 std::rc::Rc::downgrade(&widgets),
@@ -231,6 +268,7 @@ fn apply(widgets: &std::rc::Rc<Widgets>, state: &SwitcherState) {
         let add = adw::ActionRow::builder()
             .title("Add Account…")
             .activatable(true)
+            .css_classes(["zaptide-add-account"])
             .build();
         // Same column as the account pictures.
         let icon = gtk::Image::builder()
@@ -255,15 +293,39 @@ fn row(widgets: &std::rc::Rc<Widgets>, account: &SwitcherRow, active: bool) -> a
     let row = adw::ActionRow::builder()
         .title(account.label.as_str())
         .subtitle(account.subtitle())
+        .title_lines(1)
+        .subtitle_lines(1)
         .activatable(!active)
         .build();
+    if active {
+        row.add_css_class("zaptide-active-account");
+    }
     row.upcast_ref::<gtk::Widget>()
         .update_property(&[gtk::accessible::Property::Description(
             &account.spoken(active),
         )]);
     let avatar = adw::Avatar::new(32, Some(&account.label), true);
     set_picture(&avatar, account.avatar.as_deref());
-    row.add_prefix(&avatar);
+    // Like Fractal: the selected account's picture gets an accent ring and a
+    // small check badge on its corner instead of a trailing check mark.
+    let prefix = gtk::Overlay::builder()
+        .child(&avatar)
+        .halign(gtk::Align::Center)
+        .valign(gtk::Align::Center)
+        .build();
+    if active {
+        prefix.add_css_class("zaptide-selected-avatar");
+        let badge = gtk::Image::builder()
+            .icon_name("object-select-symbolic")
+            .pixel_size(11)
+            .halign(gtk::Align::End)
+            .valign(gtk::Align::End)
+            .accessible_role(gtk::AccessibleRole::Presentation)
+            .build();
+        badge.add_css_class("zaptide-accent-circle");
+        prefix.add_overlay(&badge);
+    }
+    row.add_prefix(&prefix);
     if account.unread > 0 {
         let unread = gtk::Label::builder()
             .label(account.unread.to_string())
@@ -272,13 +334,6 @@ fn row(widgets: &std::rc::Rc<Widgets>, account: &SwitcherRow, active: bool) -> a
             .build();
         unread.add_css_class("zaptide-unread-pill");
         row.add_suffix(&unread);
-    }
-    if active {
-        let check = gtk::Image::builder()
-            .icon_name("object-select-symbolic")
-            .accessible_role(gtk::AccessibleRole::Presentation)
-            .build();
-        row.add_suffix(&check);
     }
     let (weak, id) = (std::rc::Rc::downgrade(widgets), account.id);
     row.connect_activated(move |_| {

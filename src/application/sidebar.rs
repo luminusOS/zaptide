@@ -69,15 +69,8 @@ impl SimpleComponent for Sidebar {
         adw::ToolbarView {
             add_top_bar = &adw::HeaderBar {
                 #[wrap(Some)]
-                set_title_widget = &adw::WindowTitle {
-                    set_title: "ZapTide",
-                },
+                set_title_widget = &gtk::Box {},
                 pack_start: &init.account_button,
-                pack_start = &gtk::Button {
-                    set_icon_name: "chat-message-new-symbolic",
-                    set_tooltip_text: Some("New chat"),
-                    connect_clicked[sender] => move |_| sender.output(SidebarOutput::NewChat).unwrap(),
-                },
                 pack_start = &adw::Spinner {
                     set_tooltip_text: Some("Updating messages"),
                     #[watch]
@@ -86,8 +79,15 @@ impl SimpleComponent for Sidebar {
                 pack_end = &gtk::MenuButton {
                     set_icon_name: "open-menu-symbolic",
                     set_tooltip_text: Some("Main menu"),
+                    update_property: &[gtk::accessible::Property::Label("Main menu")],
                     set_primary: true,
                     set_menu_model: Some(&init.menu),
+                },
+                pack_end = &gtk::Button {
+                    set_icon_name: "chat-message-new-symbolic",
+                    set_tooltip_text: Some("New chat"),
+                    update_property: &[gtk::accessible::Property::Label("New chat")],
+                    connect_clicked[sender] => move |_| sender.output(SidebarOutput::NewChat).unwrap(),
                 },
             },
             #[wrap(Some)]
