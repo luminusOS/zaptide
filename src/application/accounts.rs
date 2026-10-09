@@ -207,6 +207,17 @@ impl NativeApplication {
             }
         }
         for (phone, name) in profiles {
+            // The switcher shows every account's picture, not only the active one's.
+            if let Some(own) = phone.as_deref().map(own_jid)
+                && let Some(session) = self.accounts.get_mut(&id)
+                && session.avatar_requests.insert(own.clone())
+                && let Some(backend) = &session.backend
+            {
+                backend.send(crate::backend::Command::FetchAvatar {
+                    id: own,
+                    full: false,
+                });
+            }
             self.remember_profile(id, phone, name, sender);
         }
         for chat in &withdrawn {
@@ -259,6 +270,11 @@ impl NativeApplication {
                 .as_deref()
                 .and_then(|phone| self.avatars.get(&own_jid(phone)).cloned())
         };
+        let hidden_avatar = |phone: &Option<String>, session: &AccountSession| {
+            phone
+                .as_deref()
+                .and_then(|phone| session.avatars.get(&own_jid(phone)).cloned())
+        };
         let rows = self
             .registry
             .accounts
@@ -275,7 +291,7 @@ impl NativeApplication {
                     (
                         unread_chat_count(&session.chat_snapshots),
                         row_state(session.backend.is_some(), &session.link),
-                        None,
+                        hidden_avatar(&entry.phone, session),
                     )
                 } else {
                     (0, RowState::Failed, None)
