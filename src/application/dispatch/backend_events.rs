@@ -132,9 +132,7 @@ pub(super) fn handle_backend_ready(
                 if matches!(link, LinkStatus::LoggedOut) {
                     app.leave_screen();
                     clear_avatar_textures();
-                    for chat in &app.chat_snapshots {
-                        app.notifications.clear_chat(&chat.id);
-                    }
+                    app.notifications.clear_account(account);
                     app.chat_snapshots.clear();
                     app.contacts.clear();
                     app.avatars.clear();
@@ -295,9 +293,10 @@ pub(super) fn handle_backend_ready(
                         app.settings.notification_previews,
                     );
                     if let Err(error) = app.notifications.show(
+                        account,
                         &chat,
                         &title,
-                        &body,
+                        &crate::native_notifications::account_body(&app.registry, account, &body),
                         app.avatars.get(&chat).map(std::path::PathBuf::as_path),
                     ) {
                         log::warn!("could not show a notification: {error}");

@@ -33,6 +33,7 @@ pub(super) struct SidebarInit {
     pub(super) account_button: gtk::MenuButton,
     pub(super) state: SidebarState,
     pub(super) chat_view: gtk::ListView,
+    pub(super) chat_targets: std::rc::Rc<std::cell::RefCell<super::chats::ChatTargets>>,
     pub(super) menu: gtk::gio::Menu,
 }
 
@@ -54,7 +55,7 @@ pub(super) enum SidebarOutput {
     SetChatKindFilter(crate::native_chat_list::ChatKindFilter),
     SetArchivedFilter(bool),
     SetMutedFilter(bool),
-    SelectChat(u32),
+    SelectChat(crate::account::AccountId, String),
     NewChat,
 }
 
@@ -285,7 +286,11 @@ impl SimpleComponent for Sidebar {
                         add_css_class: "navigation-sidebar",
                         add_css_class: "zaptide-chat-list",
                         set_single_click_activate: true,
-                        connect_activate[sender] => move |_, position| sender.output(SidebarOutput::SelectChat(position)).unwrap(),
+                        connect_activate[sender, chat_targets] => move |_, position| {
+                            if let Some((account, chat)) = chat_targets.borrow().get(position) {
+                                sender.output(SidebarOutput::SelectChat(account, chat)).unwrap();
+                            }
+                        },
                     },
                 },
                 append = &adw::StatusPage {
@@ -313,6 +318,7 @@ impl SimpleComponent for Sidebar {
             search_entry: None,
         };
         let chat_view = &init.chat_view;
+        let chat_targets = init.chat_targets;
         let widgets = view_output!();
         model.search_entry = Some(widgets.search_entry.clone());
         ComponentParts { model, widgets }

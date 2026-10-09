@@ -497,6 +497,7 @@ pub struct NativeApplication {
     chat_projection: crate::native_chat_list::ChatListProjection,
     chat_filters: crate::native_chat_list::ChatListFilters,
     chat_ids: Vec<String>,
+    chat_targets: std::rc::Rc<std::cell::RefCell<chats::ChatTargets>>,
     chat_snapshots: Vec<crate::model::Chat>,
     contacts: std::collections::HashMap<String, crate::model::Contact>,
     contact_share_generation: u64,
@@ -606,9 +607,10 @@ pub enum Input {
     AddAccount,
     CancelAddAccount,
     ConfirmRemoveAccount,
-    SelectChat(u32),
+    SelectChat(crate::account::AccountId, String),
     HighlightChat(u32),
     OpenChatId(String),
+    OpenAccountChat(crate::account::AccountId, String),
     ScrollToRecentMessages,
     TranscriptAtEnd,
     LoadOlder,
@@ -996,11 +998,12 @@ impl SimpleComponent for NativeApplication {
         );
         let notification_sender = sender.clone();
         let application: gtk::Application = relm4::main_application().upcast();
-        let notifications =
-            crate::native_notifications::NativeNotifications::new(&application, move |chat| {
-                notification_sender.input(Input::OpenChatId(chat))
-            });
+        let notifications = crate::native_notifications::NativeNotifications::new(
+            &application,
+            move |account, chat| notification_sender.input(Input::OpenAccountChat(account, chat)),
+        );
         let chats: TypedListView<ChatRow, gtk::SingleSelection> = TypedListView::new();
+        let chat_targets = std::rc::Rc::new(std::cell::RefCell::new(chats::ChatTargets::default()));
         let chat_view = &chats.view.clone();
         let selection_sender = sender.clone();
         let observed_selection = chats.selection_model.clone();
@@ -1016,6 +1019,7 @@ impl SimpleComponent for NativeApplication {
         chat_keys.set_propagation_phase(gtk::PropagationPhase::Capture);
         let chat_selection = chats.selection_model.clone();
         let chat_key_sender = sender.clone();
+        let key_targets = chat_targets.clone();
         chat_keys.connect_key_pressed(move |_, key, _, _| {
             let selected = chat_selection.selected();
             let count = chat_selection.n_items();
@@ -1046,7 +1050,9 @@ impl SimpleComponent for NativeApplication {
                     } else {
                         selected.min(count - 1)
                     };
-                    chat_key_sender.input(Input::SelectChat(current));
+                    if let Some((account, chat)) = key_targets.borrow().get(current) {
+                        chat_key_sender.input(Input::SelectChat(account, chat));
+                    }
                     gtk::glib::Propagation::Stop
                 }
                 _ => gtk::glib::Propagation::Proceed,
@@ -1147,6 +1153,7 @@ impl SimpleComponent for NativeApplication {
                 account_button: account_switcher.button.clone(),
                 state: SidebarState::default(),
                 chat_view: chats.view.clone(),
+                chat_targets: chat_targets.clone(),
                 menu: primary_menu.clone(),
             })
             .forward(sender.input_sender(), |output| match output {
@@ -1156,7 +1163,7 @@ impl SimpleComponent for NativeApplication {
                 SidebarOutput::SetChatKindFilter(kind) => Input::SetChatKindFilter(kind),
                 SidebarOutput::SetArchivedFilter(active) => Input::SetArchivedFilter(active),
                 SidebarOutput::SetMutedFilter(active) => Input::SetMutedFilter(active),
-                SidebarOutput::SelectChat(position) => Input::SelectChat(position),
+                SidebarOutput::SelectChat(account, chat) => Input::SelectChat(account, chat),
                 SidebarOutput::NewChat => Input::ShowNewChat,
             });
         let transcript_view = TranscriptView::builder()
@@ -1223,6 +1230,7 @@ impl SimpleComponent for NativeApplication {
             chat_projection: crate::native_chat_list::ChatListProjection::default(),
             chat_filters: crate::native_chat_list::ChatListFilters::default(),
             chat_ids: Vec::new(),
+            chat_targets,
             chat_snapshots: Vec::new(),
             contacts: std::collections::HashMap::new(),
             contact_share_generation: 0,

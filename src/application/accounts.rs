@@ -210,7 +210,10 @@ impl NativeApplication {
             self.remember_profile(id, phone, name, sender);
         }
         for chat in &withdrawn {
-            self.notifications.clear_chat(chat);
+            self.notifications.clear_chat(id, chat);
+        }
+        if matches!(session_link(self, id), Some(LinkStatus::LoggedOut)) {
+            self.notifications.clear_account(id);
         }
         if self.removing == Some(id)
             && (!withdrawn.is_empty()
@@ -227,9 +230,10 @@ impl NativeApplication {
         }
         for notice in notices {
             if let Err(error) = self.notifications.show(
+                id,
                 &notice.chat,
                 &notice.title,
-                &notice.body,
+                &crate::native_notifications::account_body(&self.registry, id, &notice.body),
                 notice.avatar.as_deref(),
             ) {
                 log::warn!("could not show a notification: {error}");
@@ -342,6 +346,7 @@ impl NativeApplication {
         if id == self.active_account {
             return;
         }
+        self.notifications.clear_account(id);
         let backend = self.accounts.remove(&id).and_then(|mut session| {
             if let Some(drain) = &session.drain {
                 drain.close();
@@ -394,6 +399,15 @@ impl NativeApplication {
 
     /// Puts another linked account on screen.
     pub(super) fn switch_account(&mut self, id: AccountId, sender: &ComponentSender<Self>) {
+        self.switch_account_with_restore(id, sender, true);
+    }
+
+    pub(super) fn switch_account_with_restore(
+        &mut self,
+        id: AccountId,
+        sender: &ComponentSender<Self>,
+        restore_chat: bool,
+    ) {
         if id == self.active_account {
             return;
         }
@@ -450,8 +464,8 @@ impl NativeApplication {
         self.apply_chat_changes(vec![ChatChange::Snapshot(chats)]);
         self.flush_chats();
         self.refresh_sticker_picker(sender);
-        if let Some(chat) = self.settings.last_chat.clone() {
-            sender.input(Input::OpenChatId(chat));
+        if restore_chat && let Some(chat) = self.settings.last_chat.clone() {
+            self.handle_input(Input::OpenChatId(chat), sender.clone());
         }
         self.apply_runtime_settings();
         self.sync_tray();

@@ -45,7 +45,7 @@ pub struct AccountEntry {
 }
 
 impl AccountEntry {
-    /// Profile name, else number, else "Account <id>".
+    /// Profile name, else number, else `Account <id>`.
     pub fn label(&self) -> String {
         self.name
             .as_deref()

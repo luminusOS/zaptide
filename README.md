@@ -20,6 +20,10 @@ stored locally in an encrypted archive.
 
 - Chat, search and send text, replies, reactions, polls, voice notes, stickers
   and attachments. Older messages load from the archive or your phone.
+- Add and switch WhatsApp accounts from the avatar above the chat list. Each
+  account keeps its own local messages and settings. Notifications name the
+  receiving account when several are added, and open the right conversation.
+  **Remove Account…** unlinks that account and deletes its local data only.
 - Contact messages show names and phone numbers with actions to copy a number,
   add the contact to your contacts app, or message it on WhatsApp.
   Use **Attach → Contact** to share a saved WhatsApp contact or choose a `.vcf`

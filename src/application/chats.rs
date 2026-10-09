@@ -1,5 +1,33 @@
 use super::*;
 
+/// Captures the displayed account and chat ID before a GTK activation is queued.
+#[derive(Default)]
+pub(super) struct ChatTargets {
+    account: Option<crate::account::AccountId>,
+    ids: Vec<String>,
+}
+
+impl ChatTargets {
+    fn sync(&mut self, account: crate::account::AccountId, ids: &[String]) {
+        self.account = Some(account);
+        ids.clone_into(&mut self.ids);
+    }
+
+    pub(super) fn get(&self, position: u32) -> Option<(crate::account::AccountId, String)> {
+        Some((self.account?, self.ids.get(position as usize)?.clone()))
+    }
+
+    pub(super) fn position(&self, account: crate::account::AccountId, chat: &str) -> Option<u32> {
+        if self.account != Some(account) {
+            return None;
+        }
+        self.ids
+            .iter()
+            .position(|id| id == chat)
+            .map(|position| position as u32)
+    }
+}
+
 fn chat_row(chat: crate::model::Chat, avatar: Option<std::path::PathBuf>, open: bool) -> ChatRow {
     let unread = (chat.unread != 0).then(|| chat.unread.to_string());
     let muted = chat.muted(crate::util::now());
@@ -53,7 +81,7 @@ impl NativeApplication {
             self.audio.audio_errors.clear();
             self.audio.audio_registry.borrow_mut().clear();
         }
-        self.notifications.clear_chat(&chat);
+        self.notifications.clear_chat(self.active_account, &chat);
         if let Some(previous) = self.active_chat.as_deref() {
             if self
                 .editing
@@ -383,6 +411,9 @@ impl NativeApplication {
                 open,
             ));
         }
+        self.chat_targets
+            .borrow_mut()
+            .sync(self.active_account, &self.chat_ids);
         // Replace only the changed middle so scrolling and a click in progress
         // survive the frequent small reorders of history sync.
         let old_len = self.chats.len() as usize;
@@ -413,5 +444,32 @@ impl NativeApplication {
                 .view
                 .scroll_to(0, gtk::ListScrollFlags::NONE, None);
         }
+    }
+}
+
+#[cfg(test)]
+mod account_selection_tests {
+    use super::*;
+
+    #[test]
+    fn queued_selection_is_rejected_after_an_account_switch() {
+        let mut targets = ChatTargets::default();
+        targets.sync(crate::account::AccountId(1), &["shared".into()]);
+        let (account, chat) = targets.get(0).unwrap();
+        targets.sync(crate::account::AccountId(2), &["shared".into()]);
+        assert_eq!(targets.position(account, &chat), None);
+    }
+
+    #[test]
+    fn queued_selection_follows_chat_identity_after_rows_reorder() {
+        let mut targets = ChatTargets::default();
+        let account = crate::account::AccountId(1);
+        targets.sync(account, &["one".into(), "two".into()]);
+        let (_, chat) = targets.get(0).unwrap();
+        targets.sync(account, &["two".into(), "one".into()]);
+        assert_eq!(targets.position(account, &chat), Some(1));
+        assert_eq!(targets.get(99), None);
+        targets.sync(account, &["two".into()]);
+        assert_eq!(targets.position(account, &chat), None);
     }
 }

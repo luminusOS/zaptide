@@ -12,14 +12,20 @@ use relm4::gtk::prelude::*;
 const OPEN_CHAT_ACTION: &str = "open-chat";
 const MAX_PENDING_ACTIVATIONS: usize = 256;
 
+use crate::account::AccountId;
+
 #[derive(Default)]
 pub struct ActivationTokens {
-    chats: HashMap<String, String>,
+    chats: HashMap<String, (AccountId, String)>,
     order: VecDeque<String>,
 }
 
 impl ActivationTokens {
-    fn insert(&mut self, token: String, chat_id: String) -> Option<String> {
+    fn insert(
+        &mut self,
+        token: String,
+        chat_id: (AccountId, String),
+    ) -> Option<(AccountId, String)> {
         if let Some(previous_chat) = self.chats.insert(token.clone(), chat_id) {
             self.order.retain(|existing| existing != &token);
             self.order.push_back(token);
@@ -30,12 +36,12 @@ impl ActivationTokens {
         None
     }
 
-    fn activate(&mut self, token: &str) -> Option<String> {
+    fn activate(&mut self, token: &str) -> Option<(AccountId, String)> {
         self.order.retain(|existing| existing != token);
         self.chats.remove(token)
     }
 
-    fn remove_chat(&mut self, chat_id: &str) -> Vec<String> {
+    fn remove_chat(&mut self, chat_id: &(AccountId, String)) -> Vec<String> {
         let tokens = self
             .order
             .iter()
@@ -50,7 +56,7 @@ impl ActivationTokens {
     }
 
     /// The pending token of a chat, so a newer message replaces its notification.
-    fn token_for(&self, chat_id: &str) -> Option<String> {
+    fn token_for(&self, chat_id: &(AccountId, String)) -> Option<String> {
         self.order
             .iter()
             .find(|token| self.chats.get(*token).is_some_and(|chat| chat == chat_id))
@@ -61,6 +67,35 @@ impl ActivationTokens {
         let token = self.order.pop_front()?;
         self.chats.remove(&token);
         Some(token)
+    }
+
+    fn remove_account(&mut self, account: AccountId) -> Vec<String> {
+        let tokens = self
+            .order
+            .iter()
+            .filter(|token| self.chats.get(*token).is_some_and(|(id, _)| *id == account))
+            .cloned()
+            .collect::<Vec<_>>();
+        for token in &tokens {
+            self.chats.remove(token);
+        }
+        self.order.retain(|token| self.chats.contains_key(token));
+        tokens
+    }
+}
+
+/// Identifies the receiving account without changing single-account notifications.
+pub(crate) fn account_body(
+    registry: &crate::account::Registry,
+    account: AccountId,
+    body: &str,
+) -> String {
+    if registry.accounts.len() > 1
+        && let Some(entry) = registry.entry(account)
+    {
+        format!("{body}\nTo {}", entry.label())
+    } else {
+        body.to_owned()
     }
 }
 
@@ -75,7 +110,10 @@ pub struct NativeNotifications {
 
 impl NativeNotifications {
     /// Registers the notification activation action on `application`.
-    pub fn new(application: &gtk::Application, open_chat: impl Fn(String) + 'static) -> Self {
+    pub fn new(
+        application: &gtk::Application,
+        open_chat: impl Fn(AccountId, String) + 'static,
+    ) -> Self {
         use gtk::gio::prelude::*;
 
         let tokens = std::rc::Rc::new(std::cell::RefCell::new(ActivationTokens::default()));
@@ -86,8 +124,8 @@ impl NativeNotifications {
             let Some(token) = parameter.and_then(|value| value.get::<String>()) else {
                 return;
             };
-            if let Some(chat_id) = action_tokens.borrow_mut().activate(&token) {
-                open_chat(chat_id);
+            if let Some((account, chat_id)) = action_tokens.borrow_mut().activate(&token) {
+                open_chat(account, chat_id);
             }
         });
         application.add_action(&action);
@@ -102,6 +140,7 @@ impl NativeNotifications {
     /// in-memory token map.
     pub fn show(
         &self,
+        account: AccountId,
         chat_id: &str,
         title: &str,
         body: &str,
@@ -115,14 +154,15 @@ impl NativeNotifications {
             return Ok(());
         }
 
-        let existing = self.tokens.borrow().token_for(chat_id);
+        let target = (account, chat_id.to_owned());
+        let existing = self.tokens.borrow().token_for(&target);
         let token = match existing {
             Some(token) => token,
             None => activation_token()?,
         };
         let evicted = {
             let mut tokens = self.tokens.borrow_mut();
-            tokens.insert(token.clone(), chat_id.to_owned());
+            tokens.insert(token.clone(), target);
             if tokens.chats.len() > MAX_PENDING_ACTIVATIONS {
                 tokens.take_oldest()
             } else {
@@ -154,8 +194,19 @@ impl NativeNotifications {
     }
 
     /// Withdraws pending notifications and activation tokens for one chat.
-    pub fn clear_chat(&self, chat_id: &str) {
-        for token in self.tokens.borrow_mut().remove_chat(chat_id) {
+    pub fn clear_chat(&self, account: AccountId, chat_id: &str) {
+        for token in self
+            .tokens
+            .borrow_mut()
+            .remove_chat(&(account, chat_id.to_owned()))
+        {
+            self.application.withdraw_notification(&token);
+        }
+    }
+
+    /// Invalidates every notification belonging to a removed or signed-out account.
+    pub fn clear_account(&self, account: AccountId) {
+        for token in self.tokens.borrow_mut().remove_account(account) {
             self.application.withdraw_notification(&token);
         }
     }
@@ -204,6 +255,71 @@ pub fn activation_token() -> Result<String, getrandom::Error> {
 #[cfg(test)]
 mod tests {
     use super::ActivationTokens;
+    use crate::account::AccountId;
+
+    fn chat(id: &str) -> (AccountId, String) {
+        (AccountId(1), id.to_owned())
+    }
+
+    #[test]
+    fn same_chat_in_two_accounts_keeps_two_notifications() {
+        let mut tokens = ActivationTokens::default();
+        tokens.insert("one".into(), (AccountId(1), "chat".into()));
+        tokens.insert("two".into(), (AccountId(2), "chat".into()));
+        assert_eq!(
+            tokens.token_for(&(AccountId(1), "chat".into())).as_deref(),
+            Some("one")
+        );
+        assert_eq!(
+            tokens.token_for(&(AccountId(2), "chat".into())).as_deref(),
+            Some("two")
+        );
+        assert_eq!(
+            tokens.remove_chat(&(AccountId(1), "chat".into())),
+            vec!["one".to_owned()]
+        );
+        assert_eq!(tokens.activate("two"), Some((AccountId(2), "chat".into())));
+    }
+
+    #[test]
+    fn notification_body_names_the_receiving_account_only_with_several_accounts() {
+        let mut registry = crate::account::Registry::default();
+        let work = registry.add();
+        registry.entry_mut(work).unwrap().name = Some("Work".into());
+        assert_eq!(
+            super::account_body(&registry, work, "New message"),
+            "New message"
+        );
+        let home = registry.add();
+        registry.entry_mut(home).unwrap().name = Some("Home".into());
+        assert_eq!(
+            super::account_body(&registry, work, "New message"),
+            "New message\nTo Work"
+        );
+        assert_eq!(
+            super::account_body(&registry, home, "Hello"),
+            "Hello\nTo Home"
+        );
+        assert_eq!(
+            super::account_body(&registry, AccountId(99), "Hello"),
+            "Hello"
+        );
+    }
+
+    #[test]
+    fn removing_an_account_invalidates_even_chats_missing_from_its_snapshot() {
+        let mut tokens = ActivationTokens::default();
+        tokens.insert("one".into(), (AccountId(1), "missing".into()));
+        tokens.insert("two".into(), (AccountId(2), "missing".into()));
+        tokens.insert("three".into(), (AccountId(1), "other".into()));
+        assert_eq!(tokens.remove_account(AccountId(1)), ["one", "three"]);
+        assert_eq!(tokens.activate("one"), None);
+        assert_eq!(tokens.activate("three"), None);
+        assert_eq!(
+            tokens.activate("two"),
+            Some((AccountId(2), "missing".into()))
+        );
+    }
 
     #[test]
     fn chat_pictures_become_circles_with_transparent_corners() {
@@ -226,28 +342,28 @@ mod tests {
     #[test]
     fn a_chat_reuses_its_pending_token_so_notifications_replace() {
         let mut tokens = ActivationTokens::default();
-        tokens.insert("first".into(), "chat-a".into());
-        tokens.insert("other".into(), "chat-b".into());
-        assert_eq!(tokens.token_for("chat-a").as_deref(), Some("first"));
+        tokens.insert("first".into(), chat("chat-a"));
+        tokens.insert("other".into(), chat("chat-b"));
+        assert_eq!(tokens.token_for(&chat("chat-a")).as_deref(), Some("first"));
         tokens.activate("first");
-        assert_eq!(tokens.token_for("chat-a"), None);
+        assert_eq!(tokens.token_for(&chat("chat-a")), None);
     }
 
     #[test]
     fn live_token_routes_to_intended_chat() {
         let mut tokens = ActivationTokens::default();
-        tokens.insert("test-token-alpha".into(), "chat-intended-42".into());
+        tokens.insert("test-token-alpha".into(), chat("chat-intended-42"));
 
         assert_eq!(
             tokens.activate("test-token-alpha"),
-            Some("chat-intended-42".into())
+            Some(chat("chat-intended-42"))
         );
     }
 
     #[test]
     fn expired_token_presents_chat_list() {
         let mut tokens = ActivationTokens::default();
-        tokens.insert("expired-token".into(), "chat-old".into());
+        tokens.insert("expired-token".into(), chat("chat-old"));
 
         assert!(tokens.activate("expired-token").is_some());
         assert_eq!(tokens.activate("expired-token"), None);
@@ -256,15 +372,15 @@ mod tests {
     #[test]
     fn token_never_exposes_message_content() {
         let mut tokens = ActivationTokens::default();
-        tokens.insert("token-one".into(), "chat-abc".into());
-        tokens.insert("token-two".into(), "chat-abc".into());
+        tokens.insert("token-one".into(), chat("chat-abc"));
+        tokens.insert("token-two".into(), chat("chat-abc"));
         assert_eq!(tokens.activate("token-one"), tokens.activate("token-two"));
 
         let mut fresh = ActivationTokens::default();
-        fresh.insert("alpha".into(), "same-chat".into());
-        fresh.insert("beta".into(), "same-chat".into());
-        assert_eq!(fresh.activate("alpha"), Some("same-chat".into()));
-        assert_eq!(fresh.activate("beta"), Some("same-chat".into()));
+        fresh.insert("alpha".into(), chat("same-chat"));
+        fresh.insert("beta".into(), chat("same-chat"));
+        assert_eq!(fresh.activate("alpha"), Some(chat("same-chat")));
+        assert_eq!(fresh.activate("beta"), Some(chat("same-chat")));
     }
 
     #[test]
@@ -284,11 +400,11 @@ mod tests {
     #[test]
     fn repeated_activation_is_idempotent() {
         let mut tokens = ActivationTokens::default();
-        tokens.insert("idempotent-token".into(), "chat-singleton".into());
+        tokens.insert("idempotent-token".into(), chat("chat-singleton"));
 
         assert_eq!(
             tokens.activate("idempotent-token"),
-            Some("chat-singleton".into())
+            Some(chat("chat-singleton"))
         );
         assert_eq!(tokens.activate("idempotent-token"), None);
         assert_eq!(tokens.activate("idempotent-token"), None);
@@ -297,7 +413,7 @@ mod tests {
     #[test]
     fn notification_after_quit_is_rejected() {
         let mut old_session_tokens = ActivationTokens::default();
-        old_session_tokens.insert("stale-token-from-prev-session".into(), "old-chat".into());
+        old_session_tokens.insert("stale-token-from-prev-session".into(), chat("old-chat"));
 
         let mut new_session_tokens = ActivationTokens::default();
         assert_eq!(
@@ -306,19 +422,19 @@ mod tests {
         );
         assert_eq!(
             old_session_tokens.activate("stale-token-from-prev-session"),
-            Some("old-chat".into())
+            Some(chat("old-chat"))
         );
     }
 
     #[test]
     fn activation_is_one_shot_and_routes_only_to_mapped_chat() {
         let mut tokens = ActivationTokens::default();
-        tokens.insert("opaque-token".into(), "private-chat-id".into());
+        tokens.insert("opaque-token".into(), chat("private-chat-id"));
 
         assert_eq!(tokens.activate("unknown-token"), None);
         assert_eq!(
             tokens.activate("opaque-token"),
-            Some("private-chat-id".into())
+            Some(chat("private-chat-id"))
         );
         assert_eq!(tokens.activate("opaque-token"), None);
     }
@@ -326,23 +442,23 @@ mod tests {
     #[test]
     fn clearing_chat_invalidates_all_its_tokens_only() {
         let mut tokens = ActivationTokens::default();
-        tokens.insert("first".into(), "chat-a".into());
-        tokens.insert("second".into(), "chat-a".into());
-        tokens.insert("third".into(), "chat-b".into());
+        tokens.insert("first".into(), chat("chat-a"));
+        tokens.insert("second".into(), chat("chat-a"));
+        tokens.insert("third".into(), chat("chat-b"));
 
-        assert_eq!(tokens.remove_chat("chat-a"), ["first", "second"]);
+        assert_eq!(tokens.remove_chat(&chat("chat-a")), ["first", "second"]);
         assert_eq!(tokens.activate("first"), None);
-        assert_eq!(tokens.activate("third"), Some("chat-b".into()));
+        assert_eq!(tokens.activate("third"), Some(chat("chat-b")));
     }
 
     #[test]
     fn capacity_eviction_invalidates_oldest_token() {
         let mut tokens = ActivationTokens::default();
-        tokens.insert("oldest".into(), "chat-a".into());
-        tokens.insert("newest".into(), "chat-b".into());
+        tokens.insert("oldest".into(), chat("chat-a"));
+        tokens.insert("newest".into(), chat("chat-b"));
 
-        assert_eq!(tokens.take_oldest(), Some("oldest".into()));
+        assert_eq!(tokens.take_oldest().as_deref(), Some("oldest"));
         assert_eq!(tokens.activate("oldest"), None);
-        assert_eq!(tokens.activate("newest"), Some("chat-b".into()));
+        assert_eq!(tokens.activate("newest"), Some(chat("chat-b")));
     }
 }

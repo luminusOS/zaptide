@@ -184,7 +184,12 @@ impl NativeApplication {
                     &dialog_action_callback(&sender),
                 );
             }
-            Input::SelectChat(position) => self.select_chat(position),
+            Input::SelectChat(account, chat) => {
+                let position = self.chat_targets.borrow().position(account, &chat);
+                if let Some(position) = position {
+                    self.select_chat(position);
+                }
+            }
             Input::ScrollToRecentMessages => {
                 self.recent_messages_pending = false;
                 scroll_to_end(&self.messages.view);
@@ -223,6 +228,15 @@ impl NativeApplication {
                     self.loading_older = false;
                 }
             }
+            Input::OpenAccountChat(account, chat) => {
+                if account != self.active_account {
+                    self.switch_account_with_restore(account, &sender, false);
+                }
+                // A stale notification must never open the same ID in another account.
+                if account == self.active_account {
+                    self.handle_input(Input::OpenChatId(chat), sender);
+                }
+            }
             Input::OpenChatId(chat) => {
                 self.window.present();
                 let archived = self
@@ -232,7 +246,7 @@ impl NativeApplication {
                 self.reset_chat_filters(archived);
                 self.sync_chat_projection();
                 if let Some(position) = self.chat_ids.iter().position(|id| id == &chat) {
-                    sender.input(Input::SelectChat(position as u32));
+                    self.select_chat(position as u32);
                 }
             }
             Input::SearchChats(query) => {
