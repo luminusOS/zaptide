@@ -11,6 +11,7 @@ use crate::model::{Chat, ChatKind, Content, Delivery, Message};
 
 mod contacts;
 mod encryption;
+pub use encryption::{archive_key_identity, copy_archive_key, forget_archive_key};
 mod media;
 mod polls;
 mod receipts;

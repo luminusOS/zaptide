@@ -3,6 +3,7 @@
 #[cfg(not(target_os = "linux"))]
 compile_error!("ZapTide supports Linux only.");
 
+pub mod account;
 pub mod application;
 pub mod archive;
 pub mod audio;
