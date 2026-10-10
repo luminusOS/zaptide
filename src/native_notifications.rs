@@ -6,8 +6,8 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use relm4::gtk;
 use relm4::gtk::prelude::*;
+use relm4::{adw, gtk};
 
 const OPEN_CHAT_ACTION: &str = "open-chat";
 const MAX_PENDING_ACTIVATIONS: usize = 256;
@@ -161,14 +161,17 @@ impl NativeNotifications {
         let notification = gtk::gio::Notification::new(title);
         notification.set_body(Some(body));
         // The notification portal drops file icons, so a Flatpak build sends the bytes.
-        if let Some(bytes) = icon
+        // Without a picture, draw the same coloured initials the chat list shows.
+        let bytes = icon
             .and_then(round_icon)
             .and_then(|path| std::fs::read(path).ok())
-        {
-            notification.set_icon(&gtk::gio::BytesIcon::new(&gtk::glib::Bytes::from_owned(
-                bytes,
-            )));
-        }
+            .map(gtk::glib::Bytes::from_owned)
+            .unwrap_or_else(|| {
+                adw::Avatar::new(96, Some(title), true)
+                    .draw_to_texture(1)
+                    .save_to_png_bytes()
+            });
+        notification.set_icon(&gtk::gio::BytesIcon::new(&bytes));
         notification.set_default_action_and_target_value(
             &format!("app.{OPEN_CHAT_ACTION}"),
             Some(&token.to_variant()),
