@@ -1772,6 +1772,7 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
          .zaptide-selected-avatar { border-radius: 9999px; box-shadow: 0 0 0 2px @popover_bg_color, 0 0 0 4px @accent_bg_color; }\n\
          .zaptide-accent-circle { color: @accent_fg_color; background-color: @accent_bg_color; border: 2px solid @accent_bg_color; border-radius: 9999px; transform: translate(5px, 5px); }\n\
          menubutton.zaptide-account-button > button { padding: 5px; min-width: 0; min-height: 0; }\n\
+         button.zaptide-jump-button { min-width: 42px; min-height: 42px; padding: 0; }\n\
          .zaptide-delivery { opacity: 0.6; }\n\
          .zaptide-delivery.read { opacity: 1; color: #53bdeb; }\n\
          .zaptide-delivery-failed { color: @error_color; }\n\
