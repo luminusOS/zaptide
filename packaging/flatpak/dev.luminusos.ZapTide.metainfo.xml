@@ -36,6 +36,15 @@
     <control>keyboard</control>
   </supports>
   <releases>
+    <release version="0.7.0" date="2026-10-13">
+      <description>
+        <p>Several WhatsApp accounts can run at once, with a switcher in the
+        sidebar and a dialog to edit each account's name, About text and
+        picture. The interface is translated to Brazilian Portuguese, the chat
+        list sidebar can be translucent, and the window no longer shrinks
+        until its buttons are clipped.</p>
+      </description>
+    </release>
     <release version="0.6.0" date="2026-10-08">
       <description>
         <p>Clicking a quoted message jumps to the original, and a button
