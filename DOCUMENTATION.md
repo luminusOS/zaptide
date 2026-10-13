@@ -25,6 +25,7 @@ in `application/accounts.rs` and updated from their own backend.
 | Path | What lives there |
 | --- | --- |
 | `src/application.rs`, `src/application/` | The Relm4 root component and its pieces: sidebar, transcript, composer, dialogs, account switcher, profile dialog. |
+| `src/application/{icons,motion,bubbles,actions,helpers}.rs` | Pieces split out of `application.rs`: drawn and installed icons, scroll and fade animations, message bubble widgets, window actions, small pure helpers. |
 | `src/backend.rs`, `src/backend/` | The `Command` and `Event` types and the worker that owns the connection. |
 | `src/archive.rs`, `src/archive/` | The encrypted SQLite store of chats, messages and contacts. |
 | `src/model/` | The app's own types. Views never see a protobuf. |
