@@ -401,9 +401,7 @@ mod tests {
         adw::init().unwrap();
         let dir = std::path::PathBuf::from(std::env::var("RENDER_DIR").expect("RENDER_DIR"));
         let css = gtk::CssProvider::new();
-        css.load_from_string(
-            ".zaptide-unread-pill { background: var(--accent-bg-color); color: var(--accent-fg-color); border-radius: 9999px; padding: 0 6px; } .zaptide-account-dot { min-width: 8px; min-height: 8px; border-radius: 9999px; background: var(--accent-bg-color); box-shadow: 0 0 0 2px var(--headerbar-bg-color); }",
-        );
+        css.load_from_string(include_str!("../../data/style.css"));
         gtk::style_context_add_provider_for_display(
             &gtk::gdk::Display::default().unwrap(),
             &css,

@@ -1,0 +1,119 @@
+.zaptide-transcript, .zaptide-transcript textview, .zaptide-transcript text { background: none; }
+.zaptide-message-row { padding: 2px 6px; }
+.zaptide-chat-list > row { padding: 0; }
+.zaptide-emoji-grid { background: none; }
+.zaptide-photo { border-radius: 10px; }
+.zaptide-photo-button { padding: 0; border-radius: 10px; }
+.zaptide-album-more { color: white; background-color: color-mix(in srgb, black 50%, transparent); }
+/* The viewer is intentionally dark in every theme, like a media player. */
+.zaptide-viewer { background-color: #101010; color: white; }
+.zaptide-media-badge { padding: 2px 7px; border-radius: 9999px; color: white; background-color: color-mix(in srgb, black 60%, transparent); }
+.zaptide-play { min-width: 48px; min-height: 48px; border-radius: 9999px; color: white; background-color: color-mix(in srgb, black 55%, transparent); }
+.zaptide-photo-button:hover .zaptide-play { background-color: color-mix(in srgb, black 75%, transparent); }
+.zaptide-viewer headerbar, .zaptide-viewer .bottom-bar { background-color: color-mix(in srgb, black 55%, transparent); color: white; box-shadow: none; }
+.zaptide-emoji-grid > child { padding: 0; border-radius: 8px; }
+.zaptide-emoji-cell { font-size: 1.55em; min-width: 38px; min-height: 38px; }
+.zaptide-chat-item { padding: 8px 14px; border-radius: inherit; }
+.zaptide-chat-item.zaptide-chat-open { background-color: color-mix(in srgb, currentColor 22%, transparent); }
+.zaptide-bubble { padding: 8px 11px; border-radius: 13px; }
+.zaptide-bubble.incoming { background-color: var(--zaptide-bubble-in); color: var(--zaptide-bubble-in-text); }
+.zaptide-bubble.outgoing { background-color: var(--zaptide-bubble-out); color: var(--zaptide-bubble-out-text); }
+.zaptide-message-selected { border-radius: 12px; background-color: color-mix(in srgb, var(--accent-bg-color) 15%, transparent); }
+.zaptide-typing-bubble { padding: 13px 14px; border-bottom-left-radius: 4px; }
+.zaptide-typing-dot { min-width: 7px; min-height: 7px; border-radius: 9999px; background-color: currentColor; opacity: 0.35; animation: zaptide-typing 1.2s ease-in-out infinite; }
+.zaptide-typing-dot:nth-child(2) { animation-delay: 150ms; }
+.zaptide-typing-dot:nth-child(3) { animation-delay: 300ms; }
+@keyframes zaptide-typing { 0% { opacity: 0.35; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-3px); } 60% { opacity: 0.35; transform: translateY(0); } 100% { opacity: 0.35; transform: translateY(0); } }
+.zaptide-mention-popover > contents { padding: 0; }
+.zaptide-mention-popover list { background: none; }
+.zaptide-mention-popover row { border-radius: 8px; }
+.zaptide-message-flash .zaptide-bubble { outline: 2px solid var(--accent-color); outline-offset: 2px; }
+.zaptide-message-item:focus-visible .zaptide-bubble { outline: 2px solid var(--accent-color); outline-offset: 2px; }
+.zaptide-media-card { padding: 8px 12px; margin-top: 4px; background-color: color-mix(in srgb, currentColor 8%, transparent); }
+.zaptide-link-card:hover { background-color: color-mix(in srgb, currentColor 12%, transparent); }
+.zaptide-link-thumbnail { border-radius: 8px; }
+.zaptide-sender-blue { color: var(--blue-3); }
+.zaptide-sender-green { color: var(--green-4); }
+.zaptide-sender-yellow { color: var(--yellow-5); }
+.zaptide-sender-orange { color: var(--orange-4); }
+.zaptide-sender-red { color: var(--red-3); }
+.zaptide-sender-purple { color: var(--purple-3); }
+.zaptide-bubble:hover { box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 12%, transparent); }
+.zaptide-message-timestamp { min-width: 36px; font-weight: normal; }
+.zaptide-filters-active { color: var(--accent-color); }
+.zaptide-unread-pill { font-weight: bold; font-size: 0.8em; border-radius: 9999px; min-width: 1.4em; padding: 2px 6px; color: var(--accent-fg-color); background-color: var(--accent-bg-color); }
+.zaptide-selected-avatar { border-radius: 9999px; box-shadow: 0 0 0 2px var(--popover-bg-color), 0 0 0 4px var(--accent-bg-color); }
+.zaptide-accent-circle { color: var(--accent-fg-color); background-color: var(--accent-bg-color); border: 2px solid var(--accent-bg-color); border-radius: 9999px; transform: translate(5px, 5px); }
+menubutton.zaptide-account-button > button { padding: 5px; min-width: 0; min-height: 0; }
+button.zaptide-jump-button { min-width: 42px; min-height: 42px; padding: 0; }
+.zaptide-delivery { opacity: 0.6; }
+/* WhatsApp read-receipt blue, theme-independent by design. */
+.zaptide-delivery.read { opacity: 1; color: #53bdeb; }
+.zaptide-delivery-failed { color: var(--error-color); }
+.zaptide-sticker { border-radius: 12px; padding: 4px; }
+.zaptide-audio-seek trough, .zaptide-audio-seek highlight, .zaptide-audio-seek slider { background: none; border-color: transparent; box-shadow: none; outline-color: transparent; }
+.zaptide-audio-seek:focus-visible trough { outline: 2px solid color-mix(in srgb, var(--accent-color) 50%, transparent); outline-offset: 2px; }
+.zaptide-audio-speed.compact { font-size: 0.85em; }
+.zaptide-reaction { font-size: 1.4em; min-width: 40px; min-height: 40px; padding: 0; }
+.zaptide-reaction.chosen { background-color: color-mix(in srgb, var(--accent-bg-color) 25%, transparent); }
+.zaptide-reaction > label { transition: transform 120ms ease-out; }
+.zaptide-reaction:hover > label { transform: scale(1.25); }
+.zaptide-reaction-chip { min-height: 0; min-width: 0; padding: 1px 8px; border-radius: 9999px; font-size: 0.9em; background-color: var(--window-bg-color); box-shadow: 0 0 0 1px color-mix(in srgb, currentColor 12%, transparent); }
+.zaptide-reaction-chip:hover { background-color: color-mix(in srgb, currentColor 8%, var(--window-bg-color)); }
+.zaptide-reaction-chip.chosen { background-color: color-mix(in srgb, var(--accent-bg-color) 18%, var(--window-bg-color)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-color) 55%, transparent); color: var(--accent-color); }
+.zaptide-sticker-tab { border-radius: 8px; min-width: 36px; min-height: 36px; padding: 2px; }
+.zaptide-sticker-tab:checked { background-color: color-mix(in srgb, currentColor 12%, transparent); }
+.zaptide-sticker-picker > contents { padding: 0; }
+.zaptide-unread-pill.compact { font-size: 0.75em; min-width: 1.2em; padding: 0 5px; }
+.zaptide-unread-pill.muted { color: var(--window-fg-color); background-color: color-mix(in srgb, currentColor 18%, transparent); }
+.zaptide-composer { border-radius: 18px; background-color: color-mix(in srgb, currentColor 8%, transparent); }
+.zaptide-composer textview, .zaptide-composer text { background: none; }
+.zaptide-composer:focus-within { outline: 2px solid color-mix(in srgb, var(--accent-color) 60%, transparent); outline-offset: -2px; }
+.zaptide-drop-scrim { background-color: var(--shade-color); }
+.zaptide-conversation:drop(active) { border-color: transparent; box-shadow: none; }
+.zaptide-drop-card { margin: 24px; padding: 12px 24px; border-radius: 15px; background-color: var(--dialog-bg-color); color: var(--dialog-fg-color); box-shadow: 0 0 14px 2px rgba(0,0,6,0.03), 0 0 5px 2px rgba(0,0,6,0.10), 0 0 0 1px rgba(0,0,0,0.05); }
+.zaptide-attachments { padding: 6px 8px 4px; border-radius: 18px; background-color: color-mix(in srgb, currentColor 5%, transparent); }
+.zaptide-attachment { border-radius: 12px; }
+.zaptide-attachment-file { padding: 0 40px 0 12px; }
+.zaptide-attachment-remove { min-width: 24px; min-height: 24px; padding: 0; }
+.zaptide-tray-action { min-height: 24px; padding: 2px 10px; border-radius: 9999px; font-size: 0.9em; }
+.zaptide-account-dot { min-width: 8px; min-height: 8px; border-radius: 9999px; background: var(--accent-bg-color); box-shadow: 0 0 0 2px var(--headerbar-bg-color); }
+.zaptide-attach-tile { padding: 10px 6px 8px; border-radius: 12px; min-width: 72px; }
+.zaptide-attach-icon { min-width: 44px; min-height: 44px; border-radius: 9999px; color: white; }
+.zaptide-attach-icon.gallery { background-color: var(--accent-purple); }
+.zaptide-attach-icon.files { background-color: var(--accent-blue); }
+.zaptide-attach-icon.poll { background-color: var(--accent-orange); }
+.zaptide-attach-icon.mention { background-color: var(--accent-green); }
+.zaptide-attach-icon.contact { color: var(--accent-fg-color); background-color: var(--accent-bg-color); }
+.zaptide-qr { border-radius: 12px; }
+.zaptide-document { padding: 10px 10px 10px 12px; }
+.zaptide-pair-code { padding: 16px 16px 16px 28px; }
+.zaptide-pair-code-label { font-size: 2.4em; font-weight: 800; letter-spacing: 0.14em; }
+.zaptide-quote { border-left: 2px solid var(--accent-bg-color); padding-left: 6px; opacity: 0.7; }
+/* Opt-in translucent chat list (window class toggled from Rust). */
+window.translucent-sidebar { background-color: transparent; }
+window.translucent-sidebar .content-pane { background-color: var(--window-bg-color); }
+window.translucent-sidebar .sidebar-pane {
+  background-color: color-mix(in srgb, var(--sidebar-bg-color) 70%, transparent);
+  backdrop-filter: blur(30px);
+}
+window.translucent-sidebar .sidebar-pane:backdrop {
+  background-color: color-mix(in srgb, var(--sidebar-backdrop-color) 70%, transparent);
+}
+window.translucent-sidebar .sidebar-pane headerbar,
+window.translucent-sidebar .sidebar-pane .titlebar,
+window.translucent-sidebar .sidebar-pane listview,
+window.translucent-sidebar .sidebar-pane .view {
+  background: transparent;
+  background-color: transparent;
+}
+@media (prefers-contrast: more) {
+  window.translucent-sidebar { background-color: var(--window-bg-color); }
+  window.translucent-sidebar .sidebar-pane {
+    background-color: var(--sidebar-bg-color);
+    backdrop-filter: none;
+  }
+  window.translucent-sidebar .sidebar-pane:backdrop {
+    background-color: var(--sidebar-backdrop-color);
+  }
+}
