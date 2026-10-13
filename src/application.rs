@@ -2,8 +2,10 @@
 
 mod account_switcher;
 mod accounts;
+mod actions;
 mod albums;
 mod audio;
+mod bubbles;
 mod chats;
 mod components;
 mod composer;
@@ -11,15 +13,21 @@ mod contact_sharing;
 mod conversation;
 mod dialogs;
 mod dispatch;
+mod helpers;
+mod icons;
 mod link_page;
 mod linking;
+mod motion;
 mod presentation;
 mod profile_dialog;
 mod rows;
 mod sidebar;
 mod transcript_view;
 
+use crate::i18n::gettext;
+use actions::*;
 use albums::{AlbumRole, album_roles};
+use bubbles::*;
 use composer::{
     ComposerState, ComposerView, ComposerViewInit, ComposerViewInput, ComposerViewOutput,
 };
@@ -28,8 +36,11 @@ use dialogs::{
     show_chat_info_dialog, show_forward_dialog, show_mention_dialog, show_new_chat_dialog,
     show_poll_dialog, sticker_picker_content,
 };
+use helpers::*;
+use icons::*;
 use link_page::{LinkPage, LinkPageInit, LinkPageInput, LinkPageOutput, LinkPageState};
 use linking::{link_page, qr_texture};
+use motion::*;
 use presentation::*;
 use rows::MessageRowWidgets;
 use sidebar::{Sidebar, SidebarInit, SidebarInput, SidebarOutput, SidebarState};
@@ -367,72 +378,6 @@ struct AudioState {
     voice_send_pending: bool,
     recording_meter: crate::native_media_widgets::RecordingMeter,
     played_voice: std::collections::HashSet<(String, String)>,
-}
-
-/// A funnel, which neither Adwaita nor GTK ships; a `-symbolic` name lets
-/// GTK recolour it with the theme.
-const FILTER_ICON: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><path d="M2.5 2h11a1 1 0 0 1 .78 1.63L10 8.98V13a1 1 0 0 1-.55.9l-2 1A1 1 0 0 1 6 14V8.98L1.72 3.63A1 1 0 0 1 2.5 2z" fill="#2e3436"/></svg>"##;
-
-/// The app's symbolic icon, drawn in the tray. The names match the copies
-/// the Flatpak exports to the host's icon theme.
-const TRAY_ICON: &str = include_str!("../packaging/icons/zaptide-symbolic.svg");
-
-/// The tray icon with a dot for unread chats. The `error` class lets hosts
-/// recolour the dot like GTK does.
-const TRAY_UNREAD_ICON: &str = include_str!("../packaging/icons/zaptide-unread-symbolic.svg");
-
-/// The full-colour app icon, for the window and About dialog when the host
-/// has no installed copy (AppImage, `cargo run`).
-const APP_ICON: &str = include_str!("../packaging/icons/zaptide.svg");
-
-fn install_icons(dir: &std::path::Path) {
-    let tray = [
-        ("dev.luminusos.ZapTide-symbolic.svg", TRAY_ICON),
-        (
-            "dev.luminusos.ZapTide-unread-symbolic.svg",
-            TRAY_UNREAD_ICON,
-        ),
-    ];
-    let icons = [
-        ("dev.luminusos.ZapTide.svg", APP_ICON),
-        ("zaptide-filter-symbolic.svg", FILTER_ICON),
-    ];
-    write_icons(dir, tray.iter().chain(&icons));
-    // Trays draw a symbolic icon at the panel's size and colour only when
-    // the host theme knows its name; the Flatpak exports the tray icons, an
-    // AppImage has to put them in the user's theme.
-    if std::env::var_os("APPIMAGE").is_some() {
-        let hicolor = gtk::glib::user_data_dir().join("icons/hicolor");
-        // The colour icon goes in the theme too: with only the symbolic one
-        // there, GTK resolves the app's name to it and About shows a bubble.
-        let app = [("dev.luminusos.ZapTide.svg", APP_ICON)];
-        let tray_changed = write_icons(&hicolor.join("symbolic/apps"), tray.iter());
-        if write_icons(&hicolor.join("scalable/apps"), app.iter()) | tray_changed {
-            // Theme caches rescan only when the theme directory changes.
-            let _ = std::fs::File::open(&hicolor)
-                .and_then(|theme| theme.set_modified(std::time::SystemTime::now()));
-        }
-    }
-    if let Some(display) = gtk::gdk::Display::default() {
-        gtk::IconTheme::for_display(&display).add_search_path(dir);
-    }
-}
-
-/// Writes the icons that differ from their copy in `dir`; true if any did.
-fn write_icons<'a>(
-    dir: &std::path::Path,
-    icons: impl Iterator<Item = &'a (&'a str, &'a str)>,
-) -> bool {
-    let mut changed = false;
-    if std::fs::create_dir_all(dir).is_ok() {
-        for (name, svg) in icons {
-            let icon = dir.join(name);
-            if std::fs::read_to_string(&icon).ok().as_deref() != Some(*svg) {
-                changed |= std::fs::write(&icon, svg).is_ok();
-            }
-        }
-    }
-    changed
 }
 
 /// True when `b` would render the same media as `a`. A sent sticker moves
@@ -809,7 +754,7 @@ impl SimpleComponent for NativeApplication {
 
                         #[wrap(Some)]
                         set_content = &adw::NavigationPage {
-                            set_title: "Chat",
+                            set_title: &gettext("Chat"),
                             #[wrap(Some)]
                             set_child = &adw::ToolbarView {
                             add_top_bar = &adw::HeaderBar {
@@ -818,7 +763,7 @@ impl SimpleComponent for NativeApplication {
                                 #[wrap(Some)]
                                 set_title_widget = &gtk::Button {
                                     add_css_class: "flat",
-                                    set_tooltip_text: Some("Chat details"),
+                                    set_tooltip_text: Some(&gettext("Chat details")),
                                     #[watch]
                                     set_can_target: model.active_chat.is_some(),
                                     #[watch]
@@ -835,14 +780,14 @@ impl SimpleComponent for NativeApplication {
                                 },
                                 pack_end = &gtk::MenuButton {
                                     set_icon_name: "view-more-symbolic",
-                                    set_tooltip_text: Some("Chat menu"),
+                                    set_tooltip_text: Some(&gettext("Chat menu")),
                                     #[watch]
                                     set_visible: model.active_chat.is_some(),
                                     set_menu_model: Some(&model.chat_menu),
                                 },
                             },
                             add_top_bar = &adw::Banner {
-                                set_title: "Connection lost",
+                                set_title: &gettext("Connection lost"),
                                 set_button_label: Some("Reconnect"),
                                 #[watch]
                                 set_revealed: matches!(model.link, LinkStatus::Failed(_) | LinkStatus::Disconnected { .. }),
@@ -912,7 +857,7 @@ impl SimpleComponent for NativeApplication {
                                              set_visible: model.message_selection.is_some(),
                                              #[wrap(Some)]
                                              set_start_widget = &gtk::Button {
-                                                 set_label: "Cancel",
+                                                 set_label: &gettext("Cancel"),
                                                  add_css_class: "flat",
                                                  connect_clicked => Input::CancelSelection,
                                              },
@@ -925,11 +870,11 @@ impl SimpleComponent for NativeApplication {
                                              #[wrap(Some)]
                                              set_end_widget = &gtk::Button {
                                                  add_css_class: "suggested-action",
-                                                 set_tooltip_text: Some("Forward selected messages"),
+                                                 set_tooltip_text: Some(&gettext("Forward selected messages")),
                                                  #[wrap(Some)]
                                                  set_child = &adw::ButtonContent {
                                                      set_icon_name: "mail-forward-symbolic",
-                                                     set_label: "Forward",
+                                                     set_label: &gettext("Forward"),
                                                  },
                                                  #[watch]
                                                  set_sensitive: model.message_selection.as_ref().is_some_and(|selection| !selection.is_empty()),
@@ -955,7 +900,7 @@ impl SimpleComponent for NativeApplication {
                                                     add_css_class: "compact",
                                                     add_css_class: "zaptide-drop-card",
                                                     set_icon_name: Some("mail-attachment-symbolic"),
-                                                    set_title: "Drop Files to Attach",
+                                                    set_title: &gettext("Drop Files to Attach"),
                                                     set_description: Some("Photos and files are added to your message, so you can write a caption before sending"),
                                                 },
                                             },
@@ -1115,10 +1060,10 @@ impl SimpleComponent for NativeApplication {
                 }
             };
         let link_menu = gtk::gio::Menu::new();
-        link_menu.append(Some("_Remove Account…"), Some("win.unlink"));
-        link_menu.append(Some("_Preferences"), Some("win.preferences"));
-        link_menu.append(Some("_About ZapTide"), Some("win.about"));
-        link_menu.append(Some("_Quit"), Some("win.quit"));
+        link_menu.append(Some(&gettext("_Remove Account…")), Some("win.unlink"));
+        link_menu.append(Some(&gettext("_Preferences")), Some("win.preferences"));
+        link_menu.append(Some(&gettext("_About ZapTide")), Some("win.about"));
+        link_menu.append(Some(&gettext("_Quit")), Some("win.quit"));
         let (switch_sender, add_sender, profile_sender) =
             (sender.clone(), sender.clone(), sender.clone());
         let link_switcher = account_switcher::AccountSwitcher::new(
@@ -1150,14 +1095,14 @@ impl SimpleComponent for NativeApplication {
             });
         let primary_menu = gtk::gio::Menu::new();
         let section = gtk::gio::Menu::new();
-        section.append(Some("_New Chat"), Some("win.new-chat"));
-        section.append(Some("_Remove Account…"), Some("win.unlink"));
+        section.append(Some(&gettext("_New Chat")), Some("win.new-chat"));
+        section.append(Some(&gettext("_Remove Account…")), Some("win.unlink"));
         primary_menu.append_section(None, &section);
         let section = gtk::gio::Menu::new();
-        section.append(Some("_Preferences"), Some("win.preferences"));
-        section.append(Some("_Keyboard Shortcuts"), Some("win.shortcuts"));
-        section.append(Some("_About ZapTide"), Some("win.about"));
-        section.append(Some("_Quit"), Some("win.quit"));
+        section.append(Some(&gettext("_Preferences")), Some("win.preferences"));
+        section.append(Some(&gettext("_Keyboard Shortcuts")), Some("win.shortcuts"));
+        section.append(Some(&gettext("_About ZapTide")), Some("win.about"));
+        section.append(Some(&gettext("_Quit")), Some("win.quit"));
         primary_menu.append_section(None, &section);
         let (switch_sender, add_sender, profile_sender) =
             (sender.clone(), sender.clone(), sender.clone());
@@ -1532,188 +1477,6 @@ impl SimpleComponent for NativeApplication {
     }
 }
 
-fn selection_title(count: usize) -> String {
-    match count {
-        0 => "Select Messages".to_owned(),
-        1 => "1 Selected".to_owned(),
-        count => format!("{count} Selected"),
-    }
-}
-
-fn composer_draft_state_changed(before_empty: bool, after_empty: bool) -> bool {
-    before_empty != after_empty
-}
-
-/// Moves a list to its end once rows are laid out. `ListView::scroll_to`
-/// leaves blank space with rows of varying height, and the height estimate
-/// only settles after the newly shown rows are measured, hence the second pass.
-fn scroll_to_end(view: &gtk::ListView) {
-    let Some(adjustment) = view.vadjustment() else {
-        return;
-    };
-    let end = move || adjustment.set_value(adjustment.upper() - adjustment.page_size());
-    let settle = end.clone();
-    gtk::glib::idle_add_local_once(end);
-    gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(150), settle);
-}
-
-thread_local! {
-    static END_GLIDE: std::cell::RefCell<Option<adw::TimedAnimation>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-fn gliding() -> bool {
-    END_GLIDE.with_borrow(|running| {
-        running
-            .as_ref()
-            .is_some_and(|animation| animation.state() == adw::AnimationState::Playing)
-    })
-}
-
-/// Scrolls smoothly to the end for new messages. Each frame aims at the
-/// current end, so row heights settling mid-way bend the path instead of
-/// jumping. Reduced motion skips straight to the end.
-fn glide_to_end(view: &gtk::ListView) {
-    let Some(adjustment) = view.vadjustment() else {
-        return;
-    };
-    let start = adjustment.value();
-    let target = adw::CallbackAnimationTarget::new(move |progress| {
-        let end = adjustment.upper() - adjustment.page_size();
-        adjustment.set_value(start + (end - start) * progress);
-    });
-    let animation = adw::TimedAnimation::new(view, 0.0, 1.0, 250, target);
-    animation.set_easing(adw::Easing::EaseOutCubic);
-    END_GLIDE.with_borrow_mut(|running| {
-        if let Some(previous) = running.replace(animation.clone()) {
-            previous.pause();
-        }
-    });
-    animation.play();
-}
-
-thread_local! {
-    static ARRIVING: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
-}
-
-/// Names the message whose row should fade in when the list first binds it.
-/// Binding happens during layout, before the row's first frame, so nothing
-/// flashes at full opacity. The mark expires in case the row is never shown.
-fn mark_arriving(id: String) {
-    ARRIVING.set(Some(id.clone()));
-    gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(500), move || {
-        ARRIVING.with_borrow_mut(|arriving| {
-            if arriving.as_deref() == Some(id.as_str()) {
-                *arriving = None;
-            }
-        });
-    });
-}
-
-/// Fades `row` in if its message was marked as arriving; otherwise makes sure a
-/// recycled widget is fully opaque. Adwaita animations honour reduced motion by
-/// jumping straight to the end value.
-fn fade_in_if_arriving(row: &gtk::Box, id: &str) {
-    if ARRIVING
-        .with_borrow_mut(|arriving| arriving.take_if(|marked| marked == id))
-        .is_none()
-    {
-        row.set_opacity(1.0);
-        return;
-    }
-    row.set_opacity(0.0);
-    // An animation on an unmapped widget jumps to its end, and a freshly bound
-    // row is not mapped yet; mapping still happens before its first frame.
-    if row.is_mapped() {
-        fade_in(row);
-        return;
-    }
-    let id = id.to_owned();
-    let handler = std::rc::Rc::new(std::cell::Cell::new(None));
-    let pending = handler.clone();
-    handler.set(Some(row.connect_map(move |row| {
-        if let Some(handler) = pending.take() {
-            row.disconnect(handler);
-        }
-        // The widget may have been recycled for another message meanwhile.
-        if row.widget_name() == id.as_str() {
-            fade_in(row);
-        }
-    })));
-}
-
-fn fade_in(row: &gtk::Box) {
-    let target = adw::PropertyAnimationTarget::new(row, "opacity");
-    let animation = adw::TimedAnimation::new(row, 0.0, 1.0, 220, target);
-    animation.set_easing(adw::Easing::EaseOutCubic);
-    animation.play();
-}
-
-/// Start, removed count, and inserted count of the span where `new` differs
-/// from an old list of `old_len` items, keeping their common prefix and suffix.
-fn changed_span<T>(
-    old_len: usize,
-    new: &[T],
-    same: impl Fn(usize, &T) -> bool,
-) -> (usize, usize, usize) {
-    let prefix = new
-        .iter()
-        .enumerate()
-        .take_while(|(position, row)| *position < old_len && same(*position, row))
-        .count();
-    let suffix = new[prefix..]
-        .iter()
-        .rev()
-        .enumerate()
-        .take_while(|(offset, row)| *offset < old_len - prefix && same(old_len - 1 - offset, row))
-        .count();
-    (
-        prefix,
-        old_len - prefix - suffix,
-        new.len() - prefix - suffix,
-    )
-}
-
-/// A paper-plane send icon filled with the button's text color, so it follows
-/// the theme like a symbolic icon.
-fn paper_plane_icon() -> gtk::DrawingArea {
-    let icon = gtk::DrawingArea::builder()
-        .content_width(16)
-        .content_height(16)
-        .halign(gtk::Align::Center)
-        .valign(gtk::Align::Center)
-        .build();
-    icon.set_draw_func(|area, cairo, _, _| {
-        let color = area.color();
-        cairo.set_source_rgba(
-            color.red().into(),
-            color.green().into(),
-            color.blue().into(),
-            color.alpha().into(),
-        );
-        for (index, (x, y)) in [
-            (1.2, 1.6),
-            (15.2, 8.0),
-            (1.2, 14.4),
-            (3.1, 8.8),
-            (9.5, 8.0),
-            (3.1, 7.2),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            if index == 0 {
-                cairo.move_to(x, y);
-            } else {
-                cairo.line_to(x, y);
-            }
-        }
-        cairo.close_path();
-        let _ = cairo.fill();
-    });
-    icon
-}
-
 fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssProvider) {
     let palette = settings.cached_palette();
     let scheme = palette.map_or_else(
@@ -1737,343 +1500,6 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
     }
     css.push_str(include_str!("../data/style.css"));
     theme_provider.load_from_string(&css);
-}
-
-fn translucent_sidebar_active(
-    settings: &crate::settings::Settings,
-    linked: bool,
-    split_collapsed: bool,
-) -> bool {
-    settings.translucent_sidebar && linked && !split_collapsed
-}
-
-fn should_auto_download(media: Option<&crate::model::Media>) -> bool {
-    const MAX_AUTO_DOWNLOAD: u64 = 64 * 1024 * 1024;
-    media.is_some_and(|media| {
-        media.path.is_none()
-            && media.size <= MAX_AUTO_DOWNLOAD
-            && matches!(media.state, crate::model::MediaState::Idle)
-    })
-}
-
-fn should_send_on_enter(enter_sends: bool, control: bool, shift: bool) -> bool {
-    !shift && (enter_sends || control)
-}
-
-/// A searchable country list for linking by phone number, starting at the
-/// locale's country. The button shows the flag and code; the list, names.
-fn country_picker() -> gtk::DropDown {
-    let labels: Vec<String> = crate::countries::COUNTRIES
-        .iter()
-        .map(crate::countries::Country::label)
-        .collect();
-    let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
-    let picker = gtk::DropDown::builder()
-        .model(&gtk::StringList::new(&labels))
-        .enable_search(true)
-        .search_match_mode(gtk::StringFilterMatchMode::Substring)
-        .expression(gtk::PropertyExpression::new(
-            gtk::StringObject::static_type(),
-            None::<gtk::Expression>,
-            "string",
-        ))
-        .tooltip_text("Country")
-        .build();
-    picker.set_list_factory(Some(&label_factory(|text| text.to_owned())));
-    picker.set_factory(Some(&label_factory(|text| {
-        let flag = text.split(' ').next().unwrap_or_default();
-        let code = text.rsplit(' ').next().unwrap_or_default();
-        format!("{flag} {code}")
-    })));
-    let locale = ["LC_ALL", "LC_TELEPHONE", "LANG"]
-        .into_iter()
-        .filter_map(|name| std::env::var(name).ok())
-        .find(|value| !value.is_empty())
-        .unwrap_or_default();
-    picker.set_selected(crate::countries::from_locale(&locale) as u32);
-    picker
-}
-
-/// Labels for a string list, with `text` shaping what each row shows.
-fn label_factory(text: impl Fn(&str) -> String + 'static) -> gtk::SignalListItemFactory {
-    let factory = gtk::SignalListItemFactory::new();
-    factory.connect_setup(|_, item| {
-        if let Some(item) = item.downcast_ref::<gtk::ListItem>() {
-            item.set_child(Some(&gtk::Label::builder().xalign(0.0).build()));
-        }
-    });
-    factory.connect_bind(move |_, item| {
-        let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
-            return;
-        };
-        if let (Some(label), Some(string)) = (
-            item.child().and_downcast::<gtk::Label>(),
-            item.item().and_downcast::<gtk::StringObject>(),
-        ) {
-            label.set_label(&text(&string.string()));
-        }
-    });
-    factory
-}
-
-/// The number typed next to `picker`, with the chosen country's code.
-fn international_phone(picker: &gtk::DropDown, entry: &gtk::Entry) -> String {
-    match crate::countries::COUNTRIES.get(picker.selected() as usize) {
-        Some(country) => crate::countries::international(country, &entry.text()),
-        None => entry.text().to_string(),
-    }
-}
-
-fn normalized_phone(input: &str) -> Option<String> {
-    let digits: String = input.chars().filter(char::is_ascii_digit).collect();
-    (7..=15).contains(&digits.len()).then_some(digits)
-}
-
-/// Notify unless the chat is on screen, muted, archived, or locked.
-fn notification_should_show(
-    enabled: bool,
-    window_active: bool,
-    active_chat: Option<&str>,
-    chat: &str,
-    known: Option<&crate::model::Chat>,
-) -> bool {
-    enabled
-        && !(window_active && active_chat == Some(chat))
-        && known.is_none_or(|known| {
-            !known.muted(crate::util::now()) && !known.archived && !known.locked
-        })
-}
-
-/// Day separators, and the unread marker before the first of the `unread`
-/// newest incoming messages. Only messages after your own last one can be
-/// unread: replying means you saw them, even before the count catches up.
-fn conversation_prefixes(messages: &[(i64, bool)], unread: usize) -> Vec<String> {
-    let after_own = messages
-        .iter()
-        .rposition(|(_, from_me)| *from_me)
-        .map_or(0, |index| index + 1);
-    let unread = unread.min(messages.len() - after_own);
-    let unread_at = messages.len() - unread;
-    let mut previous_day = None;
-    messages
-        .iter()
-        .enumerate()
-        .map(|(index, (timestamp, _))| {
-            let day = crate::util::day_label(*timestamp);
-            let mut prefix = String::new();
-            if previous_day.as_deref() != Some(day.as_str()) {
-                prefix.push_str(&format!("── {day} ──\n"));
-                previous_day = Some(day);
-            }
-            if unread > 0 && index == unread_at {
-                prefix.push_str("── Unread messages ──\n");
-            }
-            prefix
-        })
-        .collect()
-}
-
-/// WhatsApp-style check marks, drawn so the double tick overlaps like the
-/// original instead of depending on the font's check glyph.
-fn delivery_ticks() -> gtk::DrawingArea {
-    let area = gtk::DrawingArea::builder()
-        .content_width(16)
-        .content_height(11)
-        .valign(gtk::Align::Center)
-        .css_classes(["zaptide-delivery"])
-        .build();
-    area.set_draw_func(|area, cr, _, height| {
-        let color = area.color();
-        let bottom = f64::from(height) - 2.0;
-        cr.set_source_rgba(
-            color.red().into(),
-            color.green().into(),
-            color.blue().into(),
-            color.alpha().into(),
-        );
-        cr.set_line_width(1.5);
-        cr.set_line_cap(gtk::cairo::LineCap::Round);
-        cr.set_line_join(gtk::cairo::LineJoin::Round);
-        let double = area.has_css_class("double");
-        let first = if double { 1.0 } else { 3.0 };
-        cr.move_to(first, bottom - 3.5);
-        cr.line_to(first + 3.5, bottom);
-        cr.line_to(first + 10.0, 1.5);
-        if double {
-            // The second tick's short stroke hides behind the first one.
-            cr.move_to(first + 6.0, bottom - 1.5);
-            cr.line_to(first + 7.5, bottom);
-            cr.line_to(first + 14.0, 1.5);
-        }
-        let _ = cr.stroke();
-    });
-    area
-}
-
-fn set_delivery_ticks(area: &gtk::DrawingArea, glyph: &str) {
-    area.set_visible(!glyph.is_empty());
-    if glyph.chars().count() == 2 {
-        area.add_css_class("double");
-    } else {
-        area.remove_css_class("double");
-    }
-    area.queue_draw();
-}
-
-fn message_row(
-    message: crate::model::Message,
-    contacts: &std::collections::HashMap<String, crate::model::Contact>,
-    pointer_sender: ComponentSender<NativeApplication>,
-    prefix: &str,
-    avatar: Option<std::path::PathBuf>,
-    boundaries: (bool, bool),
-    audio_registry: AudioRegistry,
-) -> MessageRow {
-    let (show_sender, show_timestamp) = boundaries;
-    const SENDER_CLASSES: [&str; 6] = [
-        "zaptide-sender-blue",
-        "zaptide-sender-green",
-        "zaptide-sender-yellow",
-        "zaptide-sender-orange",
-        "zaptide-sender-red",
-        "zaptide-sender-purple",
-    ];
-    let sender: std::borrow::Cow<'_, str> = if message.from_me {
-        "You".into()
-    } else {
-        sender_label(message.sender_name.as_deref(), &message.sender).into()
-    };
-    let separator = prefix
-        .lines()
-        .map(|line| line.trim_matches(|c| c == '─' || c == ' '))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let body = match &message.content {
-        crate::model::Content::Text { text, .. } => text.clone(),
-        crate::model::Content::Image { caption, .. }
-        | crate::model::Content::Video { caption, .. }
-        | crate::model::Content::Document { caption, .. } => caption.clone().unwrap_or_default(),
-        _ => String::new(),
-    };
-    let quote = message
-        .quoted
-        .as_ref()
-        .map(|quoted| {
-            format!(
-                "{}: {}",
-                sender_label(quoted.sender_name.as_deref(), &quoted.sender),
-                quoted.summary
-            )
-        })
-        .unwrap_or_default();
-    let clock = crate::util::clock(message.timestamp);
-    let delivery = delivery_label(message.status);
-    let mut footer = Vec::new();
-    if message.forwarded {
-        footer.push("Forwarded".to_owned());
-    }
-    if message.edited {
-        footer.push("Edited".to_owned());
-    }
-    let reactions = reaction_summary(&message.reactions);
-    footer.push(clock.clone());
-    let mentions = mention_labels(&message, contacts);
-    let accessible_label = format!(
-        "{prefix}{sender}: {}{}{} · {clock}{delivery}",
-        crate::safety::display_mentions(&transcript_text(&message), &mentions),
-        if quote.is_empty() {
-            String::new()
-        } else {
-            format!("\n↪ {quote}")
-        },
-        reactions,
-    );
-    MessageRow {
-        id: message.id.clone(),
-        separator,
-        sender: sender.into_owned(),
-        sender_class: SENDER_CLASSES
-            [crate::util::hue(&message.sender) as usize * SENDER_CLASSES.len() / 360],
-        avatar,
-        quote,
-        body,
-        mentions,
-        footer: footer.join(" · "),
-        accessible_label,
-        show_sender,
-        show_timestamp,
-        pointer_sender,
-        message,
-        album: Vec::new(),
-        collapsed: false,
-        audio: None,
-        audio_registry,
-        selected: None,
-    }
-}
-
-/// A pill under the bubble; clicking it adds this reaction, or removes ours.
-fn reaction_chip(
-    id: &str,
-    emoji: &str,
-    count: usize,
-    from_me: bool,
-    sender: &ComponentSender<NativeApplication>,
-) -> gtk::Button {
-    let others = count - usize::from(from_me);
-    let who = match (from_me, others) {
-        (true, 0) => "You".to_owned(),
-        (true, 1) => "You and 1 other".to_owned(),
-        (true, n) => format!("You and {n} others"),
-        (false, 1) => "1 person".to_owned(),
-        (false, n) => format!("{n} people"),
-    };
-    let button = gtk::Button::builder()
-        .label(if count > 1 {
-            format!("{emoji} {count}")
-        } else {
-            emoji.to_owned()
-        })
-        .tooltip_text(format!(
-            "{who} reacted with {emoji}\n{}",
-            if from_me {
-                "Click to remove"
-            } else {
-                "Click to react"
-            }
-        ))
-        .css_classes(["zaptide-reaction-chip"])
-        .build();
-    if from_me {
-        button.add_css_class("chosen");
-    }
-    let (id, emoji, sender) = (id.to_owned(), emoji.to_owned(), sender.clone());
-    button.connect_clicked(move |_| {
-        sender.input(Input::ReactTo {
-            id: id.clone(),
-            emoji: if from_me {
-                String::new()
-            } else {
-                emoji.clone()
-            },
-        });
-    });
-    button
-}
-
-fn reaction_summary(reactions: &[crate::model::Reaction]) -> String {
-    let counts = reaction_counts(reactions);
-    if counts.is_empty() {
-        return String::new();
-    }
-    let summary = counts
-        .into_iter()
-        .map(|(emoji, count, from_me)| {
-            format!("{emoji} × {count}{}", if from_me { " · You" } else { "" })
-        })
-        .collect::<Vec<_>>()
-        .join("   ");
-    format!("\n{summary}")
 }
 
 impl NativeApplication {
@@ -2166,7 +1592,7 @@ impl NativeApplication {
         if self.settings.cached_palette() != previous_palette {
             self.apply_runtime_settings();
             if self.save_settings().is_err() {
-                self.status = "Could not save theme preference".into();
+                self.status = gettext("Could not save theme preference");
             }
         }
         let choices = self.theme_choice_filenames();
@@ -2322,8 +1748,8 @@ impl NativeApplication {
                 Some("message.attachment"),
             );
             if downloaded {
-                open.append(Some("Show in Folder"), Some("message.folder"));
-                open.append(Some("Save Attachment…"), Some("message.save"));
+                open.append(Some(&gettext("Show in Folder")), Some("message.folder"));
+                open.append(Some(&gettext("Save Attachment…")), Some("message.save"));
             }
         }
         if matches!(
@@ -2333,10 +1759,13 @@ impl NativeApplication {
                 ..
             }
         ) {
-            open.append(Some("Open Link"), Some("message.open-link"));
+            open.append(Some(&gettext("Open Link")), Some("message.open-link"));
         }
         if message.quoted.is_some() {
-            open.append(Some("Go to Quoted Message"), Some("message.quoted"));
+            open.append(
+                Some(&gettext("Go to Quoted Message")),
+                Some("message.quoted"),
+            );
         }
         let reactions = gtk::gio::Menu::new();
         let item = gtk::gio::MenuItem::new(None, None);
@@ -2344,14 +1773,14 @@ impl NativeApplication {
         reactions.append_item(&item);
         let respond = gtk::gio::Menu::new();
         if message_text(message).is_some() {
-            respond.append(Some("Copy Text"), Some("message.copy"));
+            respond.append(Some(&gettext("Copy Text")), Some("message.copy"));
         }
-        respond.append(Some("Reply"), Some("message.reply"));
+        respond.append(Some(&gettext("Reply")), Some("message.reply"));
         if self.editable_messages.contains_key(&message.id) {
-            respond.append(Some("Edit"), Some("message.edit"));
+            respond.append(Some(&gettext("Edit")), Some("message.edit"));
         }
-        respond.append(Some("Forward…"), Some("message.forward"));
-        respond.append(Some("Select"), Some("message.select"));
+        respond.append(Some(&gettext("Forward…")), Some("message.forward"));
+        respond.append(Some(&gettext("Select")), Some("message.select"));
         let vote = gtk::gio::Menu::new();
         if self.selected_poll_can_vote() {
             for (index, option) in self
@@ -2369,9 +1798,12 @@ impl NativeApplication {
             }
         }
         let delete = gtk::gio::Menu::new();
-        delete.append(Some("Delete for Me"), Some("message.delete"));
+        delete.append(Some(&gettext("Delete for Me")), Some("message.delete"));
         if message.from_me {
-            delete.append(Some("Delete for Everyone"), Some("message.delete-everyone"));
+            delete.append(
+                Some(&gettext("Delete for Everyone")),
+                Some("message.delete-everyone"),
+            );
         }
         for section in [reactions, open, respond, vote, delete] {
             if section.n_items() > 0 {
@@ -2484,7 +1916,7 @@ impl NativeApplication {
                         chat,
                         message: message.clone(),
                     });
-                    self.status = "Downloading attachment".into();
+                    self.status = gettext("Downloading attachment");
                 }
                 self.refresh_message_row(&message);
             }
@@ -2496,7 +1928,7 @@ impl NativeApplication {
                 )
                 .is_err()
                 {
-                    self.status = "Could not open attachment".into();
+                    self.status = gettext("Could not open attachment");
                 }
             }
             _ => {}
@@ -2508,11 +1940,11 @@ impl NativeApplication {
             return;
         };
         if !self.portal_requests.borrow().is_empty() {
-            self.status = "Finish the active portal action first".into();
+            self.status = gettext("Finish the active portal action first");
             return;
         }
         let Some(display) = gtk::gdk::Display::default() else {
-            self.status = "Clipboard is unavailable".into();
+            self.status = gettext("Clipboard is unavailable");
             return;
         };
         let input = sender.clone();
@@ -2570,15 +2002,15 @@ impl NativeApplication {
         if let Some(id) = request {
             request_id.set(Some(id));
             self.portal_requests.borrow_mut().insert(id);
-            self.status = "Reading clipboard image".into();
+            self.status = gettext("Reading clipboard image");
         } else {
-            self.status = "Could not read clipboard image".into();
+            self.status = gettext("Could not read clipboard image");
         }
     }
 
     fn stage_clipboard_image(&mut self, chat: String, pixels: ClipboardPixels) {
         if self.active_chat.as_deref() != Some(&chat) || !self.can_attach() {
-            self.status = "Choose an available conversation before pasting an image".into();
+            self.status = gettext("Choose an available conversation before pasting an image");
             return;
         }
         if self.pending_send.is_some()
@@ -2592,11 +2024,11 @@ impl NativeApplication {
                 .keys()
                 .any(|staged_chat| staged_chat != &chat)
         {
-            self.status = "Send or clear the staged attachment before pasting an image".into();
+            self.status = gettext("Send or clear the staged attachment before pasting an image");
             return;
         }
         self.pending_clipboard_images.insert(chat, pixels);
-        self.status = "Clipboard image ready".into();
+        self.status = gettext("Clipboard image ready");
     }
 
     fn open_selected_uri(&mut self, sender: &ComponentSender<Self>) {
@@ -2629,16 +2061,16 @@ impl NativeApplication {
             Ok(id) => {
                 request_id.set(Some(id));
                 self.portal_requests.borrow_mut().insert(id);
-                self.status = "Opening link".into();
+                self.status = gettext("Opening link");
             }
-            Err(_) => self.status = "Link is not supported".into(),
+            Err(_) => self.status = gettext("Link is not supported"),
         }
     }
 
     fn prepare_themes_folder(&mut self, sender: &ComponentSender<Self>) {
         let Some(config_dir) = self.settings_path.parent() else {
-            self.status = "Could not open themes folder".into();
-            self.toast("Could not open themes folder");
+            self.status = gettext("Could not open themes folder");
+            self.toast(&gettext("Could not open themes folder"));
             return;
         };
         let folder = config_dir.join("themes");
@@ -2647,13 +2079,13 @@ impl NativeApplication {
             let success = std::fs::create_dir_all(folder).is_ok();
             sender.input(Input::ThemesFolderPrepared(success));
         });
-        self.status = "Preparing themes folder".into();
+        self.status = gettext("Preparing themes folder");
     }
 
     fn launch_themes_folder(&mut self, sender: &ComponentSender<Self>) {
         let Some(config_dir) = self.settings_path.parent() else {
-            self.status = "Could not open themes folder".into();
-            self.toast("Could not open themes folder");
+            self.status = gettext("Could not open themes folder");
+            self.toast(&gettext("Could not open themes folder"));
             return;
         };
         let folder = config_dir.join("themes");
@@ -2674,11 +2106,11 @@ impl NativeApplication {
             Ok(id) => {
                 request_id.set(Some(id));
                 self.portal_requests.borrow_mut().insert(id);
-                self.status = "Opening themes folder".into();
+                self.status = gettext("Opening themes folder");
             }
             Err(_) => {
-                self.status = "Could not open themes folder".into();
-                self.toast("Could not open themes folder");
+                self.status = gettext("Could not open themes folder");
+                self.toast(&gettext("Could not open themes folder"));
             }
         }
     }
@@ -2715,9 +2147,9 @@ impl NativeApplication {
         if let Some(id) = request {
             callback_id.set(Some(id));
             self.portal_requests.borrow_mut().insert(id);
-            self.status = "Choose save location".into();
+            self.status = gettext("Choose save location");
         } else {
-            self.status = "Could not open save dialog".into();
+            self.status = gettext("Could not open save dialog");
         }
     }
 
@@ -2806,7 +2238,7 @@ impl NativeApplication {
             })
             .collect();
         if destinations.is_empty() {
-            self.status = "Choose another available conversation".into();
+            self.status = gettext("Choose another available conversation");
             return;
         }
         let Some(backend) = &self.backend else {
@@ -2865,11 +2297,11 @@ impl NativeApplication {
             match action {
                 crate::model::Action::DeleteForEveryone { chat, message } => {
                     backend.send(crate::backend::Command::Revoke { chat, id: message });
-                    self.status = "Deleting message for everyone".into();
+                    self.status = gettext("Deleting message for everyone");
                 }
                 crate::model::Action::DeleteForMe { chat, message } => {
                     backend.send(crate::backend::Command::DeleteLocal { chat, id: message });
-                    self.status = "Deleting message".into();
+                    self.status = gettext("Deleting message");
                 }
                 _ => {}
             }
@@ -2912,7 +2344,7 @@ impl NativeApplication {
             return;
         };
         let Ok(draft) = draft.validated() else {
-            self.status = "Enter a question and two different poll options".into();
+            self.status = gettext("Enter a question and two different poll options");
             return;
         };
         let action = crate::native_actions::create_poll(chat, draft);
@@ -2920,7 +2352,7 @@ impl NativeApplication {
             && let Some(backend) = &self.backend
         {
             backend.send(crate::backend::Command::CreatePoll { chat, draft });
-            self.status = "Creating poll".into();
+            self.status = gettext("Creating poll");
         }
     }
 
@@ -3086,7 +2518,7 @@ impl NativeApplication {
         } else {
             self.refresh_selected_voice();
         }
-        self.status = "Message deleted".into();
+        self.status = gettext("Message deleted");
     }
 
     fn clear_active_chat(&mut self) {
@@ -3113,7 +2545,7 @@ impl NativeApplication {
         self.audio.selected_voice_message = None;
         self.messages.clear();
         self.page_title = "Conversation unavailable".into();
-        self.status = "This chat is no longer available.".into();
+        self.status = gettext("This chat is no longer available.");
     }
 
     /// File names of the files staged for the open chat.
@@ -3170,9 +2602,9 @@ impl NativeApplication {
         }
         self.portals.cancel_all();
         if self.save_settings().is_err() {
-            self.status = "Could not save preferences".into();
+            self.status = gettext("Could not save preferences");
         }
-        self.status = "Shutdown requested".into();
+        self.status = gettext("Shutdown requested");
         let mut backends: Vec<Backend> = self.backend.take().into_iter().collect();
         backends.extend(
             self.accounts
@@ -3210,8 +2642,8 @@ impl NativeApplication {
                  icons, and none is shown now. Closing the window will quit the app.",
             ),
         );
-        alert.add_response("cancel", "Cancel");
-        alert.add_response("quit", "Quit");
+        alert.add_response("cancel", &gettext("Cancel"));
+        alert.add_response("quit", &gettext("Quit"));
         alert.set_response_appearance("quit", adw::ResponseAppearance::Destructive);
         alert.set_close_response("cancel");
         alert.set_default_response(Some("cancel"));
@@ -3230,211 +2662,6 @@ impl NativeApplication {
             overlay.add_toast(adw::Toast::builder().title(text).use_markup(false).build());
         }
     }
-}
-
-fn is_edit_completion(pending: Option<&(String, String, String)>, chat: &str, id: &str) -> bool {
-    pending.is_some_and(|(pending_chat, pending_id, _)| pending_chat == chat && pending_id == id)
-}
-
-/// "photo.jpg", "photo.jpg and 2 more", or "2 attachments ready" when only
-/// a clipboard image has no file name.
-fn attachment_summary(names: &[String], count: usize) -> String {
-    match names {
-        [] => format!(
-            "{count} attachment{} ready",
-            if count == 1 { "" } else { "s" }
-        ),
-        [name] if count == 1 => name.clone(),
-        [name, ..] => format!("{name} and {} more", count - 1),
-    }
-}
-
-fn caption(text: &str) -> Option<String> {
-    Some(text.trim().to_owned()).filter(|text| !text.is_empty())
-}
-
-fn convert_premultiplied_bgra_to_rgba(pixels: &mut [u8]) {
-    let (pixels, _) = pixels.as_chunks_mut::<4>();
-    for pixel in pixels {
-        let alpha = u16::from(pixel[3]);
-        let channels = [pixel[2], pixel[1], pixel[0]];
-        for (slot, channel) in pixel[..3].iter_mut().zip(channels) {
-            *slot = (u16::from(channel) * 255 + alpha / 2)
-                .checked_div(alpha)
-                .unwrap_or_default()
-                .min(255) as u8;
-        }
-    }
-}
-
-fn sanitized_error_feedback(error: &str) -> &'static str {
-    let error = error.to_ascii_lowercase();
-    if error.contains("timeout") || error.contains("timed out") || error.contains("connect") {
-        "Connection failed. Check your network and try again."
-    } else if error.contains("permission") || error.contains("denied") {
-        "Permission denied. Check access and try again."
-    } else if error.contains("disk") || error.contains("storage") || error.contains("space") {
-        "Storage operation failed. Check available disk space."
-    } else {
-        "Action failed. Check connection and try again."
-    }
-}
-
-fn install_message_actions(
-    window: &adw::ApplicationWindow,
-    sender: &ComponentSender<NativeApplication>,
-) {
-    let group = gtk::gio::SimpleActionGroup::new();
-    type MessageAction = (&'static str, fn() -> Input);
-    let actions: [MessageAction; 12] = [
-        ("copy", || Input::CopySelectedText),
-        ("attachment", || Input::ActivateSelectedAttachment),
-        ("folder", || Input::ShowSelectedInFolder),
-        ("save", || Input::SaveSelectedAttachment),
-        ("open-link", || Input::OpenSelectedUri),
-        ("quoted", || Input::OpenQuoted),
-        ("reply", || Input::ReplySelected),
-        ("edit", || Input::EditSelected),
-        ("forward", || Input::ShowForward),
-        ("select", || Input::StartSelection),
-        ("delete", || Input::DeleteSelected(false)),
-        ("delete-everyone", || Input::DeleteSelected(true)),
-    ];
-    for (name, input) in actions {
-        let action = gtk::gio::SimpleAction::new(name, None);
-        let sender = sender.clone();
-        action.connect_activate(move |_, _| sender.input(input()));
-        group.add_action(&action);
-    }
-    let vote = gtk::gio::SimpleAction::new("vote", Some(gtk::glib::VariantTy::UINT32));
-    let vote_sender = sender.clone();
-    vote.connect_activate(move |_, choice| {
-        if let Some(choice) = choice.and_then(gtk::glib::Variant::get::<u32>) {
-            vote_sender.input(Input::VoteOption(choice as usize));
-        }
-    });
-    group.add_action(&vote);
-    window.insert_action_group("message", Some(&group));
-}
-
-fn install_window_actions(
-    window: &adw::ApplicationWindow,
-    sender: &ComponentSender<NativeApplication>,
-) {
-    let add = |name: &str, activate: Box<dyn Fn()>| {
-        let action = gtk::gio::SimpleAction::new(name, None);
-        action.connect_activate(move |_, _| activate());
-        window.add_action(&action);
-    };
-    let input = |input: fn() -> Input| -> Box<dyn Fn()> {
-        let sender = sender.clone();
-        Box::new(move || sender.input(input()))
-    };
-    add("preferences", input(|| Input::ShowPreferences));
-    add("shortcuts", input(|| Input::ShowShortcuts));
-    add("about", input(|| Input::ShowAbout));
-    add("chat-info", input(|| Input::ShowChatInfo));
-    add("chat-pin", input(|| Input::ToggleSelectedPin));
-    add("chat-mute", input(|| Input::ToggleSelectedMute));
-    add("chat-archive", input(|| Input::ToggleSelectedArchive));
-    add("copy-transcript", input(|| Input::CopyTranscript));
-    add("quit", input(|| Input::Quit));
-    add("close", input(|| Input::Close));
-    add("new-chat", input(|| Input::ShowNewChat));
-    add("unlink", input(|| Input::ConfirmRemoveAccount));
-}
-
-/// Contacts offered in New Chat as (id, name, formatted phone): only people
-/// saved in the address book, so not everyone who has messaged or joined a
-/// group with us.
-fn new_chat_contacts(
-    contacts: &std::collections::HashMap<String, crate::model::Contact>,
-) -> Vec<(String, String, String)> {
-    let mut rows: Vec<_> = contacts
-        .values()
-        .filter_map(|contact| {
-            let phone = crate::util::phone(crate::model::phone_of(&contact.id)?);
-            let name = contact.full_name.as_deref()?.trim();
-            (!name.is_empty()).then(|| (contact.id.clone(), name.to_owned(), phone))
-        })
-        .collect();
-    rows.sort_by_cached_key(|(_, name, _)| name.to_lowercase());
-    rows
-}
-
-fn forwardable_chat(chat: &crate::model::Chat) -> bool {
-    chat.kind != crate::model::ChatKind::Broadcast && chat.can_send()
-}
-
-/// Text a message shows, if any: its body or a media caption.
-fn message_text(message: &crate::model::Message) -> Option<String> {
-    let text = match &message.content {
-        crate::model::Content::Text { text, .. } => Some(text.clone()),
-        crate::model::Content::Image { caption, .. }
-        | crate::model::Content::Video { caption, .. }
-        | crate::model::Content::Document { caption, .. } => caption.clone(),
-        content => content.interactive_lines(),
-    };
-    text.filter(|text| !text.trim().is_empty())
-}
-
-/// WhatsApp-style quick reactions above the message menu. Picking the
-/// reaction already sent removes it; "+" opens the full emoji chooser.
-fn reaction_bar(
-    menu: &gtk::PopoverMenu,
-    parent: &gtk::Widget,
-    rect: gtk::gdk::Rectangle,
-    current: Option<String>,
-    sender: &ComponentSender<NativeApplication>,
-) -> gtk::Box {
-    let bar = gtk::Box::builder()
-        .spacing(2)
-        .css_classes(["zaptide-reactions"])
-        .build();
-    for emoji in ["👍", "❤️", "😂", "😮", "😢", "🙏"] {
-        let chosen = current.as_deref() == Some(emoji);
-        let button = gtk::Button::builder()
-            .label(emoji)
-            .tooltip_text(if chosen { "Remove reaction" } else { emoji })
-            .css_classes(["flat", "circular", "zaptide-reaction"])
-            .build();
-        if chosen {
-            button.add_css_class("chosen");
-        }
-        let (menu, sender) = (menu.clone(), sender.clone());
-        let emoji = if chosen {
-            String::new()
-        } else {
-            emoji.to_owned()
-        };
-        button.connect_clicked(move |_| {
-            menu.popdown();
-            sender.input(Input::ReactSelected(emoji.clone()));
-        });
-        bar.append(&button);
-    }
-    let more = gtk::Button::builder()
-        .icon_name("list-add-symbolic")
-        .tooltip_text("More Reactions")
-        .css_classes(["flat", "circular", "zaptide-reaction"])
-        .build();
-    let (menu, parent, sender) = (menu.clone(), parent.clone(), sender.clone());
-    more.connect_clicked(move |_| {
-        menu.popdown();
-        let sender = sender.clone();
-        let chooser = crate::native_emoji::picker(move |emoji| {
-            sender.input(Input::ReactSelected(emoji.to_owned()));
-        });
-        chooser.set_parent(&parent);
-        chooser.set_pointing_to(Some(&rect));
-        chooser.connect_closed(|chooser| {
-            let chooser = chooser.clone();
-            gtk::glib::idle_add_local_once(move || chooser.unparent());
-        });
-        chooser.popup();
-    });
-    bar.append(&more);
-    bar
 }
 
 /// Runs the native shell and starts the backend only after the first main-context turn.

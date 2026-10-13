@@ -13,6 +13,7 @@ pub mod contact_cards;
 pub mod countries;
 pub mod event_drain;
 pub mod glib_notifier;
+pub mod i18n;
 pub mod message_window;
 pub mod model;
 pub mod native_actions;

@@ -1,4 +1,5 @@
 use super::*;
+use crate::i18n::gettext;
 
 pub(super) fn attach_dropped(application: &mut NativeApplication, paths: Vec<std::path::PathBuf>) {
     let Some(chat) = application
@@ -6,14 +7,14 @@ pub(super) fn attach_dropped(application: &mut NativeApplication, paths: Vec<std
         .clone()
         .filter(|_| application.can_attach())
     else {
-        application.status = "Choose a writable chat before attaching files".into();
+        application.status = gettext("Choose a writable chat before attaching files");
         return;
     };
     if paths.is_empty() {
         return;
     }
     if application.pending_clipboard_images.contains_key(&chat) {
-        application.status = "Clear the staged clipboard image before adding files".into();
+        application.status = gettext("Clear the staged clipboard image before adding files");
         return;
     }
     application
@@ -49,11 +50,11 @@ pub(super) fn pick_attachments(
         return;
     };
     if !application.portal_requests.borrow().is_empty() {
-        application.status = "Finish the active portal action first".into();
+        application.status = gettext("Finish the active portal action first");
         return;
     }
     if application.pending_clipboard_images.contains_key(&chat) {
-        application.status = "Clear the staged clipboard image before adding files".into();
+        application.status = gettext("Clear the staged clipboard image before adding files");
         return;
     }
     let input = sender.clone();
@@ -62,7 +63,7 @@ pub(super) fn pick_attachments(
     let callback_request_id = request_id.clone();
     let (title, filter) = if gallery {
         let filter = gtk::FileFilter::new();
-        filter.set_name(Some("Photos and videos"));
+        filter.set_name(Some(&gettext("Photos and videos")));
         filter.add_mime_type("image/*");
         filter.add_mime_type("video/*");
         ("Gallery", Some(filter))
@@ -105,7 +106,7 @@ pub(super) fn attachments_picked(
         return;
     }
     if application.pending_clipboard_images.contains_key(&chat) {
-        application.status = "Clear the staged clipboard image before adding files".into();
+        application.status = gettext("Clear the staged clipboard image before adding files");
         return;
     }
     application

@@ -1,4 +1,5 @@
 use super::*;
+use crate::i18n::gettext;
 
 impl NativeApplication {
     /// Jumps to the message `message` quotes, loading older history if needed.
@@ -15,7 +16,7 @@ impl NativeApplication {
                 id: quoted_id,
                 before: (message.timestamp, message.id),
             });
-            self.status = "Loading quoted message".into();
+            self.status = gettext("Loading quoted message");
         }
     }
 
@@ -26,13 +27,13 @@ impl NativeApplication {
         self.composer.begin_reply(&chat, message.clone());
         self.reply_to = Some((chat, message));
         self.editing = None;
-        self.status = "Replying to selected message".into();
+        self.status = gettext("Replying to selected message");
         self.focus_composer();
     }
 
     pub(super) fn edit_selected(&mut self) {
         if self.pending_edit.is_some() {
-            self.status = "Saving edit".into();
+            self.status = gettext("Saving edit");
             return;
         }
         let Some((chat, message)) = self.active_chat.clone().zip(self.selected_message_id()) else {
@@ -44,7 +45,7 @@ impl NativeApplication {
             self.draft = text;
             self.composer.begin_edit(&chat, message, self.draft.clone());
             self.composer_buffer.set_text(&self.draft);
-            self.status = "Editing selected message".into();
+            self.status = gettext("Editing selected message");
             self.focus_composer();
         } else {
             self.reply_to = Some((chat.clone(), message.clone()));
@@ -53,7 +54,7 @@ impl NativeApplication {
                 &self.reply_to.as_ref().unwrap().0,
                 self.reply_to.as_ref().unwrap().1.clone(),
             );
-            self.status = "Replying to selected message".into();
+            self.status = gettext("Replying to selected message");
         }
     }
 
@@ -123,7 +124,7 @@ impl NativeApplication {
             self.composer.set_draft(chat, self.draft.clone());
         }
         if self.pending_send.is_some() || self.voice_send_pending() {
-            self.status = "Waiting for previous message.".into();
+            self.status = gettext("Waiting for previous message.");
             return;
         }
         let Some(chat) = self.active_chat.clone() else {
@@ -139,19 +140,19 @@ impl NativeApplication {
             .find(|known| known.id == chat)
             .is_some_and(crate::model::Chat::can_send);
         if !writable {
-            self.status = "This conversation is read-only.".into();
+            self.status = gettext("This conversation is read-only.");
             return;
         }
         if let Some(backend) = &self.backend {
             if attachment_count > 0 && self.editing.is_some() {
-                self.status = "Finish editing before sending attachments.".into();
+                self.status = gettext("Finish editing before sending attachments.");
                 return;
             }
             if let Some((edit_chat, id)) = self.editing.as_ref()
                 && edit_chat == &chat
             {
                 if self.pending_edit.is_some() {
-                    self.status = "Saving edit".into();
+                    self.status = gettext("Saving edit");
                     return;
                 }
                 self.pending_composer_request = self.composer.submit(&chat);
@@ -162,7 +163,7 @@ impl NativeApplication {
                     text: wire.clone(),
                     mentions: mentions.clone(),
                 });
-                self.status = "Saving edit".into();
+                self.status = gettext("Saving edit");
                 return;
             }
             let quote = self
@@ -203,7 +204,7 @@ impl NativeApplication {
                     quoting: quote,
                     mentions: mentions.clone(),
                 });
-                self.status = "Sending attachments".into();
+                self.status = gettext("Sending attachments");
             } else if let Some(image) = self.pending_clipboard_images.get(&chat) {
                 backend.send(crate::backend::Command::SendImage {
                     chat,
@@ -214,7 +215,7 @@ impl NativeApplication {
                     quoting: quote,
                     mentions: mentions.clone(),
                 });
-                self.status = "Sending clipboard image".into();
+                self.status = gettext("Sending clipboard image");
             } else {
                 backend.send(crate::backend::Command::SendText {
                     chat,
@@ -222,13 +223,13 @@ impl NativeApplication {
                     quoting: quote,
                     mentions,
                 });
-                self.status = "Sending message".into();
+                self.status = gettext("Sending message");
             }
             // The pending row shows the message now; a failure restores it.
             self.draft.clear();
             self.composer_buffer.set_text("");
         } else {
-            self.status = "Backend unavailable. Draft kept.".into();
+            self.status = gettext("Backend unavailable. Draft kept.");
         }
     }
 
@@ -289,7 +290,7 @@ impl NativeApplication {
                 view.scroll_to(position as u32, gtk::ListScrollFlags::NONE, None);
             });
         }
-        self.status = "Conversation loaded".into();
+        self.status = gettext("Conversation loaded");
     }
 
     pub(super) fn message_updated(&mut self, message: crate::model::Message) {
@@ -330,7 +331,7 @@ impl NativeApplication {
                 self.composer.cancel_context(&chat);
                 self.composer.set_draft(&chat, self.draft.clone());
                 self.composer_buffer.set_text(&self.draft);
-                self.status = "Message updated".into();
+                self.status = gettext("Message updated");
             }
         } else {
             if let Some(request) = self.pending_composer_request.take() {
@@ -338,7 +339,7 @@ impl NativeApplication {
                 self.composer.complete_edit(&request);
                 self.composer.set_draft(&chat, text);
             }
-            self.status = "Edit could not be saved. Draft kept.".into();
+            self.status = gettext("Edit could not be saved. Draft kept.");
         }
     }
 
@@ -415,7 +416,7 @@ impl NativeApplication {
             {
                 self.reply_to = None;
             }
-            self.status = "Message sent".into();
+            self.status = gettext("Message sent");
         } else {
             // Put the cleared text back; if the user already typed something
             // new, keep the failed text ahead of it instead of dropping it.
@@ -441,7 +442,7 @@ impl NativeApplication {
                     .or_default()
                     .splice(0..0, pending.failed_attachments);
             }
-            self.status = "Message could not be sent. Draft kept.".into();
+            self.status = gettext("Message could not be sent. Draft kept.");
         }
     }
 
@@ -664,7 +665,7 @@ impl NativeApplication {
                 &self.window.clipboard(),
                 &text,
             );
-            self.status = "Transcript copied".into();
+            self.status = gettext("Transcript copied");
         }
     }
 }

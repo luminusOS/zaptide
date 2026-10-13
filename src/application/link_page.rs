@@ -1,4 +1,5 @@
 use crate::backend::LinkStatus;
+use crate::i18n::gettext;
 use gtk::prelude::*;
 use relm4::prelude::*;
 
@@ -81,14 +82,14 @@ impl SimpleComponent for LinkPage {
                 set_show_title: false,
                 pack_start: &init.account_button,
                 pack_start = &gtk::Button {
-                    set_label: "Cancel",
+                    set_label: &gettext("Cancel"),
                     #[watch]
                     set_visible: model.state.can_cancel,
                     connect_clicked[sender] => move |_| sender.output(LinkPageOutput::Cancel).unwrap(),
                 },
                 pack_end = &gtk::MenuButton {
                     set_icon_name: "open-menu-symbolic",
-                    set_tooltip_text: Some("Main menu"),
+                    set_tooltip_text: Some(&gettext("Main menu")),
                     set_menu_model: Some(&init.menu),
                 },
             },
@@ -129,7 +130,7 @@ impl SimpleComponent for LinkPage {
                             set_halign: gtk::Align::Center,
                             set_size_request: (264, 264),
                             set_can_shrink: false,
-                            set_alternative_text: Some("WhatsApp device-linking QR code"),
+                            set_alternative_text: Some(&gettext("WhatsApp device-linking QR code")),
                             #[watch]
                             set_visible: model.state.qr_texture.is_some() && !model.state.phone_linking,
                             #[watch]
@@ -151,7 +152,7 @@ impl SimpleComponent for LinkPage {
                             },
                             append = &gtk::Button {
                                 set_icon_name: "edit-copy-symbolic",
-                                set_tooltip_text: Some("Copy Code"),
+                                set_tooltip_text: Some(&gettext("Copy Code")),
                                 set_valign: gtk::Align::Center,
                                 add_css_class: "flat",
                                 add_css_class: "circular",
@@ -176,7 +177,7 @@ impl SimpleComponent for LinkPage {
                                 #[name = "phone_entry"]
                                 append = &gtk::Entry {
                                     set_hexpand: true,
-                                    set_placeholder_text: Some("Phone number"),
+                                    set_placeholder_text: Some(&gettext("Phone number")),
                                     set_input_purpose: gtk::InputPurpose::Phone,
                                     connect_activate[sender, country_picker] => move |entry| {
                                         let phone = super::international_phone(&country_picker, entry);
@@ -185,7 +186,7 @@ impl SimpleComponent for LinkPage {
                                 },
                             },
                             append = &gtk::Button {
-                                set_label: "Get Code",
+                                set_label: &gettext("Get Code"),
                                 set_halign: gtk::Align::Center,
                                 add_css_class: "pill",
                                 add_css_class: "suggested-action",
@@ -205,7 +206,7 @@ impl SimpleComponent for LinkPage {
                             connect_clicked[sender] => move |_| sender.output(LinkPageOutput::TogglePhoneLinking).unwrap(),
                         },
                         append = &gtk::Button {
-                            set_label: "Try Again",
+                            set_label: &gettext("Try Again"),
                             set_halign: gtk::Align::Center,
                             add_css_class: "pill",
                             add_css_class: "suggested-action",

@@ -1,4 +1,5 @@
 use super::*;
+use crate::i18n::gettext;
 
 impl NativeApplication {
     pub(super) fn voice_send_pending(&self) -> bool {
@@ -236,7 +237,7 @@ impl NativeApplication {
             crate::model::Action::CycleVoiceSpeed => {
                 self.settings.voice_speed = self.audio.media.cycle_speed();
                 if self.save_settings().is_err() {
-                    self.status = "Could not save voice playback speed".into();
+                    self.status = gettext("Could not save voice playback speed");
                 }
                 if let Some(id) = self.audio.playing_audio.clone() {
                     self.refresh_message_row(&id);
@@ -323,13 +324,13 @@ impl NativeApplication {
                         media.state = crate::model::MediaState::Downloading;
                     }
                     backend.send(crate::backend::Command::Download { chat, message });
-                    self.status = "Downloading voice".into();
+                    self.status = gettext("Downloading voice");
                     self.refresh_selected_voice();
                 }
             }
             crate::model::Action::PlayVoice { message, path } => {
                 if self.audio.media.toggle_playback(&message, &path).is_err() {
-                    self.status = "Voice playback could not start.".into();
+                    self.status = gettext("Voice playback could not start.");
                 } else if self.audio.media.is_playing() {
                     self.audio.playing_audio = Some(message.clone());
                 }
@@ -353,7 +354,7 @@ impl NativeApplication {
         } = action
         {
             if self.audio.media.seek(&message, &path, fraction).is_err() {
-                self.status = "Voice playback could not seek".into();
+                self.status = gettext("Voice playback could not seek");
             } else {
                 self.audio.playing_audio = Some(message.clone());
             }
@@ -381,7 +382,7 @@ impl NativeApplication {
             }
             crate::model::Action::CancelRecording => {
                 self.audio.media.cancel_recording();
-                self.status = "Recording canceled".into();
+                self.status = gettext("Recording canceled");
             }
             crate::model::Action::SendRecording => {
                 let Some(samples) = self.audio.media.finish_recording() else {
@@ -403,10 +404,10 @@ impl NativeApplication {
                                 quoting,
                             });
                             self.audio.voice_send_pending = true;
-                            self.status = "Sending voice message".into();
+                            self.status = gettext("Sending voice message");
                         }
                     }
-                    Err(_) => self.status = "Could not record voice message".into(),
+                    Err(_) => self.status = gettext("Could not record voice message"),
                 }
             }
             _ => {}
@@ -415,7 +416,7 @@ impl NativeApplication {
 
     pub(super) fn poll_voice(&mut self, sender: &ComponentSender<Self>) {
         if let Err(error) = self.audio.media.poll() {
-            self.status = "Audio playback could not continue.".into();
+            self.status = gettext("Audio playback could not continue.");
             if let (Some(chat), Some(id)) = (&self.active_chat, &self.audio.playing_audio) {
                 self.audio
                     .audio_errors
@@ -485,7 +486,7 @@ impl NativeApplication {
         if matches!(action, crate::model::Action::CycleVoiceSpeed) {
             self.settings.voice_speed = self.audio.media.cycle_speed();
             if let Err(_error) = self.save_settings() {
-                self.status = "Could not save voice playback speed".into();
+                self.status = gettext("Could not save voice playback speed");
             }
             self.refresh_selected_voice();
         }

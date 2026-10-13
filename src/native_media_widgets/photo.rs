@@ -1,4 +1,5 @@
 use super::*;
+use crate::i18n::gettext;
 
 /// Largest side of a photo in the transcript, in logical pixels.
 const PHOTO_EDGE: u32 = 300;
@@ -202,7 +203,9 @@ fn album_download(
         .valign(gtk::Align::Center)
         .css_classes(["osd", "circular"])
         .build();
-    button.update_property(&[gtk::accessible::Property::Label("Download all photos")]);
+    button.update_property(&[gtk::accessible::Property::Label(&gettext(
+        "Download all photos",
+    ))]);
     button.connect_clicked(move |_| {
         for action in &downloads {
             on_action(action.clone());
@@ -235,10 +238,10 @@ fn append_photo_sized(
             let button = gtk::Button::builder()
                 .child(&frame)
                 .halign(gtk::Align::Start)
-                .tooltip_text("View photo")
+                .tooltip_text(gettext("View photo"))
                 .css_classes(["flat", "zaptide-photo-button"])
                 .build();
-            button.update_property(&[gtk::accessible::Property::Label("View photo")]);
+            button.update_property(&[gtk::accessible::Property::Label(&gettext("View photo"))]);
             let (items, start) = viewer.unwrap_or_else(|| {
                 let item = PhotoItem {
                     path,
@@ -254,7 +257,7 @@ fn append_photo_sized(
         Some(action @ NativeMediaAction::Download { .. }) => {
             let button = gtk::Button::builder()
                 .icon_name("folder-download-symbolic")
-                .tooltip_text("Download photo")
+                .tooltip_text(gettext("Download photo"))
                 .halign(gtk::Align::Center)
                 .valign(gtk::Align::Center)
                 .css_classes(["osd", "circular"])
@@ -359,7 +362,7 @@ pub(super) fn append_video(
                 .tooltip_text(if playable { "Play video" } else { "Open video" })
                 .css_classes(["flat", "zaptide-photo-button"])
                 .build();
-            button.update_property(&[gtk::accessible::Property::Label("Play video")]);
+            button.update_property(&[gtk::accessible::Property::Label(&gettext("Play video"))]);
             let details = ViewerDetails::of(message);
             button.connect_clicked(move |button| {
                 if playable {
@@ -413,8 +416,8 @@ fn show_video(
         .build();
     let failed = adw::StatusPage::builder()
         .icon_name("video-x-generic-symbolic")
-        .title("Can't Play This Video")
-        .description("Open it with another app instead")
+        .title(gettext("Can't Play This Video"))
+        .description(gettext("Open it with another app instead"))
         .build();
     let stack = gtk::Stack::new();
     stack.add_named(&video, Some("video"));
@@ -471,7 +474,7 @@ pub fn show_in_folder(widget: &impl IsA<gtk::Widget>, path: &std::path::Path) {
 fn show_in_folder_button(path: &std::path::Path) -> gtk::Button {
     let button = gtk::Button::builder()
         .icon_name("folder-open-symbolic")
-        .tooltip_text("Show in Folder")
+        .tooltip_text(gettext("Show in Folder"))
         .valign(gtk::Align::Center)
         .build();
     let path = path.to_path_buf();
@@ -537,7 +540,7 @@ pub(super) fn document_card(
         Some(NativeMediaAction::Open(path)) => {
             let open = gtk::Button::builder()
                 .icon_name("adw-external-link-symbolic")
-                .tooltip_text("Open")
+                .tooltip_text(gettext("Open"))
                 .valign(gtk::Align::Center)
                 .build();
             let target = path.clone();
@@ -566,7 +569,7 @@ pub(super) fn document_card(
                 .width_request(24)
                 .height_request(24)
                 .valign(gtk::Align::Center)
-                .tooltip_text("Downloading")
+                .tooltip_text(gettext("Downloading"))
                 .build(),
         ),
     }
@@ -689,7 +692,7 @@ fn open_with_button(
 ) {
     let button = gtk::Button::builder()
         .icon_name("adw-external-link-symbolic")
-        .tooltip_text("Open With Another App")
+        .tooltip_text(gettext("Open With Another App"))
         .build();
     let dialog: std::rc::Rc<std::cell::RefCell<glib::WeakRef<adw::Dialog>>> =
         std::rc::Rc::default();
@@ -718,7 +721,7 @@ fn show_photo(
         .hexpand(true)
         .vexpand(true)
         .build();
-    picture.update_property(&[gtk::accessible::Property::Label("Photo")]);
+    picture.update_property(&[gtk::accessible::Property::Label(&gettext("Photo"))]);
     let scroller = gtk::ScrolledWindow::builder()
         .child(&picture)
         .hscrollbar_policy(gtk::PolicyType::Never)
@@ -726,9 +729,9 @@ fn show_photo(
         .build();
     let zoom = gtk::ToggleButton::builder()
         .icon_name("zoom-original-symbolic")
-        .tooltip_text("Actual Size")
+        .tooltip_text(gettext("Actual Size"))
         .build();
-    zoom.update_property(&[gtk::accessible::Property::Label("Actual Size")]);
+    zoom.update_property(&[gtk::accessible::Property::Label(&gettext("Actual Size"))]);
     {
         let (picture, scroller) = (picture.clone(), scroller.clone());
         zoom.connect_toggled(move |zoom| {
@@ -789,9 +792,9 @@ fn show_photo(
     scroller.add_controller(pan);
     let copy = gtk::Button::builder()
         .icon_name("edit-copy-symbolic")
-        .tooltip_text("Copy Image")
+        .tooltip_text(gettext("Copy Image"))
         .build();
-    copy.update_property(&[gtk::accessible::Property::Label("Copy Image")]);
+    copy.update_property(&[gtk::accessible::Property::Label(&gettext("Copy Image"))]);
     {
         let picture = picture.clone();
         copy.connect_clicked(move |button| {
@@ -806,9 +809,11 @@ fn show_photo(
         std::rc::Rc::default();
     let open = gtk::Button::builder()
         .icon_name("adw-external-link-symbolic")
-        .tooltip_text("Open With Another App")
+        .tooltip_text(gettext("Open With Another App"))
         .build();
-    open.update_property(&[gtk::accessible::Property::Label("Open With Another App")]);
+    open.update_property(&[gtk::accessible::Property::Label(&gettext(
+        "Open With Another App",
+    ))]);
     {
         let (items, current, dialog_ref) = (items.clone(), current.clone(), dialog_ref.clone());
         open.connect_clicked(move |_| {
@@ -820,10 +825,10 @@ fn show_photo(
     }
     let folder = gtk::Button::builder()
         .icon_name("folder-open-symbolic")
-        .tooltip_text("Show in Folder")
+        .tooltip_text(gettext("Show in Folder"))
         .valign(gtk::Align::Center)
         .build();
-    folder.update_property(&[gtk::accessible::Property::Label("Show in Folder")]);
+    folder.update_property(&[gtk::accessible::Property::Label(&gettext("Show in Folder"))]);
     {
         let (items, current) = (items.clone(), current.clone());
         folder.connect_clicked(move |button| show_in_folder(button, &items[current.get()].path));

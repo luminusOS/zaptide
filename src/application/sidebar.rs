@@ -1,3 +1,4 @@
+use crate::i18n::gettext;
 use gtk::prelude::*;
 use relm4::prelude::*;
 
@@ -72,21 +73,21 @@ impl SimpleComponent for Sidebar {
                 set_title_widget = &gtk::Box {},
                 pack_start: &init.account_button,
                 pack_start = &adw::Spinner {
-                    set_tooltip_text: Some("Updating messages"),
+                    set_tooltip_text: Some(&gettext("Updating messages")),
                     #[watch]
                     set_visible: model.state.refreshing,
                 },
                 pack_end = &gtk::MenuButton {
                     set_icon_name: "open-menu-symbolic",
-                    set_tooltip_text: Some("Main menu"),
-                    update_property: &[gtk::accessible::Property::Label("Main menu")],
+                    set_tooltip_text: Some(&gettext("Main menu")),
+                    update_property: &[gtk::accessible::Property::Label(&gettext("Main menu"))],
                     set_primary: true,
                     set_menu_model: Some(&init.menu),
                 },
                 pack_end = &gtk::Button {
                     set_icon_name: "chat-message-new-symbolic",
-                    set_tooltip_text: Some("New chat"),
-                    update_property: &[gtk::accessible::Property::Label("New chat")],
+                    set_tooltip_text: Some(&gettext("New chat")),
+                    update_property: &[gtk::accessible::Property::Label(&gettext("New chat"))],
                     connect_clicked[sender] => move |_| sender.output(SidebarOutput::NewChat).unwrap(),
                 },
             },
@@ -101,15 +102,15 @@ impl SimpleComponent for Sidebar {
                     #[name = "search_entry"]
                     append = &gtk::SearchEntry {
                         set_hexpand: true,
-                        set_placeholder_text: Some("Search chats"),
+                        set_placeholder_text: Some(&gettext("Search chats")),
                         connect_search_changed[sender] => move |entry| {
                             sender.output(SidebarOutput::SearchChats(entry.text().to_string())).unwrap();
                         },
                     },
                     append = &gtk::MenuButton {
                         set_icon_name: "zaptide-filter-symbolic",
-                        set_tooltip_text: Some("Filters"),
-                        update_property: &[gtk::accessible::Property::Label("Filter chats")],
+                        set_tooltip_text: Some(&gettext("Filters")),
+                        update_property: &[gtk::accessible::Property::Label(&gettext("Filter chats"))],
                         #[watch]
                         set_class_active: ("zaptide-filters-active", model.state.filters_active()),
                         #[wrap(Some)]
@@ -123,7 +124,7 @@ impl SimpleComponent for Sidebar {
                                 set_margin_start: 12,
                                 set_margin_end: 12,
                                 append = &gtk::Label {
-                                    set_label: "Chat Type",
+                                    set_label: &gettext("Chat Type"),
                                     set_halign: gtk::Align::Start,
                                     add_css_class: "heading",
                                 },
@@ -138,9 +139,9 @@ impl SimpleComponent for Sidebar {
                                         #[wrap(Some)]
                                         set_child = &adw::ButtonContent {
                                             set_icon_name: "view-list-bullet-symbolic",
-                                            set_label: "All",
+                                            set_label: &gettext("All"),
                                         },
-                                        update_property: &[gtk::accessible::Property::Label("All")],
+                                        update_property: &[gtk::accessible::Property::Label(&gettext("All"))],
                                         #[watch]
                                         set_active: !model.state.filters.private_only && !model.state.filters.groups_only,
                                         #[watch]
@@ -151,9 +152,9 @@ impl SimpleComponent for Sidebar {
                                         #[wrap(Some)]
                                         set_child = &adw::ButtonContent {
                                             set_icon_name: "avatar-default-symbolic",
-                                            set_label: "Private",
+                                            set_label: &gettext("Private"),
                                         },
-                                        update_property: &[gtk::accessible::Property::Label("Private")],
+                                        update_property: &[gtk::accessible::Property::Label(&gettext("Private"))],
                                         set_group: Some(&all_filter),
                                         #[watch]
                                         set_active: model.state.filters.private_only,
@@ -165,9 +166,9 @@ impl SimpleComponent for Sidebar {
                                         #[wrap(Some)]
                                         set_child = &adw::ButtonContent {
                                             set_icon_name: "system-users-symbolic",
-                                            set_label: "Groups",
+                                            set_label: &gettext("Groups"),
                                         },
-                                        update_property: &[gtk::accessible::Property::Label("Groups")],
+                                        update_property: &[gtk::accessible::Property::Label(&gettext("Groups"))],
                                         set_group: Some(&all_filter),
                                         #[watch]
                                         set_active: model.state.filters.groups_only,
@@ -177,7 +178,7 @@ impl SimpleComponent for Sidebar {
                                     },
                                 },
                                 append = &gtk::Label {
-                                    set_label: "Show Only",
+                                    set_label: &gettext("Show Only"),
                                     set_halign: gtk::Align::Start,
                                     add_css_class: "heading",
                                 },
@@ -191,9 +192,9 @@ impl SimpleComponent for Sidebar {
                                         #[wrap(Some)]
                                         set_child = &adw::ButtonContent {
                                             set_icon_name: "mail-unread-symbolic",
-                                            set_label: "Unread",
+                                            set_label: &gettext("Unread"),
                                         },
-                                        update_property: &[gtk::accessible::Property::Label("Unread")],
+                                        update_property: &[gtk::accessible::Property::Label(&gettext("Unread"))],
                                         #[watch]
                                         set_active: model.state.filters.unread_only,
                                         #[watch]
@@ -204,9 +205,9 @@ impl SimpleComponent for Sidebar {
                                         #[wrap(Some)]
                                         set_child = &adw::ButtonContent {
                                             set_icon_name: "view-pin-symbolic",
-                                            set_label: "Pinned",
+                                            set_label: &gettext("Pinned"),
                                         },
-                                        update_property: &[gtk::accessible::Property::Label("Pinned")],
+                                        update_property: &[gtk::accessible::Property::Label(&gettext("Pinned"))],
                                         #[watch]
                                         set_active: model.state.filters.pinned_only,
                                         #[watch]
@@ -217,9 +218,9 @@ impl SimpleComponent for Sidebar {
                                         #[wrap(Some)]
                                         set_child = &adw::ButtonContent {
                                             set_icon_name: "notifications-disabled-symbolic",
-                                            set_label: "Muted",
+                                            set_label: &gettext("Muted"),
                                         },
-                                        update_property: &[gtk::accessible::Property::Label("Muted")],
+                                        update_property: &[gtk::accessible::Property::Label(&gettext("Muted"))],
                                         #[watch]
                                         set_active: model.state.filters.muted == crate::native_chat_list::MutedFilter::Only,
                                         #[watch]
@@ -248,7 +249,7 @@ impl SimpleComponent for Sidebar {
                         },
                         add = adw::Toggle {
                             set_name: Some("archived"),
-                            set_label: Some("Archived"),
+                            set_label: Some(&gettext("Archived")),
                             set_tooltip: "Archived",
                             #[wrap(Some)]
                             set_child = &gtk::Box {

@@ -1,5 +1,6 @@
 use super::*;
 use crate::contact_cards::{ContactCard, MAX_VCARD_BYTES};
+use crate::i18n::gettext;
 use std::{cell::RefCell, rc::Rc};
 
 #[derive(Clone)]
@@ -19,7 +20,9 @@ impl std::fmt::Debug for ShareTarget {
 impl NativeApplication {
     pub(super) fn show_contact_picker(&mut self, sender: &ComponentSender<Self>) {
         if !self.can_attach() || !self.link.is_connected() {
-            self.toast("Choose a writable chat while connected to share a contact");
+            self.toast(&gettext(
+                "Choose a writable chat while connected to share a contact",
+            ));
             return;
         }
         let Some(chat) = self
@@ -57,7 +60,9 @@ impl NativeApplication {
 
     pub(super) fn share_contact(&mut self, target: ShareTarget, contact: ContactCard) {
         if !self.valid_contact_target(&target) {
-            self.toast("Contact not sent: the conversation or linked account changed");
+            self.toast(&gettext(
+                "Contact not sent: the conversation or linked account changed",
+            ));
             return;
         }
         if let Some(backend) = &self.backend {
@@ -66,9 +71,9 @@ impl NativeApplication {
                 contact,
                 quoting: target.quoting,
             });
-            self.status = "Sending contact".into();
+            self.status = gettext("Sending contact");
         } else {
-            self.toast("Backend unavailable");
+            self.toast(&gettext("Backend unavailable"));
         }
     }
 
@@ -77,11 +82,11 @@ impl NativeApplication {
             return;
         }
         if !self.portal_requests.borrow().is_empty() {
-            self.toast("Finish the active file chooser first");
+            self.toast(&gettext("Finish the active file chooser first"));
             return;
         }
         let filter = gtk::FileFilter::new();
-        filter.set_name(Some("Contact cards (.vcf)"));
+        filter.set_name(Some(&gettext("Contact cards (.vcf)")));
         filter.add_mime_type("text/vcard");
         filter.add_mime_type("text/x-vcard");
         filter.add_pattern("*.vcf");
@@ -117,7 +122,7 @@ impl NativeApplication {
             slot.set(Some(id));
             self.portal_requests.borrow_mut().insert(id);
         } else {
-            self.toast("Could not open the contact file chooser");
+            self.toast(&gettext("Could not open the contact file chooser"));
         }
     }
 
@@ -140,7 +145,7 @@ impl NativeApplication {
 
     pub(super) fn open_contact(&mut self, contact: ContactCard, sender: &ComponentSender<Self>) {
         if !self.portal_requests.borrow().is_empty() {
-            self.toast("Finish the active file chooser first");
+            self.toast(&gettext("Finish the active file chooser first"));
             return;
         }
         let input = sender.clone();
@@ -178,7 +183,7 @@ impl NativeApplication {
             slot.set(Some(id));
             self.portal_requests.borrow_mut().insert(id);
         } else {
-            self.toast("Could not open the contact save dialog");
+            self.toast(&gettext("Could not open the contact save dialog"));
         }
     }
 }
@@ -236,7 +241,7 @@ fn show_picker(
     sender: &relm4::Sender<Input>,
 ) -> adw::Dialog {
     let dialog = adw::Dialog::builder()
-        .title("Share Contact")
+        .title(gettext("Share Contact"))
         .content_width(400)
         .content_height(540)
         .build();
@@ -260,22 +265,28 @@ fn show_picker(
     if allow_import && !contacts.is_empty() {
         let import = import_button("");
         import.set_icon_name("document-open-symbolic");
-        import.set_tooltip_text(Some("Import vCard File…"));
-        import.update_property(&[gtk::accessible::Property::Label("Import vCard File…")]);
+        import.set_tooltip_text(Some(&gettext("Import vCard File…")));
+        import.update_property(&[gtk::accessible::Property::Label(&gettext(
+            "Import vCard File…",
+        ))]);
         header.pack_start(&import);
     }
     let search = gtk::SearchEntry::builder()
-        .placeholder_text("Search names or phone numbers")
+        .placeholder_text(gettext("Search names or phone numbers"))
         .margin_start(12)
         .margin_end(12)
         .margin_bottom(6)
         .visible(!contacts.is_empty())
         .build();
-    search.update_property(&[gtk::accessible::Property::Label("Search contacts")]);
+    search.update_property(&[gtk::accessible::Property::Label(&gettext(
+        "Search contacts",
+    ))]);
     let no_contacts = adw::StatusPage::builder()
         .icon_name("avatar-default-symbolic")
-        .title("No Saved Contacts")
-        .description("Saved contacts appear here after syncing with your phone.")
+        .title(gettext("No Saved Contacts"))
+        .description(gettext(
+            "Saved contacts appear here after syncing with your phone.",
+        ))
         .css_classes(["compact"])
         .build();
     if allow_import {
@@ -286,8 +297,8 @@ fn show_picker(
     }
     let no_results = adw::StatusPage::builder()
         .icon_name("edit-find-symbolic")
-        .title("No Results Found")
-        .description("Try a different name or phone number.")
+        .title(gettext("No Results Found"))
+        .description(gettext("Try a different name or phone number."))
         .css_classes(["compact"])
         .build();
     let list = gtk::ListBox::builder()
@@ -414,7 +425,7 @@ fn show_preview(
     picker: gtk::glib::WeakRef<adw::Dialog>,
 ) -> adw::Dialog {
     let dialog = adw::Dialog::builder()
-        .title("Send Contact")
+        .title(gettext("Send Contact"))
         .content_width(400)
         .build();
     let header = adw::HeaderBar::builder()
@@ -425,8 +436,8 @@ fn show_preview(
         .show_start_title_buttons(false)
         .show_end_title_buttons(false)
         .build();
-    let cancel = gtk::Button::with_label("Cancel");
-    let send = gtk::Button::with_label("Send");
+    let cancel = gtk::Button::with_label(&gettext("Cancel"));
+    let send = gtk::Button::with_label(&gettext("Send"));
     send.add_css_class("suggested-action");
     header.pack_start(&cancel);
     header.pack_end(&send);

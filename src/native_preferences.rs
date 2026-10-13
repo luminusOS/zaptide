@@ -5,6 +5,7 @@
 //! preferences, so they are not invented here. Secret values are write-only:
 //! snapshots expose whether they are configured, never their contents.
 
+use crate::i18n::gettext;
 use crate::settings::{Settings, ThemeChoice};
 
 /// Existing JSON field that persists a control.
@@ -358,7 +359,7 @@ impl NativePreferencesDialog {
 
         let open_themes_folder = gtk4::Button::builder()
             .icon_name("folder-open-symbolic")
-            .tooltip_text("Open Themes Folder")
+            .tooltip_text(gettext("Open Themes Folder"))
             .valign(gtk4::Align::Center)
             .css_classes(["flat"])
             .build();
@@ -455,7 +456,7 @@ impl NativePreferencesDialog {
         });
         lock_set.set_valign(gtk4::Align::Center);
         set_accessible_label(&lock_set, "Set locked chats code");
-        lock_set.set_tooltip_text(Some("Set or change locked chats code"));
+        lock_set.set_tooltip_text(Some(&gettext("Set or change locked chats code")));
         lock_row.add_suffix(&lock_set);
         {
             let change_sink = change_sink.clone();
@@ -477,11 +478,11 @@ impl NativePreferencesDialog {
             });
         }
         if preferences.privacy.chat_lock_configured {
-            let clear = gtk4::Button::with_label("Remove…");
+            let clear = gtk4::Button::with_label(&gettext("Remove…"));
             clear.set_valign(gtk4::Align::Center);
             clear.add_css_class("destructive-action");
             set_accessible_label(&clear, "Remove locked chats code");
-            clear.set_tooltip_text(Some("Remove locked chats code"));
+            clear.set_tooltip_text(Some(&gettext("Remove locked chats code")));
             let change_sink = change_sink.clone();
             let parent = dialog.downgrade();
             clear.connect_clicked(move |_| {
@@ -492,8 +493,8 @@ impl NativePreferencesDialog {
                     Some("Remove locked chats code?"),
                     Some("Locked chats will no longer require this code."),
                 );
-                alert.add_response("cancel", "Cancel");
-                alert.add_response("remove", "Remove");
+                alert.add_response("cancel", &gettext("Cancel"));
+                alert.add_response("remove", &gettext("Remove"));
                 alert
                     .set_response_appearance("remove", libadwaita::ResponseAppearance::Destructive);
                 alert.set_close_response("cancel");
@@ -731,8 +732,8 @@ fn present_secret_entry(
     let alert = libadwaita::AlertDialog::new(Some(heading), Some(body));
     alert.set_extra_child(Some(&entry));
     alert.set_focus(Some(&entry));
-    alert.add_response("cancel", "Cancel");
-    alert.add_response("save", "Save");
+    alert.add_response("cancel", &gettext("Cancel"));
+    alert.add_response("save", &gettext("Save"));
     alert.set_close_response("cancel");
     alert.set_default_response(Some("save"));
     alert.set_response_enabled("save", false);

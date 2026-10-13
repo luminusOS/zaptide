@@ -38,8 +38,8 @@ chmod +x ./quick-sharun
 
 export OUTPATH=./dist
 export OUTNAME="zaptide-${VERSION:-dev}-$ARCH.AppImage"
-export ICON=packaging/icons/zaptide.svg
-export DESKTOP=packaging/applications/dev.luminusos.ZapTide.desktop
+export ICON=data/icons/zaptide.svg
+export DESKTOP=data/dev.luminusos.ZapTide.desktop
 export STARTUPWMCLASS=dev.luminusos.ZapTide
 export GTK_CLASS_FIX=1
 

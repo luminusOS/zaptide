@@ -1,4 +1,5 @@
 use super::*;
+use crate::i18n::gettext;
 
 /// Stickers draw without a card, as on the phone. Until the file downloads,
 /// a dim label keeps the row from collapsing.
@@ -8,7 +9,7 @@ pub(super) fn append_sticker(
     token: &DecodeToken,
 ) {
     let Some(path) = path else {
-        let label = gtk::Label::new(Some("Sticker"));
+        let label = gtk::Label::new(Some(&gettext("Sticker")));
         label.set_xalign(0.0);
         label.add_css_class("dim-label");
         parent.append(&label);
@@ -17,9 +18,9 @@ pub(super) fn append_sticker(
     let sticker = gtk::Image::new();
     sticker.set_pixel_size(160);
     sticker.set_halign(gtk::Align::Start);
-    sticker.update_property(&[gtk::accessible::Property::Label("Sticker")]);
+    sticker.update_property(&[gtk::accessible::Property::Label(&gettext("Sticker"))]);
     // Keep the space reserved while decoding so the transcript does not jump.
-    sticker.set_tooltip_text(Some("Sticker"));
+    sticker.set_tooltip_text(Some(&gettext("Sticker")));
     parent.append(&sticker);
     start_sticker_decode(sticker.downgrade(), path, token.issue());
 }
@@ -152,7 +153,7 @@ fn start_sticker_decode(
                     // Same fallback as a sticker without a file.
                     image.set_visible(false);
                     if let Some(parent) = image.parent().and_downcast::<gtk::Box>() {
-                        let label = gtk::Label::new(Some("Sticker"));
+                        let label = gtk::Label::new(Some(&gettext("Sticker")));
                         label.set_xalign(0.0);
                         label.add_css_class("dim-label");
                         parent.append(&label);

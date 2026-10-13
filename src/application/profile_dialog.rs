@@ -1,6 +1,7 @@
 //! The signed-in account's own profile: picture, name, and About text.
 
 use crate::backend::{PictureEdit, ProfileEdit};
+use crate::i18n::gettext;
 use relm4::adw::prelude::*;
 use relm4::{adw, gtk};
 use std::{cell::RefCell, rc::Rc};
@@ -65,11 +66,11 @@ impl ProfileDialog {
                 .as_ref(),
         );
         let change = gtk::Button::builder()
-            .label("Change Photo…")
+            .label(gettext("Change Photo…"))
             .css_classes(["pill"])
             .build();
         let remove = gtk::Button::builder()
-            .label("Remove")
+            .label(gettext("Remove"))
             .css_classes(["pill", "destructive-action"])
             .visible(init.picture.is_some())
             .build();
@@ -80,9 +81,9 @@ impl ProfileDialog {
         photo_buttons.append(&change);
         photo_buttons.append(&remove);
 
-        let name = adw::EntryRow::builder().title("Name").build();
+        let name = adw::EntryRow::builder().title(gettext("Name")).build();
         name.set_text(&init.name);
-        let about = adw::EntryRow::builder().title("About").build();
+        let about = adw::EntryRow::builder().title(gettext("About")).build();
         let group = adw::PreferencesGroup::new();
         group.add(&name);
         group.add(&about);
@@ -90,11 +91,13 @@ impl ProfileDialog {
             .xalign(0.0)
             .wrap(true)
             .css_classes(["dim-label", "caption"])
-            .label("Your name and About text are visible to your contacts.")
+            .label(gettext(
+                "Your name and About text are visible to your contacts.",
+            ))
             .build();
 
         let save = gtk::Button::builder()
-            .label("Save")
+            .label(gettext("Save"))
             .css_classes(["suggested-action", "pill"])
             .halign(gtk::Align::Center)
             .sensitive(false)
@@ -123,7 +126,7 @@ impl ProfileDialog {
         toolbar.add_top_bar(&header);
         toolbar.set_content(Some(&scroller));
         let dialog = adw::Dialog::builder()
-            .title("Profile")
+            .title(gettext("Profile"))
             .content_width(440)
             .content_height(520)
             .child(&toolbar)
@@ -172,12 +175,12 @@ impl ProfileDialog {
             );
             change.connect_clicked(move |_| {
                 let images = gtk::FileFilter::new();
-                images.set_name(Some("Images"));
+                images.set_name(Some(&gettext("Images")));
                 images.add_mime_type("image/*");
                 let filters = gtk::gio::ListStore::new::<gtk::FileFilter>();
                 filters.append(&images);
                 let chooser = gtk::FileDialog::builder()
-                    .title("Choose a Profile Photo")
+                    .title(gettext("Choose a Profile Photo"))
                     .filters(&filters)
                     .build();
                 let parent = dialog.root().and_downcast::<gtk::Window>();
