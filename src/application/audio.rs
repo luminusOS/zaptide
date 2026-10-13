@@ -235,7 +235,7 @@ impl NativeApplication {
             }
             crate::model::Action::CycleVoiceSpeed => {
                 self.settings.voice_speed = self.audio.media.cycle_speed();
-                if self.settings.save(&self.settings_path).is_err() {
+                if self.save_settings().is_err() {
                     self.status = "Could not save voice playback speed".into();
                 }
                 if let Some(id) = self.audio.playing_audio.clone() {
@@ -484,7 +484,7 @@ impl NativeApplication {
         };
         if matches!(action, crate::model::Action::CycleVoiceSpeed) {
             self.settings.voice_speed = self.audio.media.cycle_speed();
-            if let Err(_error) = self.settings.save(&self.settings_path) {
+            if let Err(_error) = self.save_settings() {
                 self.status = "Could not save voice playback speed".into();
             }
             self.refresh_selected_voice();

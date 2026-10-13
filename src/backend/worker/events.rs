@@ -323,6 +323,7 @@ impl Worker {
             E::SelfPushNameUpdated(update) => {
                 self.me_name = Some(update.new_name.clone());
                 let _ = self.archive.set_meta("me_name", &update.new_name);
+                self.emit_profile();
             }
             E::OfflineSyncCompleted(_) => self.emit_chats(),
             _ => {}

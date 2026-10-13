@@ -135,7 +135,8 @@ impl SimpleComponent for TranscriptView {
                         set_tooltip_text: Some("Go to latest message"),
                         update_property: &[gtk::accessible::Property::Label("Go to latest message")],
                         add_css_class: "circular",
-                        add_css_class: "osd",
+                        add_css_class: "suggested-action",
+                        add_css_class: "zaptide-jump-button",
                         #[watch]
                         set_visible: model.away_from_end && !model.state.recent_messages_pending,
                         connect_clicked[sender] => move |_| sender.output(TranscriptViewOutput::ScrollToRecentMessages).unwrap(),

@@ -28,22 +28,119 @@ fn plaintext(path: &Path) -> Result<bool> {
 pub(super) fn key_for(path: &Path) -> Result<Zeroizing<[u8; 32]>> {
     let parent = path.parent().context("Archive has no parent directory")?;
     fs::create_dir_all(parent)?;
-    // Separate profiles must not overwrite each other's keys. The credential
-    // label contains a digest, never a user path, phone number or message data.
+    let identity = identity_for(parent)?;
+    let entry = store()?
+        .build(KEYRING_SERVICE, &identity, None)
+        .context("The OS keyring could not open ZapTide's archive key")?;
+    key_from_entry(path, &entry)
+}
+
+fn store() -> Result<std::sync::Arc<zbus_secret_service_keyring_store::Store>> {
+    zbus_secret_service_keyring_store::Store::new()
+        .context("Unlock your OS keyring and restart ZapTide")
+}
+
+/// Separate profiles must not overwrite each other's keys. The credential
+/// label contains a digest, never a user path, phone number or message data.
+fn identity_for(parent: &Path) -> Result<String> {
     let digest = Sha256::digest(parent.canonicalize()?.as_os_str().as_encoded_bytes());
-    let identity = format!(
+    Ok(format!(
         "archive-{}",
         digest
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>()
-    );
-    let store = zbus_secret_service_keyring_store::Store::new();
-    let store = store.context("Unlock your OS keyring and restart ZapTide")?;
-    let entry = store
-        .build(KEYRING_SERVICE, &identity, None)
+    ))
+}
+
+/// The keyring identity of the archive at `path`, while its folder exists.
+pub fn archive_key_identity(path: &Path) -> Result<String> {
+    identity_for(path.parent().context("Archive has no parent directory")?)
+}
+
+/// Copies an encrypted archive's key to the identity of `new_archive`'s
+/// folder and reads it back, so the archive can move there.
+pub fn copy_archive_key(old_archive: &Path, new_archive: &Path) -> Result<()> {
+    if plaintext(old_archive)? {
+        return Ok(());
+    }
+    copy_archive_key_in(old_archive, new_archive, &*store()?)
+}
+
+fn copy_archive_key_in(
+    old_archive: &Path,
+    new_archive: &Path,
+    store: &dyn CredentialStoreApi,
+) -> Result<()> {
+    let old_parent = old_archive
+        .parent()
+        .context("Archive has no parent directory")?;
+    let new_parent = new_archive
+        .parent()
+        .context("Archive has no parent directory")?;
+    if !old_parent.exists() {
+        return Ok(());
+    }
+    fs::create_dir_all(new_parent)?;
+    if old_parent.canonicalize()? == new_parent.canonicalize()? {
+        return Ok(());
+    }
+    let old_entry = store
+        .build(KEYRING_SERVICE, &identity_for(old_parent)?, None)
         .context("The OS keyring could not open ZapTide's archive key")?;
-    key_from_entry(path, &entry)
+    let key = match old_entry.get_secret() {
+        Ok(secret) => {
+            let secret = Zeroizing::new(secret);
+            ensure!(
+                secret.len() == 32,
+                "The archive key in the OS keyring is invalid"
+            );
+            let mut key = Zeroizing::new([0; 32]);
+            key.copy_from_slice(&secret);
+            key
+        }
+        Err(keyring_core::Error::NoEntry) => {
+            ensure!(
+                plaintext(old_archive)?,
+                "The archive is encrypted but its OS keyring key is missing. Restore the original keyring; the archive has not been changed"
+            );
+            return Ok(());
+        }
+        Err(error) => return Err(error).context("Unlock your OS keyring and restart ZapTide"),
+    };
+    let new_entry = store
+        .build(KEYRING_SERVICE, &identity_for(new_parent)?, None)
+        .context("The OS keyring could not open ZapTide's archive key")?;
+    new_entry
+        .set_secret(key.as_ref())
+        .context("Could not save the archive key in the OS keyring")?;
+    // Read back before the only copy of the history moves under this key.
+    let saved = Zeroizing::new(
+        new_entry
+            .get_secret()
+            .context("Could not verify the copied archive key")?,
+    );
+    ensure!(
+        saved.as_slice() == key.as_ref(),
+        "The OS keyring did not retain the copied archive key"
+    );
+    Ok(())
+}
+
+/// Deletes the keyring entry of an archive folder that is gone for good,
+/// such as a removed account's. Never call it while the archive is in use.
+pub fn forget_archive_key(identity: &str) -> Result<()> {
+    forget_archive_key_in(identity, &*store()?)
+}
+
+fn forget_archive_key_in(identity: &str, store: &dyn CredentialStoreApi) -> Result<()> {
+    let entry = store
+        .build(KEYRING_SERVICE, identity, None)
+        .context("The OS keyring could not open ZapTide's archive key")?;
+    match entry.delete_credential() {
+        Ok(()) | Err(keyring_core::Error::NoEntry) => Ok(()),
+        Err(error) => Err(error).context("Could not delete the archive key from the OS keyring"),
+    }
 }
 
 fn key_from_entry(path: &Path, entry: &keyring_core::Entry) -> Result<Zeroizing<[u8; 32]>> {
@@ -202,6 +299,73 @@ mod tests {
     fn keyring_service_is_isolated_from_zapfast() {
         assert_eq!(KEYRING_SERVICE, "dev.luminusos.ZapTide");
         assert_ne!(KEYRING_SERVICE, "rocks.zapfast.ZapFast");
+    }
+
+    #[test]
+    fn identity_differs_per_archive_folder_and_reveals_no_path() {
+        let directory = directory();
+        let one = directory.path().join("1/archive.db");
+        let two = directory.path().join("2/archive.db");
+        fs::create_dir_all(one.parent().unwrap()).unwrap();
+        fs::create_dir_all(two.parent().unwrap()).unwrap();
+        let first = archive_key_identity(&one).unwrap();
+        assert_ne!(first, archive_key_identity(&two).unwrap());
+        assert!(first.starts_with("archive-") && !first.contains('/'));
+    }
+
+    #[test]
+    fn copying_the_key_of_a_plaintext_archive_needs_no_keyring() {
+        let directory = directory();
+        let old = directory.path().join("archive.db");
+        fs::write(&old, b"SQLite format 3\0rest").unwrap();
+        copy_archive_key(&old, &directory.path().join("accounts/1/archive.db")).unwrap();
+    }
+
+    #[test]
+    fn an_encrypted_archive_key_is_copied_and_read_back() {
+        let directory = directory();
+        let old = directory.path().join("archive.db");
+        let new = directory.path().join("accounts/1/archive.db");
+        fs::write(&old, [7u8; 64]).unwrap();
+        let store = keyring_core::mock::Store::new().unwrap();
+        let old_identity = archive_key_identity(&old).unwrap();
+        store
+            .build(KEYRING_SERVICE, &old_identity, None)
+            .unwrap()
+            .set_secret(&[9u8; 32])
+            .unwrap();
+        copy_archive_key_in(&old, &new, &*store).unwrap();
+        let new_identity = archive_key_identity(&new).unwrap();
+        let copied = store
+            .build(KEYRING_SERVICE, &new_identity, None)
+            .unwrap()
+            .get_secret()
+            .unwrap();
+        assert_eq!(copied, vec![9u8; 32]);
+        forget_archive_key_in(&new_identity, &*store).unwrap();
+        assert!(matches!(
+            store
+                .build(KEYRING_SERVICE, &new_identity, None)
+                .unwrap()
+                .get_secret(),
+            Err(keyring_core::Error::NoEntry)
+        ));
+        forget_archive_key_in(&new_identity, &*store).unwrap();
+    }
+
+    #[test]
+    fn an_encrypted_archive_without_its_key_is_not_copied() {
+        let directory = directory();
+        let old = directory.path().join("archive.db");
+        fs::write(&old, [7u8; 64]).unwrap();
+        let store = keyring_core::mock::Store::new().unwrap();
+        let error = copy_archive_key_in(
+            &old,
+            &directory.path().join("accounts/1/archive.db"),
+            &*store,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("missing"));
     }
 
     fn read_secret(connection: &Connection) -> String {

@@ -1,5 +1,7 @@
 //! Relm4 root shell: link page, chat list, and conversation.
 
+mod account_switcher;
+mod accounts;
 mod albums;
 mod audio;
 mod chats;
@@ -12,6 +14,7 @@ mod dispatch;
 mod link_page;
 mod linking;
 mod presentation;
+mod profile_dialog;
 mod rows;
 mod sidebar;
 mod transcript_view;
@@ -20,7 +23,7 @@ use albums::{AlbumRole, album_roles};
 use composer::{
     ComposerState, ComposerView, ComposerViewInit, ComposerViewInput, ComposerViewOutput,
 };
-use dialogs::{attach_tile, show_archive_confirmation, show_unlink_confirmation};
+use dialogs::{attach_tile, show_archive_confirmation, show_remove_account_confirmation};
 use dialogs::{
     show_chat_info_dialog, show_forward_dialog, show_mention_dialog, show_new_chat_dialog,
     show_poll_dialog, sticker_picker_content,
@@ -148,6 +151,10 @@ enum ChatChange {
 }
 
 enum NativeEvent {
+    Profile {
+        phone: Option<String>,
+        name: Option<String>,
+    },
     Link(LinkStatus),
     Syncing(bool),
     Chats(Vec<crate::model::Chat>),
@@ -189,6 +196,9 @@ enum NativeEvent {
     ContactAbout {
         id: String,
         about: Option<String>,
+    },
+    ProfileSaved {
+        error: Option<String>,
     },
     Info(String),
     Error(String),
@@ -469,12 +479,29 @@ pub struct NativeApplication {
     backend: Option<Backend>,
     notifications: crate::native_notifications::NativeNotifications,
     notifier: EventNotifier,
-    _event_drain: GlibEventDrain,
+    /// The active account's event drain; hidden accounts keep their own.
+    active_drain: Option<GlibEventDrain>,
+    /// Linked accounts that are not on screen.
+    accounts: std::collections::HashMap<crate::account::AccountId, accounts::AccountSession>,
+    active_account: crate::account::AccountId,
+    active_dirs: AppDirs,
+    base_dirs: AppDirs,
+    registry: crate::account::Registry,
+    /// The single-account files could not move into their folder yet.
+    legacy_layout: bool,
+    account_switcher: account_switcher::AccountSwitcher,
+    /// The same, on the link page of an account that cannot be used.
+    link_switcher: account_switcher::AccountSwitcher,
+    /// An account being linked, and the one to return to if it is cancelled.
+    pending_account: Option<(crate::account::AccountId, crate::account::AccountId)>,
+    /// The account whose removal waits for its logout.
+    removing: Option<crate::account::AccountId>,
     shutdown_started: bool,
     chats: TypedListView<ChatRow, gtk::SingleSelection>,
     chat_projection: crate::native_chat_list::ChatListProjection,
     chat_filters: crate::native_chat_list::ChatListFilters,
     chat_ids: Vec<String>,
+    chat_targets: std::rc::Rc<std::cell::RefCell<chats::ChatTargets>>,
     chat_snapshots: Vec<crate::model::Chat>,
     contacts: std::collections::HashMap<String, crate::model::Contact>,
     contact_share_generation: u64,
@@ -558,6 +585,7 @@ pub struct NativeApplication {
         std::cell::RefCell<std::collections::HashSet<crate::native_portals::RequestId>>,
     >,
     preferences: Option<crate::native_preferences::NativePreferencesDialog>,
+    profile_dialog: Option<profile_dialog::ProfileDialog>,
     sidebar: relm4::Controller<Sidebar>,
     sidebar_visible: bool,
     split_view: Option<adw::NavigationSplitView>,
@@ -579,10 +607,17 @@ pub enum Input {
     /// as its back button does.
     SidebarShown(bool),
     StartBackend,
-    BackendReady,
-    SelectChat(u32),
+    BackendReady(crate::account::AccountId),
+    SwitchAccount(crate::account::AccountId),
+    AddAccount,
+    ShowProfile,
+    SaveProfile(crate::backend::ProfileEdit),
+    CancelAddAccount,
+    ConfirmRemoveAccount,
+    SelectChat(crate::account::AccountId, String),
     HighlightChat(u32),
     OpenChatId(String),
+    OpenAccountChat(crate::account::AccountId, String),
     ScrollToRecentMessages,
     TranscriptAtEnd,
     LoadOlder,
@@ -944,22 +979,42 @@ impl SimpleComponent for NativeApplication {
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         let icon_dir = init.dirs.icon_dir();
+        let base_dirs = init.dirs.clone();
+        let prepared = crate::account::prepare(
+            &base_dirs,
+            &crate::settings::Settings::load(&base_dirs.settings_file()),
+        );
+        let legacy_layout = prepared.legacy;
+        let registry = prepared.registry;
+        let active_account = registry.active.unwrap_or(crate::account::AccountId::FIRST);
+        let active_dirs = if legacy_layout {
+            base_dirs.clone()
+        } else {
+            base_dirs.for_account(active_account)
+        };
+        if let Err(error) = active_dirs.ensure() {
+            log::error!("could not prepare the account folder: {error}");
+        }
         let (notifier, drain) = EventNotifier::new();
         let input = sender.clone();
         let event_drain = GlibEventDrain::install(
             &notifier,
             drain,
             gtk::glib::MainContext::default(),
-            move || input.input(Input::BackendReady),
+            move || input.input(Input::BackendReady(active_account)),
         );
         let notification_sender = sender.clone();
         let application: gtk::Application = relm4::main_application().upcast();
-        let notifications =
-            crate::native_notifications::NativeNotifications::new(&application, move |chat| {
-                notification_sender.input(Input::OpenChatId(chat))
-            });
+        let notifications = crate::native_notifications::NativeNotifications::new(
+            &application,
+            move |account, chat| notification_sender.input(Input::OpenAccountChat(account, chat)),
+        );
         let chats: TypedListView<ChatRow, gtk::SingleSelection> = TypedListView::new();
+        let chat_targets = std::rc::Rc::new(std::cell::RefCell::new(chats::ChatTargets::default()));
         let chat_view = &chats.view.clone();
+        // Nothing is highlighted until a chat is opened or picked with the keys.
+        chats.selection_model.set_autoselect(false);
+        chats.selection_model.set_can_unselect(true);
         let selection_sender = sender.clone();
         let observed_selection = chats.selection_model.clone();
         chats
@@ -974,6 +1029,7 @@ impl SimpleComponent for NativeApplication {
         chat_keys.set_propagation_phase(gtk::PropagationPhase::Capture);
         let chat_selection = chats.selection_model.clone();
         let chat_key_sender = sender.clone();
+        let key_targets = chat_targets.clone();
         chat_keys.connect_key_pressed(move |_, key, _, _| {
             let selected = chat_selection.selected();
             let count = chat_selection.n_items();
@@ -1004,18 +1060,31 @@ impl SimpleComponent for NativeApplication {
                     } else {
                         selected.min(count - 1)
                     };
-                    chat_key_sender.input(Input::SelectChat(current));
+                    if let Some((account, chat)) = key_targets.borrow().get(current) {
+                        chat_key_sender.input(Input::SelectChat(account, chat));
+                    }
                     gtk::glib::Propagation::Stop
                 }
                 _ => gtk::glib::Propagation::Proceed,
             }
         });
         chat_view.add_controller(chat_keys);
+        // Single-click activation makes GTK select whichever row the pointer
+        // last crossed, leaving a second highlight beside the open chat.
+        // Selection follows the open chat and the arrow keys only.
+        chat_view.action_set_enabled("list.select-item", false);
         let messages: TypedListView<MessageRow, gtk::NoSelection> = TypedListView::new();
         let composer_buffer = gtk::TextBuffer::new(None);
         let enter_sends = std::rc::Rc::new(std::cell::Cell::new(true));
         let settings_path = init.dirs.settings_file();
-        let settings = crate::settings::Settings::load(&settings_path);
+        let mut settings = crate::settings::Settings::load(&settings_path);
+        if !legacy_layout {
+            crate::account::AccountSettings::load_or(
+                &active_dirs.account_settings_file(),
+                &settings,
+            )
+            .apply_to(&mut settings);
+        }
         enter_sends.set(settings.enter_sends);
         let mut theme_catalog = crate::theme::custom::Catalog::default();
         theme_catalog.enable_desktop_themes();
@@ -1030,7 +1099,7 @@ impl SimpleComponent for NativeApplication {
         let mut media = crate::services::media::MediaService::default();
         media.set_speed(settings.voice_speed);
         let (backend, page_title, status): (Option<Backend>, String, String) =
-            match Backend::try_spawn(init.dirs, notifier.clone()) {
+            match Backend::try_spawn(active_dirs.clone(), notifier.clone()) {
                 Ok(backend) => (
                     Some(backend),
                     "Starting ZapTide".into(),
@@ -1046,11 +1115,21 @@ impl SimpleComponent for NativeApplication {
                 }
             };
         let link_menu = gtk::gio::Menu::new();
+        link_menu.append(Some("_Remove Account…"), Some("win.unlink"));
         link_menu.append(Some("_Preferences"), Some("win.preferences"));
         link_menu.append(Some("_About ZapTide"), Some("win.about"));
         link_menu.append(Some("_Quit"), Some("win.quit"));
+        let (switch_sender, add_sender, profile_sender) =
+            (sender.clone(), sender.clone(), sender.clone());
+        let link_switcher = account_switcher::AccountSwitcher::new(
+            move |account| switch_sender.input(Input::SwitchAccount(account)),
+            move || add_sender.input(Input::AddAccount),
+            move || profile_sender.input(Input::ShowProfile),
+        );
+        link_switcher.button.set_visible(false);
         let link_page = LinkPage::builder()
             .launch(LinkPageInit {
+                account_button: link_switcher.button.clone(),
                 state: LinkPageState {
                     link: LinkStatus::Starting,
                     title: page_title.clone(),
@@ -1058,6 +1137,7 @@ impl SimpleComponent for NativeApplication {
                     qr_texture: None,
                     phone_linking: false,
                     busy: true,
+                    can_cancel: false,
                 },
                 menu: link_menu,
             })
@@ -1066,11 +1146,12 @@ impl SimpleComponent for NativeApplication {
                 LinkPageOutput::TogglePhoneLinking => Input::TogglePhoneLinking,
                 LinkPageOutput::CopyPairCode => Input::CopyPairCode,
                 LinkPageOutput::Reconnect => Input::Reconnect,
+                LinkPageOutput::Cancel => Input::CancelAddAccount,
             });
         let primary_menu = gtk::gio::Menu::new();
         let section = gtk::gio::Menu::new();
         section.append(Some("_New Chat"), Some("win.new-chat"));
-        section.append(Some("_Unlink This Computer"), Some("win.unlink"));
+        section.append(Some("_Remove Account…"), Some("win.unlink"));
         primary_menu.append_section(None, &section);
         let section = gtk::gio::Menu::new();
         section.append(Some("_Preferences"), Some("win.preferences"));
@@ -1078,10 +1159,19 @@ impl SimpleComponent for NativeApplication {
         section.append(Some("_About ZapTide"), Some("win.about"));
         section.append(Some("_Quit"), Some("win.quit"));
         primary_menu.append_section(None, &section);
+        let (switch_sender, add_sender, profile_sender) =
+            (sender.clone(), sender.clone(), sender.clone());
+        let account_switcher = account_switcher::AccountSwitcher::new(
+            move |account| switch_sender.input(Input::SwitchAccount(account)),
+            move || add_sender.input(Input::AddAccount),
+            move || profile_sender.input(Input::ShowProfile),
+        );
         let sidebar = Sidebar::builder()
             .launch(SidebarInit {
+                account_button: account_switcher.button.clone(),
                 state: SidebarState::default(),
                 chat_view: chats.view.clone(),
+                chat_targets: chat_targets.clone(),
                 menu: primary_menu.clone(),
             })
             .forward(sender.input_sender(), |output| match output {
@@ -1091,7 +1181,7 @@ impl SimpleComponent for NativeApplication {
                 SidebarOutput::SetChatKindFilter(kind) => Input::SetChatKindFilter(kind),
                 SidebarOutput::SetArchivedFilter(active) => Input::SetArchivedFilter(active),
                 SidebarOutput::SetMutedFilter(active) => Input::SetMutedFilter(active),
-                SidebarOutput::SelectChat(position) => Input::SelectChat(position),
+                SidebarOutput::SelectChat(account, chat) => Input::SelectChat(account, chat),
                 SidebarOutput::NewChat => Input::ShowNewChat,
             });
         let transcript_view = TranscriptView::builder()
@@ -1142,12 +1232,23 @@ impl SimpleComponent for NativeApplication {
             backend,
             notifications,
             notifier,
-            _event_drain: event_drain,
+            active_drain: Some(event_drain),
+            accounts: std::collections::HashMap::new(),
+            active_account,
+            active_dirs,
+            base_dirs,
+            registry,
+            legacy_layout,
+            account_switcher,
+            link_switcher,
+            pending_account: None,
+            removing: None,
             shutdown_started: false,
             chats,
             chat_projection: crate::native_chat_list::ChatListProjection::default(),
             chat_filters: crate::native_chat_list::ChatListFilters::default(),
             chat_ids: Vec::new(),
+            chat_targets,
             chat_snapshots: Vec::new(),
             contacts: std::collections::HashMap::new(),
             contact_share_generation: 0,
@@ -1230,6 +1331,7 @@ impl SimpleComponent for NativeApplication {
             portals: crate::native_portals::NativePortals::default(),
             portal_requests: std::rc::Rc::default(),
             preferences: None,
+            profile_dialog: None,
             sidebar,
             sidebar_visible: true,
             split_view: None,
@@ -1241,6 +1343,7 @@ impl SimpleComponent for NativeApplication {
             custom_theme_provider: gtk::CssProvider::new(),
             enter_sends,
         };
+        model.spawn_hidden_accounts(&sender);
         install_window_actions(&root, &sender);
         install_icons(&icon_dir);
         let (tray_actions, tray_receiver) = relm4::channel();
@@ -1628,132 +1731,11 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
         },
     );
     adw::StyleManager::default().set_color_scheme(scheme);
-    let mut css = ":root {\n\
-                   --zaptide-bubble-in: var(--card-bg-color);\n\
-                   --zaptide-bubble-out: color-mix(in srgb, var(--success-bg-color) 60%, var(--card-bg-color));\n\
-                   --zaptide-bubble-in-text: var(--window-fg-color);\n\
-                   --zaptide-bubble-out-text: var(--window-fg-color);\n\
-                   }\n"
-        .to_owned();
+    let mut css = include_str!("../data/theme-defaults.css").to_owned();
     if let Some(palette) = palette {
         css.push_str(&crate::native_theme::css_for_palette(&palette));
     }
-    css.push_str(
-        ".zaptide-transcript, .zaptide-transcript textview, .zaptide-transcript text { background: none; }\n\
-         .zaptide-message-row { padding: 2px 6px; }\n\
-         .zaptide-chat-list > row { padding: 0; }\n\
-         .zaptide-emoji-grid { background: none; }\n\
-         .zaptide-photo { border-radius: 10px; }\n\
-         .zaptide-photo-button { padding: 0; border-radius: 10px; }\n\
-         .zaptide-album-more { color: white; background-color: color-mix(in srgb, black 50%, transparent); }\n\
-         /* The viewer is intentionally dark in every theme, like a media player. */\n\
-         .zaptide-viewer { background-color: #101010; color: white; }\n\
-         .zaptide-media-badge { padding: 2px 7px; border-radius: 9999px; color: white; background-color: color-mix(in srgb, black 60%, transparent); }\n\
-         .zaptide-play { min-width: 48px; min-height: 48px; border-radius: 9999px; color: white; background-color: color-mix(in srgb, black 55%, transparent); }\n\
-         .zaptide-photo-button:hover .zaptide-play { background-color: color-mix(in srgb, black 75%, transparent); }\n\
-         .zaptide-viewer headerbar, .zaptide-viewer .bottom-bar { background-color: color-mix(in srgb, black 55%, transparent); color: white; box-shadow: none; }\n\
-         .zaptide-emoji-grid > child { padding: 0; border-radius: 8px; }\n\
-         .zaptide-emoji-cell { font-size: 1.55em; min-width: 38px; min-height: 38px; }\n\
-         .zaptide-chat-item { padding: 8px 14px; border-radius: inherit; }\n\
-         .zaptide-chat-item.zaptide-chat-open { background-color: color-mix(in srgb, currentColor 22%, transparent); }\n\
-         .zaptide-bubble { padding: 8px 11px; border-radius: 13px; }\n\
-         .zaptide-bubble.incoming { background-color: var(--zaptide-bubble-in); color: var(--zaptide-bubble-in-text); }\n\
-          .zaptide-bubble.outgoing { background-color: var(--zaptide-bubble-out); color: var(--zaptide-bubble-out-text); }\n\
-          .zaptide-message-selected { border-radius: 12px; background-color: color-mix(in srgb, var(--accent-bg-color) 15%, transparent); }\n\
-          .zaptide-typing-bubble { padding: 13px 14px; border-bottom-left-radius: 4px; }\n\
-          .zaptide-typing-dot { min-width: 7px; min-height: 7px; border-radius: 9999px; background-color: currentColor; opacity: 0.35; animation: zaptide-typing 1.2s ease-in-out infinite; }\n\
-          .zaptide-typing-dot:nth-child(2) { animation-delay: 150ms; }\n\
-          .zaptide-typing-dot:nth-child(3) { animation-delay: 300ms; }\n\
-          @keyframes zaptide-typing { 0% { opacity: 0.35; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-3px); } 60% { opacity: 0.35; transform: translateY(0); } 100% { opacity: 0.35; transform: translateY(0); } }\n\
-          .zaptide-mention-popover > contents { padding: 0; }\n\
-          .zaptide-mention-popover list { background: none; }\n\
-          .zaptide-mention-popover row { border-radius: 8px; }\n\
-          .zaptide-message-flash .zaptide-bubble { outline: 2px solid var(--accent-color); outline-offset: 2px; }\n\
-          .zaptide-message-item:focus-visible .zaptide-bubble { outline: 2px solid var(--accent-color); outline-offset: 2px; }\n\
-         .zaptide-media-card { padding: 8px 12px; margin-top: 4px; background-color: color-mix(in srgb, currentColor 8%, transparent); }\n\
-         .zaptide-link-card:hover { background-color: color-mix(in srgb, currentColor 12%, transparent); }\n\
-         .zaptide-link-thumbnail { border-radius: 8px; }\n\
-         .zaptide-sender-blue { color: var(--blue-3); }\n\
-         .zaptide-sender-green { color: var(--green-4); }\n\
-         .zaptide-sender-yellow { color: var(--yellow-5); }\n\
-         .zaptide-sender-orange { color: var(--orange-4); }\n\
-         .zaptide-sender-red { color: var(--red-3); }\n\
-         .zaptide-sender-purple { color: var(--purple-3); }\n\
-         .zaptide-bubble:hover { box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 12%, transparent); }\n\
-         .zaptide-message-timestamp { min-width: 36px; font-weight: normal; }\n\
-         .zaptide-filters-active { color: var(--accent-color); }\n\
-         .zaptide-unread-pill { font-weight: bold; font-size: 0.8em; border-radius: 9999px; min-width: 1.4em; padding: 2px 6px; color: var(--accent-fg-color); background-color: var(--accent-bg-color); }\n\
-         .zaptide-delivery { opacity: 0.6; }\n\
-         /* WhatsApp read-receipt blue, theme-independent by design. */\n\
-         .zaptide-delivery.read { opacity: 1; color: #53bdeb; }\n\
-         .zaptide-delivery-failed { color: var(--error-color); }\n\
-         .zaptide-sticker { border-radius: 12px; padding: 4px; }\n\
-         .zaptide-audio-seek trough, .zaptide-audio-seek highlight, .zaptide-audio-seek slider { background: none; border-color: transparent; box-shadow: none; outline-color: transparent; }\n\
-          .zaptide-audio-seek:focus-visible trough { outline: 2px solid color-mix(in srgb, var(--accent-color) 50%, transparent); outline-offset: 2px; }\n\
-          .zaptide-audio-speed.compact { font-size: 0.85em; }\n\
-          .zaptide-reaction { font-size: 1.4em; min-width: 40px; min-height: 40px; padding: 0; }\n\
-         .zaptide-reaction.chosen { background-color: color-mix(in srgb, var(--accent-bg-color) 25%, transparent); }\n\
-         .zaptide-reaction > label { transition: transform 120ms ease-out; }\n\
-         .zaptide-reaction:hover > label { transform: scale(1.25); }\n\
-         .zaptide-reaction-chip { min-height: 0; min-width: 0; padding: 1px 8px; border-radius: 9999px; font-size: 0.9em; background-color: var(--window-bg-color); box-shadow: 0 0 0 1px color-mix(in srgb, currentColor 12%, transparent); }\n\
-         .zaptide-reaction-chip:hover { background-color: color-mix(in srgb, currentColor 8%, var(--window-bg-color)); }\n\
-         .zaptide-reaction-chip.chosen { background-color: color-mix(in srgb, var(--accent-bg-color) 18%, var(--window-bg-color)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-color) 55%, transparent); color: var(--accent-color); }\n\
-         .zaptide-sticker-tab { border-radius: 8px; min-width: 36px; min-height: 36px; padding: 2px; }\n\
-         .zaptide-sticker-tab:checked { background-color: color-mix(in srgb, currentColor 12%, transparent); }\n\
-         .zaptide-sticker-picker > contents { padding: 0; }\n\
-         .zaptide-unread-pill.compact { font-size: 0.75em; min-width: 1.2em; padding: 0 5px; }\n\
-         .zaptide-unread-pill.muted { color: var(--window-fg-color); background-color: color-mix(in srgb, currentColor 18%, transparent); }\n\
-         .zaptide-composer { border-radius: 18px; background-color: color-mix(in srgb, currentColor 8%, transparent); }\n\
-         .zaptide-composer textview, .zaptide-composer text { background: none; }\n\
-         .zaptide-composer:focus-within { outline: 2px solid color-mix(in srgb, var(--accent-color) 60%, transparent); outline-offset: -2px; }\n\
-         .zaptide-drop-scrim { background-color: var(--shade-color); }\n\
-         .zaptide-conversation:drop(active) { border-color: transparent; box-shadow: none; }\n\
-         .zaptide-drop-card { margin: 24px; padding: 12px 24px; border-radius: 15px; background-color: var(--dialog-bg-color); color: var(--dialog-fg-color); box-shadow: 0 0 14px 2px rgba(0,0,6,0.03), 0 0 5px 2px rgba(0,0,6,0.10), 0 0 0 1px rgba(0,0,0,0.05); }\n\
-         .zaptide-attachments { padding: 6px 8px 4px; border-radius: 18px; background-color: color-mix(in srgb, currentColor 5%, transparent); }\n\
-         .zaptide-attachment { border-radius: 12px; }\n\
-         .zaptide-attachment-file { padding: 0 40px 0 12px; }\n\
-         .zaptide-attachment-remove { min-width: 24px; min-height: 24px; padding: 0; }\n\
-         .zaptide-tray-action { min-height: 24px; padding: 2px 10px; border-radius: 9999px; font-size: 0.9em; }\n\
-         .zaptide-attach-tile { padding: 10px 6px 8px; border-radius: 12px; min-width: 72px; }\n\
-         .zaptide-attach-icon { min-width: 44px; min-height: 44px; border-radius: 9999px; color: white; }\n\
-         .zaptide-attach-icon.gallery { background-color: var(--accent-purple); }\n\
-         .zaptide-attach-icon.files { background-color: var(--accent-blue); }\n\
-         .zaptide-attach-icon.poll { background-color: var(--accent-orange); }\n\
-         .zaptide-attach-icon.mention { background-color: var(--accent-green); }\n\
-         .zaptide-attach-icon.contact { color: var(--accent-fg-color); background-color: var(--accent-bg-color); }\n\
-         .zaptide-qr { border-radius: 12px; }\n\
-         .zaptide-document { padding: 10px 10px 10px 12px; }\n\
-         .zaptide-pair-code { padding: 16px 16px 16px 28px; }\n\
-         .zaptide-pair-code-label { font-size: 2.4em; font-weight: 800; letter-spacing: 0.14em; }\n\
-         .zaptide-quote { border-left: 2px solid var(--accent-bg-color); padding-left: 6px; opacity: 0.7; }\n\
-         /* Opt-in translucent chat list (window class toggled from Rust). */\n\
-         window.translucent-sidebar { background-color: transparent; }\n\
-         window.translucent-sidebar .content-pane { background-color: var(--window-bg-color); }\n\
-         window.translucent-sidebar .sidebar-pane {\n\
-           background-color: color-mix(in srgb, var(--sidebar-bg-color) 70%, transparent);\n\
-           backdrop-filter: blur(30px);\n\
-         }\n\
-         window.translucent-sidebar .sidebar-pane:backdrop {\n\
-           background-color: color-mix(in srgb, var(--sidebar-backdrop-color) 70%, transparent);\n\
-         }\n\
-         window.translucent-sidebar .sidebar-pane headerbar,\n\
-         window.translucent-sidebar .sidebar-pane .titlebar,\n\
-         window.translucent-sidebar .sidebar-pane listview,\n\
-         window.translucent-sidebar .sidebar-pane .view {\n\
-           background: transparent;\n\
-           background-color: transparent;\n\
-         }\n\
-         @media (prefers-contrast: more) {\n\
-           window.translucent-sidebar { background-color: var(--window-bg-color); }\n\
-           window.translucent-sidebar .sidebar-pane {\n\
-             background-color: var(--sidebar-bg-color);\n\
-             backdrop-filter: none;\n\
-           }\n\
-           window.translucent-sidebar .sidebar-pane:backdrop {\n\
-             background-color: var(--sidebar-backdrop-color);\n\
-           }\n\
-         }\n",
-    );
+    css.push_str(include_str!("../data/style.css"));
     theme_provider.load_from_string(&css);
 }
 
@@ -2183,7 +2165,7 @@ impl NativeApplication {
 
         if self.settings.cached_palette() != previous_palette {
             self.apply_runtime_settings();
-            if self.settings.save(&self.settings_path).is_err() {
+            if self.save_settings().is_err() {
                 self.status = "Could not save theme preference".into();
             }
         }
@@ -3178,20 +3160,32 @@ impl NativeApplication {
         if std::mem::replace(&mut self.shutdown_started, true) {
             return;
         }
-        self._event_drain.close();
+        if let Some(drain) = &self.active_drain {
+            drain.close();
+        }
+        for session in self.accounts.values() {
+            if let Some(drain) = &session.drain {
+                drain.close();
+            }
+        }
         self.portals.cancel_all();
-        if let Err(_error) = self.settings.save(&self.settings_path) {
+        if self.save_settings().is_err() {
             self.status = "Could not save preferences".into();
         }
         self.status = "Shutdown requested".into();
-        if let Some(mut backend) = self.backend.take() {
-            std::thread::spawn(move || {
+        let mut backends: Vec<Backend> = self.backend.take().into_iter().collect();
+        backends.extend(
+            self.accounts
+                .values_mut()
+                .filter_map(|session| session.backend.take()),
+        );
+        // ponytail: one account after another; join in parallel if many accounts slow quitting
+        std::thread::spawn(move || {
+            for mut backend in backends {
                 backend.shutdown();
-                sender.input(Input::ShutdownComplete);
-            });
-        } else {
+            }
             sender.input(Input::ShutdownComplete);
-        }
+        });
     }
 
     /// Closing the window hides it when something can bring it back (a tray or
@@ -3347,11 +3341,7 @@ fn install_window_actions(
     add("quit", input(|| Input::Quit));
     add("close", input(|| Input::Close));
     add("new-chat", input(|| Input::ShowNewChat));
-    let (parent, on_action) = (window.clone(), dialog_action_callback(sender));
-    add(
-        "unlink",
-        Box::new(move || show_unlink_confirmation(&parent, &on_action)),
-    );
+    add("unlink", input(|| Input::ConfirmRemoveAccount));
 }
 
 /// Contacts offered in New Chat as (id, name, formatted phone): only people

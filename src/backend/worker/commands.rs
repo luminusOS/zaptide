@@ -439,6 +439,12 @@ impl Worker {
                 }
                 self.emit_stickers();
             }
+            Command::EditProfile(edit) => self.edit_profile(edit),
+            Command::ProfileSaved {
+                session_generation,
+                edit,
+                result,
+            } => self.profile_saved(session_generation, edit, result),
             Command::ContactAbout { id } => {
                 let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&id)) else {
                     return;

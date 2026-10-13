@@ -2,6 +2,7 @@ use super::*;
 
 mod attachments;
 mod backend_events;
+pub(super) use backend_events::drain_hidden;
 
 impl NativeApplication {
     pub(super) fn handle_input(&mut self, input: Input, sender: ComponentSender<Self>) {
@@ -37,6 +38,14 @@ impl NativeApplication {
                     .connect_clicked(move |_| input_sender.input(Input::OpenThemesFolder));
                 self.preferences = Some(dialog);
             }
+            Input::ShowProfile => self.show_profile(&sender),
+            Input::SaveProfile(edit) => {
+                if let Some(backend) = &self.backend {
+                    backend.send(crate::backend::Command::EditProfile(edit));
+                } else if let Some(dialog) = &self.profile_dialog {
+                    dialog.saved(Some("Not connected to WhatsApp"));
+                }
+            }
             Input::OpenThemesFolder => self.prepare_themes_folder(&sender),
             Input::ThemesFolderPrepared(success) => {
                 if success {
@@ -62,6 +71,25 @@ impl NativeApplication {
                     .application_icon("dev.luminusos.ZapTide")
                     .version(env!("CARGO_PKG_VERSION"))
                     .developer_name("LuminusOS")
+                    .developers(["LuminusOS"])
+                    .comments(
+                        "A native WhatsApp client for Linux, built with Rust, GTK4, and libadwaita.\n\nZapTide is an independent project and is not affiliated with or endorsed by WhatsApp or Meta.",
+                    )
+                    .website(env!("CARGO_PKG_HOMEPAGE"))
+                    .issue_url(concat!(env!("CARGO_PKG_REPOSITORY"), "/issues"))
+                    .license_type(gtk::License::MitX11)
+                    .copyright("© 2026 LuminusOS")
+                    .debug_info(format!(
+                        "ZapTide {}\nGTK {}.{}.{}\nlibadwaita {}.{}.{}",
+                        env!("CARGO_PKG_VERSION"),
+                        gtk::major_version(),
+                        gtk::minor_version(),
+                        gtk::micro_version(),
+                        adw::major_version(),
+                        adw::minor_version(),
+                        adw::micro_version(),
+                    ))
+                    .debug_info_filename("zaptide-debug-info.txt")
                     .build();
                 about.present(Some(&self.window));
             }
@@ -111,7 +139,7 @@ impl NativeApplication {
                     });
                     for change in changes {
                         if change.apply(&mut self.settings).is_ok() {
-                            if let Err(_error) = self.settings.save(&self.settings_path) {
+                            if let Err(_error) = self.save_settings() {
                                 self.status = "Could not save preferences".into();
                                 self.toast("Could not save preferences");
                             } else {
@@ -124,7 +152,7 @@ impl NativeApplication {
                     }
                     if custom_theme_changed {
                         self.sync_custom_theme_selection();
-                        if self.settings.save(&self.settings_path).is_err() {
+                        if self.save_settings().is_err() {
                             self.status = "Could not save preferences".into();
                             self.toast("Could not save preferences");
                         }
@@ -141,9 +169,55 @@ impl NativeApplication {
                     let _ = startup.send(());
                     self.status = "Starting backend".into();
                 }
+                for session in self.accounts.values_mut() {
+                    if let Some(startup) = session.backend.as_mut().and_then(Backend::take_startup)
+                    {
+                        let _ = startup.send(());
+                    }
+                }
             }
-            Input::BackendReady => backend_events::handle_backend_ready(self, sender),
-            Input::SelectChat(position) => self.select_chat(position),
+            Input::BackendReady(account) => {
+                backend_events::handle_backend_ready(self, account, sender)
+            }
+            Input::SwitchAccount(account) => {
+                if self
+                    .pending_account
+                    .is_some_and(|(pending, _)| pending == self.active_account)
+                {
+                    self.cancel_add_account(account, &sender);
+                } else {
+                    self.switch_account(account, &sender);
+                }
+            }
+            Input::AddAccount => self.add_account(&sender),
+            Input::CancelAddAccount => {
+                if let Some((_, previous)) = self.pending_account {
+                    self.cancel_add_account(previous, &sender);
+                }
+            }
+            Input::ConfirmRemoveAccount if self.pending_account.is_some() => {
+                // An account still being added is simply dropped.
+                if let Some((_, previous)) = self.pending_account {
+                    self.cancel_add_account(previous, &sender);
+                }
+            }
+            Input::ConfirmRemoveAccount => {
+                let name = self
+                    .registry
+                    .entry(self.active_account)
+                    .map_or_else(|| "this account".to_owned(), |entry| entry.label());
+                show_remove_account_confirmation(
+                    &self.window,
+                    &name,
+                    &dialog_action_callback(&sender),
+                );
+            }
+            Input::SelectChat(account, chat) => {
+                let position = self.chat_targets.borrow().position(account, &chat);
+                if let Some(position) = position {
+                    self.select_chat(position);
+                }
+            }
             Input::ScrollToRecentMessages => {
                 self.recent_messages_pending = false;
                 scroll_to_end(&self.messages.view);
@@ -182,6 +256,15 @@ impl NativeApplication {
                     self.loading_older = false;
                 }
             }
+            Input::OpenAccountChat(account, chat) => {
+                if account != self.active_account {
+                    self.switch_account_with_restore(account, &sender, false);
+                }
+                // A stale notification must never open the same ID in another account.
+                if account == self.active_account {
+                    self.handle_input(Input::OpenChatId(chat), sender);
+                }
+            }
             Input::OpenChatId(chat) => {
                 self.window.present();
                 let archived = self
@@ -191,7 +274,7 @@ impl NativeApplication {
                 self.reset_chat_filters(archived);
                 self.sync_chat_projection();
                 if let Some(position) = self.chat_ids.iter().position(|id| id == &chat) {
-                    sender.input(Input::SelectChat(position as u32));
+                    self.select_chat(position as u32);
                 }
             }
             Input::SearchChats(query) => {
@@ -276,12 +359,15 @@ impl NativeApplication {
                 }
             }
             Input::Resumed => {
-                let linked = matches!(
-                    self.link,
-                    LinkStatus::Connecting
-                        | LinkStatus::Connected
-                        | LinkStatus::Disconnected { .. }
-                );
+                for session in self.accounts.values() {
+                    if let (true, Some(backend)) = (
+                        super::accounts::reconnects_after_resume(&session.link),
+                        &session.backend,
+                    ) {
+                        backend.send(crate::backend::Command::Reconnect);
+                    }
+                }
+                let linked = super::accounts::reconnects_after_resume(&self.link);
                 if let (true, Some(backend)) = (linked, &self.backend) {
                     // The socket died with the suspend but may not know yet;
                     // reconnecting now brings the missed messages in.
@@ -297,6 +383,14 @@ impl NativeApplication {
             }
             Input::ResumeSettled => self.resuming = false,
             Input::UnlinkConfirmed => {
+                if !self.legacy_layout {
+                    self.removing = Some(self.active_account);
+                    if self.backend.is_none() {
+                        // Nothing to unlink: the account never started.
+                        self.finish_removal(&sender);
+                        return;
+                    }
+                }
                 if let Some(backend) = &self.backend {
                     backend.send(crate::backend::Command::Unlink);
                     self.status = "Unlinking this computer".into();
@@ -355,7 +449,7 @@ impl NativeApplication {
                     }
                     TrayAction::ToggleNotifications => {
                         self.settings.notifications = !self.settings.notifications;
-                        if self.settings.save(&self.settings_path).is_err() {
+                        if self.save_settings().is_err() {
                             self.status = "Could not save preferences".into();
                         }
                     }

@@ -1,0 +1,6 @@
+:root {
+  --zaptide-bubble-in: var(--card-bg-color);
+  --zaptide-bubble-out: color-mix(in srgb, var(--success-bg-color) 60%, var(--card-bg-color));
+  --zaptide-bubble-in-text: var(--window-fg-color);
+  --zaptide-bubble-out-text: var(--window-fg-color);
+}
