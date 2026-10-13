@@ -46,7 +46,9 @@ fn readable_foreground(
 /// Build scoped libadwaita color overrides from an existing ZapTide palette.
 ///
 /// This leaves spacing, radii, focus rings, and widget state rendering to GTK,
-/// replacing only palette colors.
+/// replacing only palette colors. Overrides use CSS custom properties
+/// (`var(--window-bg-color)` style), since `@define-color` and `@name`
+/// references are deprecated in GTK 4.16.
 pub fn css_for_palette(palette: &Palette) -> String {
     let window = css_color(palette.window);
     let panel = css_color(palette.panel);
@@ -69,38 +71,41 @@ pub fn css_for_palette(palette: &Palette) -> String {
     let bubble_out_text = css_color(readable_foreground(palette.bubble_out, palette.text));
 
     format!(
-        "@define-color window_bg_color {window};\n\
-         @define-color window_fg_color {window_text};\n\
-         @define-color view_bg_color {chat};\n\
-         @define-color view_fg_color {view_text};\n\
-         @define-color headerbar_bg_color {panel};\n\
-         @define-color headerbar_fg_color {panel_text};\n\
-         @define-color sidebar_bg_color {panel};\n\
-         @define-color sidebar_fg_color {panel_text};\n\
-         @define-color card_bg_color {surface};\n\
-         @define-color card_fg_color {surface_text};\n\
-         @define-color popover_bg_color {surface};\n\
-         @define-color popover_fg_color {surface_text};\n\
-         @define-color accent_bg_color {accent};\n\
-         @define-color accent_fg_color {on_accent};\n\
-         @define-color accent_color {accent};\n\
-         @define-color destructive_bg_color {danger};\n\
-         @define-color destructive_fg_color {danger_text};\n\
-         @define-color borders {outline};\n\
-         @define-color secondary_text_color {secondary};\n\
-         @define-color zaptide_bubble_in {bubble_in};\n\
-         @define-color zaptide_bubble_out {bubble_out};\n\
-         @define-color zaptide_bubble_in_text {bubble_in_text};\n\
-         @define-color zaptide_bubble_out_text {bubble_out_text};\n\
-         window, .background {{ background-color: @window_bg_color; color: @window_fg_color; }}\n\
-         headerbar, .titlebar, .sidebar {{ background-color: @headerbar_bg_color; color: @headerbar_fg_color; }}\n\
-         .view, list, listview, textview {{ background-color: @view_bg_color; color: @view_fg_color; }}\n\
-         card, .card, popover {{ background-color: @card_bg_color; color: @card_fg_color; }}\n\
-         entry, textview {{ caret-color: @accent_color; }}\n\
-         button {{ border-color: @borders; }}\n\
-         button:hover {{ background-color: {hover}; }}\n\
-         button.suggested-action {{ background-color: @accent_bg_color; color: @accent_fg_color; }}\n\
-         button.destructive-action {{ background-color: @destructive_bg_color; color: @destructive_fg_color; }}\n"
+        ":root {{\n\
+          --window-bg-color: {window};\n\
+          --window-fg-color: {window_text};\n\
+          --view-bg-color: {chat};\n\
+          --view-fg-color: {view_text};\n\
+          --headerbar-bg-color: {panel};\n\
+          --headerbar-fg-color: {panel_text};\n\
+          --sidebar-bg-color: {panel};\n\
+          --sidebar-fg-color: {panel_text};\n\
+          --card-bg-color: {surface};\n\
+          --card-fg-color: {surface_text};\n\
+          --popover-bg-color: {surface};\n\
+          --popover-fg-color: {surface_text};\n\
+          --accent-bg-color: {accent};\n\
+          --accent-fg-color: {on_accent};\n\
+          --accent-color: {accent};\n\
+          --destructive-bg-color: {danger};\n\
+          --destructive-fg-color: {danger_text};\n\
+          --border-color: {outline};\n\
+          --zaptide-secondary-text: {secondary};\n\
+          --zaptide-bubble-in: {bubble_in};\n\
+          --zaptide-bubble-out: {bubble_out};\n\
+          --zaptide-bubble-in-text: {bubble_in_text};\n\
+          --zaptide-bubble-out-text: {bubble_out_text};\n\
+          --zaptide-hover: {hover};\n\
+        }}\n\
+         window, .background {{ background-color: var(--window-bg-color); color: var(--window-fg-color); }}\n\
+         headerbar, .titlebar, .sidebar {{ background-color: var(--headerbar-bg-color); color: var(--headerbar-fg-color); }}\n\
+         .view, list, listview, textview {{ background-color: var(--view-bg-color); color: var(--view-fg-color); }}\n\
+         card, .card, popover {{ background-color: var(--card-bg-color); color: var(--card-fg-color); }}\n\
+         entry, textview {{ caret-color: var(--accent-color); }}\n\
+         button {{ border-color: var(--border-color); }}\n\
+         button:hover {{ background-color: var(--zaptide-hover); }}\n\
+         button.suggested-action {{ background-color: var(--accent-bg-color); color: var(--accent-fg-color); }}\n\
+         button.destructive-action {{ background-color: var(--destructive-bg-color); color: var(--destructive-fg-color); }}\n"
     )
 }
 
@@ -117,14 +122,14 @@ mod tests {
 
         let css = css_for_palette(&palette);
 
-        assert!(css.contains("@define-color window_bg_color #123456"));
-        assert!(css.contains("@define-color accent_bg_color #abcdef"));
+        assert!(css.contains("--window-bg-color: #123456"));
+        assert!(css.contains("--accent-bg-color: #abcdef"));
         assert!(css.contains(&format!(
-            "@define-color zaptide_bubble_in {};",
+            "--zaptide-bubble-in: {};",
             css_color(palette.bubble_in)
         )));
         assert!(css.contains(&format!(
-            "@define-color zaptide_bubble_out {};",
+            "--zaptide-bubble-out: {};",
             css_color(palette.bubble_out)
         )));
         assert!(css.contains("button.suggested-action"));
@@ -138,7 +143,7 @@ mod tests {
         let foreground = readable_foreground(palette.danger, palette.text);
         assert!(contrast_ratio(palette.danger, foreground) >= 4.5);
         assert!(css_for_palette(&palette).contains(&format!(
-            "@define-color destructive_fg_color {};",
+            "--destructive-fg-color: {};",
             css_color(foreground)
         )));
     }
@@ -153,7 +158,7 @@ mod tests {
             let foreground = readable_foreground(background, palette.text);
             assert!(contrast_ratio(background, foreground) >= 4.5);
             assert!(css.contains(&format!(
-                "@define-color zaptide_bubble_{name}_text {};",
+                "--zaptide-bubble-{name}-text: {};",
                 css_color(foreground)
             )));
         }
@@ -185,10 +190,10 @@ mod tests {
         ] {
             assert!(contrast_ratio(background, readable_foreground(background, foreground)) >= 4.5);
         }
-        assert!(css.contains("@define-color window_fg_color #000000"));
-        assert!(css.contains("@define-color secondary_text_color #000000"));
-        assert!(css.contains("@define-color accent_fg_color #000000"));
-        assert!(css.contains("@define-color destructive_fg_color #000000"));
+        assert!(css.contains("--window-fg-color: #000000"));
+        assert!(css.contains("--zaptide-secondary-text: #000000"));
+        assert!(css.contains("--accent-fg-color: #000000"));
+        assert!(css.contains("--destructive-fg-color: #000000"));
     }
 
     #[test]
@@ -217,9 +222,9 @@ mod tests {
         ] {
             assert!(contrast_ratio(background, readable_foreground(background, foreground)) >= 4.5);
         }
-        assert!(css.contains("@define-color window_fg_color #ffffff"));
-        assert!(css.contains("@define-color secondary_text_color #ffffff"));
-        assert!(css.contains("@define-color accent_fg_color #ffffff"));
-        assert!(css.contains("@define-color destructive_fg_color #ffffff"));
+        assert!(css.contains("--window-fg-color: #ffffff"));
+        assert!(css.contains("--zaptide-secondary-text: #ffffff"));
+        assert!(css.contains("--accent-fg-color: #ffffff"));
+        assert!(css.contains("--destructive-fg-color: #ffffff"));
     }
 }

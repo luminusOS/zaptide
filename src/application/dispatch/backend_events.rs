@@ -162,6 +162,7 @@ pub(super) fn handle_backend_ready(
                 }
                 app.link = link;
                 (app.page_title, app.status) = link_page(&app.link);
+                app.sync_translucent_sidebar();
             }
             NativeEvent::Profile { phone, name } => {
                 app.remember_profile(account, phone, name, &sender)

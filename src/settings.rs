@@ -48,6 +48,8 @@ pub struct Settings {
     /// Last open chat, restored at startup.
     pub last_chat: Option<String>,
     pub show_shortcut_hints: bool,
+    /// Blur the desktop behind a translucent chat list when the compositor supports it.
+    pub translucent_sidebar: bool,
     /// Recently used emoji, newest first.
     pub recent_emoji: Vec<String>,
     /// Keep ZapTide running after its window closes.
@@ -85,6 +87,7 @@ impl Default for Settings {
             show_sender_pictures: false,
             last_chat: None,
             show_shortcut_hints: true,
+            translucent_sidebar: false,
             recent_emoji: Vec::new(),
             keep_running_in_background: true,
             notifications: true,

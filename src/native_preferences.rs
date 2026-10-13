@@ -21,6 +21,7 @@ pub enum SettingsField {
     NamesFromContacts,
     SaveContactsToPhone,
     ShowShortcutHints,
+    TranslucentSidebar,
     ChatLockCodeHash,
     Notifications,
     NotificationPreviews,
@@ -50,6 +51,7 @@ pub struct AppearancePreferences {
     pub enter_sends: bool,
     pub show_sender_pictures: bool,
     pub show_shortcut_hints: bool,
+    pub translucent_sidebar: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -96,6 +98,7 @@ impl From<&Settings> for NativePreferences {
                 enter_sends: settings.enter_sends,
                 show_sender_pictures: settings.show_sender_pictures,
                 show_shortcut_hints: settings.show_shortcut_hints,
+                translucent_sidebar: settings.translucent_sidebar,
             },
             account: AccountPreferences {
                 names_from_contacts: settings.names_from_contacts,
@@ -138,6 +141,7 @@ pub enum PreferenceChange {
     SetNamesFromContacts(bool),
     SetSaveContactsToPhone(bool),
     SetShowShortcutHints(bool),
+    SetTranslucentSidebar(bool),
     SetChatLockCode(Option<String>),
     SetNotifications(bool),
     SetNotificationPreviews(bool),
@@ -186,6 +190,10 @@ impl std::fmt::Debug for PreferenceChange {
                 .debug_tuple("SetShowShortcutHints")
                 .field(value)
                 .finish(),
+            Change::SetTranslucentSidebar(value) => formatter
+                .debug_tuple("SetTranslucentSidebar")
+                .field(value)
+                .finish(),
             Change::SetChatLockCode(_) => formatter
                 .debug_tuple("SetChatLockCode")
                 .field(&"[REDACTED]")
@@ -224,6 +232,7 @@ impl PreferenceChange {
             Self::SetNamesFromContacts(_) => SettingsField::NamesFromContacts,
             Self::SetSaveContactsToPhone(_) => SettingsField::SaveContactsToPhone,
             Self::SetShowShortcutHints(_) => SettingsField::ShowShortcutHints,
+            Self::SetTranslucentSidebar(_) => SettingsField::TranslucentSidebar,
             Self::SetChatLockCode(_) => SettingsField::ChatLockCodeHash,
             Self::SetNotifications(_) => SettingsField::Notifications,
             Self::SetNotificationPreviews(_) => SettingsField::NotificationPreviews,
@@ -387,6 +396,14 @@ impl NativePreferencesDialog {
             preferences.appearance.show_shortcut_hints,
             change_sink.clone(),
             PreferenceChange::SetShowShortcutHints,
+        );
+        add_switch(
+            &appearance_group,
+            "Translucent sidebar",
+            "Blur the desktop behind the chat list. Needs a compositor that supports background blur",
+            preferences.appearance.translucent_sidebar,
+            change_sink.clone(),
+            PreferenceChange::SetTranslucentSidebar,
         );
 
         let account_page = libadwaita::PreferencesPage::new();
@@ -818,6 +835,7 @@ impl PreferenceChange {
             Self::SetNamesFromContacts(value) => settings.names_from_contacts = value,
             Self::SetSaveContactsToPhone(value) => settings.save_contacts_to_phone = value,
             Self::SetShowShortcutHints(value) => settings.show_shortcut_hints = value,
+            Self::SetTranslucentSidebar(value) => settings.translucent_sidebar = value,
             Self::SetChatLockCode(value) => settings.set_chat_lock_code(value.as_deref()),
             Self::SetNotifications(value) => settings.notifications = value,
             Self::SetNotificationPreviews(value) => settings.notification_previews = value,

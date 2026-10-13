@@ -14,7 +14,8 @@ impl NativeApplication {
             Input::SidebarShown(shown) => self.sidebar_visible = shown,
             // Collapsing keeps an open conversation on screen; widening resets.
             Input::SplitCollapsed(collapsed) => {
-                self.sidebar_visible = !collapsed || self.active_chat.is_none()
+                self.sidebar_visible = !collapsed || self.active_chat.is_none();
+                self.sync_translucent_sidebar();
             }
             Input::ShowPreferences => {
                 let preferences =

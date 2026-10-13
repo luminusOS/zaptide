@@ -817,3 +817,16 @@ fn bench_synthetic() {
         std::hint::black_box(projection.visible().count());
     });
 }
+
+#[test]
+fn translucent_sidebar_requires_linked_expanded_layout() {
+    let enabled = crate::settings::Settings {
+        translucent_sidebar: true,
+        ..Default::default()
+    };
+    assert!(!translucent_sidebar_active(&enabled, false, false));
+    assert!(!translucent_sidebar_active(&enabled, true, true));
+    assert!(translucent_sidebar_active(&enabled, true, false));
+    let disabled = crate::settings::Settings::default();
+    assert!(!translucent_sidebar_active(&disabled, true, false));
+}
