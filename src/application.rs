@@ -1315,6 +1315,7 @@ impl SimpleComponent for NativeApplication {
             .connect_show_content_notify(move |split| {
                 shown_sender.input(Input::SidebarShown(!split.shows_content()));
             });
+        model.sync_translucent_sidebar();
         // The whole conversation accepts dropped files, not only the composer.
         // Capture runs before the text view's own drop handling.
         let (mut last_wall, mut last_monotonic) =
@@ -1627,10 +1628,13 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
         },
     );
     adw::StyleManager::default().set_color_scheme(scheme);
-    let mut css = "@define-color zaptide_bubble_in @card_bg_color;\n\
-                   @define-color zaptide_bubble_out color-mix(in srgb, @success_bg_color 60%, @card_bg_color);\n\
-                   @define-color zaptide_bubble_in_text @window_fg_color;\n\
-                   @define-color zaptide_bubble_out_text @window_fg_color;\n".to_owned();
+    let mut css = ":root {\n\
+                   --zaptide-bubble-in: var(--card-bg-color);\n\
+                   --zaptide-bubble-out: color-mix(in srgb, var(--success-bg-color) 60%, var(--card-bg-color));\n\
+                   --zaptide-bubble-in-text: var(--window-fg-color);\n\
+                   --zaptide-bubble-out-text: var(--window-fg-color);\n\
+                   }\n"
+        .to_owned();
     if let Some(palette) = palette {
         css.push_str(&crate::native_theme::css_for_palette(&palette));
     }
@@ -1641,20 +1645,21 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
          .zaptide-emoji-grid { background: none; }\n\
          .zaptide-photo { border-radius: 10px; }\n\
          .zaptide-photo-button { padding: 0; border-radius: 10px; }\n\
-         .zaptide-album-more { color: white; background-color: alpha(black, 0.5); }\n\
+         .zaptide-album-more { color: white; background-color: color-mix(in srgb, black 50%, transparent); }\n\
+         /* The viewer is intentionally dark in every theme, like a media player. */\n\
          .zaptide-viewer { background-color: #101010; color: white; }\n\
-         .zaptide-media-badge { padding: 2px 7px; border-radius: 9999px; color: white; background-color: alpha(black, 0.6); }\n\
-         .zaptide-play { min-width: 48px; min-height: 48px; border-radius: 9999px; color: white; background-color: alpha(black, 0.55); }\n\
-         .zaptide-photo-button:hover .zaptide-play { background-color: alpha(black, 0.75); }\n\
-         .zaptide-viewer headerbar, .zaptide-viewer .bottom-bar { background-color: alpha(black, 0.55); color: white; box-shadow: none; }\n\
+         .zaptide-media-badge { padding: 2px 7px; border-radius: 9999px; color: white; background-color: color-mix(in srgb, black 60%, transparent); }\n\
+         .zaptide-play { min-width: 48px; min-height: 48px; border-radius: 9999px; color: white; background-color: color-mix(in srgb, black 55%, transparent); }\n\
+         .zaptide-photo-button:hover .zaptide-play { background-color: color-mix(in srgb, black 75%, transparent); }\n\
+         .zaptide-viewer headerbar, .zaptide-viewer .bottom-bar { background-color: color-mix(in srgb, black 55%, transparent); color: white; box-shadow: none; }\n\
          .zaptide-emoji-grid > child { padding: 0; border-radius: 8px; }\n\
          .zaptide-emoji-cell { font-size: 1.55em; min-width: 38px; min-height: 38px; }\n\
          .zaptide-chat-item { padding: 8px 14px; border-radius: inherit; }\n\
-         .zaptide-chat-item.zaptide-chat-open { background-color: alpha(currentColor, 0.22); }\n\
+         .zaptide-chat-item.zaptide-chat-open { background-color: color-mix(in srgb, currentColor 22%, transparent); }\n\
          .zaptide-bubble { padding: 8px 11px; border-radius: 13px; }\n\
-         .zaptide-bubble.incoming { background-color: @zaptide_bubble_in; color: @zaptide_bubble_in_text; }\n\
-          .zaptide-bubble.outgoing { background-color: @zaptide_bubble_out; color: @zaptide_bubble_out_text; }\n\
-          .zaptide-message-selected { border-radius: 12px; background-color: alpha(@accent_bg_color, 0.15); }\n\
+         .zaptide-bubble.incoming { background-color: var(--zaptide-bubble-in); color: var(--zaptide-bubble-in-text); }\n\
+          .zaptide-bubble.outgoing { background-color: var(--zaptide-bubble-out); color: var(--zaptide-bubble-out-text); }\n\
+          .zaptide-message-selected { border-radius: 12px; background-color: color-mix(in srgb, var(--accent-bg-color) 15%, transparent); }\n\
           .zaptide-typing-bubble { padding: 13px 14px; border-bottom-left-radius: 4px; }\n\
           .zaptide-typing-dot { min-width: 7px; min-height: 7px; border-radius: 9999px; background-color: currentColor; opacity: 0.35; animation: zaptide-typing 1.2s ease-in-out infinite; }\n\
           .zaptide-typing-dot:nth-child(2) { animation-delay: 150ms; }\n\
@@ -1663,46 +1668,47 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
           .zaptide-mention-popover > contents { padding: 0; }\n\
           .zaptide-mention-popover list { background: none; }\n\
           .zaptide-mention-popover row { border-radius: 8px; }\n\
-          .zaptide-message-flash .zaptide-bubble { outline: 2px solid @accent_color; outline-offset: 2px; }\n\
-          .zaptide-message-item:focus-visible .zaptide-bubble { outline: 2px solid @accent_color; outline-offset: 2px; }\n\
+          .zaptide-message-flash .zaptide-bubble { outline: 2px solid var(--accent-color); outline-offset: 2px; }\n\
+          .zaptide-message-item:focus-visible .zaptide-bubble { outline: 2px solid var(--accent-color); outline-offset: 2px; }\n\
          .zaptide-media-card { padding: 8px 12px; margin-top: 4px; background-color: color-mix(in srgb, currentColor 8%, transparent); }\n\
          .zaptide-link-card:hover { background-color: color-mix(in srgb, currentColor 12%, transparent); }\n\
          .zaptide-link-thumbnail { border-radius: 8px; }\n\
-         .zaptide-sender-blue { color: @blue_3; }\n\
-         .zaptide-sender-green { color: @green_4; }\n\
-         .zaptide-sender-yellow { color: @yellow_5; }\n\
-         .zaptide-sender-orange { color: @orange_4; }\n\
-         .zaptide-sender-red { color: @red_3; }\n\
-         .zaptide-sender-purple { color: @purple_3; }\n\
+         .zaptide-sender-blue { color: var(--blue-3); }\n\
+         .zaptide-sender-green { color: var(--green-4); }\n\
+         .zaptide-sender-yellow { color: var(--yellow-5); }\n\
+         .zaptide-sender-orange { color: var(--orange-4); }\n\
+         .zaptide-sender-red { color: var(--red-3); }\n\
+         .zaptide-sender-purple { color: var(--purple-3); }\n\
          .zaptide-bubble:hover { box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 12%, transparent); }\n\
          .zaptide-message-timestamp { min-width: 36px; font-weight: normal; }\n\
-         .zaptide-filters-active { color: @accent_color; }\n\
-         .zaptide-unread-pill { font-weight: bold; font-size: 0.8em; border-radius: 9999px; min-width: 1.4em; padding: 2px 6px; color: @accent_fg_color; background-color: @accent_bg_color; }\n\
+         .zaptide-filters-active { color: var(--accent-color); }\n\
+         .zaptide-unread-pill { font-weight: bold; font-size: 0.8em; border-radius: 9999px; min-width: 1.4em; padding: 2px 6px; color: var(--accent-fg-color); background-color: var(--accent-bg-color); }\n\
          .zaptide-delivery { opacity: 0.6; }\n\
+         /* WhatsApp read-receipt blue, theme-independent by design. */\n\
          .zaptide-delivery.read { opacity: 1; color: #53bdeb; }\n\
-         .zaptide-delivery-failed { color: @error_color; }\n\
+         .zaptide-delivery-failed { color: var(--error-color); }\n\
          .zaptide-sticker { border-radius: 12px; padding: 4px; }\n\
          .zaptide-audio-seek trough, .zaptide-audio-seek highlight, .zaptide-audio-seek slider { background: none; border-color: transparent; box-shadow: none; outline-color: transparent; }\n\
-          .zaptide-audio-seek:focus-visible trough { outline: 2px solid alpha(@accent_color, 0.5); outline-offset: 2px; }\n\
+          .zaptide-audio-seek:focus-visible trough { outline: 2px solid color-mix(in srgb, var(--accent-color) 50%, transparent); outline-offset: 2px; }\n\
           .zaptide-audio-speed.compact { font-size: 0.85em; }\n\
           .zaptide-reaction { font-size: 1.4em; min-width: 40px; min-height: 40px; padding: 0; }\n\
-         .zaptide-reaction.chosen { background-color: alpha(@accent_bg_color, 0.25); }\n\
+         .zaptide-reaction.chosen { background-color: color-mix(in srgb, var(--accent-bg-color) 25%, transparent); }\n\
          .zaptide-reaction > label { transition: transform 120ms ease-out; }\n\
          .zaptide-reaction:hover > label { transform: scale(1.25); }\n\
-         .zaptide-reaction-chip { min-height: 0; min-width: 0; padding: 1px 8px; border-radius: 9999px; font-size: 0.9em; background-color: @window_bg_color; box-shadow: 0 0 0 1px alpha(currentColor, 0.12); }\n\
-         .zaptide-reaction-chip:hover { background-color: color-mix(in srgb, currentColor 8%, @window_bg_color); }\n\
-         .zaptide-reaction-chip.chosen { background-color: color-mix(in srgb, @accent_bg_color 18%, @window_bg_color); box-shadow: 0 0 0 1px alpha(@accent_color, 0.55); color: @accent_color; }\n\
+         .zaptide-reaction-chip { min-height: 0; min-width: 0; padding: 1px 8px; border-radius: 9999px; font-size: 0.9em; background-color: var(--window-bg-color); box-shadow: 0 0 0 1px color-mix(in srgb, currentColor 12%, transparent); }\n\
+         .zaptide-reaction-chip:hover { background-color: color-mix(in srgb, currentColor 8%, var(--window-bg-color)); }\n\
+         .zaptide-reaction-chip.chosen { background-color: color-mix(in srgb, var(--accent-bg-color) 18%, var(--window-bg-color)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-color) 55%, transparent); color: var(--accent-color); }\n\
          .zaptide-sticker-tab { border-radius: 8px; min-width: 36px; min-height: 36px; padding: 2px; }\n\
-         .zaptide-sticker-tab:checked { background-color: alpha(currentColor, 0.12); }\n\
+         .zaptide-sticker-tab:checked { background-color: color-mix(in srgb, currentColor 12%, transparent); }\n\
          .zaptide-sticker-picker > contents { padding: 0; }\n\
          .zaptide-unread-pill.compact { font-size: 0.75em; min-width: 1.2em; padding: 0 5px; }\n\
-         .zaptide-unread-pill.muted { color: @window_fg_color; background-color: alpha(currentColor, 0.18); }\n\
+         .zaptide-unread-pill.muted { color: var(--window-fg-color); background-color: color-mix(in srgb, currentColor 18%, transparent); }\n\
          .zaptide-composer { border-radius: 18px; background-color: color-mix(in srgb, currentColor 8%, transparent); }\n\
          .zaptide-composer textview, .zaptide-composer text { background: none; }\n\
-         .zaptide-composer:focus-within { outline: 2px solid alpha(@accent_color, 0.6); outline-offset: -2px; }\n\
-         .zaptide-drop-scrim { background-color: @shade_color; }\n\
+         .zaptide-composer:focus-within { outline: 2px solid color-mix(in srgb, var(--accent-color) 60%, transparent); outline-offset: -2px; }\n\
+         .zaptide-drop-scrim { background-color: var(--shade-color); }\n\
          .zaptide-conversation:drop(active) { border-color: transparent; box-shadow: none; }\n\
-         .zaptide-drop-card { margin: 24px; padding: 12px 24px; border-radius: 15px; background-color: @dialog_bg_color; color: @dialog_fg_color; box-shadow: 0 0 14px 2px rgba(0,0,6,0.03), 0 0 5px 2px rgba(0,0,6,0.10), 0 0 0 1px rgba(0,0,0,0.05); }\n\
+         .zaptide-drop-card { margin: 24px; padding: 12px 24px; border-radius: 15px; background-color: var(--dialog-bg-color); color: var(--dialog-fg-color); box-shadow: 0 0 14px 2px rgba(0,0,6,0.03), 0 0 5px 2px rgba(0,0,6,0.10), 0 0 0 1px rgba(0,0,0,0.05); }\n\
          .zaptide-attachments { padding: 6px 8px 4px; border-radius: 18px; background-color: color-mix(in srgb, currentColor 5%, transparent); }\n\
          .zaptide-attachment { border-radius: 12px; }\n\
          .zaptide-attachment-file { padding: 0 40px 0 12px; }\n\
@@ -1710,18 +1716,53 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
          .zaptide-tray-action { min-height: 24px; padding: 2px 10px; border-radius: 9999px; font-size: 0.9em; }\n\
          .zaptide-attach-tile { padding: 10px 6px 8px; border-radius: 12px; min-width: 72px; }\n\
          .zaptide-attach-icon { min-width: 44px; min-height: 44px; border-radius: 9999px; color: white; }\n\
-         .zaptide-attach-icon.gallery { background-color: #9141ac; }\n\
-         .zaptide-attach-icon.files { background-color: #3584e4; }\n\
-         .zaptide-attach-icon.poll { background-color: #e66100; }\n\
-         .zaptide-attach-icon.mention { background-color: #26a269; }\n\
-         .zaptide-attach-icon.contact { color: @accent_fg_color; background-color: @accent_bg_color; }\n\
+         .zaptide-attach-icon.gallery { background-color: var(--accent-purple); }\n\
+         .zaptide-attach-icon.files { background-color: var(--accent-blue); }\n\
+         .zaptide-attach-icon.poll { background-color: var(--accent-orange); }\n\
+         .zaptide-attach-icon.mention { background-color: var(--accent-green); }\n\
+         .zaptide-attach-icon.contact { color: var(--accent-fg-color); background-color: var(--accent-bg-color); }\n\
          .zaptide-qr { border-radius: 12px; }\n\
          .zaptide-document { padding: 10px 10px 10px 12px; }\n\
          .zaptide-pair-code { padding: 16px 16px 16px 28px; }\n\
          .zaptide-pair-code-label { font-size: 2.4em; font-weight: 800; letter-spacing: 0.14em; }\n\
-         .zaptide-quote { border-left: 2px solid @accent_bg_color; padding-left: 6px; opacity: 0.7; }\n",
+         .zaptide-quote { border-left: 2px solid var(--accent-bg-color); padding-left: 6px; opacity: 0.7; }\n\
+         /* Opt-in translucent chat list (window class toggled from Rust). */\n\
+         window.translucent-sidebar { background-color: transparent; }\n\
+         window.translucent-sidebar .content-pane { background-color: var(--window-bg-color); }\n\
+         window.translucent-sidebar .sidebar-pane {\n\
+           background-color: color-mix(in srgb, var(--sidebar-bg-color) 70%, transparent);\n\
+           backdrop-filter: blur(30px);\n\
+         }\n\
+         window.translucent-sidebar .sidebar-pane:backdrop {\n\
+           background-color: color-mix(in srgb, var(--sidebar-backdrop-color) 70%, transparent);\n\
+         }\n\
+         window.translucent-sidebar .sidebar-pane headerbar,\n\
+         window.translucent-sidebar .sidebar-pane .titlebar,\n\
+         window.translucent-sidebar .sidebar-pane listview,\n\
+         window.translucent-sidebar .sidebar-pane .view {\n\
+           background: transparent;\n\
+           background-color: transparent;\n\
+         }\n\
+         @media (prefers-contrast: more) {\n\
+           window.translucent-sidebar { background-color: var(--window-bg-color); }\n\
+           window.translucent-sidebar .sidebar-pane {\n\
+             background-color: var(--sidebar-bg-color);\n\
+             backdrop-filter: none;\n\
+           }\n\
+           window.translucent-sidebar .sidebar-pane:backdrop {\n\
+             background-color: var(--sidebar-backdrop-color);\n\
+           }\n\
+         }\n",
     );
     theme_provider.load_from_string(&css);
+}
+
+fn translucent_sidebar_active(
+    settings: &crate::settings::Settings,
+    linked: bool,
+    split_collapsed: bool,
+) -> bool {
+    settings.translucent_sidebar && linked && !split_collapsed
 }
 
 fn should_auto_download(media: Option<&crate::model::Media>) -> bool {
@@ -2176,6 +2217,20 @@ impl NativeApplication {
         ));
         self.enter_sends.set(self.settings.enter_sends);
         self.audio.media.set_speed(self.settings.voice_speed);
+        self.sync_translucent_sidebar();
+    }
+
+    pub(super) fn sync_translucent_sidebar(&self) {
+        let collapsed = self
+            .split_view
+            .as_ref()
+            .is_some_and(adw::NavigationSplitView::is_collapsed);
+        let active = translucent_sidebar_active(&self.settings, self.is_linked(), collapsed);
+        if active {
+            self.window.add_css_class("translucent-sidebar");
+        } else {
+            self.window.remove_css_class("translucent-sidebar");
+        }
     }
 
     fn cancel_portal_requests(&mut self) {
@@ -3290,6 +3345,7 @@ fn install_window_actions(
     add("chat-archive", input(|| Input::ToggleSelectedArchive));
     add("copy-transcript", input(|| Input::CopyTranscript));
     add("quit", input(|| Input::Quit));
+    add("close", input(|| Input::Close));
     add("new-chat", input(|| Input::ShowNewChat));
     let (parent, on_action) = (window.clone(), dialog_action_callback(sender));
     add(
