@@ -714,8 +714,6 @@ impl SimpleComponent for NativeApplication {
         adw::ApplicationWindow {
             set_title: Some("ZapTide"),
             set_default_size: (960, 640),
-            // Collapsed, the conversation needs about 350px (the composer alone 292px);
-            // narrower and the send and close buttons are clipped.
             set_size_request: (420, 480),
 
             connect_map[sender] => move |_| sender.input(Input::WindowMapped),
