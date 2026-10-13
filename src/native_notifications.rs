@@ -6,8 +6,8 @@
 
 use std::collections::{HashMap, VecDeque};
 
+use relm4::gtk;
 use relm4::gtk::prelude::*;
-use relm4::{adw, gtk};
 
 const OPEN_CHAT_ACTION: &str = "open-chat";
 const MAX_PENDING_ACTIVATIONS: usize = 256;
@@ -166,12 +166,10 @@ impl NativeNotifications {
             .and_then(round_icon)
             .and_then(|path| std::fs::read(path).ok())
             .map(gtk::glib::Bytes::from_owned)
-            .unwrap_or_else(|| {
-                adw::Avatar::new(96, Some(title), true)
-                    .draw_to_texture(1)
-                    .save_to_png_bytes()
-            });
-        notification.set_icon(&gtk::gio::BytesIcon::new(&bytes));
+            .or_else(|| initials_icon(title));
+        if let Some(bytes) = bytes {
+            notification.set_icon(&gtk::gio::BytesIcon::new(&bytes));
+        }
         notification.set_default_action_and_target_value(
             &format!("app.{OPEN_CHAT_ACTION}"),
             Some(&token.to_variant()),
@@ -198,6 +196,60 @@ impl NativeNotifications {
             self.application.withdraw_notification(&token);
         }
     }
+}
+
+/// Coloured initials as PNG bytes, for chats without a picture. Drawn straight
+/// into a snapshot because an unshown `AdwAvatar` never gets laid out; the
+/// renderer comes from any realized window.
+fn initials_icon(title: &str) -> Option<gtk::glib::Bytes> {
+    const SIZE: f32 = 96.0;
+    const COLOURS: [(f32, f32, f32); 7] = [
+        (0.21, 0.52, 0.89),
+        (0.15, 0.64, 0.41),
+        (0.90, 0.65, 0.04),
+        (0.99, 0.47, 0.0),
+        (0.88, 0.11, 0.14),
+        (0.57, 0.25, 0.67),
+        (0.60, 0.46, 0.20),
+    ];
+    let renderer = gtk::Window::list_toplevels()
+        .into_iter()
+        .filter_map(|window| window.downcast::<gtk::Window>().ok())
+        .find_map(|window| window.renderer())?;
+    let initials: String = {
+        let mut words = title
+            .split_whitespace()
+            .filter_map(|word| word.chars().next());
+        let first = words.next();
+        let last = words.next_back();
+        first
+            .into_iter()
+            .chain(last)
+            .flat_map(char::to_uppercase)
+            .collect()
+    };
+    let (red, green, blue) = COLOURS[title.bytes().map(usize::from).sum::<usize>() % COLOURS.len()];
+    let rect = gtk::graphene::Rect::new(0.0, 0.0, SIZE, SIZE);
+    let snapshot = gtk::Snapshot::new();
+    snapshot.push_rounded_clip(&gtk::gsk::RoundedRect::from_rect(rect, SIZE / 2.0));
+    snapshot.append_color(&gtk::gdk::RGBA::new(red, green, blue, 1.0), &rect);
+    snapshot.pop();
+    let layout = gtk::Label::new(None).create_pango_layout(Some(&initials));
+    layout.set_font_description(Some(&gtk::pango::FontDescription::from_string(
+        "Sans Bold 34",
+    )));
+    let (width, height) = layout.pixel_size();
+    snapshot.translate(&gtk::graphene::Point::new(
+        (SIZE - width as f32) / 2.0,
+        (SIZE - height as f32) / 2.0,
+    ));
+    snapshot.append_layout(&layout, &gtk::gdk::RGBA::WHITE);
+    let node = snapshot.to_node()?;
+    Some(
+        renderer
+            .render_texture(&node, Some(&rect))
+            .save_to_png_bytes(),
+    )
 }
 
 /// A circular copy of a chat picture, as the desktop shows icons unmasked.
