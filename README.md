@@ -93,10 +93,16 @@ FastWhatsApp; link it as a separate companion device.
 ## Development
 
 See [PACKAGING.md](PACKAGING.md) for build dependencies and Flatpak packaging, and
-[AGENTS.md](AGENTS.md) for architecture and contribution rules. ZapTide is a
-[ZapFast](https://github.com/crmne/zapfast) fork with a native GTK interface.
+[AGENTS.md](AGENTS.md) for architecture and contribution rules.
+
+## About this project
+
+ZapTide is a hard fork of [ZapFast](https://github.com/crmne/zapfast) by Carmine Paolino. It
+started from ZapFast's code and has since diverged: the interface is a native GTK4 and
+libadwaita app built with Relm4, and it supports several accounts at once. It keeps its own
+data folders and keyring entry, separate from ZapFast's.
 
 ZapTide is unofficial and is not affiliated with WhatsApp or Meta. Using an
 unofficial client may violate WhatsApp's terms and put your account at risk.
 
-Licensed under [MIT](LICENSE).
+Licensed under [MIT](LICENSE). The original code is © Carmine Paolino; see the license file.
