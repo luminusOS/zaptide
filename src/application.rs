@@ -714,7 +714,7 @@ impl SimpleComponent for NativeApplication {
         adw::ApplicationWindow {
             set_title: Some("ZapTide"),
             set_default_size: (960, 640),
-            set_size_request: (360, 480),
+            set_size_request: (420, 480),
 
             connect_map[sender] => move |_| sender.input(Input::WindowMapped),
 
