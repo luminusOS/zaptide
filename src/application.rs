@@ -14,6 +14,7 @@ mod dispatch;
 mod link_page;
 mod linking;
 mod presentation;
+mod profile_dialog;
 mod rows;
 mod sidebar;
 mod transcript_view;
@@ -195,6 +196,9 @@ enum NativeEvent {
     ContactAbout {
         id: String,
         about: Option<String>,
+    },
+    ProfileSaved {
+        error: Option<String>,
     },
     Info(String),
     Error(String),
@@ -581,6 +585,7 @@ pub struct NativeApplication {
         std::cell::RefCell<std::collections::HashSet<crate::native_portals::RequestId>>,
     >,
     preferences: Option<crate::native_preferences::NativePreferencesDialog>,
+    profile_dialog: Option<profile_dialog::ProfileDialog>,
     sidebar: relm4::Controller<Sidebar>,
     sidebar_visible: bool,
     split_view: Option<adw::NavigationSplitView>,
@@ -605,6 +610,8 @@ pub enum Input {
     BackendReady(crate::account::AccountId),
     SwitchAccount(crate::account::AccountId),
     AddAccount,
+    ShowProfile,
+    SaveProfile(crate::backend::ProfileEdit),
     CancelAddAccount,
     ConfirmRemoveAccount,
     SelectChat(crate::account::AccountId, String),
@@ -1112,10 +1119,12 @@ impl SimpleComponent for NativeApplication {
         link_menu.append(Some("_Preferences"), Some("win.preferences"));
         link_menu.append(Some("_About ZapTide"), Some("win.about"));
         link_menu.append(Some("_Quit"), Some("win.quit"));
-        let (switch_sender, add_sender) = (sender.clone(), sender.clone());
+        let (switch_sender, add_sender, profile_sender) =
+            (sender.clone(), sender.clone(), sender.clone());
         let link_switcher = account_switcher::AccountSwitcher::new(
             move |account| switch_sender.input(Input::SwitchAccount(account)),
             move || add_sender.input(Input::AddAccount),
+            move || profile_sender.input(Input::ShowProfile),
         );
         link_switcher.button.set_visible(false);
         let link_page = LinkPage::builder()
@@ -1150,10 +1159,12 @@ impl SimpleComponent for NativeApplication {
         section.append(Some("_About ZapTide"), Some("win.about"));
         section.append(Some("_Quit"), Some("win.quit"));
         primary_menu.append_section(None, &section);
-        let (switch_sender, add_sender) = (sender.clone(), sender.clone());
+        let (switch_sender, add_sender, profile_sender) =
+            (sender.clone(), sender.clone(), sender.clone());
         let account_switcher = account_switcher::AccountSwitcher::new(
             move |account| switch_sender.input(Input::SwitchAccount(account)),
             move || add_sender.input(Input::AddAccount),
+            move || profile_sender.input(Input::ShowProfile),
         );
         let sidebar = Sidebar::builder()
             .launch(SidebarInit {
@@ -1320,6 +1331,7 @@ impl SimpleComponent for NativeApplication {
             portals: crate::native_portals::NativePortals::default(),
             portal_requests: std::rc::Rc::default(),
             preferences: None,
+            profile_dialog: None,
             sidebar,
             sidebar_visible: true,
             split_view: None,

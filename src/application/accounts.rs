@@ -317,6 +317,30 @@ impl NativeApplication {
         }
     }
 
+    /// Opens the active account's own profile for editing.
+    pub(super) fn show_profile(&mut self, sender: &ComponentSender<Self>) {
+        let Some(entry) = self.registry.entry(self.active_account) else {
+            return;
+        };
+        let Some(own) = entry.phone.as_deref().map(own_jid) else {
+            return;
+        };
+        let init = super::profile_dialog::ProfileInit {
+            name: entry.name.clone().unwrap_or_default(),
+            picture: self.avatars.get(&own).cloned(),
+            own_id: own.clone(),
+        };
+        let input_sender = sender.clone();
+        let dialog =
+            super::profile_dialog::ProfileDialog::present(&self.window, init, move |edit| {
+                input_sender.input(Input::SaveProfile(edit));
+            });
+        if let Some(backend) = &self.backend {
+            backend.send(crate::backend::Command::ContactAbout { id: own });
+        }
+        self.profile_dialog = Some(dialog);
+    }
+
     /// Links another number: a new account comes on screen with the link page.
     pub(super) fn add_account(&mut self, sender: &ComponentSender<Self>) {
         if self.legacy_layout || self.pending_account.is_some() {
@@ -683,7 +707,7 @@ pub(super) fn record_profile(
 }
 
 /// The WhatsApp id of a formatted phone number, for our own picture.
-fn own_jid(phone: &str) -> String {
+pub(super) fn own_jid(phone: &str) -> String {
     let digits: String = phone.chars().filter(char::is_ascii_digit).collect();
     format!("{digits}@s.whatsapp.net")
 }

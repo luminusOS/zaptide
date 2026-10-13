@@ -67,6 +67,7 @@ pub(super) fn drain_and_convert(
             Event::ContactAbout { id, about } => {
                 events.push(NativeEvent::ContactAbout { id, about })
             }
+            Event::ProfileSaved { error } => events.push(NativeEvent::ProfileSaved { error }),
             Event::Info(message) => events.push(NativeEvent::Info(message)),
             Event::MessageDeleted { chat, id } => {
                 events.push(NativeEvent::MessageDeleted { chat, id })
@@ -378,7 +379,20 @@ pub(super) fn handle_backend_ready(
                 app.chats_dirty = true;
             }
             NativeEvent::ReceiptsPrivacy { disabled } => app.account_receipts_off = disabled,
+            NativeEvent::ProfileSaved { error } => {
+                if let Some(dialog) = &app.profile_dialog {
+                    dialog.saved(error.as_deref());
+                }
+                if error.is_none() {
+                    app.toast("Profile saved");
+                }
+            }
             NativeEvent::ContactAbout { id, about } => {
+                if let Some(dialog) = &app.profile_dialog
+                    && dialog.is_for(&id)
+                {
+                    dialog.set_about(about.as_deref().unwrap_or_default());
+                }
                 if let Some((chat, row)) = &app.info_about
                     && chat == &id
                     && let Some(about) = about

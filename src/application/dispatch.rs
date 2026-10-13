@@ -37,6 +37,14 @@ impl NativeApplication {
                     .connect_clicked(move |_| input_sender.input(Input::OpenThemesFolder));
                 self.preferences = Some(dialog);
             }
+            Input::ShowProfile => self.show_profile(&sender),
+            Input::SaveProfile(edit) => {
+                if let Some(backend) = &self.backend {
+                    backend.send(crate::backend::Command::EditProfile(edit));
+                } else if let Some(dialog) = &self.profile_dialog {
+                    dialog.saved(Some("Not connected to WhatsApp"));
+                }
+            }
             Input::OpenThemesFolder => self.prepare_themes_folder(&sender),
             Input::ThemesFolderPrepared(success) => {
                 if success {
@@ -62,14 +70,6 @@ impl NativeApplication {
                     .application_icon("dev.luminusos.ZapTide")
                     .version(env!("CARGO_PKG_VERSION"))
                     .developer_name("LuminusOS")
-                    .build();
-                about.present(Some(&self.window));
-            }
-            Input::ShowShortcuts => {
-                let (send, newline) = if self.enter_sends.get() {
-                    ("Return", "<Shift>Return")
-                } else {
-                    ("<Control>Return", "Return")
                     .developers(["LuminusOS"])
                     .comments(
                         "A native WhatsApp client for Linux, built with Rust, GTK4, and libadwaita.\n\nZapTide is an independent project and is not affiliated with or endorsed by WhatsApp or Meta.",
@@ -89,6 +89,14 @@ impl NativeApplication {
                         adw::micro_version(),
                     ))
                     .debug_info_filename("zaptide-debug-info.txt")
+                    .build();
+                about.present(Some(&self.window));
+            }
+            Input::ShowShortcuts => {
+                let (send, newline) = if self.enter_sends.get() {
+                    ("Return", "<Shift>Return")
+                } else {
+                    ("<Control>Return", "Return")
                 };
                 let dialog = adw::ShortcutsDialog::new();
                 for (title, items) in [

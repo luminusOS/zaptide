@@ -158,6 +158,23 @@ pub struct CreatedPoll {
     pub recipients: Vec<String>,
 }
 
+/// What to do with this account's profile picture.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum PictureEdit {
+    #[default]
+    Keep,
+    Set(PathBuf),
+    Remove,
+}
+
+/// Changes to this account's own profile; `None` and `Keep` leave a field alone.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProfileEdit {
+    pub name: Option<String>,
+    pub about: Option<String>,
+    pub picture: PictureEdit,
+}
+
 #[derive(Clone, Debug)]
 pub enum Command {
     PollHistoryFailed {
@@ -451,6 +468,14 @@ pub enum Command {
         session_generation: u64,
         avatar_generation: u64,
     },
+    /// Saves this account's name, About text, and picture.
+    EditProfile(ProfileEdit),
+    /// Internal result of [`Command::EditProfile`].
+    ProfileSaved {
+        session_generation: u64,
+        edit: ProfileEdit,
+        result: Result<(), String>,
+    },
     /// Fetches a contact's About text for the info dialog.
     ContactAbout {
         id: String,
@@ -524,6 +549,10 @@ pub enum Command {
 
 #[derive(Debug)]
 pub enum Event {
+    /// The result of saving this account's own profile.
+    ProfileSaved {
+        error: Option<String>,
+    },
     /// This account's own number and profile name, whenever either changes.
     Profile {
         phone: Option<String>,

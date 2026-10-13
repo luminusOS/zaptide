@@ -43,6 +43,7 @@ mod history;
 mod outbound;
 mod poll_history;
 mod polls;
+mod profile;
 mod protocol;
 mod reactions;
 

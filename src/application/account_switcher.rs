@@ -113,6 +113,7 @@ struct Widgets {
     popover: gtk::Popover,
     on_switch: Box<dyn Fn(AccountId)>,
     on_add: Box<dyn Fn()>,
+    on_profile: Box<dyn Fn()>,
 }
 
 pub(super) struct AccountSwitcher {
@@ -137,6 +138,7 @@ impl AccountSwitcher {
     pub(super) fn new(
         on_switch: impl Fn(AccountId) + 'static,
         on_add: impl Fn() + 'static,
+        on_profile: impl Fn() + 'static,
     ) -> Self {
         let avatar = adw::Avatar::new(24, None, true);
         let dot = gtk::Box::builder()
@@ -190,6 +192,7 @@ impl AccountSwitcher {
             popover: popover.clone(),
             on_switch: Box::new(on_switch),
             on_add: Box::new(on_add),
+            on_profile: Box::new(on_profile),
         });
         let shown = std::rc::Rc::new(std::cell::RefCell::new(None));
         let deferred: std::rc::Rc<std::cell::RefCell<Option<SwitcherState>>> =
@@ -326,6 +329,26 @@ fn row(widgets: &std::rc::Rc<Widgets>, account: &SwitcherRow, active: bool) -> a
         prefix.add_overlay(&badge);
     }
     row.add_prefix(&prefix);
+    if account.state == RowState::Ready {
+        let settings = gtk::Button::builder()
+            .icon_name("emblem-system-symbolic")
+            .tooltip_text("Profile settings")
+            .valign(gtk::Align::Center)
+            .css_classes(["flat", "circular"])
+            .build();
+        settings.update_property(&[gtk::accessible::Property::Label("Profile settings")]);
+        let (weak, id) = (std::rc::Rc::downgrade(widgets), account.id);
+        settings.connect_clicked(move |_| {
+            if let Some(widgets) = weak.upgrade() {
+                widgets.popover.popdown();
+                if !active {
+                    (widgets.on_switch)(id);
+                }
+                (widgets.on_profile)();
+            }
+        });
+        row.add_suffix(&settings);
+    }
     if account.unread > 0 {
         let unread = gtk::Label::builder()
             .label(account.unread.to_string())
@@ -449,7 +472,7 @@ mod tests {
         ] {
             adw::StyleManager::default().set_color_scheme(scheme);
             for (count, state) in [("one", &one), ("two", &two)] {
-                let switcher = AccountSwitcher::new(|_| {}, || {});
+                let switcher = AccountSwitcher::new(|_| {}, || {}, || {});
                 switcher.sync(state.clone());
                 assert_eq!(
                     switcher.button.tooltip_text().as_deref(),
