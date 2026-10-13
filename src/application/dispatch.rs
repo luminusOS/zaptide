@@ -70,6 +70,25 @@ impl NativeApplication {
                     ("Return", "<Shift>Return")
                 } else {
                     ("<Control>Return", "Return")
+                    .developers(["LuminusOS"])
+                    .comments(
+                        "A native WhatsApp client for Linux, built with Rust, GTK4, and libadwaita.\n\nZapTide is an independent project and is not affiliated with or endorsed by WhatsApp or Meta.",
+                    )
+                    .website(env!("CARGO_PKG_HOMEPAGE"))
+                    .issue_url(concat!(env!("CARGO_PKG_REPOSITORY"), "/issues"))
+                    .license_type(gtk::License::MitX11)
+                    .copyright("© 2026 LuminusOS")
+                    .debug_info(format!(
+                        "ZapTide {}\nGTK {}.{}.{}\nlibadwaita {}.{}.{}",
+                        env!("CARGO_PKG_VERSION"),
+                        gtk::major_version(),
+                        gtk::minor_version(),
+                        gtk::micro_version(),
+                        adw::major_version(),
+                        adw::minor_version(),
+                        adw::micro_version(),
+                    ))
+                    .debug_info_filename("zaptide-debug-info.txt")
                 };
                 let dialog = adw::ShortcutsDialog::new();
                 for (title, items) in [
