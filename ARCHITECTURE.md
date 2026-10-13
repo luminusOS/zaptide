@@ -1,6 +1,6 @@
-# ZapTide documentation
+# ZapTide architecture
 
-An index of how the code is laid out. The rules for contributors and agents (privacy, boundaries,
+How the code is laid out and how the pieces talk to each other. The rules for contributors and agents (privacy, boundaries,
 definition of done) are in [AGENTS.md](AGENTS.md); packaging and releases are in
 [PACKAGING.md](PACKAGING.md). Day-to-day commands are in the [justfile](justfile).
 
@@ -11,10 +11,19 @@ ZapTide is a GTK 4 / libadwaita WhatsApp client written in Rust. The protocol co
 
 The interface and the protocol run on separate threads and only exchange messages:
 
-```
-GTK thread                          tokio thread
-application.rs  --- Command --->    backend/worker.rs  --- whatsapp-rust
-   (Relm4)      <--- Event ----        archive.rs (SQLCipher)
+```mermaid
+flowchart LR
+    subgraph gtk["GTK thread"]
+        app["application.rs<br/>(Relm4)"]
+    end
+    subgraph tokio["tokio thread"]
+        worker["backend/worker.rs"]
+        archive[("archive.rs<br/>SQLCipher")]
+    end
+    app -- Command --> worker
+    worker -- Event --> app
+    worker --> wa["whatsapp-rust"]
+    worker --> archive
 ```
 
 Several accounts can run at once. The window always shows the active account; the others are kept
