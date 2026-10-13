@@ -1,4 +1,5 @@
 use super::*;
+use crate::i18n::gettext;
 
 pub(super) type DialogActionCallback = std::rc::Rc<dyn Fn(DialogAction)>;
 
@@ -40,14 +41,14 @@ pub(super) fn show_archive_confirmation(
     chat: &crate::model::Chat,
 ) {
     let dialog = adw::AlertDialog::builder()
-        .heading("Archive Chat?")
+        .heading(gettext("Archive Chat?"))
         .body(format!(
             "{} moves to your archived chats. You can unarchive it at any time.",
             chat.name
         ))
         .build();
-    dialog.add_response("cancel", "Cancel");
-    dialog.add_response("archive", "Archive");
+    dialog.add_response("cancel", &gettext("Cancel"));
+    dialog.add_response("archive", &gettext("Archive"));
     dialog.set_response_appearance("archive", adw::ResponseAppearance::Suggested);
     dialog.set_default_response(Some("archive"));
     dialog.set_close_response("cancel");
@@ -71,8 +72,8 @@ pub(super) fn show_remove_account_confirmation(
             "Messages saved on this computer will be deleted. Your phone keeps them, and you can link this account again later.",
         )
         .build();
-    dialog.add_response("cancel", "Cancel");
-    dialog.add_response("unlink", "Remove");
+    dialog.add_response("cancel", &gettext("Cancel"));
+    dialog.add_response("unlink", &gettext("Remove"));
     dialog.set_response_appearance("unlink", adw::ResponseAppearance::Destructive);
     dialog.set_default_response(Some("cancel"));
     dialog.set_close_response("cancel");
@@ -91,12 +92,12 @@ pub(super) fn show_poll_dialog(parent: &adw::ApplicationWindow, on_action: &Dial
     use std::{cell::RefCell, rc::Rc};
     const MAX_OPTIONS: usize = 12;
     let dialog = adw::Dialog::builder()
-        .title("New Poll")
+        .title(gettext("New Poll"))
         .content_width(420)
         .content_height(560)
         .build();
     let question = adw::EntryRow::builder()
-        .title("Question")
+        .title(gettext("Question"))
         .activates_default(true)
         .build();
     let options_list = gtk::ListBox::builder()
@@ -104,15 +105,15 @@ pub(super) fn show_poll_dialog(parent: &adw::ApplicationWindow, on_action: &Dial
         .css_classes(["boxed-list"])
         .build();
     let add = adw::ButtonRow::builder()
-        .title("Add Option")
+        .title(gettext("Add Option"))
         .start_icon_name("list-add-symbolic")
         .build();
     options_list.append(&add);
     let multiple = adw::SwitchRow::builder()
-        .title("Allow Multiple Answers")
+        .title(gettext("Allow Multiple Answers"))
         .build();
     let create = gtk::Button::builder()
-        .label("Create")
+        .label(gettext("Create"))
         .css_classes(["suggested-action"])
         .sensitive(false)
         .build();
@@ -168,7 +169,7 @@ pub(super) fn show_poll_dialog(parent: &adw::ApplicationWindow, on_action: &Dial
             let row = adw::EntryRow::builder().activates_default(true).build();
             let remove = gtk::Button::builder()
                 .icon_name("list-remove-symbolic")
-                .tooltip_text("Remove option")
+                .tooltip_text(gettext("Remove option"))
                 .valign(gtk::Align::Center)
                 .css_classes(["flat", "circular"])
                 .build();
@@ -209,14 +210,16 @@ pub(super) fn show_poll_dialog(parent: &adw::ApplicationWindow, on_action: &Dial
     let group = adw::PreferencesGroup::new();
     group.add(&question);
     page.add(&group);
-    let group = adw::PreferencesGroup::builder().title("Options").build();
+    let group = adw::PreferencesGroup::builder()
+        .title(gettext("Options"))
+        .build();
     group.add(&options_list);
     page.add(&group);
     let group = adw::PreferencesGroup::new();
     group.add(&multiple);
     page.add(&group);
 
-    let cancel = gtk::Button::with_label("Cancel");
+    let cancel = gtk::Button::with_label(&gettext("Cancel"));
     let close = dialog.downgrade();
     cancel.connect_clicked(move |_| {
         if let Some(close) = close.upgrade() {
@@ -254,12 +257,12 @@ pub(super) fn show_new_chat_dialog(
     contacts: Vec<(String, String, String)>,
 ) {
     let dialog = adw::Dialog::builder()
-        .title("New Chat")
+        .title(gettext("New Chat"))
         .content_width(400)
         .content_height(560)
         .build();
     let search = gtk::SearchEntry::builder()
-        .placeholder_text("Search contacts")
+        .placeholder_text(gettext("Search contacts"))
         .margin_start(12)
         .margin_end(12)
         .margin_bottom(6)
@@ -278,8 +281,8 @@ pub(super) fn show_new_chat_dialog(
         .css_classes(["boxed-list"])
         .build();
     let add = adw::ActionRow::builder()
-        .title("New Contact")
-        .subtitle("Message a phone number")
+        .title(gettext("New Contact"))
+        .subtitle(gettext("Message a phone number"))
         .activatable(true)
         .build();
     add.add_prefix(&gtk::Image::from_icon_name("contact-new-symbolic"));
@@ -366,7 +369,7 @@ pub(super) fn show_new_contact_dialog(
     on_action: &DialogActionCallback,
 ) {
     let dialog = gtk::Window::builder()
-        .title("New contact")
+        .title(gettext("New contact"))
         .transient_for(parent)
         .modal(true)
         .default_width(380)
@@ -380,12 +383,12 @@ pub(super) fn show_new_contact_dialog(
         .margin_end(18)
         .build();
     let phone = gtk::Entry::builder()
-        .placeholder_text("Phone number, including country code")
+        .placeholder_text(gettext("Phone number, including country code"))
         .input_purpose(gtk::InputPurpose::Phone)
         .activates_default(true)
         .build();
     let name = gtk::Entry::builder()
-        .placeholder_text("Name (optional)")
+        .placeholder_text(gettext("Name (optional)"))
         .activates_default(true)
         .build();
     let buttons = gtk::Box::builder()
@@ -393,8 +396,8 @@ pub(super) fn show_new_contact_dialog(
         .spacing(8)
         .halign(gtk::Align::End)
         .build();
-    let cancel = gtk::Button::with_label("Cancel");
-    let add = gtk::Button::with_label("Add contact");
+    let cancel = gtk::Button::with_label(&gettext("Cancel"));
+    let add = gtk::Button::with_label(&gettext("Add contact"));
     add.add_css_class("suggested-action");
     buttons.append(&cancel);
     buttons.append(&add);
@@ -434,12 +437,12 @@ pub(super) fn show_mention_dialog(
     avatars: &std::collections::HashMap<String, std::path::PathBuf>,
 ) {
     let dialog = adw::Dialog::builder()
-        .title("Mention")
+        .title(gettext("Mention"))
         .content_width(380)
         .content_height(520)
         .build();
     let search = gtk::SearchEntry::builder()
-        .placeholder_text("Search participants")
+        .placeholder_text(gettext("Search participants"))
         .margin_start(12)
         .margin_end(12)
         .margin_bottom(6)
@@ -455,7 +458,7 @@ pub(super) fn show_mention_dialog(
         .build();
     list.set_placeholder(Some(
         &gtk::Label::builder()
-            .label("No participants match this search.")
+            .label(gettext("No participants match this search."))
             .margin_top(18)
             .margin_bottom(18)
             .css_classes(["dim-label"])
@@ -583,12 +586,12 @@ pub(super) fn show_forward_dialog(
     avatars: &std::collections::HashMap<String, std::path::PathBuf>,
 ) {
     let dialog = adw::Dialog::builder()
-        .title("Forward To")
+        .title(gettext("Forward To"))
         .content_width(400)
         .content_height(560)
         .build();
     let search = gtk::SearchEntry::builder()
-        .placeholder_text("Search chats")
+        .placeholder_text(gettext("Search chats"))
         .margin_start(12)
         .margin_end(12)
         .margin_bottom(6)
@@ -612,7 +615,7 @@ pub(super) fn show_forward_dialog(
             .build();
         card.append(
             &gtk::Label::builder()
-                .label("Forwarding")
+                .label(gettext("Forwarding"))
                 .xalign(0.0)
                 .css_classes(["caption-heading", "dim-label"])
                 .build(),
@@ -653,7 +656,7 @@ pub(super) fn show_forward_dialog(
     ));
     // Destinations are ticked, then sent together from the header button.
     let send = gtk::Button::builder()
-        .label("Forward")
+        .label(gettext("Forward"))
         .sensitive(false)
         .halign(gtk::Align::Center)
         .css_classes(["pill", "suggested-action"])
@@ -944,8 +947,8 @@ pub(super) fn sticker_picker_content(
     if stickers.is_empty() {
         let empty = adw::StatusPage::builder()
             .icon_name("emoji-nature-symbolic")
-            .title("No Stickers Yet")
-            .description("Your recently used stickers appear here.")
+            .title(gettext("No Stickers Yet"))
+            .description(gettext("Your recently used stickers appear here."))
             .vexpand(true)
             .build();
         empty.add_css_class("compact");
@@ -1060,7 +1063,7 @@ pub(super) fn show_chat_info_dialog(
     if let Some(phone) = chat.phone() {
         let phone = crate::util::phone(phone);
         let row = adw::ActionRow::builder()
-            .title("Phone")
+            .title(gettext("Phone"))
             .use_markup(false)
             .subtitle(&phone)
             .subtitle_selectable(true)
@@ -1068,7 +1071,7 @@ pub(super) fn show_chat_info_dialog(
             .build();
         let copy = gtk::Button::builder()
             .icon_name("edit-copy-symbolic")
-            .tooltip_text("Copy phone number")
+            .tooltip_text(gettext("Copy phone number"))
             .valign(gtk::Align::Center)
             .css_classes(["flat"])
             .build();
@@ -1179,7 +1182,7 @@ pub(super) fn show_chat_info_dialog(
 
     if chat.is_group() && !chat.participants.is_empty() {
         let group = adw::PreferencesGroup::builder()
-            .title("Participants")
+            .title(gettext("Participants"))
             .build();
         let mut members: Vec<_> = chat
             .participants

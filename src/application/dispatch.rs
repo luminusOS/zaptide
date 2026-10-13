@@ -1,4 +1,5 @@
 use super::*;
+use crate::i18n::gettext;
 
 mod attachments;
 mod backend_events;
@@ -43,7 +44,7 @@ impl NativeApplication {
                 if let Some(backend) = &self.backend {
                     backend.send(crate::backend::Command::EditProfile(edit));
                 } else if let Some(dialog) = &self.profile_dialog {
-                    dialog.saved(Some("Not connected to WhatsApp"));
+                    dialog.saved(Some(&gettext("Not connected to WhatsApp")));
                 }
             }
             Input::OpenThemesFolder => self.prepare_themes_folder(&sender),
@@ -51,8 +52,8 @@ impl NativeApplication {
                 if success {
                     self.launch_themes_folder(&sender);
                 } else {
-                    self.status = "Could not open themes folder".into();
-                    self.toast("Could not open themes folder");
+                    self.status = gettext("Could not open themes folder");
+                    self.toast(&gettext("Could not open themes folder"));
                 }
             }
             Input::ThemesFolderFinished(success) => {
@@ -62,7 +63,7 @@ impl NativeApplication {
                     "Could not open themes folder".into()
                 };
                 if !success {
-                    self.toast("Could not open themes folder");
+                    self.toast(&gettext("Could not open themes folder"));
                 }
             }
             Input::ShowAbout => {
@@ -140,26 +141,26 @@ impl NativeApplication {
                     for change in changes {
                         if change.apply(&mut self.settings).is_ok() {
                             if let Err(_error) = self.save_settings() {
-                                self.status = "Could not save preferences".into();
-                                self.toast("Could not save preferences");
+                                self.status = gettext("Could not save preferences");
+                                self.toast(&gettext("Could not save preferences"));
                             } else {
-                                self.status = "Preferences saved".into();
+                                self.status = gettext("Preferences saved");
                             }
                         } else {
-                            self.status = "Preference value is invalid".into();
-                            self.toast("Preference value is invalid");
+                            self.status = gettext("Preference value is invalid");
+                            self.toast(&gettext("Preference value is invalid"));
                         }
                     }
                     if custom_theme_changed {
                         self.sync_custom_theme_selection();
                         if self.save_settings().is_err() {
-                            self.status = "Could not save preferences".into();
-                            self.toast("Could not save preferences");
+                            self.status = gettext("Could not save preferences");
+                            self.toast(&gettext("Could not save preferences"));
                         }
                     }
                     if !errors.is_empty() {
-                        self.status = "Preference value is invalid".into();
-                        self.toast("Preference value is invalid");
+                        self.status = gettext("Preference value is invalid");
+                        self.toast(&gettext("Preference value is invalid"));
                     }
                     self.apply_runtime_settings();
                 }
@@ -167,7 +168,7 @@ impl NativeApplication {
             Input::StartBackend => {
                 if let Some(startup) = self.backend.as_mut().and_then(Backend::take_startup) {
                     let _ = startup.send(());
-                    self.status = "Starting backend".into();
+                    self.status = gettext("Starting backend");
                 }
                 for session in self.accounts.values_mut() {
                     if let Some(startup) = session.backend.as_mut().and_then(Backend::take_startup)
@@ -236,7 +237,7 @@ impl NativeApplication {
                     return;
                 }
                 let Some(backend) = &self.backend else {
-                    self.status = "Backend unavailable".into();
+                    self.status = gettext("Backend unavailable");
                     return;
                 };
                 self.loading_older = true;
@@ -355,7 +356,7 @@ impl NativeApplication {
             Input::Reconnect => {
                 if let Some(backend) = &self.backend {
                     backend.send(crate::backend::Command::Reconnect);
-                    self.status = "Reconnecting to WhatsApp".into();
+                    self.status = gettext("Reconnecting to WhatsApp");
                 }
             }
             Input::Resumed => {
@@ -374,7 +375,7 @@ impl NativeApplication {
                     backend.send(crate::backend::Command::Reconnect);
                     self.resuming = true;
                     self.resume_dropped = false;
-                    self.status = "Refreshing messages".into();
+                    self.status = gettext("Refreshing messages");
                     let input = sender.clone();
                     gtk::glib::timeout_add_local_once(RESUME_REFRESH_LIMIT, move || {
                         input.input(Input::ResumeSettled)
@@ -393,9 +394,9 @@ impl NativeApplication {
                 }
                 if let Some(backend) = &self.backend {
                     backend.send(crate::backend::Command::Unlink);
-                    self.status = "Unlinking this computer".into();
+                    self.status = gettext("Unlinking this computer");
                 } else {
-                    self.status = "Backend unavailable".into();
+                    self.status = gettext("Backend unavailable");
                 }
             }
             Input::ShowChatInfo => {
@@ -450,7 +451,7 @@ impl NativeApplication {
                     TrayAction::ToggleNotifications => {
                         self.settings.notifications = !self.settings.notifications;
                         if self.save_settings().is_err() {
-                            self.status = "Could not save preferences".into();
+                            self.status = gettext("Could not save preferences");
                         }
                     }
                     TrayAction::Preferences => {
@@ -488,7 +489,7 @@ impl NativeApplication {
                         &self.window.clipboard(),
                         &code,
                     );
-                    self.toast("Code copied");
+                    self.toast(&gettext("Code copied"));
                 }
             }
             Input::CopyCode(code) => {
@@ -496,7 +497,7 @@ impl NativeApplication {
                     &self.window.clipboard(),
                     &code,
                 );
-                self.toast("Code copied");
+                self.toast(&gettext("Code copied"));
             }
             Input::FlushChats => {
                 self.chats_flush_scheduled = false;
@@ -504,21 +505,21 @@ impl NativeApplication {
             }
             Input::PairWithPhone(phone) => {
                 let Some(digits) = normalized_phone(&phone) else {
-                    self.status = "Enter valid phone number with country code".into();
-                    self.toast("Enter valid phone number with country code");
+                    self.status = gettext("Enter valid phone number with country code");
+                    self.toast(&gettext("Enter valid phone number with country code"));
                     return;
                 };
                 if let Some(backend) = &self.backend {
                     backend.send(crate::backend::Command::PairWithPhone(digits));
-                    self.status = "Requesting a pairing code from WhatsApp".into();
+                    self.status = gettext("Requesting a pairing code from WhatsApp");
                 } else {
-                    self.status = "Backend unavailable".into();
+                    self.status = gettext("Backend unavailable");
                 }
             }
             Input::NewContact { phone, name } => {
                 let Some(digits) = normalized_phone(&phone) else {
-                    self.status = "Enter valid phone number with country code".into();
-                    self.toast("Enter valid phone number with country code");
+                    self.status = gettext("Enter valid phone number with country code");
+                    self.toast(&gettext("Enter valid phone number with country code"));
                     return;
                 };
                 let name = name.filter(|name| !name.trim().is_empty());
@@ -535,9 +536,9 @@ impl NativeApplication {
                         full_name: name,
                         to_phone: self.settings.save_contacts_to_phone,
                     });
-                    self.status = "Checking contact on WhatsApp".into();
+                    self.status = gettext("Checking contact on WhatsApp");
                 } else {
-                    self.status = "Backend unavailable".into();
+                    self.status = gettext("Backend unavailable");
                 }
             }
             Input::ShowMessageMenu { id, x, y } => self.show_message_menu(id, x, y, &sender),
@@ -641,7 +642,7 @@ impl NativeApplication {
             }
             Input::SendContact { target, contact } => self.share_contact(target, contact),
             Input::ContactActionFinished(result) => match result {
-                Ok(()) => self.toast("Contact opened"),
+                Ok(()) => self.toast(&gettext("Contact opened")),
                 Err(error) => {
                     self.status = error.clone();
                     self.toast(&error);
@@ -772,12 +773,12 @@ impl NativeApplication {
                     "Could not save attachment".into()
                 };
                 if !success {
-                    self.toast("Could not save attachment");
+                    self.toast(&gettext("Could not save attachment"));
                 }
             }
             Input::PortalActionFinished(error) => {
                 self.status = error;
-                self.toast("Clipboard or portal action failed");
+                self.toast(&gettext("Clipboard or portal action failed"));
             }
             Input::PickAttachments { gallery } => {
                 attachments::pick_attachments(self, gallery, &sender)
@@ -796,7 +797,7 @@ impl NativeApplication {
                         &self.window.clipboard(),
                         &text,
                     );
-                    self.toast("Copied");
+                    self.toast(&gettext("Copied"));
                 }
             }
             Input::ActivateVoice => self.activate_voice(&sender),
@@ -812,7 +813,7 @@ impl NativeApplication {
                         &self.window.clipboard(),
                         &number,
                     );
-                    self.toast("Phone number copied");
+                    self.toast(&gettext("Phone number copied"));
                 }
                 crate::native_media::NativeMediaAction::OpenContact(contact) => {
                     self.open_contact(contact, &sender)
@@ -837,14 +838,14 @@ impl NativeApplication {
                             button,
                         });
                     } else {
-                        self.status = "Backend unavailable".into();
+                        self.status = gettext("Backend unavailable");
                     }
                 }
                 crate::native_media::NativeMediaAction::AnswerListRow { chat, message, row } => {
                     if let Some(backend) = &self.backend {
                         backend.send(crate::backend::Command::AnswerListRow { chat, message, row });
                     } else {
-                        self.status = "Backend unavailable".into();
+                        self.status = gettext("Backend unavailable");
                     }
                 }
                 crate::native_media::NativeMediaAction::Open(path) => {
@@ -930,15 +931,15 @@ impl NativeApplication {
             }
             Input::DeleteSelected(everyone) => {
                 let dialog = adw::AlertDialog::builder()
-                    .heading("Delete message?")
+                    .heading(gettext("Delete message?"))
                     .body(if everyone {
                         "Delete this message for everyone?"
                     } else {
                         "Delete this message for you?"
                     })
                     .build();
-                dialog.add_response("cancel", "Cancel");
-                dialog.add_response("delete", "Delete");
+                dialog.add_response("cancel", &gettext("Cancel"));
+                dialog.add_response("delete", &gettext("Delete"));
                 dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
                 let input = sender.clone();
                 dialog.connect_response(None, move |_, response| {
@@ -974,7 +975,7 @@ impl NativeApplication {
                 self.request_shutdown(sender);
             }
             Input::ShutdownComplete => {
-                self.status = "Shutdown complete".into();
+                self.status = gettext("Shutdown complete");
                 relm4::main_application().quit();
             }
         }

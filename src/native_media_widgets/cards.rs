@@ -1,4 +1,5 @@
 use super::*;
+use crate::i18n::gettext;
 
 /// A shared place: the sender's map snapshot, name, address, and
 /// coordinates. Clicking opens the default maps app, else OpenStreetMap.
@@ -337,7 +338,9 @@ fn start_preview_decode(
                         image.set_visible(true);
                     }
                     Some(ThumbnailResult::Placeholder(_)) | None => {
-                        image.set_tooltip_text(Some("Image preview unavailable; open attachment"));
+                        image.set_tooltip_text(Some(&gettext(
+                            "Image preview unavailable; open attachment",
+                        )));
                         image.set_visible(false);
                     }
                 }

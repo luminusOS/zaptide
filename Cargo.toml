@@ -41,6 +41,7 @@ name = "zaptide"
 path = "src/main.rs"
 
 [dependencies]
+gettext-rs = { version = "0.7", features = ["gettext-system"] }
 anyhow = "1"
 # Hashes saved stickers by content. Already included through wacore.
 sha2 = "0.11"

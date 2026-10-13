@@ -1,3 +1,4 @@
+use crate::i18n::gettext;
 use gtk::prelude::*;
 use relm4::prelude::*;
 
@@ -56,7 +57,7 @@ impl SimpleComponent for TranscriptView {
 
             add_named[Some("empty")] = &adw::StatusPage {
                 set_icon_name: Some("chat-message-new-symbolic"),
-                set_title: "No Conversation Selected",
+                set_title: &gettext("No Conversation Selected"),
                 set_description: Some("Choose a chat from the list to start messaging."),
             },
 
@@ -68,7 +69,7 @@ impl SimpleComponent for TranscriptView {
                     set_margin_top: 4,
                     set_margin_bottom: 4,
                     add_css_class: "flat",
-                    set_tooltip_text: Some("Show earlier messages from the archive or your phone"),
+                    set_tooltip_text: Some(&gettext("Show earlier messages from the archive or your phone")),
                     #[watch]
                     set_visible: model.state.has_messages && !model.state.history_complete,
                     // Stay sensitive while loading: insensitive styling would dim the
@@ -92,7 +93,7 @@ impl SimpleComponent for TranscriptView {
                                 add_css_class: "dim-label",
                             },
                             append = &gtk::Label {
-                                set_label: "Load older messages",
+                                set_label: &gettext("Load older messages"),
                                 add_css_class: "dim-label",
                             },
                         },
@@ -104,7 +105,7 @@ impl SimpleComponent for TranscriptView {
                                 set_valign: gtk::Align::Center,
                             },
                             append = &gtk::Label {
-                                set_label: "Loading older messages…",
+                                set_label: &gettext("Loading older messages…"),
                                 add_css_class: "dim-label",
                             },
                         },
@@ -132,8 +133,8 @@ impl SimpleComponent for TranscriptView {
                         set_margin_end: 18,
                         set_margin_bottom: 18,
                         set_icon_name: "go-bottom-symbolic",
-                        set_tooltip_text: Some("Go to latest message"),
-                        update_property: &[gtk::accessible::Property::Label("Go to latest message")],
+                        set_tooltip_text: Some(&gettext("Go to latest message")),
+                        update_property: &[gtk::accessible::Property::Label(&gettext("Go to latest message"))],
                         add_css_class: "circular",
                         add_css_class: "suggested-action",
                         add_css_class: "zaptide-jump-button",
@@ -147,7 +148,7 @@ impl SimpleComponent for TranscriptView {
                         set_valign: gtk::Align::End,
                         set_margin_end: 18,
                         set_margin_bottom: 18,
-                        set_tooltip_text: Some("Go to new messages"),
+                        set_tooltip_text: Some(&gettext("Go to new messages")),
                         add_css_class: "pill",
                         add_css_class: "suggested-action",
                         #[watch]
@@ -160,7 +161,7 @@ impl SimpleComponent for TranscriptView {
                                 set_icon_name: Some("go-bottom-symbolic"),
                             },
                             append = &gtk::Label {
-                                set_label: "New messages",
+                                set_label: &gettext("New messages"),
                             },
                         },
                     },

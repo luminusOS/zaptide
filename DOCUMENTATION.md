@@ -42,6 +42,14 @@ Static CSS is in `data/style.css` and `data/theme-defaults.css` and is embedded 
 `apply_theme` in `src/application.rs`. Only the palette of a custom theme and the zoom are generated
 at run time. Add new rules to `data/style.css` rather than to the Rust code.
 
+## Translations
+
+UI strings go through `gettext("...")` from `src/i18n.rs`. `just pot` refreshes `po/zaptide.pot` and
+merges it into each language listed in `po/LINGUAS`; `just run` compiles the catalogues into
+`target/locale` first. The Flatpak manifests install the compiled catalogues under `/app/share/locale`.
+Brazilian Portuguese is the first translation. Strings built with `format!` and the AppImage build are
+not translated yet.
+
 ## Building
 
 ```sh

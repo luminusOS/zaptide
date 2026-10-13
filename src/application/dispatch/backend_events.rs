@@ -1,4 +1,5 @@
 use super::*;
+use crate::i18n::gettext;
 
 pub(super) fn drain_and_convert(
     backend: Option<&Backend>,
@@ -215,7 +216,7 @@ pub(super) fn handle_backend_ready(
                     app.loading_older = false;
                     app.history_complete = !more;
                     if !more {
-                        app.status = "No older messages available".into();
+                        app.status = gettext("No older messages available");
                     }
                 }
             }
@@ -385,7 +386,7 @@ pub(super) fn handle_backend_ready(
                     dialog.saved(error.as_deref());
                 }
                 if error.is_none() {
-                    app.toast("Profile saved");
+                    app.toast(&gettext("Profile saved"));
                 }
             }
             NativeEvent::ContactAbout { id, about } => {
@@ -410,7 +411,7 @@ pub(super) fn handle_backend_ready(
                     id.clone(),
                     display_name,
                 ))]);
-                app.status = "Contact is on WhatsApp".into();
+                app.status = gettext("Contact is on WhatsApp");
                 sender.input(Input::OpenChatId(id));
             }
             NativeEvent::Info(message) => {

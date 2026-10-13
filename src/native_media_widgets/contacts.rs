@@ -1,5 +1,6 @@
 use super::*;
 use crate::contact_cards::ContactCard;
+use crate::i18n::gettext;
 use adw::prelude::ActionRowExt;
 use std::rc::Rc;
 
@@ -61,7 +62,7 @@ fn header(name: &str, detail: Option<&str>, suffix: Option<&gtk::Button>) -> gtk
 fn copy_button(number: &str, on_action: &Rc<dyn Fn(NativeMediaAction)>) -> gtk::Button {
     let copy = gtk::Button::builder()
         .icon_name("edit-copy-symbolic")
-        .tooltip_text("Copy phone number")
+        .tooltip_text(gettext("Copy phone number"))
         .valign(gtk::Align::Center)
         .css_classes(["flat", "circular"])
         .build();
@@ -104,7 +105,11 @@ pub(crate) fn contact_preview(contact: &ContactCard) -> gtk::Box {
         phones.append(&row);
     }
     if contact.phones.is_empty() {
-        phones.append(&adw::ActionRow::builder().title("No phone number").build());
+        phones.append(
+            &adw::ActionRow::builder()
+                .title(gettext("No phone number"))
+                .build(),
+        );
     }
     page.append(&phones);
     page

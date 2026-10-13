@@ -6,6 +6,7 @@
 //! creates the cells on screen. It reads GTK's own emoji data, and GTK's
 //! recent-emoji setting, so recents carry over from the old chooser.
 
+use crate::i18n::gettext;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -143,7 +144,7 @@ pub fn picker(on_pick: impl Fn(&str) + 'static) -> gtk::Popover {
     let popover = gtk::Popover::new();
     let content = gtk::Box::new(gtk::Orientation::Vertical, 6);
     let search = gtk::SearchEntry::builder()
-        .placeholder_text("Search emoji")
+        .placeholder_text(gettext("Search emoji"))
         .build();
     let grid = gtk::GridView::builder()
         .min_columns(COLUMNS)

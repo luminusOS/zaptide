@@ -1,4 +1,5 @@
 use super::*;
+use crate::i18n::gettext;
 
 /// Draws voice-message bars (0-100) across the area; with `progress`, the played
 /// part is brighter and a dot marks the position. Shared by playback and recording.
@@ -73,7 +74,9 @@ impl RecordingMeter {
             .content_height(32)
             .hexpand(true)
             .build();
-        area.update_property(&[gtk::accessible::Property::Label("Microphone level")]);
+        area.update_property(&[gtk::accessible::Property::Label(&gettext(
+            "Microphone level",
+        ))]);
         let paint = bars.clone();
         area.set_draw_func(move |area, cr, width, height| {
             draw_waveform(area, cr, width, height, &paint.borrow(), None);
@@ -142,7 +145,7 @@ impl AudioControls {
         seek.set_draw_value(false);
         // The waveform shows progress; the scale only takes clicks and drags.
         seek.add_css_class("zaptide-audio-seek");
-        seek.update_property(&[gtk::accessible::Property::Label("Seek audio")]);
+        seek.update_property(&[gtk::accessible::Property::Label(&gettext("Seek audio"))]);
         let action = on_action.clone();
         seek.connect_change_value(move |_, _, value| {
             action(crate::native_voice::VoiceIntent::Seek(

@@ -5,6 +5,7 @@ fn main() -> anyhow::Result<()> {
         env_logger::Env::default().default_filter_or("warn,zaptide=info"),
     )
     .init();
+    zaptide::i18n::init();
     let dirs = zaptide::paths::AppDirs::discover();
     zaptide::application::run(dirs);
     Ok(())

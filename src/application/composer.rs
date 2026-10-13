@@ -1,3 +1,4 @@
+use crate::i18n::gettext;
 use gtk::prelude::*;
 use relm4::prelude::*;
 
@@ -132,14 +133,14 @@ impl SimpleComponent for ComposerView {
                 set_visible: model.state.recording,
                 append = &gtk::Button {
                     set_icon_name: "user-trash-symbolic",
-                    set_tooltip_text: Some("Discard recording"),
+                    set_tooltip_text: Some(&gettext("Discard recording")),
                     add_css_class: "flat",
                     add_css_class: "circular",
                     connect_clicked[sender] => move |_| sender.output(ComposerViewOutput::Recording(crate::native_voice::RecordingIntent::Cancel)).unwrap(),
                 },
                 append = &gtk::Image {
                     set_icon_name: Some("media-record-symbolic"),
-                    update_property: &[gtk::accessible::Property::Label("Recording")],
+                    update_property: &[gtk::accessible::Property::Label(&gettext("Recording"))],
                     add_css_class: "error",
                     #[watch]
                     set_opacity: model.state.recording_blink,
@@ -154,8 +155,8 @@ impl SimpleComponent for ComposerView {
                 append = &gtk::Button {
                     #[wrap(Some)]
                     set_child = &super::paper_plane_icon() -> gtk::DrawingArea {},
-                    set_tooltip_text: Some("Send voice message"),
-                    update_property: &[gtk::accessible::Property::Label("Send voice message")],
+                    set_tooltip_text: Some(&gettext("Send voice message")),
+                    update_property: &[gtk::accessible::Property::Label(&gettext("Send voice message"))],
                     add_css_class: "suggested-action",
                     add_css_class: "circular",
                     #[watch]
@@ -195,7 +196,7 @@ impl SimpleComponent for ComposerView {
                 },
                 append = &gtk::Button {
                     set_icon_name: "window-close-symbolic",
-                    set_tooltip_text: Some("Cancel"),
+                    set_tooltip_text: Some(&gettext("Cancel")),
                     add_css_class: "flat",
                     add_css_class: "circular",
                     connect_clicked[sender] => move |_| {
@@ -229,7 +230,7 @@ impl SimpleComponent for ComposerView {
                         #[wrap(Some)]
                         set_child = &libadwaita::ButtonContent {
                             set_icon_name: "edit-clear-all-symbolic",
-                            set_label: "Remove All",
+                            set_label: &gettext("Remove All"),
                         },
                         set_valign: gtk::Align::Center,
                         add_css_class: "flat",
@@ -262,7 +263,7 @@ impl SimpleComponent for ComposerView {
                 #[name = "emoji_button"]
                 append = &gtk::MenuButton {
                     set_icon_name: "mail-attachment-symbolic",
-                    set_tooltip_text: Some("Attach"),
+                    set_tooltip_text: Some(&gettext("Attach")),
                     set_valign: gtk::Align::End,
                     add_css_class: "flat",
                     add_css_class: "circular",
@@ -278,7 +279,7 @@ impl SimpleComponent for ComposerView {
                             set_column_homogeneous: true,
                             attach[0, 0, 1, 1] = &gtk::Button {
                                 set_child: Some(&super::attach_tile("image-x-generic-symbolic", "Gallery", "gallery")),
-                                set_tooltip_text: Some("Send photos and videos"),
+                                set_tooltip_text: Some(&gettext("Send photos and videos")),
                                 add_css_class: "flat",
                                 add_css_class: "zaptide-attach-tile",
                                 #[watch]
@@ -287,7 +288,7 @@ impl SimpleComponent for ComposerView {
                             },
                             attach[1, 0, 1, 1] = &gtk::Button {
                                 set_child: Some(&super::attach_tile("text-x-generic-symbolic", "Files", "files")),
-                                set_tooltip_text: Some("Send any file as a document"),
+                                set_tooltip_text: Some(&gettext("Send any file as a document")),
                                 add_css_class: "flat",
                                 add_css_class: "zaptide-attach-tile",
                                 #[watch]
@@ -296,7 +297,7 @@ impl SimpleComponent for ComposerView {
                             },
                             attach[0, 1, 1, 1] = &gtk::Button {
                                 set_child: Some(&super::attach_tile("view-list-bullet-symbolic", "Poll", "poll")),
-                                set_tooltip_text: Some("Create a poll"),
+                                set_tooltip_text: Some(&gettext("Create a poll")),
                                 add_css_class: "flat",
                                 add_css_class: "zaptide-attach-tile",
                                 #[watch]
@@ -305,7 +306,7 @@ impl SimpleComponent for ComposerView {
                             },
                             attach[1, 1, 1, 1] = &gtk::Button {
                                 set_child: Some(&super::attach_tile("avatar-default-symbolic", "Mention", "mention")),
-                                set_tooltip_text: Some("Mention a participant"),
+                                set_tooltip_text: Some(&gettext("Mention a participant")),
                                 add_css_class: "flat",
                                 add_css_class: "zaptide-attach-tile",
                                 #[watch]
@@ -314,8 +315,8 @@ impl SimpleComponent for ComposerView {
                             },
                             attach[0, 2, 2, 1] = &gtk::Button {
                                 set_child: Some(&super::attach_tile("avatar-default-symbolic", "Contact", "contact")),
-                                set_tooltip_text: Some("Share a contact"),
-                                update_property: &[gtk::accessible::Property::Label("Share a contact")],
+                                set_tooltip_text: Some(&gettext("Share a contact")),
+                                update_property: &[gtk::accessible::Property::Label(&gettext("Share a contact"))],
                                 add_css_class: "flat",
                                 add_css_class: "zaptide-attach-tile",
                                 #[watch]
@@ -328,7 +329,7 @@ impl SimpleComponent for ComposerView {
 
                 append = &gtk::MenuButton {
                     set_icon_name: "face-smile-symbolic",
-                    set_tooltip_text: Some("Emoji"),
+                    set_tooltip_text: Some(&gettext("Emoji")),
                     set_valign: gtk::Align::End,
                     add_css_class: "flat",
                     add_css_class: "circular",
@@ -343,7 +344,7 @@ impl SimpleComponent for ComposerView {
                 #[name = "sticker_button"]
                 append = &gtk::Button {
                     set_icon_name: "emoji-nature-symbolic",
-                    set_tooltip_text: Some("Sticker"),
+                    set_tooltip_text: Some(&gettext("Sticker")),
                     set_valign: gtk::Align::End,
                     add_css_class: "flat",
                     add_css_class: "circular",
@@ -368,8 +369,8 @@ impl SimpleComponent for ComposerView {
                         set_left_margin: 12,
                         set_right_margin: 12,
                         set_buffer: Some(&model.buffer),
-                        update_property: &[gtk::accessible::Property::Label("Message composer")],
-                        update_property: &[gtk::accessible::Property::Description("Write a message. Return inserts a line; use Send to submit when using IME.")],
+                        update_property: &[gtk::accessible::Property::Label(&gettext("Message composer"))],
+                        update_property: &[gtk::accessible::Property::Description(&gettext("Write a message. Return inserts a line; use Send to submit when using IME."))],
                         #[watch]
                         set_editable: model.state.editable,
                         #[watch]
@@ -379,7 +380,7 @@ impl SimpleComponent for ComposerView {
 
                 append = &gtk::Button {
                     set_icon_name: "audio-input-microphone-symbolic",
-                    set_tooltip_text: Some("Record voice message"),
+                    set_tooltip_text: Some(&gettext("Record voice message")),
                     set_valign: gtk::Align::End,
                     add_css_class: "flat",
                     add_css_class: "circular",
@@ -428,7 +429,9 @@ impl SimpleComponent for ComposerView {
             .css_classes(["navigation-sidebar"])
             .width_request(300)
             .build();
-        mention_list.update_property(&[gtk::accessible::Property::Label("Mention suggestions")]);
+        mention_list.update_property(&[gtk::accessible::Property::Label(&gettext(
+            "Mention suggestions",
+        ))]);
         // Not autohide and not focusable, so typing stays in the composer.
         let mention_popover = gtk::Popover::builder()
             .position(gtk::PositionType::Top)
@@ -675,7 +678,7 @@ impl ComposerView {
         }
         if let Some(texture) = &self.state.clipboard_preview {
             let picture = gtk::Picture::for_paintable(texture);
-            picture.set_alternative_text(Some("Clipboard image"));
+            picture.set_alternative_text(Some(&gettext("Clipboard image")));
             list.append(&attachment_card(
                 &thumbnail(picture),
                 "Clipboard image",

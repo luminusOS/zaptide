@@ -93,6 +93,7 @@ jobs:
           cp "target/${{ matrix.target }}/release/zaptide" README.md LICENSE "dist/$name/"
           # Desktop integration for package builds and hand-installs.
           cp --parents data/dev.luminusos.ZapTide.desktop data/icons/zaptide.svg data/icons/zaptide-symbolic.svg data/icons/zaptide-unread-symbolic.svg "dist/$name/"
+          cp -r po "dist/$name/"
           cd dist
           tar czf "$name.tar.gz" "$name"
 

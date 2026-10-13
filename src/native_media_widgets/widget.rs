@@ -1,4 +1,5 @@
 use super::*;
+use crate::i18n::gettext;
 
 /// Build message media widget and forward attachment actions to its owner.
 pub fn build_media_widget_with_action(
@@ -372,7 +373,7 @@ pub fn build_media_widget_with_action(
         let preview = gtk::Image::new();
         preview.set_pixel_size(256);
         preview.set_halign(gtk::Align::Start);
-        preview.set_tooltip_text(Some("Image preview"));
+        preview.set_tooltip_text(Some(&gettext("Image preview")));
         // An empty gtk::Image still reserves its pixel size, stretching the
         // row with a blank card until the thumbnail decodes, if it ever does.
         preview.set_visible(false);
@@ -384,7 +385,7 @@ pub fn build_media_widget_with_action(
 
     if let Some(action) = attachment_action(message) {
         let button = gtk::Button::with_label(attachment_button_label(message));
-        button.set_tooltip_text(Some("Open or download attachment"));
+        button.set_tooltip_text(Some(&gettext("Open or download attachment")));
         button.connect_clicked(move |_| {
             on_action(action.clone());
         });

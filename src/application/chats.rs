@@ -1,4 +1,5 @@
 use super::*;
+use crate::i18n::gettext;
 
 /// Captures the displayed account and chat ID before a GTK activation is queued.
 #[derive(Default)]
@@ -128,7 +129,7 @@ impl NativeApplication {
             .find(|known| known.id == chat)
             .map(|known| known.name.clone())
             .unwrap_or_else(|| "Conversation".into());
-        self.status = "Loading messages".into();
+        self.status = gettext("Loading messages");
         if let Some(backend) = &self.backend {
             backend.send(crate::backend::Command::MarkRead {
                 chat: chat.clone(),
@@ -228,7 +229,10 @@ impl NativeApplication {
         section.append(Some(archive), Some("win.chat-archive"));
         self.chat_menu.append_section(None, &section);
         let section = gtk::gio::Menu::new();
-        section.append(Some("Copy _Transcript"), Some("win.copy-transcript"));
+        section.append(
+            Some(&gettext("Copy _Transcript")),
+            Some("win.copy-transcript"),
+        );
         self.chat_menu.append_section(None, &section);
     }
 
