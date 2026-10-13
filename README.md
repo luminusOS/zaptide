@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="packaging/icons/zaptide.svg" alt="ZapTide logo" width="160" height="160" />
+<img src="data/icons/zaptide.svg" alt="ZapTide logo" width="160" height="160" />
 
 # ZapTide
 

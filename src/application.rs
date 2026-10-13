@@ -375,15 +375,15 @@ const FILTER_ICON: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="16"
 
 /// The app's symbolic icon, drawn in the tray. The names match the copies
 /// the Flatpak exports to the host's icon theme.
-const TRAY_ICON: &str = include_str!("../packaging/icons/zaptide-symbolic.svg");
+const TRAY_ICON: &str = include_str!("../data/icons/zaptide-symbolic.svg");
 
 /// The tray icon with a dot for unread chats. The `error` class lets hosts
 /// recolour the dot like GTK does.
-const TRAY_UNREAD_ICON: &str = include_str!("../packaging/icons/zaptide-unread-symbolic.svg");
+const TRAY_UNREAD_ICON: &str = include_str!("../data/icons/zaptide-unread-symbolic.svg");
 
 /// The full-colour app icon, for the window and About dialog when the host
 /// has no installed copy (AppImage, `cargo run`).
-const APP_ICON: &str = include_str!("../packaging/icons/zaptide.svg");
+const APP_ICON: &str = include_str!("../data/icons/zaptide.svg");
 
 fn install_icons(dir: &std::path::Path) {
     let tray = [

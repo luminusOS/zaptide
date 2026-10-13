@@ -11,8 +11,8 @@ keywords = ["whatsapp", "chat", "gtk", "messaging"]
 categories = ["gui"]
 
 [package.metadata.appimage]
-icon = "packaging/icons/zaptide.svg"
-desktop_entry = "packaging/applications/dev.luminusos.ZapTide.desktop"
+icon = "data/icons/zaptide.svg"
+desktop_entry = "data/dev.luminusos.ZapTide.desktop"
 auto_link = true
 auto_link_exclude_list = [
   "ld-linux*.so*",
