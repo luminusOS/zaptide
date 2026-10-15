@@ -644,6 +644,7 @@ async fn newsletter_sends_are_rejected_before_reaching_the_client() {
             text: "Fixture".into(),
             quoting: None,
             mentions: Vec::new(),
+            link_preview: false,
         })
         .await;
     let emitted: Vec<_> = events.try_iter().collect();

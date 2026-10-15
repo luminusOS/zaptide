@@ -69,6 +69,9 @@ pub(super) fn drain_and_convert(
                 events.push(NativeEvent::ContactAbout { id, about })
             }
             Event::ProfileSaved { error } => events.push(NativeEvent::ProfileSaved { error }),
+            Event::LinkPreviewsChanged(enabled) => {
+                events.push(NativeEvent::LinkPreviewsChanged(enabled))
+            }
             Event::Info(message) => events.push(NativeEvent::Info(message)),
             Event::MessageDeleted { chat, id } => {
                 events.push(NativeEvent::MessageDeleted { chat, id })
@@ -387,6 +390,12 @@ pub(super) fn handle_backend_ready(
                 }
                 if error.is_none() {
                     app.toast(&gettext("Profile saved"));
+                }
+            }
+            NativeEvent::LinkPreviewsChanged(enabled) => {
+                app.settings.link_previews = enabled;
+                if app.save_settings().is_err() {
+                    app.toast(&gettext("Could not save preferences"));
                 }
             }
             NativeEvent::ContactAbout { id, about } => {

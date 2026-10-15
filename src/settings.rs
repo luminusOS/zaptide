@@ -40,6 +40,8 @@ pub struct Settings {
     pub send_read_receipts: bool,
     /// Send typing state while composing.
     pub send_typing: bool,
+    /// Fetch and show link previews; mirrors the account setting synced with the phone.
+    pub link_previews: bool,
     /// Download attachments when they enter view instead of on click.
     #[serde(alias = "auto_download_images")]
     pub auto_download: bool,
@@ -83,6 +85,7 @@ impl Default for Settings {
             enter_sends: true,
             send_read_receipts: true,
             send_typing: true,
+            link_previews: true,
             auto_download: true,
             show_sender_pictures: false,
             last_chat: None,

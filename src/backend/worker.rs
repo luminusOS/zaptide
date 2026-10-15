@@ -59,6 +59,7 @@ use protocol::classify;
 
 use super::{Command, Event, LinkStatus, Wake, read_sync::ReadSync};
 use crate::archive::Archive;
+use crate::link_preview;
 
 const PAGE: usize = 60;
 use crate::model::{
@@ -2501,6 +2502,7 @@ impl Worker {
         text: String,
         quoting: Option<String>,
         mentions: Vec<String>,
+        link_preview: bool,
     ) {
         let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&chat)) else {
             self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
@@ -2513,6 +2515,10 @@ impl Worker {
         let (context, quoted_row) = self.quote_context(&chat, quoting.as_deref());
         let mut message = outgoing_text(text.clone(), context, &mentions);
         let expiration = self.apply_ephemeral(&chat, &mut message);
+        let link = link_preview
+            .then(|| first_link(&text))
+            .flatten()
+            .map(|url| (url, text.clone()));
         let mentions = self.mentions_of(&mentions);
         let id = client.generate_message_id();
         let session_generation = self.session_generation;
@@ -2536,19 +2542,38 @@ impl Worker {
             thumbnail: None,
         };
         self.store_message(row, Some(message.encode_to_vec()), None);
-        tokio::spawn(send_outgoing(
-            OutgoingSession {
-                client,
-                commands: self.commands.clone(),
-                generation: session_generation,
-                generation_shared: session_generation_shared,
-            },
-            chat,
-            jid,
-            id,
-            message,
-            expiration,
-        ));
+        let session = OutgoingSession {
+            client,
+            commands: self.commands.clone(),
+            generation: session_generation,
+            generation_shared: session_generation_shared,
+        };
+        tokio::spawn(async move {
+            let message = match link {
+                Some((url, text)) => match link_preview::fetch(url.clone()).await {
+                    Some(preview) => with_link_preview(message, &text, &url, preview, expiration),
+                    None => message,
+                },
+                None => message,
+            };
+            send_outgoing(session, chat, jid, id, message, expiration).await
+        });
+    }
+
+    fn set_link_previews(&self, enabled: bool) {
+        let Some(client) = self.client.clone() else {
+            self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
+            return;
+        };
+        tokio::spawn(async move {
+            if let Err(error) = client
+                .app_state_settings()
+                .set_link_previews_disabled(!enabled)
+                .await
+            {
+                log::warn!("link-preview setting was not synced: {error}");
+            }
+        });
     }
 
     /// Answers a buttons or list message with one of its choices. The wire
@@ -4278,6 +4303,35 @@ fn outgoing_text(
         Some(context) => wa::Message::text_with_context(text, context),
         None => wa::Message::text(text),
     }
+}
+
+/// Wire message for text that links a page, with the title and description the
+/// recipient sees under it. The local row keeps the plain text.
+fn with_link_preview(
+    message: wa::Message,
+    text: &str,
+    url: &str,
+    preview: link_preview::Preview,
+    expiration: Option<u32>,
+) -> wa::Message {
+    use whatsapp_rust::prelude::MessageField;
+    let context = message
+        .extended_text_message
+        .as_option()
+        .and_then(|extended| extended.context_info.as_option().cloned());
+    let mut wire = wa::Message {
+        extended_text_message: MessageField::some(wa::message::ExtendedTextMessage {
+            text: Some(text.to_owned()),
+            matched_text: Some(url.to_owned()),
+            title: preview.title,
+            description: preview.description,
+            context_info: context.map_or_else(MessageField::none, MessageField::some),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    apply_ephemeral_expiration(&mut wire, expiration);
+    wire
 }
 
 /// Wire message answering a quick-reply button.

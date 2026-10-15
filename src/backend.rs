@@ -177,6 +177,8 @@ pub struct ProfileEdit {
 
 #[derive(Clone, Debug)]
 pub enum Command {
+    /// Turns link previews on or off for this account, synced with the phone.
+    SetLinkPreviews(bool),
     PollHistoryFailed {
         session_generation: u64,
         chat: ChatId,
@@ -216,6 +218,7 @@ pub enum Command {
         text: String,
         quoting: Option<String>,
         mentions: Vec<String>,
+        link_preview: bool,
     },
     SendContact {
         chat: ChatId,
@@ -549,6 +552,8 @@ pub enum Command {
 
 #[derive(Debug)]
 pub enum Event {
+    /// The phone changed this account's link-preview setting.
+    LinkPreviewsChanged(bool),
     /// The result of saving this account's own profile.
     ProfileSaved {
         error: Option<String>,

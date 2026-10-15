@@ -208,6 +208,7 @@ enum NativeEvent {
         id: String,
         about: Option<String>,
     },
+    LinkPreviewsChanged(bool),
     ProfileSaved {
         error: Option<String>,
     },

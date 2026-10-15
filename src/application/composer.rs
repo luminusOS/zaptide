@@ -453,7 +453,15 @@ impl SimpleComponent for ComposerView {
         };
         let enter_setting = init.enter_sends;
         let input = sender.clone();
+        model.buffer.tag_table().add(
+            &gtk::TextTag::builder()
+                .name(LINK_TAG)
+                .underline(gtk::pango::Underline::Single)
+                .foreground_rgba(&libadwaita::StyleManager::default().accent_color_rgba())
+                .build(),
+        );
         model.buffer.connect_changed(move |buffer| {
+            highlight_links(buffer);
             let text = buffer
                 .text(&buffer.start_iter(), &buffer.end_iter(), true)
                 .to_string();
@@ -801,4 +809,19 @@ fn attachment_card(
     });
     card.add_overlay(&remove);
     card
+}
+
+const LINK_TAG: &str = "zaptide-link";
+
+fn highlight_links(buffer: &gtk::TextBuffer) {
+    let (start, end) = buffer.bounds();
+    buffer.remove_tag_by_name(LINK_TAG, &start, &end);
+    let text = buffer.text(&start, &end, false);
+    for (from, to) in crate::link_preview::link_ranges(&text) {
+        buffer.apply_tag_by_name(
+            LINK_TAG,
+            &buffer.iter_at_offset(from as i32),
+            &buffer.iter_at_offset(to as i32),
+        );
+    }
 }

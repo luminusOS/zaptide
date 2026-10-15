@@ -133,6 +133,11 @@ impl NativeApplication {
         &mut self,
         change: crate::native_preferences::PreferenceChange,
     ) {
+        if let crate::native_preferences::PreferenceChange::SetLinkPreviews(enabled) = change
+            && let Some(backend) = &self.backend
+        {
+            backend.send(crate::backend::Command::SetLinkPreviews(enabled));
+        }
         if change.apply(&mut self.settings).is_ok() {
             if self.save_settings().is_err() {
                 self.status = gettext("Could not save preferences");
@@ -349,6 +354,7 @@ impl NativeApplication {
             own_id: own.clone(),
             send_read_receipts: self.settings.send_read_receipts,
             send_typing: self.settings.send_typing,
+            link_previews: self.settings.link_previews,
             chat_lock_configured: self.settings.chat_lock_code_hash.is_some(),
         };
         let input_sender = sender.clone();
