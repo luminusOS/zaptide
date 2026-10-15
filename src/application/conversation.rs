@@ -491,7 +491,9 @@ impl NativeApplication {
 
     pub(super) fn rebuild_message_rows(&mut self, live_messages_appended: bool) {
         let len = self.message_ids.len();
+        let mut just_opened = false;
         if self.opened_unread > 0 && len > 0 {
+            just_opened = true;
             let first_unread = len - self.opened_unread.min(len);
             self.unread_marker = Some(self.message_ids[first_unread].clone());
             self.opened_unread = 0;
@@ -511,6 +513,9 @@ impl NativeApplication {
             .map(|message| (message.timestamp, message.from_me))
             .collect::<Vec<_>>();
         let prefixes = conversation_prefixes(&timeline, unread);
+        let unread_row = prefixes
+            .iter()
+            .position(|prefix| prefix.contains(UNREAD_MARKER));
         let boundaries = message_group_boundaries(&messages);
         let separated = prefixes
             .iter()
@@ -620,7 +625,14 @@ impl NativeApplication {
         // Follow the conversation only when the reader is already at its end.
         if at_bottom && count > 0 && (removed > 0 || inserted > 0) {
             if old_len == 0 {
-                scroll_to_end(&self.messages.view);
+                match unread_row.filter(|_| just_opened) {
+                    Some(at) => scroll_to_unread(
+                        &self.messages.view,
+                        at as u32,
+                        self.message_ids[at].clone(),
+                    ),
+                    None => scroll_to_end(&self.messages.view),
+                }
             } else {
                 glide_to_end(&self.messages.view);
                 // Only a new last message fades: older pages, separators and

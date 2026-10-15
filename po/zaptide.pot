@@ -1,4 +1,4 @@
-# ZapTide translation template.
+# SOME DESCRIPTIVE TITLE.
 # Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
 # This file is distributed under the same license as the zaptide package.
 # FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: zaptide\n"
 "Report-Msgid-Bugs-To: https://github.com/luminusOS/zaptide/issues\n"
-"POT-Creation-Date: 2026-10-13 17:25-0300\n"
+"POT-Creation-Date: 2026-10-13 18:40-0300\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -49,6 +49,10 @@ msgstr ""
 msgid "Audio playback could not continue."
 msgstr ""
 
+#: src/application/bubbles.rs:252
+msgid "More Reactions"
+msgstr ""
+
 #: src/application/chats.rs:132
 msgid "Loading messages"
 msgstr ""
@@ -73,7 +77,7 @@ msgstr ""
 #: src/application/dialogs.rs:50 src/application/dialogs.rs:75
 #: src/application/dialogs.rs:222 src/application/dialogs.rs:399
 #: src/application/dispatch.rs:941 src/application/link_page.rs:85
-#: src/application.rs:916 src/application.rs:3220 src/native_preferences.rs:496
+#: src/application.rs:863 src/application.rs:2648 src/native_preferences.rs:496
 #: src/native_preferences.rs:735
 msgid "Cancel"
 msgstr ""
@@ -279,7 +283,7 @@ msgstr ""
 msgid "Message could not be sent. Draft kept."
 msgstr ""
 
-#: src/application/conversation.rs:668
+#: src/application/conversation.rs:680
 msgid "Transcript copied"
 msgstr ""
 
@@ -376,7 +380,7 @@ msgstr ""
 msgid "Forwarding"
 msgstr ""
 
-#: src/application/dialogs.rs:659 src/application.rs:933
+#: src/application/dialogs.rs:659 src/application.rs:880
 msgid "Forward"
 msgstr ""
 
@@ -410,7 +414,7 @@ msgstr ""
 msgid "Clear the staged clipboard image before adding files"
 msgstr ""
 
-#: src/application/dispatch/attachments.rs:53 src/application.rs:2518
+#: src/application/dispatch/attachments.rs:53 src/application.rs:1946
 msgid "Finish the active portal action first"
 msgstr ""
 
@@ -435,15 +439,15 @@ msgid "Not connected to WhatsApp"
 msgstr ""
 
 #: src/application/dispatch.rs:55 src/application/dispatch.rs:56
-#: src/application/dispatch.rs:66 src/application.rs:2647
-#: src/application.rs:2648 src/application.rs:2662 src/application.rs:2663
-#: src/application.rs:2687 src/application.rs:2688
+#: src/application/dispatch.rs:66 src/application.rs:2075
+#: src/application.rs:2076 src/application.rs:2090 src/application.rs:2091
+#: src/application.rs:2115 src/application.rs:2116
 msgid "Could not open themes folder"
 msgstr ""
 
 #: src/application/dispatch.rs:144 src/application/dispatch.rs:145
 #: src/application/dispatch.rs:157 src/application/dispatch.rs:158
-#: src/application/dispatch.rs:454 src/application.rs:3180
+#: src/application/dispatch.rs:454 src/application.rs:2608
 msgid "Could not save preferences"
 msgstr ""
 
@@ -521,6 +525,10 @@ msgstr ""
 msgid "Shutdown complete"
 msgstr ""
 
+#: src/application/helpers.rs:80
+msgid "Country"
+msgstr ""
+
 #: src/application/link_page.rs:92 src/application/sidebar.rs:82
 #: src/application/sidebar.rs:83
 msgid "Main menu"
@@ -578,201 +586,197 @@ msgstr ""
 msgid "Choose a Profile Photo"
 msgstr ""
 
-#: src/application.rs:813
+#: src/application/rows.rs:197
+msgid "Unread messages"
+msgstr ""
+
+#: src/application.rs:760
 msgid "Chat"
 msgstr ""
 
-#: src/application.rs:822
+#: src/application.rs:769
 msgid "Chat details"
 msgstr ""
 
-#: src/application.rs:839
+#: src/application.rs:786
 msgid "Chat menu"
 msgstr ""
 
-#: src/application.rs:846
+#: src/application.rs:793
 msgid "Connection lost"
 msgstr ""
 
-#: src/application.rs:929
+#: src/application.rs:876
 msgid "Forward selected messages"
 msgstr ""
 
-#: src/application.rs:959
+#: src/application.rs:906
 msgid "Drop Files to Attach"
 msgstr ""
 
-#: src/application.rs:1119 src/application.rs:1155
+#: src/application.rs:1066 src/application.rs:1102
 msgid "_Remove Account…"
 msgstr ""
 
-#: src/application.rs:1120 src/application.rs:1158
+#: src/application.rs:1067 src/application.rs:1105
 msgid "_Preferences"
 msgstr ""
 
-#: src/application.rs:1121 src/application.rs:1160
+#: src/application.rs:1068 src/application.rs:1107
 msgid "_About ZapTide"
 msgstr ""
 
-#: src/application.rs:1122 src/application.rs:1161
+#: src/application.rs:1069 src/application.rs:1108
 msgid "_Quit"
 msgstr ""
 
-#: src/application.rs:1154
+#: src/application.rs:1101
 msgid "_New Chat"
 msgstr ""
 
-#: src/application.rs:1159
+#: src/application.rs:1106
 msgid "_Keyboard Shortcuts"
 msgstr ""
 
-#: src/application.rs:1781
-msgid "Country"
-msgstr ""
-
-#: src/application.rs:2170
+#: src/application.rs:1598
 msgid "Could not save theme preference"
 msgstr ""
 
-#: src/application.rs:2326 src/native_media_widgets/photo.rs:477
+#: src/application.rs:1754 src/native_media_widgets/photo.rs:477
 #: src/native_media_widgets/photo.rs:828 src/native_media_widgets/photo.rs:831
 msgid "Show in Folder"
 msgstr ""
 
-#: src/application.rs:2327
+#: src/application.rs:1755
 msgid "Save Attachment…"
 msgstr ""
 
-#: src/application.rs:2337
+#: src/application.rs:1765
 msgid "Open Link"
 msgstr ""
 
-#: src/application.rs:2341
+#: src/application.rs:1769
 msgid "Go to Quoted Message"
 msgstr ""
 
-#: src/application.rs:2351
+#: src/application.rs:1779
 msgid "Copy Text"
 msgstr ""
 
-#: src/application.rs:2353
+#: src/application.rs:1781
 msgid "Reply"
 msgstr ""
 
-#: src/application.rs:2355
+#: src/application.rs:1783
 msgid "Edit"
 msgstr ""
 
-#: src/application.rs:2357
+#: src/application.rs:1785
 msgid "Forward…"
 msgstr ""
 
-#: src/application.rs:2358
+#: src/application.rs:1786
 msgid "Select"
 msgstr ""
 
-#: src/application.rs:2376
+#: src/application.rs:1804
 msgid "Delete for Me"
 msgstr ""
 
-#: src/application.rs:2379
+#: src/application.rs:1807
 msgid "Delete for Everyone"
 msgstr ""
 
-#: src/application.rs:2494
+#: src/application.rs:1922
 msgid "Downloading attachment"
 msgstr ""
 
-#: src/application.rs:2506
+#: src/application.rs:1934
 msgid "Could not open attachment"
 msgstr ""
 
-#: src/application.rs:2522
+#: src/application.rs:1950
 msgid "Clipboard is unavailable"
 msgstr ""
 
-#: src/application.rs:2580
+#: src/application.rs:2008
 msgid "Reading clipboard image"
 msgstr ""
 
-#: src/application.rs:2582
+#: src/application.rs:2010
 msgid "Could not read clipboard image"
 msgstr ""
 
-#: src/application.rs:2588
+#: src/application.rs:2016
 msgid "Choose an available conversation before pasting an image"
 msgstr ""
 
-#: src/application.rs:2602
+#: src/application.rs:2030
 msgid "Send or clear the staged attachment before pasting an image"
 msgstr ""
 
-#: src/application.rs:2606
+#: src/application.rs:2034
 msgid "Clipboard image ready"
 msgstr ""
 
-#: src/application.rs:2639
+#: src/application.rs:2067
 msgid "Opening link"
 msgstr ""
 
-#: src/application.rs:2641
+#: src/application.rs:2069
 msgid "Link is not supported"
 msgstr ""
 
-#: src/application.rs:2657
+#: src/application.rs:2085
 msgid "Preparing themes folder"
 msgstr ""
 
-#: src/application.rs:2684
+#: src/application.rs:2112
 msgid "Opening themes folder"
 msgstr ""
 
-#: src/application.rs:2725
+#: src/application.rs:2153
 msgid "Choose save location"
 msgstr ""
 
-#: src/application.rs:2727
+#: src/application.rs:2155
 msgid "Could not open save dialog"
 msgstr ""
 
-#: src/application.rs:2816
+#: src/application.rs:2244
 msgid "Choose another available conversation"
 msgstr ""
 
-#: src/application.rs:2875
+#: src/application.rs:2303
 msgid "Deleting message for everyone"
 msgstr ""
 
-#: src/application.rs:2879
+#: src/application.rs:2307
 msgid "Deleting message"
 msgstr ""
 
-#: src/application.rs:2922
+#: src/application.rs:2350
 msgid "Enter a question and two different poll options"
 msgstr ""
 
-#: src/application.rs:2930
+#: src/application.rs:2358
 msgid "Creating poll"
 msgstr ""
 
-#: src/application.rs:3096
+#: src/application.rs:2524
 msgid "Message deleted"
 msgstr ""
 
-#: src/application.rs:3123
+#: src/application.rs:2551
 msgid "This chat is no longer available."
 msgstr ""
 
-#: src/application.rs:3182
+#: src/application.rs:2610
 msgid "Shutdown requested"
 msgstr ""
 
-#: src/application.rs:3221
+#: src/application.rs:2649
 msgid "Quit"
-msgstr ""
-
-#: src/application.rs:3425
-msgid "More Reactions"
 msgstr ""
 
 #: src/application/sidebar.rs:76

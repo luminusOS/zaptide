@@ -296,6 +296,8 @@ struct MessageRow {
     id: String,
     /// Day and unread separators shown above the row.
     separator: String,
+    /// Whether the unread marker is drawn above the row.
+    unread_divider: bool,
     sender: String,
     sender_class: &'static str,
     avatar: Option<std::path::PathBuf>,
@@ -330,6 +332,7 @@ impl MessageRow {
             && self.audio == other.audio
             && self.mentions == other.mentions
             && self.separator == other.separator
+            && self.unread_divider == other.unread_divider
             && self.avatar == other.avatar
             && self.show_sender == other.show_sender
             && self.show_timestamp == other.show_timestamp

@@ -106,3 +106,31 @@ pub(super) fn fade_in(row: &gtk::Box) {
     animation.set_easing(adw::Easing::EaseOutCubic);
     animation.play();
 }
+
+/// Scrolls so the row `id` at `position` sits near the top, or as high as the
+/// end of the list allows. The row only exists once `scroll_to` has realized
+/// it, so its place is read in a second pass.
+pub(super) fn scroll_to_unread(view: &gtk::ListView, position: u32, id: String) {
+    let view = view.clone();
+    gtk::glib::idle_add_local_once(move || {
+        view.scroll_to(position, gtk::ListScrollFlags::NONE, None);
+        gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(150), move || {
+            let Some(adjustment) = view.vadjustment() else {
+                return;
+            };
+            let mut child = view.first_child();
+            while let Some(item) = child {
+                if let Some(root) = item.first_child()
+                    && root.widget_name() == id
+                    && let Some(bounds) = root.compute_bounds(&view)
+                {
+                    let top = adjustment.value() + f64::from(bounds.y()) - 16.0;
+                    adjustment
+                        .set_value(top.clamp(0.0, adjustment.upper() - adjustment.page_size()));
+                    return;
+                }
+                child = item.next_sibling();
+            }
+        });
+    });
+}

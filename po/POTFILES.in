@@ -1,4 +1,5 @@
 src/application/audio.rs
+src/application/bubbles.rs
 src/application/chats.rs
 src/application/composer.rs
 src/application/contact_sharing.rs
@@ -7,8 +8,10 @@ src/application/dialogs.rs
 src/application/dispatch/attachments.rs
 src/application/dispatch/backend_events.rs
 src/application/dispatch.rs
+src/application/helpers.rs
 src/application/link_page.rs
 src/application/profile_dialog.rs
+src/application/rows.rs
 src/application.rs
 src/application/sidebar.rs
 src/application/transcript_view.rs
