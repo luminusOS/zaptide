@@ -139,17 +139,7 @@ impl NativeApplication {
                             == crate::native_preferences::SettingsField::CustomTheme
                     });
                     for change in changes {
-                        if change.apply(&mut self.settings).is_ok() {
-                            if let Err(_error) = self.save_settings() {
-                                self.status = gettext("Could not save preferences");
-                                self.toast(&gettext("Could not save preferences"));
-                            } else {
-                                self.status = gettext("Preferences saved");
-                            }
-                        } else {
-                            self.status = gettext("Preference value is invalid");
-                            self.toast(&gettext("Preference value is invalid"));
-                        }
+                        self.apply_preference_change(change);
                     }
                     if custom_theme_changed {
                         self.sync_custom_theme_selection();
@@ -164,6 +154,10 @@ impl NativeApplication {
                     }
                     self.apply_runtime_settings();
                 }
+            }
+            Input::ApplyAccountSetting(change) => {
+                self.apply_preference_change(change);
+                self.apply_runtime_settings();
             }
             Input::StartBackend => {
                 if let Some(startup) = self.backend.as_mut().and_then(Backend::take_startup) {

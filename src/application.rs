@@ -682,6 +682,8 @@ pub enum Input {
     ThemesFolderFinished(bool),
     SplitCollapsed(bool),
     ApplyPreferences,
+    /// A per-account setting changed in the profile dialog.
+    ApplyAccountSetting(crate::native_preferences::PreferenceChange),
     ShowAbout,
     ShowShortcuts,
     ConfirmDelete(bool),

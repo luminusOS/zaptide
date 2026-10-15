@@ -128,6 +128,24 @@ impl NativeApplication {
         }
     }
 
+    /// Applies one edited preference and saves it, reporting what happened.
+    pub(super) fn apply_preference_change(
+        &mut self,
+        change: crate::native_preferences::PreferenceChange,
+    ) {
+        if change.apply(&mut self.settings).is_ok() {
+            if self.save_settings().is_err() {
+                self.status = gettext("Could not save preferences");
+                self.toast(&gettext("Could not save preferences"));
+            } else {
+                self.status = gettext("Preferences saved");
+            }
+        } else {
+            self.status = gettext("Preference value is invalid");
+            self.toast(&gettext("Preference value is invalid"));
+        }
+    }
+
     /// Saves the shared preferences, and the active account's own ones.
     pub(super) fn save_settings(&mut self) -> std::io::Result<()> {
         self.settings.last_chat = self.active_chat.clone();
@@ -329,12 +347,18 @@ impl NativeApplication {
             name: entry.name.clone().unwrap_or_default(),
             picture: self.avatars.get(&own).cloned(),
             own_id: own.clone(),
+            send_read_receipts: self.settings.send_read_receipts,
+            send_typing: self.settings.send_typing,
+            chat_lock_configured: self.settings.chat_lock_code_hash.is_some(),
         };
         let input_sender = sender.clone();
-        let dialog =
-            super::profile_dialog::ProfileDialog::present(&self.window, init, move |edit| {
-                input_sender.input(Input::SaveProfile(edit));
-            });
+        let setting_sender = sender.clone();
+        let dialog = super::profile_dialog::ProfileDialog::present(
+            &self.window,
+            init,
+            move |edit| input_sender.input(Input::SaveProfile(edit)),
+            move |change| setting_sender.input(Input::ApplyAccountSetting(change)),
+        );
         if let Some(backend) = &self.backend {
             backend.send(crate::backend::Command::ContactAbout { id: own });
         }

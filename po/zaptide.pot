@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: zaptide\n"
 "Report-Msgid-Bugs-To: https://github.com/luminusOS/zaptide/issues\n"
-"POT-Creation-Date: 2026-10-13 18:40-0300\n"
+"POT-Creation-Date: 2026-10-15 14:44-0300\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -16,6 +16,21 @@ msgstr ""
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
+
+#: src/application/accounts.rs:138 src/application/accounts.rs:139
+#: src/application/dispatch.rs:147 src/application/dispatch.rs:148
+#: src/application/dispatch.rs:448 src/application.rs:2614
+msgid "Could not save preferences"
+msgstr ""
+
+#: src/application/accounts.rs:141
+msgid "Preferences saved"
+msgstr ""
+
+#: src/application/accounts.rs:144 src/application/accounts.rs:145
+#: src/application/dispatch.rs:152 src/application/dispatch.rs:153
+msgid "Preference value is invalid"
+msgstr ""
 
 #: src/application/audio.rs:240 src/application/audio.rs:489
 msgid "Could not save voice playback speed"
@@ -57,7 +72,7 @@ msgstr ""
 msgid "Loading messages"
 msgstr ""
 
-#: src/application/chats.rs:233
+#: src/application/chats.rs:234
 msgid "Copy _Transcript"
 msgstr ""
 
@@ -76,9 +91,9 @@ msgstr ""
 #: src/application/composer.rs:199 src/application/contact_sharing.rs:439
 #: src/application/dialogs.rs:50 src/application/dialogs.rs:75
 #: src/application/dialogs.rs:222 src/application/dialogs.rs:399
-#: src/application/dispatch.rs:941 src/application/link_page.rs:85
-#: src/application.rs:863 src/application.rs:2648 src/native_preferences.rs:496
-#: src/native_preferences.rs:735
+#: src/application/dispatch.rs:935 src/application/link_page.rs:85
+#: src/application/profile_dialog.rs:108 src/application.rs:865
+#: src/application.rs:2654 src/native_preferences.rs:649
 msgid "Cancel"
 msgstr ""
 
@@ -154,10 +169,10 @@ msgstr ""
 msgid "Sending contact"
 msgstr ""
 
-#: src/application/contact_sharing.rs:76 src/application/dispatch.rs:240
-#: src/application/dispatch.rs:399 src/application/dispatch.rs:516
-#: src/application/dispatch.rs:541 src/application/dispatch.rs:841
-#: src/application/dispatch.rs:848
+#: src/application/contact_sharing.rs:76 src/application/dispatch.rs:234
+#: src/application/dispatch.rs:393 src/application/dispatch.rs:510
+#: src/application/dispatch.rs:535 src/application/dispatch.rs:835
+#: src/application/dispatch.rs:842
 msgid "Backend unavailable"
 msgstr ""
 
@@ -295,8 +310,8 @@ msgstr ""
 msgid "Archive"
 msgstr ""
 
-#: src/application/dialogs.rs:76 src/application/profile_dialog.rs:73
-#: src/native_preferences.rs:497
+#: src/application/dialogs.rs:76 src/application/profile_dialog.rs:109
+#: src/application/profile_dialog.rs:184
 msgid "Remove"
 msgstr ""
 
@@ -380,7 +395,7 @@ msgstr ""
 msgid "Forwarding"
 msgstr ""
 
-#: src/application/dialogs.rs:659 src/application.rs:880
+#: src/application/dialogs.rs:659 src/application.rs:882
 msgid "Forward"
 msgstr ""
 
@@ -414,7 +429,7 @@ msgstr ""
 msgid "Clear the staged clipboard image before adding files"
 msgstr ""
 
-#: src/application/dispatch/attachments.rs:53 src/application.rs:1946
+#: src/application/dispatch/attachments.rs:53 src/application.rs:1952
 msgid "Finish the active portal action first"
 msgstr ""
 
@@ -439,89 +454,74 @@ msgid "Not connected to WhatsApp"
 msgstr ""
 
 #: src/application/dispatch.rs:55 src/application/dispatch.rs:56
-#: src/application/dispatch.rs:66 src/application.rs:2075
-#: src/application.rs:2076 src/application.rs:2090 src/application.rs:2091
-#: src/application.rs:2115 src/application.rs:2116
+#: src/application/dispatch.rs:66 src/application.rs:2081
+#: src/application.rs:2082 src/application.rs:2096 src/application.rs:2097
+#: src/application.rs:2121 src/application.rs:2122
 msgid "Could not open themes folder"
 msgstr ""
 
-#: src/application/dispatch.rs:144 src/application/dispatch.rs:145
-#: src/application/dispatch.rs:157 src/application/dispatch.rs:158
-#: src/application/dispatch.rs:454 src/application.rs:2608
-msgid "Could not save preferences"
-msgstr ""
-
-#: src/application/dispatch.rs:147
-msgid "Preferences saved"
-msgstr ""
-
-#: src/application/dispatch.rs:150 src/application/dispatch.rs:151
-#: src/application/dispatch.rs:162 src/application/dispatch.rs:163
-msgid "Preference value is invalid"
-msgstr ""
-
-#: src/application/dispatch.rs:171
+#: src/application/dispatch.rs:165
 msgid "Starting backend"
 msgstr ""
 
-#: src/application/dispatch.rs:359
+#: src/application/dispatch.rs:353
 msgid "Reconnecting to WhatsApp"
 msgstr ""
 
-#: src/application/dispatch.rs:378
+#: src/application/dispatch.rs:372
 msgid "Refreshing messages"
 msgstr ""
 
-#: src/application/dispatch.rs:397
+#: src/application/dispatch.rs:391
 msgid "Unlinking this computer"
 msgstr ""
 
-#: src/application/dispatch.rs:492 src/application/dispatch.rs:500
+#: src/application/dispatch.rs:486 src/application/dispatch.rs:494
 msgid "Code copied"
 msgstr ""
 
-#: src/application/dispatch.rs:508 src/application/dispatch.rs:509
-#: src/application/dispatch.rs:521 src/application/dispatch.rs:522
+#: src/application/dispatch.rs:502 src/application/dispatch.rs:503
+#: src/application/dispatch.rs:515 src/application/dispatch.rs:516
 msgid "Enter valid phone number with country code"
 msgstr ""
 
-#: src/application/dispatch.rs:514
+#: src/application/dispatch.rs:508
 msgid "Requesting a pairing code from WhatsApp"
 msgstr ""
 
-#: src/application/dispatch.rs:539
+#: src/application/dispatch.rs:533
 msgid "Checking contact on WhatsApp"
 msgstr ""
 
-#: src/application/dispatch.rs:645
+#: src/application/dispatch.rs:639
 msgid "Contact opened"
 msgstr ""
 
-#: src/application/dispatch.rs:776
+#: src/application/dispatch.rs:770
 msgid "Could not save attachment"
 msgstr ""
 
-#: src/application/dispatch.rs:781
+#: src/application/dispatch.rs:775
 msgid "Clipboard or portal action failed"
 msgstr ""
 
-#: src/application/dispatch.rs:800
+#: src/application/dispatch.rs:794
 msgid "Copied"
 msgstr ""
 
-#: src/application/dispatch.rs:816
+#: src/application/dispatch.rs:810
 msgid "Phone number copied"
 msgstr ""
 
-#: src/application/dispatch.rs:934
+#: src/application/dispatch.rs:928
 msgid "Delete message?"
 msgstr ""
 
-#: src/application/dispatch.rs:942
+#: src/application/dispatch.rs:936
 msgid "Delete"
 msgstr ""
 
-#: src/application/dispatch.rs:978
+#: src/application/dispatch.rs:972
 msgid "Shutdown complete"
 msgstr ""
 
@@ -554,35 +554,99 @@ msgstr ""
 msgid "Try Again"
 msgstr ""
 
-#: src/application/profile_dialog.rs:69
+#: src/application/profile_dialog.rs:29
+msgid "Privacy"
+msgstr ""
+
+#: src/application/profile_dialog.rs:34
+msgid "Send read receipts"
+msgstr ""
+
+#: src/application/profile_dialog.rs:35
+msgid "Let contacts know when messages are read"
+msgstr ""
+
+#: src/application/profile_dialog.rs:40
+msgid "Send typing status"
+msgstr ""
+
+#: src/application/profile_dialog.rs:41
+msgid "Let contacts know while you are typing"
+msgstr ""
+
+#: src/application/profile_dialog.rs:58 src/application/profile_dialog.rs:95
+msgid "Locked chats code"
+msgstr ""
+
+#: src/application/profile_dialog.rs:59
+msgid "Write-only. The saved code is never shown."
+msgstr ""
+
+#: src/application/profile_dialog.rs:63
+msgid "Remove…"
+msgstr ""
+
+#: src/application/profile_dialog.rs:68 src/application/profile_dialog.rs:93
+msgid "Set locked chats code"
+msgstr ""
+
+#: src/application/profile_dialog.rs:70
+msgid "Set or change locked chats code"
+msgstr ""
+
+#: src/application/profile_dialog.rs:72 src/application/profile_dialog.rs:74
+msgid "Remove locked chats code"
+msgstr ""
+
+#: src/application/profile_dialog.rs:79
+msgid "Change…"
+msgstr ""
+
+#: src/application/profile_dialog.rs:81
+msgid "Set…"
+msgstr ""
+
+#: src/application/profile_dialog.rs:94
+msgid "Enter a code. The saved code cannot be viewed."
+msgstr ""
+
+#: src/application/profile_dialog.rs:105
+msgid "Remove locked chats code?"
+msgstr ""
+
+#: src/application/profile_dialog.rs:106
+msgid "Locked chats will no longer require this code."
+msgstr ""
+
+#: src/application/profile_dialog.rs:180
 msgid "Change Photo…"
 msgstr ""
 
-#: src/application/profile_dialog.rs:84
+#: src/application/profile_dialog.rs:195
 msgid "Name"
 msgstr ""
 
-#: src/application/profile_dialog.rs:86
+#: src/application/profile_dialog.rs:197
 msgid "About"
 msgstr ""
 
-#: src/application/profile_dialog.rs:95
+#: src/application/profile_dialog.rs:206
 msgid "Your name and About text are visible to your contacts."
 msgstr ""
 
-#: src/application/profile_dialog.rs:100 src/native_preferences.rs:736
+#: src/application/profile_dialog.rs:211 src/native_preferences.rs:650
 msgid "Save"
 msgstr ""
 
-#: src/application/profile_dialog.rs:129
+#: src/application/profile_dialog.rs:241
 msgid "Profile"
 msgstr ""
 
-#: src/application/profile_dialog.rs:178
+#: src/application/profile_dialog.rs:290
 msgid "Images"
 msgstr ""
 
-#: src/application/profile_dialog.rs:183
+#: src/application/profile_dialog.rs:295
 msgid "Choose a Profile Photo"
 msgstr ""
 
@@ -590,192 +654,192 @@ msgstr ""
 msgid "Unread messages"
 msgstr ""
 
-#: src/application.rs:760
+#: src/application.rs:762
 msgid "Chat"
 msgstr ""
 
-#: src/application.rs:769
+#: src/application.rs:771
 msgid "Chat details"
 msgstr ""
 
-#: src/application.rs:786
+#: src/application.rs:788
 msgid "Chat menu"
 msgstr ""
 
-#: src/application.rs:793
+#: src/application.rs:795
 msgid "Connection lost"
 msgstr ""
 
-#: src/application.rs:876
+#: src/application.rs:878
 msgid "Forward selected messages"
 msgstr ""
 
-#: src/application.rs:906
+#: src/application.rs:908
 msgid "Drop Files to Attach"
 msgstr ""
 
-#: src/application.rs:1066 src/application.rs:1102
+#: src/application.rs:1068 src/application.rs:1104
 msgid "_Remove Account…"
 msgstr ""
 
-#: src/application.rs:1067 src/application.rs:1105
+#: src/application.rs:1069 src/application.rs:1107
 msgid "_Preferences"
 msgstr ""
 
-#: src/application.rs:1068 src/application.rs:1107
+#: src/application.rs:1070 src/application.rs:1109
 msgid "_About ZapTide"
 msgstr ""
 
-#: src/application.rs:1069 src/application.rs:1108
+#: src/application.rs:1071 src/application.rs:1110
 msgid "_Quit"
 msgstr ""
 
-#: src/application.rs:1101
+#: src/application.rs:1103
 msgid "_New Chat"
 msgstr ""
 
-#: src/application.rs:1106
+#: src/application.rs:1108
 msgid "_Keyboard Shortcuts"
 msgstr ""
 
-#: src/application.rs:1598
+#: src/application.rs:1604
 msgid "Could not save theme preference"
 msgstr ""
 
-#: src/application.rs:1754 src/native_media_widgets/photo.rs:477
+#: src/application.rs:1760 src/native_media_widgets/photo.rs:477
 #: src/native_media_widgets/photo.rs:828 src/native_media_widgets/photo.rs:831
 msgid "Show in Folder"
 msgstr ""
 
-#: src/application.rs:1755
+#: src/application.rs:1761
 msgid "Save Attachment…"
 msgstr ""
 
-#: src/application.rs:1765
+#: src/application.rs:1771
 msgid "Open Link"
 msgstr ""
 
-#: src/application.rs:1769
+#: src/application.rs:1775
 msgid "Go to Quoted Message"
 msgstr ""
 
-#: src/application.rs:1779
+#: src/application.rs:1785
 msgid "Copy Text"
 msgstr ""
 
-#: src/application.rs:1781
+#: src/application.rs:1787
 msgid "Reply"
 msgstr ""
 
-#: src/application.rs:1783
+#: src/application.rs:1789
 msgid "Edit"
 msgstr ""
 
-#: src/application.rs:1785
+#: src/application.rs:1791
 msgid "Forward…"
 msgstr ""
 
-#: src/application.rs:1786
+#: src/application.rs:1792
 msgid "Select"
 msgstr ""
 
-#: src/application.rs:1804
+#: src/application.rs:1810
 msgid "Delete for Me"
 msgstr ""
 
-#: src/application.rs:1807
+#: src/application.rs:1813
 msgid "Delete for Everyone"
 msgstr ""
 
-#: src/application.rs:1922
+#: src/application.rs:1928
 msgid "Downloading attachment"
 msgstr ""
 
-#: src/application.rs:1934
+#: src/application.rs:1940
 msgid "Could not open attachment"
 msgstr ""
 
-#: src/application.rs:1950
+#: src/application.rs:1956
 msgid "Clipboard is unavailable"
 msgstr ""
 
-#: src/application.rs:2008
+#: src/application.rs:2014
 msgid "Reading clipboard image"
 msgstr ""
 
-#: src/application.rs:2010
+#: src/application.rs:2016
 msgid "Could not read clipboard image"
 msgstr ""
 
-#: src/application.rs:2016
+#: src/application.rs:2022
 msgid "Choose an available conversation before pasting an image"
 msgstr ""
 
-#: src/application.rs:2030
+#: src/application.rs:2036
 msgid "Send or clear the staged attachment before pasting an image"
 msgstr ""
 
-#: src/application.rs:2034
+#: src/application.rs:2040
 msgid "Clipboard image ready"
 msgstr ""
 
-#: src/application.rs:2067
+#: src/application.rs:2073
 msgid "Opening link"
 msgstr ""
 
-#: src/application.rs:2069
+#: src/application.rs:2075
 msgid "Link is not supported"
 msgstr ""
 
-#: src/application.rs:2085
+#: src/application.rs:2091
 msgid "Preparing themes folder"
 msgstr ""
 
-#: src/application.rs:2112
+#: src/application.rs:2118
 msgid "Opening themes folder"
 msgstr ""
 
-#: src/application.rs:2153
+#: src/application.rs:2159
 msgid "Choose save location"
 msgstr ""
 
-#: src/application.rs:2155
+#: src/application.rs:2161
 msgid "Could not open save dialog"
 msgstr ""
 
-#: src/application.rs:2244
+#: src/application.rs:2250
 msgid "Choose another available conversation"
 msgstr ""
 
-#: src/application.rs:2303
+#: src/application.rs:2309
 msgid "Deleting message for everyone"
 msgstr ""
 
-#: src/application.rs:2307
+#: src/application.rs:2313
 msgid "Deleting message"
 msgstr ""
 
-#: src/application.rs:2350
+#: src/application.rs:2356
 msgid "Enter a question and two different poll options"
 msgstr ""
 
-#: src/application.rs:2358
+#: src/application.rs:2364
 msgid "Creating poll"
 msgstr ""
 
-#: src/application.rs:2524
+#: src/application.rs:2530
 msgid "Message deleted"
 msgstr ""
 
-#: src/application.rs:2551
+#: src/application.rs:2557
 msgid "This chat is no longer available."
 msgstr ""
 
-#: src/application.rs:2610
+#: src/application.rs:2616
 msgid "Shutdown requested"
 msgstr ""
 
-#: src/application.rs:2649
+#: src/application.rs:2655
 msgid "Quit"
 msgstr ""
 
@@ -933,18 +997,6 @@ msgstr ""
 msgid "Open or download attachment"
 msgstr ""
 
-#: src/native_preferences.rs:362
+#: src/native_preferences.rs:361
 msgid "Open Themes Folder"
-msgstr ""
-
-#: src/native_preferences.rs:459
-msgid "Set or change locked chats code"
-msgstr ""
-
-#: src/native_preferences.rs:481
-msgid "Remove…"
-msgstr ""
-
-#: src/native_preferences.rs:485
-msgid "Remove locked chats code"
 msgstr ""
