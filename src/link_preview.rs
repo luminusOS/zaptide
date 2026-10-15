@@ -1,6 +1,7 @@
 //! Title and description of a link, read from the page the way a chat preview
 //! shows them. The fetch runs only when a message with a link is sent.
 
+use std::io::Read;
 use std::time::Duration;
 
 const TIMEOUT: Duration = Duration::from_secs(2);
@@ -24,13 +25,15 @@ fn read_page(url: &str) -> Option<Preview> {
         .build()
         .call()
         .ok()?;
-    let html = response
-        .body_mut()
-        .with_config()
-        .limit(MAX_BYTES)
-        .read_to_string()
-        .ok()?;
-    parse(&html)
+    parse(&read_head(response.body_mut().as_reader())?)
+}
+
+/// The first `MAX_BYTES` of a page. Larger bodies are cut rather than failed,
+/// since the metadata sits in `<head>` and most pages exceed the limit.
+fn read_head(reader: impl Read) -> Option<String> {
+    let mut head = Vec::new();
+    reader.take(MAX_BYTES).read_to_end(&mut head).ok()?;
+    Some(String::from_utf8_lossy(&head).into_owned())
 }
 
 pub fn parse(html: &str) -> Option<Preview> {
@@ -121,6 +124,17 @@ mod tests {
         assert_eq!(preview.title.as_deref(), Some("Plain page"));
         assert_eq!(preview.description, None);
         assert_eq!(parse("<p>no metadata</p>"), None);
+    }
+
+    #[test]
+    fn reads_only_the_head_of_a_large_page() {
+        let page = format!(
+            "<title>Big page</title>{}",
+            "x".repeat(2 * MAX_BYTES as usize)
+        );
+        let head = read_head(page.as_bytes()).unwrap();
+        assert_eq!(head.len(), MAX_BYTES as usize);
+        assert_eq!(parse(&head).unwrap().title.as_deref(), Some("Big page"));
     }
 
     #[test]
