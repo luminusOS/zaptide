@@ -72,9 +72,15 @@ pub(super) fn message_row(
     } else {
         sender_label(message.sender_name.as_deref(), &message.sender).into()
     };
+    let mut unread_divider = false;
     let separator = prefix
         .lines()
         .map(|line| line.trim_matches(|c| c == '─' || c == ' '))
+        .filter(|line| {
+            let marker = *line == UNREAD_MARKER;
+            unread_divider |= marker;
+            !marker
+        })
         .collect::<Vec<_>>()
         .join("\n");
     let body = match &message.content {
@@ -120,6 +126,7 @@ pub(super) fn message_row(
     MessageRow {
         id: message.id.clone(),
         separator,
+        unread_divider,
         sender: sender.into_owned(),
         sender_class: SENDER_CLASSES
             [crate::util::hue(&message.sender) as usize * SENDER_CLASSES.len() / 360],

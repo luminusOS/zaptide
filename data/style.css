@@ -117,3 +117,4 @@ window.translucent-sidebar .sidebar-pane .view {
     background-color: var(--sidebar-backdrop-color);
   }
 }
+.zaptide-unread-divider { font-weight: bold; font-size: 0.85em; border-radius: 9999px; padding: 3px 14px; color: var(--accent-color); background-color: color-mix(in srgb, var(--accent-bg-color) 18%, transparent); }

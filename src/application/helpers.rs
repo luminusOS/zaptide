@@ -147,6 +147,9 @@ pub(super) fn notification_should_show(
 /// Day separators, and the unread marker before the first of the `unread`
 /// newest incoming messages. Only messages after your own last one can be
 /// unread: replying means you saw them, even before the count catches up.
+/// Text of the unread marker inside a row's prefix; the row draws it translated.
+pub(super) const UNREAD_MARKER: &str = "Unread messages";
+
 pub(super) fn conversation_prefixes(messages: &[(i64, bool)], unread: usize) -> Vec<String> {
     let after_own = messages
         .iter()
@@ -166,7 +169,7 @@ pub(super) fn conversation_prefixes(messages: &[(i64, bool)], unread: usize) -> 
                 previous_day = Some(day);
             }
             if unread > 0 && index == unread_at {
-                prefix.push_str("── Unread messages ──\n");
+                prefix.push_str(&format!("── {UNREAD_MARKER} ──\n"));
             }
             prefix
         })

@@ -145,6 +145,7 @@ impl RelmListItem for ChatRow {
 
 pub(super) struct MessageRowWidgets {
     separator: gtk::Label,
+    unread_divider: gtk::Label,
     avatar: adw::Avatar,
     leading_space: gtk::Box,
     trailing_space: gtk::Box,
@@ -192,6 +193,15 @@ impl RelmListItem for MessageRow {
             .css_classes(["dim-label", "caption-heading"])
             .build();
         root.append(&separator);
+        let unread_divider = gtk::Label::builder()
+            .label(gettext("Unread messages"))
+            .halign(gtk::Align::Center)
+            .margin_top(6)
+            .margin_bottom(8)
+            .visible(false)
+            .css_classes(["zaptide-unread-divider"])
+            .build();
+        root.append(&unread_divider);
         let row = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(8)
@@ -411,6 +421,7 @@ impl RelmListItem for MessageRow {
             root,
             MessageRowWidgets {
                 separator,
+                unread_divider,
                 avatar,
                 leading_space,
                 trailing_space,
@@ -473,6 +484,7 @@ impl RelmListItem for MessageRow {
         root.set_margin_bottom(if self.show_timestamp { 6 } else { 0 });
         widgets.separator.set_label(&self.separator);
         widgets.separator.set_visible(!self.separator.is_empty());
+        widgets.unread_divider.set_visible(self.unread_divider);
         // Continuation rows keep the avatar's space so incoming bubbles align.
         widgets
             .avatar
