@@ -19,6 +19,8 @@ pub enum TrayAction {
 pub struct TrayState {
     pub unread_chats: usize,
     pub notifications: bool,
+    /// Whether the desktop uses a light theme, so the panel is light too.
+    pub light_theme: bool,
 }
 
 /// "1 unread chat", "3 unread chats"; nothing when all are read.
@@ -84,7 +86,7 @@ mod imp {
             // The name resolves through the host's icon theme, where the
             // Flatpak exports it and an AppImage installs it; when it is
             // missing there (`cargo run`), hosts draw these pixels instead.
-            pixmap(&self.icon_dir, self.glyph())
+            pixmap(&self.icon_dir, self.glyph(), self.state.light_theme)
         }
 
         fn tool_tip(&self) -> ToolTip {
@@ -155,16 +157,16 @@ mod imp {
         }
     }
 
-    /// The installed symbolic icon as light ARGB32, since panels are dark and
-    /// a pixmap cannot be recoloured by the host.
-    fn pixmap(dir: &str, name: &str) -> Vec<ksni::Icon> {
+    /// The installed symbolic icon as ARGB32, light on a dark theme and dark
+    /// on a light one, since a pixmap cannot be recoloured by the host.
+    fn pixmap(dir: &str, name: &str, light_theme: bool) -> Vec<ksni::Icon> {
         use gtk::{gdk, gdk::prelude::TextureExt, glib};
         // GTK's own loader (glycin) decodes the SVG; the bundled gdk-pixbuf
         // has no SVG loader in an AppImage.
         let render = || -> Option<ksni::Icon> {
             let svg = std::fs::read_to_string(format!("{dir}/{name}.svg"))
                 .ok()?
-                .replace("#2e3436", "#eeeeec")
+                .replace("#2e3436", if light_theme { "#2e3436" } else { "#eeeeec" })
                 // The SVG already keeps its own margin; hosts scale 22px down.
                 .replacen(r#"width="16" height="16""#, r#"width="22" height="22""#, 1);
             let texture = gdk::Texture::from_bytes(&glib::Bytes::from_owned(svg.into_bytes()))
