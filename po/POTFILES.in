@@ -1,3 +1,4 @@
+src/application/accounts.rs
 src/application/audio.rs
 src/application/bubbles.rs
 src/application/chats.rs

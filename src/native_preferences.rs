@@ -278,7 +278,6 @@ impl NativePreferencesDialog {
         theme_choices: &[String],
         on_change: impl Fn() + 'static,
     ) -> Self {
-        use gtk4::prelude::*;
         use libadwaita::prelude::*;
 
         let dialog = libadwaita::PreferencesDialog::new();
@@ -431,86 +430,6 @@ impl NativePreferencesDialog {
             PreferenceChange::SetSaveContactsToPhone,
         );
 
-        let privacy = libadwaita::PreferencesPage::new();
-        privacy.set_title("Privacy");
-        privacy.set_icon_name(Some("preferences-system-privacy-symbolic"));
-        let privacy_group = libadwaita::PreferencesGroup::new();
-        privacy_group.set_title("Privacy controls");
-        privacy.add(&privacy_group);
-        dialog.add(&privacy);
-        add_switch(
-            &privacy_group,
-            "Send read receipts",
-            "Let contacts know when messages are read",
-            preferences.privacy.send_read_receipts,
-            change_sink.clone(),
-            PreferenceChange::SetSendReadReceipts,
-        );
-        let lock_row = libadwaita::ActionRow::new();
-        lock_row.set_title("Locked chats code");
-        lock_row.set_subtitle("Write-only. The saved code is never shown.");
-        let lock_set = gtk4::Button::with_label(if preferences.privacy.chat_lock_configured {
-            "Change…"
-        } else {
-            "Set…"
-        });
-        lock_set.set_valign(gtk4::Align::Center);
-        set_accessible_label(&lock_set, "Set locked chats code");
-        lock_set.set_tooltip_text(Some(&gettext("Set or change locked chats code")));
-        lock_row.add_suffix(&lock_set);
-        {
-            let change_sink = change_sink.clone();
-            let parent = dialog.downgrade();
-            lock_set.connect_clicked(move |_| {
-                let Some(parent) = parent.upgrade() else {
-                    return;
-                };
-                let change_sink = change_sink.clone();
-                present_secret_entry(
-                    &parent,
-                    "Set locked chats code",
-                    "Enter a code. The saved code cannot be viewed.",
-                    "Locked chats code",
-                    move |text| {
-                        change_sink.push(PreferenceChange::SetChatLockCode(Some(text)));
-                    },
-                );
-            });
-        }
-        if preferences.privacy.chat_lock_configured {
-            let clear = gtk4::Button::with_label(&gettext("Remove…"));
-            clear.set_valign(gtk4::Align::Center);
-            clear.add_css_class("destructive-action");
-            set_accessible_label(&clear, "Remove locked chats code");
-            clear.set_tooltip_text(Some(&gettext("Remove locked chats code")));
-            let change_sink = change_sink.clone();
-            let parent = dialog.downgrade();
-            clear.connect_clicked(move |_| {
-                let Some(parent) = parent.upgrade() else {
-                    return;
-                };
-                let alert = libadwaita::AlertDialog::new(
-                    Some("Remove locked chats code?"),
-                    Some("Locked chats will no longer require this code."),
-                );
-                alert.add_response("cancel", &gettext("Cancel"));
-                alert.add_response("remove", &gettext("Remove"));
-                alert
-                    .set_response_appearance("remove", libadwaita::ResponseAppearance::Destructive);
-                alert.set_close_response("cancel");
-                alert.set_default_response(Some("cancel"));
-                let change_sink = change_sink.clone();
-                alert.connect_response(None, move |_, response| {
-                    if response == "remove" {
-                        change_sink.push(PreferenceChange::SetChatLockCode(None));
-                    }
-                });
-                alert.present(Some(&parent));
-            });
-            lock_row.add_suffix(&clear);
-        }
-        privacy_group.add(&lock_row);
-
         let notifications_page = libadwaita::PreferencesPage::new();
         notifications_page.set_title("Notifications");
         notifications_page.set_icon_name(Some("preferences-system-notifications-symbolic"));
@@ -574,14 +493,6 @@ impl NativePreferencesDialog {
         protocol_group.set_title("Messaging and media");
         protocol_page.add(&protocol_group);
         dialog.add(&protocol_page);
-        add_switch(
-            &protocol_group,
-            "Send typing status",
-            "Let contacts know while you are typing",
-            preferences.protocol.send_typing,
-            change_sink.clone(),
-            PreferenceChange::SetSendTyping,
-        );
         let voice_row = libadwaita::ComboRow::new();
         voice_row.set_title("Voice playback speed");
         voice_row.set_model(Some(&gtk4::StringList::new(&["1×", "1.5×", "2×"])));
@@ -711,12 +622,15 @@ fn add_switch(
     group.add(&row);
 }
 
-fn set_accessible_label(widget: &impl gtk4::prelude::IsA<gtk4::Accessible>, label: &str) {
+pub(crate) fn set_accessible_label(
+    widget: &impl gtk4::prelude::IsA<gtk4::Accessible>,
+    label: &str,
+) {
     use gtk4::prelude::*;
     widget.update_property(&[gtk4::accessible::Property::Label(label)]);
 }
 
-fn present_secret_entry(
+pub(crate) fn present_secret_entry(
     parent: &impl gtk4::prelude::IsA<gtk4::Widget>,
     heading: &str,
     body: &str,

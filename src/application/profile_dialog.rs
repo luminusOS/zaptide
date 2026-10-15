@@ -2,6 +2,7 @@
 
 use crate::backend::{PictureEdit, ProfileEdit};
 use crate::i18n::gettext;
+use crate::native_preferences::PreferenceChange;
 use relm4::adw::prelude::*;
 use relm4::{adw, gtk};
 use std::{cell::RefCell, rc::Rc};
@@ -14,6 +15,114 @@ pub(super) struct ProfileInit {
     pub(super) name: String,
     pub(super) picture: Option<std::path::PathBuf>,
     pub(super) own_id: String,
+    pub(super) send_read_receipts: bool,
+    pub(super) send_typing: bool,
+    pub(super) chat_lock_configured: bool,
+}
+
+/// Settings kept per account: they apply at once and are not part of Save.
+fn privacy_group(
+    init: &ProfileInit,
+    on_setting: Rc<dyn Fn(PreferenceChange)>,
+) -> adw::PreferencesGroup {
+    let group = adw::PreferencesGroup::builder()
+        .title(gettext("Privacy"))
+        .build();
+    type Switch = (String, String, bool, fn(bool) -> PreferenceChange);
+    let switches: [Switch; 2] = [
+        (
+            gettext("Send read receipts"),
+            gettext("Let contacts know when messages are read"),
+            init.send_read_receipts,
+            PreferenceChange::SetSendReadReceipts,
+        ),
+        (
+            gettext("Send typing status"),
+            gettext("Let contacts know while you are typing"),
+            init.send_typing,
+            PreferenceChange::SetSendTyping,
+        ),
+    ];
+    for (title, subtitle, active, change) in switches {
+        let row = adw::SwitchRow::builder()
+            .title(title)
+            .subtitle(subtitle)
+            .active(active)
+            .build();
+        let on_setting = on_setting.clone();
+        row.connect_active_notify(move |row| on_setting(change(row.is_active())));
+        group.add(&row);
+    }
+
+    let lock_row = adw::ActionRow::builder()
+        .title(gettext("Locked chats code"))
+        .subtitle(gettext("Write-only. The saved code is never shown."))
+        .build();
+    let set = gtk::Button::builder().valign(gtk::Align::Center).build();
+    let clear = gtk::Button::builder()
+        .label(gettext("Remove…"))
+        .valign(gtk::Align::Center)
+        .css_classes(["destructive-action"])
+        .build();
+    set.update_property(&[gtk::accessible::Property::Label(&gettext(
+        "Set locked chats code",
+    ))]);
+    set.set_tooltip_text(Some(&gettext("Set or change locked chats code")));
+    clear.update_property(&[gtk::accessible::Property::Label(&gettext(
+        "Remove locked chats code",
+    ))]);
+    clear.set_tooltip_text(Some(&gettext("Remove locked chats code")));
+    let show_lock: Rc<dyn Fn(bool)> = {
+        let (set, clear) = (set.clone(), clear.clone());
+        Rc::new(move |configured| {
+            set.set_label(&if configured {
+                gettext("Change…")
+            } else {
+                gettext("Set…")
+            });
+            clear.set_visible(configured);
+        })
+    };
+    show_lock(init.chat_lock_configured);
+    {
+        let (on_setting, show_lock) = (on_setting.clone(), show_lock.clone());
+        set.connect_clicked(move |button| {
+            let (on_setting, show_lock) = (on_setting.clone(), show_lock.clone());
+            crate::native_preferences::present_secret_entry(
+                button,
+                &gettext("Set locked chats code"),
+                &gettext("Enter a code. The saved code cannot be viewed."),
+                &gettext("Locked chats code"),
+                move |text| {
+                    on_setting(PreferenceChange::SetChatLockCode(Some(text)));
+                    show_lock(true);
+                },
+            );
+        });
+    }
+    clear.connect_clicked(move |button| {
+        let alert = adw::AlertDialog::new(
+            Some(&gettext("Remove locked chats code?")),
+            Some(&gettext("Locked chats will no longer require this code.")),
+        );
+        alert.add_response("cancel", &gettext("Cancel"));
+        alert.add_response("remove", &gettext("Remove"));
+        alert.set_response_appearance("remove", adw::ResponseAppearance::Destructive);
+        alert.set_close_response("cancel");
+        alert.set_default_response(Some("cancel"));
+        let (on_setting, show_lock) = (on_setting.clone(), show_lock.clone());
+        alert.connect_response(None, move |_, response| {
+            if response == "remove" {
+                on_setting(PreferenceChange::SetChatLockCode(None));
+                show_lock(false);
+            }
+        });
+        alert.present(Some(button));
+    });
+    lock_row.add_suffix(&set);
+    lock_row.add_suffix(&clear);
+    group.add(&lock_row);
+    group
 }
 
 /// Why a name or About text cannot be saved, if it cannot.
@@ -50,7 +159,9 @@ impl ProfileDialog {
         parent: &adw::ApplicationWindow,
         init: ProfileInit,
         on_save: impl Fn(ProfileEdit) + 'static,
+        on_setting: impl Fn(PreferenceChange) + 'static,
     ) -> Self {
+        let on_setting: Rc<dyn Fn(PreferenceChange)> = Rc::new(on_setting);
         let state = Rc::new(RefCell::new(State {
             name: init.name.clone(),
             about: String::new(),
@@ -115,6 +226,7 @@ impl ProfileDialog {
         page.append(&group);
         page.append(&hint);
         page.append(&save);
+        page.append(&privacy_group(&init, on_setting));
         let scroller = gtk::ScrolledWindow::builder()
             .child(&adw::Clamp::builder().maximum_size(420).child(&page).build())
             .hscrollbar_policy(gtk::PolicyType::Never)
