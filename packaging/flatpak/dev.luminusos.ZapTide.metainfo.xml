@@ -36,6 +36,14 @@
     <control>keyboard</control>
   </supports>
   <releases>
+    <release version="0.7.1" date="2026-10-15">
+      <description>
+        <p>Chats open at the first unread message, which is now easier to
+        spot. Tray icon is visible on light panels, and the read receipts,
+        typing status and locked chats code moved to the Profile dialog,
+        since they belong to each account.</p>
+      </description>
+    </release>
     <release version="0.7.0" date="2026-10-13">
       <description>
         <p>Several WhatsApp accounts can run at once, with a switcher in the
