@@ -92,8 +92,8 @@ FastWhatsApp; link it as a separate companion device.
 
 ## Development
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for how the code is laid out, [PACKAGING.md](PACKAGING.md)
-for build dependencies and Flatpak packaging, and [AGENTS.md](AGENTS.md) for contribution rules.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for how the code is laid out, and
+[PACKAGING.md](PACKAGING.md) for build dependencies and Flatpak packaging.
 
 ## About this project
 
