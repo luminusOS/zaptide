@@ -1307,6 +1307,10 @@ impl SimpleComponent for NativeApplication {
             tray_actions,
         );
         model.tray_shown = model.tray.is_some();
+        // The tray icon follows the theme; any input ends in `sync_tray`.
+        let scheme_sender = sender.clone();
+        adw::StyleManager::default()
+            .connect_dark_notify(move |_| scheme_sender.input(Input::WindowVisibilityChanged));
         let visibility_sender = sender.clone();
         root.connect_visible_notify(move |_| {
             visibility_sender.input(Input::WindowVisibilityChanged)
