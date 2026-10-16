@@ -2,6 +2,10 @@ use crate::i18n::gettext;
 use gtk::prelude::*;
 use relm4::prelude::*;
 
+mod link_preview;
+
+use self::link_preview::{AttachmentRemoval, link_preview_tile, loading_tile};
+
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct ComposerState {
     pub(super) active: bool,
@@ -21,6 +25,7 @@ pub(super) struct ComposerState {
     pub(super) draft_empty: bool,
     pub(super) can_send_voice: bool,
     pub(super) can_send: bool,
+    pub(super) link_previews: bool,
 }
 
 impl Default for ComposerState {
@@ -43,6 +48,7 @@ impl Default for ComposerState {
             draft_empty: true,
             can_send_voice: false,
             can_send: false,
+            link_previews: true,
         }
     }
 }
@@ -62,18 +68,39 @@ pub(super) struct ComposerView {
     attachment_list: Option<gtk::Box>,
     mention_popover: gtk::Popover,
     mention_list: gtk::ListBox,
+    preview_url: Option<String>,
+    link_preview: Option<crate::model::LinkPreview>,
+    preview_loading: bool,
+    preview_generation: u64,
 }
 
 #[derive(Debug)]
 pub(super) enum ComposerViewInput {
     Sync(ComposerState),
+    DraftChanged(String),
+    LoadPreview {
+        generation: u64,
+        url: String,
+    },
+    PreviewLoaded {
+        generation: u64,
+        url: String,
+        preview: Option<crate::link_preview::Preview>,
+    },
+    Send(String),
+    RemoveLinkPreview,
 }
 
 #[derive(Debug)]
 pub(super) enum ComposerViewOutput {
     DraftChanged(String),
-    SendText(String),
-    PickAttachments { gallery: bool },
+    SendText {
+        text: String,
+        link_preview: Option<crate::model::LinkPreview>,
+    },
+    PickAttachments {
+        gallery: bool,
+    },
     ClearAttachments,
     RemoveAttachment(std::path::PathBuf),
     CancelReply,
@@ -101,6 +128,14 @@ impl ComposerView {
 
     pub(super) fn focus_text_view(&self) {
         let _ = self.text_view().grab_focus();
+    }
+
+    fn preview_for(&self, text: &str) -> Option<crate::model::LinkPreview> {
+        self.state
+            .link_previews
+            .then(|| self.link_preview.clone())
+            .flatten()
+            .filter(|preview| crate::link_preview::matches_text(text, preview))
     }
 
     pub(super) fn sticker_button(&self) -> gtk::Button {
@@ -214,9 +249,13 @@ impl SimpleComponent for ComposerView {
                 set_spacing: 6,
                 add_css_class: "zaptide-attachments",
                 #[watch]
-                set_visible: model.state.attachment_count > 0,
+                set_visible: model.state.attachment_count > 0
+                    || model.preview_loading
+                    || model.link_preview.is_some(),
                 append = &gtk::Box {
                     set_spacing: 6,
+                    #[watch]
+                    set_visible: model.state.attachment_count > 0,
                     append = &gtk::Label {
                         set_hexpand: true,
                         set_xalign: 0.0,
@@ -406,7 +445,7 @@ impl SimpleComponent for ComposerView {
                     connect_clicked[sender, composer] => move |_| {
                         let buffer = composer.buffer();
                         let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), true).to_string();
-                        sender.output(ComposerViewOutput::SendText(text)).unwrap();
+                        sender.input(ComposerViewInput::Send(text));
                     },
                 },
             },
@@ -450,9 +489,14 @@ impl SimpleComponent for ComposerView {
             attachment_list: None,
             mention_popover,
             mention_list,
+            preview_url: None,
+            link_preview: None,
+            preview_loading: false,
+            preview_generation: 0,
         };
         let enter_setting = init.enter_sends;
         let input = sender.clone();
+        let component_input = sender.clone();
         model.buffer.tag_table().add(
             &gtk::TextTag::builder()
                 .name(LINK_TAG)
@@ -465,12 +509,13 @@ impl SimpleComponent for ComposerView {
             let text = buffer
                 .text(&buffer.start_iter(), &buffer.end_iter(), true)
                 .to_string();
+            component_input.input(ComposerViewInput::DraftChanged(text.clone()));
             input
                 .output(ComposerViewOutput::DraftChanged(text))
                 .unwrap();
         });
         let enter_buffer = model.buffer.clone();
-        let enter_sender = sender.clone();
+        let send_sender = sender.clone();
         let (key_popover, key_list) = (model.mention_popover.clone(), model.mention_list.clone());
         // Escape hides suggestions until the text before the caret changes.
         let dismissed = std::rc::Rc::new(std::cell::RefCell::new(None::<String>));
@@ -544,9 +589,7 @@ impl SimpleComponent for ComposerView {
                 let text = enter_buffer
                     .text(&enter_buffer.start_iter(), &enter_buffer.end_iter(), true)
                     .to_string();
-                enter_sender
-                    .output(ComposerViewOutput::SendText(text))
-                    .unwrap();
+                send_sender.input(ComposerViewInput::Send(text));
                 return gtk::glib::Propagation::Stop;
             }
             gtk::glib::Propagation::Proceed
@@ -607,13 +650,69 @@ impl SimpleComponent for ComposerView {
                 let staged_changed = state.attachment_paths != self.state.attachment_paths
                     || state.clipboard_preview != self.state.clipboard_preview;
                 let mentions_changed = state.mention_candidates != self.state.mention_candidates;
+                let previews_changed = state.link_previews != self.state.link_previews;
                 self.state = state;
                 if staged_changed {
                     self.rebuild_attachments(&sender);
                 }
+                if previews_changed {
+                    let text = self
+                        .buffer
+                        .text(&self.buffer.start_iter(), &self.buffer.end_iter(), true)
+                        .to_string();
+                    self.draft_changed(text, &sender);
+                }
                 if mentions_changed {
                     self.rebuild_mentions(&sender);
                 }
+            }
+            ComposerViewInput::DraftChanged(text) => self.draft_changed(text, &sender),
+            ComposerViewInput::LoadPreview { generation, url } => {
+                if self.preview_generation == generation
+                    && self.preview_url.as_deref() == Some(url.as_str())
+                    && self.preview_loading
+                {
+                    let input = sender.clone();
+                    std::thread::spawn(move || {
+                        let preview = crate::link_preview::fetch(&url);
+                        input.input(ComposerViewInput::PreviewLoaded {
+                            generation,
+                            url,
+                            preview,
+                        });
+                    });
+                }
+            }
+            ComposerViewInput::PreviewLoaded {
+                generation,
+                url,
+                preview,
+            } => {
+                if self.preview_generation == generation
+                    && self.preview_url.as_deref() == Some(url.as_str())
+                {
+                    self.preview_loading = false;
+                    self.link_preview = preview.map(|preview| crate::model::LinkPreview {
+                        url,
+                        title: preview.title,
+                        description: preview.description,
+                        thumbnail: preview.thumbnail,
+                    });
+                    self.rebuild_attachments(&sender);
+                }
+            }
+            ComposerViewInput::Send(text) => {
+                let link_preview = self.preview_for(&text);
+                sender
+                    .output(ComposerViewOutput::SendText { text, link_preview })
+                    .unwrap();
+            }
+            ComposerViewInput::RemoveLinkPreview => {
+                self.preview_generation = self.preview_generation.wrapping_add(1);
+                self.preview_url = None;
+                self.link_preview = None;
+                self.preview_loading = false;
+                self.rebuild_attachments(&sender);
             }
         }
     }
@@ -637,6 +736,30 @@ fn point_at_caret(popover: &gtk::Popover, view: &gtk::TextView, caret: &gtk::Tex
 }
 
 impl ComposerView {
+    fn draft_changed(&mut self, text: String, sender: &ComponentSender<Self>) {
+        let url = self
+            .state
+            .link_previews
+            .then(|| crate::link_preview::first_url(&text))
+            .flatten();
+        if url == self.preview_url {
+            return;
+        }
+        self.preview_generation = self.preview_generation.wrapping_add(1);
+        self.preview_url = url.clone();
+        self.link_preview = None;
+        self.preview_loading = url.is_some();
+        self.rebuild_attachments(sender);
+        let Some(url) = url else {
+            return;
+        };
+        let generation = self.preview_generation;
+        let input = sender.clone();
+        gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(400), move || {
+            input.input(ComposerViewInput::LoadPreview { generation, url });
+        });
+    }
+
     /// Suggestion popover anchored at the caret, reusing the mention dialog rows.
     fn rebuild_mentions(&self, sender: &ComponentSender<Self>) {
         let list = &self.mention_list;
@@ -684,13 +807,28 @@ impl ComposerView {
         while let Some(child) = list.first_child() {
             list.remove(&child);
         }
+        if self.preview_loading {
+            list.append(&attachment_card(
+                &loading_tile(self.preview_url.as_deref().unwrap_or_default()),
+                &gettext("Loading link preview"),
+                AttachmentRemoval::LinkPreview,
+                sender,
+            ));
+        } else if let Some(preview) = &self.link_preview {
+            list.append(&attachment_card(
+                &link_preview_tile(preview),
+                preview.title.as_deref().unwrap_or(&preview.url),
+                AttachmentRemoval::LinkPreview,
+                sender,
+            ));
+        }
         if let Some(texture) = &self.state.clipboard_preview {
             let picture = gtk::Picture::for_paintable(texture);
             picture.set_alternative_text(Some(&gettext("Clipboard image")));
             list.append(&attachment_card(
                 &thumbnail(picture),
                 "Clipboard image",
-                None,
+                AttachmentRemoval::Clear,
                 sender,
             ));
         }
@@ -710,7 +848,7 @@ impl ComposerView {
             list.append(&attachment_card(
                 &content,
                 &name,
-                Some(path.clone()),
+                AttachmentRemoval::File(path.clone()),
                 sender,
             ));
         }
@@ -773,12 +911,10 @@ fn file_tile(name: &str, content_type: &str) -> gtk::Widget {
     tile.upcast()
 }
 
-/// Rounded card with a remove button in its corner. `None` removes a
-/// clipboard image, which is the only staged item when present.
 fn attachment_card(
     content: &gtk::Widget,
     name: &str,
-    path: Option<std::path::PathBuf>,
+    removal: AttachmentRemoval,
     sender: &ComponentSender<ComposerView>,
 ) -> gtk::Overlay {
     let card = gtk::Overlay::builder()
@@ -800,12 +936,14 @@ fn attachment_card(
         .build();
     remove.update_property(&[gtk::accessible::Property::Label(&label)]);
     let sender = sender.clone();
-    remove.connect_clicked(move |_| {
-        let output = match &path {
-            Some(path) => ComposerViewOutput::RemoveAttachment(path.clone()),
-            None => ComposerViewOutput::ClearAttachments,
-        };
-        sender.output(output).unwrap();
+    remove.connect_clicked(move |_| match &removal {
+        AttachmentRemoval::File(path) => sender
+            .output(ComposerViewOutput::RemoveAttachment(path.clone()))
+            .unwrap(),
+        AttachmentRemoval::Clear => sender.output(ComposerViewOutput::ClearAttachments).unwrap(),
+        AttachmentRemoval::LinkPreview => {
+            sender.input(ComposerViewInput::RemoveLinkPreview);
+        }
     });
     card.add_overlay(&remove);
     card

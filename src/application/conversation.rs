@@ -103,7 +103,11 @@ impl NativeApplication {
         }
     }
 
-    pub(super) fn send_text(&mut self, text: String) {
+    pub(super) fn send_text(
+        &mut self,
+        text: String,
+        link_preview: Option<crate::model::LinkPreview>,
+    ) {
         // The draft keeps visible labels; only the backend gets `@<user>` tokens.
         let (wire, mentions) = self
             .active_chat
@@ -222,7 +226,11 @@ impl NativeApplication {
                     text: wire.clone(),
                     quoting: quote,
                     mentions,
-                    link_preview: self.settings.link_previews,
+                    link_preview: self
+                        .settings
+                        .link_previews
+                        .then_some(link_preview)
+                        .flatten(),
                 });
                 self.status = gettext("Sending message");
             }

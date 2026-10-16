@@ -218,7 +218,7 @@ pub enum Command {
         text: String,
         quoting: Option<String>,
         mentions: Vec<String>,
-        link_preview: bool,
+        link_preview: Option<crate::model::LinkPreview>,
     },
     SendContact {
         chat: ChatId,

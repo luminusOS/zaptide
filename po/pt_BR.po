@@ -72,6 +72,9 @@ msgstr "Mais reações"
 msgid "Loading messages"
 msgstr "Carregando mensagens"
 
+msgid "Loading link preview"
+msgstr "Carregando prévia do link"
+
 #: src/application/chats.rs:234
 msgid "Copy _Transcript"
 msgstr "Copiar _transcrição"

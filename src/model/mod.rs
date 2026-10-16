@@ -178,6 +178,9 @@ pub struct LinkPreview {
     pub url: String,
     pub title: Option<String>,
     pub description: Option<String>,
+    /// Page image picked while composing; the message row keeps it, not the preview.
+    #[serde(skip)]
+    pub thumbnail: Option<Vec<u8>>,
 }
 
 impl Message {

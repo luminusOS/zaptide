@@ -644,7 +644,7 @@ async fn newsletter_sends_are_rejected_before_reaching_the_client() {
             text: "Fixture".into(),
             quoting: None,
             mentions: Vec::new(),
-            link_preview: false,
+            link_preview: None,
         })
         .await;
     let emitted: Vec<_> = events.try_iter().collect();
@@ -3978,4 +3978,24 @@ pub(super) mod receipt_tests {
         assert_eq!(status("B2"), Delivery::Delivered);
         assert_eq!(status("B1"), Delivery::Sent);
     }
+}
+
+#[test]
+fn a_link_preview_carries_its_thumbnail_on_the_wire() {
+    let preview = crate::model::LinkPreview {
+        url: "https://example.com".into(),
+        title: Some("Example".into()),
+        description: None,
+        thumbnail: None,
+    };
+    let wire = with_link_preview(
+        outgoing_text("See https://example.com".into(), None, &[]),
+        "See https://example.com",
+        preview,
+        Some(vec![0xff, 0xd8]),
+        None,
+    );
+    let extended = wire.extended_text_message.as_option().unwrap();
+    assert_eq!(extended.jpeg_thumbnail.as_deref(), Some(&[0xff, 0xd8][..]));
+    assert_eq!(thumbnail_of(&wire), Some(vec![0xff, 0xd8]));
 }

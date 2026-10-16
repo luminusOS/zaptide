@@ -959,7 +959,7 @@ impl NativeApplication {
             Input::PollVoice => {
                 self.poll_voice(&sender);
             }
-            Input::SendText(text) => self.send_text(text),
+            Input::SendText { text, link_preview } => self.send_text(text, link_preview),
             Input::Close => {
                 self.cancel_portal_requests();
                 self.finish_close(sender);

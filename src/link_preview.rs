@@ -1,45 +1,142 @@
 //! Title and description of a link, read from the page the way a chat preview
-//! shows them. The fetch runs only when a message with a link is sent.
+//! shows them. Pages are fetched while a link is staged in the composer.
 
 use std::io::Read;
+use std::net::{IpAddr, ToSocketAddrs};
 use std::time::Duration;
 
 const TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_BYTES: u64 = 256 * 1024;
+const MAX_IMAGE_BYTES: u64 = 2 * 1024 * 1024;
+const THUMBNAIL_EDGE: u32 = 192;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Preview {
     pub title: Option<String>,
     pub description: Option<String>,
+    pub thumbnail: Option<Vec<u8>>,
 }
 
-pub async fn fetch(url: String) -> Option<Preview> {
-    let page = tokio::task::spawn_blocking(move || read_page(&url));
-    tokio::time::timeout(TIMEOUT, page).await.ok()?.ok()?
+pub fn fetch(url: &str) -> Option<Preview> {
+    let html = String::from_utf8_lossy(&download(url, MAX_BYTES)?).into_owned();
+    let mut preview = parse(&html)?;
+    preview.thumbnail = meta(&html, "og:image")
+        .and_then(|source| url::Url::parse(url).ok()?.join(&source).ok())
+        .and_then(|image| thumbnail(image.as_str()));
+    Some(preview)
 }
 
-fn read_page(url: &str) -> Option<Preview> {
+/// Body of a public page, cut at `limit` bytes rather than failed: metadata
+/// sits in `<head>` and most pages exceed the limit.
+fn download(url: &str, limit: u64) -> Option<Vec<u8>> {
+    if !public_destination(url) {
+        return None;
+    }
     let mut response = ureq::get(url)
         .config()
         .timeout_global(Some(TIMEOUT))
+        .max_redirects(0)
         .build()
         .call()
         .ok()?;
-    parse(&read_head(response.body_mut().as_reader())?)
+    let mut body = Vec::new();
+    response
+        .body_mut()
+        .as_reader()
+        .take(limit)
+        .read_to_end(&mut body)
+        .ok()?;
+    Some(body)
 }
 
-/// The first `MAX_BYTES` of a page. Larger bodies are cut rather than failed,
-/// since the metadata sits in `<head>` and most pages exceed the limit.
-fn read_head(reader: impl Read) -> Option<String> {
-    let mut head = Vec::new();
-    reader.take(MAX_BYTES).read_to_end(&mut head).ok()?;
-    Some(String::from_utf8_lossy(&head).into_owned())
+fn thumbnail(url: &str) -> Option<Vec<u8>> {
+    encode_thumbnail(download(url, MAX_IMAGE_BYTES)?)
+}
+
+fn encode_thumbnail(bytes: Vec<u8>) -> Option<Vec<u8>> {
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?;
+    reader.limits(crate::native_media::image_limits());
+    let small = reader
+        .decode()
+        .ok()?
+        .thumbnail(THUMBNAIL_EDGE, THUMBNAIL_EDGE);
+    let mut jpeg = Vec::new();
+    small
+        .to_rgb8()
+        .write_to(
+            &mut std::io::Cursor::new(&mut jpeg),
+            image::ImageFormat::Jpeg,
+        )
+        .ok()?;
+    Some(jpeg)
+}
+
+fn public_destination(raw: &str) -> bool {
+    let Ok(url) = url::Url::parse(raw) else {
+        return false;
+    };
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let Some(port) = url.port_or_known_default() else {
+        return false;
+    };
+    if !url.username().is_empty() || url.password().is_some() {
+        return false;
+    }
+    let Ok(addresses) = (host, port).to_socket_addrs() else {
+        return false;
+    };
+    let addresses: Vec<_> = addresses.collect();
+    !addresses.is_empty() && addresses.iter().all(|address| is_public(address.ip()))
+}
+
+fn is_public(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(address) => {
+            let [a, b, c, _] = address.octets();
+            !(a == 0
+                || a == 10
+                || a == 127
+                || a >= 224
+                || (a == 100 && (64..=127).contains(&b))
+                || (a == 169 && b == 254)
+                || (a == 172 && (16..=31).contains(&b))
+                || (a == 192 && (b == 0 || b == 168))
+                || (a == 192 && b == 0 && c == 2)
+                || (a == 198 && ((b == 18) || (b == 19) || (b == 51 && c == 100)))
+                || (a == 203 && b == 0 && c == 113))
+        }
+        IpAddr::V6(address) => {
+            let [first, second, third, ..] = address.segments();
+            first & 0xe000 == 0x2000 && !(first == 0x2001 && second == 0x0db8 && third == 0)
+        }
+    }
 }
 
 pub fn parse(html: &str) -> Option<Preview> {
     let title = meta(html, "og:title").or_else(|| element_text(html, "title"));
     let description = meta(html, "og:description");
-    (title.is_some() || description.is_some()).then_some(Preview { title, description })
+    (title.is_some() || description.is_some()).then_some(Preview {
+        title,
+        description,
+        thumbnail: None,
+    })
+}
+
+pub fn first_url(text: &str) -> Option<String> {
+    let token = text
+        .split_whitespace()
+        .map(|token| token.trim_end_matches(['.', ',', ')', ']', '!', '?', ';', ':']))
+        .find(|token| token.starts_with("http://") || token.starts_with("https://"))?;
+    crate::safety::preview_url(token)?;
+    Some(token.to_owned())
+}
+
+pub fn matches_text(text: &str, preview: &crate::model::LinkPreview) -> bool {
+    first_url(text).as_deref() == Some(preview.url.as_str())
 }
 
 /// Character ranges of the `http://` and `https://` words in `text`.
@@ -119,22 +216,24 @@ mod tests {
     }
 
     #[test]
+    fn page_images_become_small_jpegs_the_bubble_can_decode() {
+        let mut png = Vec::new();
+        image::DynamicImage::new_rgb8(800, 400)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let jpeg = encode_thumbnail(png).unwrap();
+        assert!(matches!(
+            crate::native_media::decode_thumbnail(&jpeg),
+            crate::native_media::ThumbnailResult::Image(_)
+        ));
+    }
+
+    #[test]
     fn falls_back_to_the_page_title() {
         let preview = parse("<title> Plain page </title>").unwrap();
         assert_eq!(preview.title.as_deref(), Some("Plain page"));
         assert_eq!(preview.description, None);
         assert_eq!(parse("<p>no metadata</p>"), None);
-    }
-
-    #[test]
-    fn reads_only_the_head_of_a_large_page() {
-        let page = format!(
-            "<title>Big page</title>{}",
-            "x".repeat(2 * MAX_BYTES as usize)
-        );
-        let head = read_head(page.as_bytes()).unwrap();
-        assert_eq!(head.len(), MAX_BYTES as usize);
-        assert_eq!(parse(&head).unwrap().title.as_deref(), Some("Big page"));
     }
 
     #[test]
@@ -144,5 +243,39 @@ mod tests {
             vec![(5, 19), (22, 33)]
         );
         assert!(link_ranges("www.a.io").is_empty());
+    }
+
+    #[test]
+    fn extracts_normalized_http_urls_without_trailing_punctuation() {
+        assert_eq!(
+            first_url("See https://example.com/path)."),
+            Some("https://example.com/path".to_owned())
+        );
+        assert_eq!(
+            first_url("http://127.0.0.1/"),
+            Some("http://127.0.0.1/".to_owned())
+        );
+    }
+
+    #[test]
+    fn rejects_non_public_addresses_before_fetching() {
+        assert!(!is_public("127.0.0.1".parse().unwrap()));
+        assert!(!is_public("192.168.1.1".parse().unwrap()));
+        assert!(!is_public("::1".parse().unwrap()));
+        assert!(is_public("8.8.8.8".parse().unwrap()));
+        assert!(is_public("2606:4700:4700::1111".parse().unwrap()));
+        assert!(!public_destination("http://127.0.0.1/"));
+    }
+
+    #[test]
+    fn only_sends_a_preview_for_its_current_draft_url() {
+        let preview = crate::model::LinkPreview {
+            url: "https://example.com".to_owned(),
+            title: Some("Example".to_owned()),
+            description: None,
+            thumbnail: None,
+        };
+        assert!(matches_text("See https://example.com", &preview));
+        assert!(!matches_text("See https://other.example", &preview));
     }
 }

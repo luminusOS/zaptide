@@ -75,6 +75,8 @@ button.zaptide-jump-button { min-width: 42px; min-height: 42px; padding: 0; }
 .zaptide-attachments { padding: 6px 8px 4px; border-radius: 18px; background-color: color-mix(in srgb, currentColor 5%, transparent); }
 .zaptide-attachment { border-radius: 12px; }
 .zaptide-attachment-file { padding: 0 40px 0 12px; }
+.zaptide-link-placeholder { background-color: color-mix(in srgb, currentColor 8%, transparent); }
+.zaptide-link-tile { padding: 8px 40px 8px 8px; }
 .zaptide-attachment-remove { min-width: 24px; min-height: 24px; padding: 0; }
 .zaptide-tray-action { min-height: 24px; padding: 2px 10px; border-radius: 9999px; font-size: 0.9em; }
 .zaptide-account-dot { min-width: 8px; min-height: 8px; border-radius: 9999px; background: var(--accent-bg-color); box-shadow: 0 0 0 2px var(--headerbar-bg-color); }

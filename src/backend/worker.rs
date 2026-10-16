@@ -2502,7 +2502,7 @@ impl Worker {
         text: String,
         quoting: Option<String>,
         mentions: Vec<String>,
-        link_preview: bool,
+        link_preview: Option<crate::model::LinkPreview>,
     ) {
         let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&chat)) else {
             self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
@@ -2515,10 +2515,20 @@ impl Worker {
         let (context, quoted_row) = self.quote_context(&chat, quoting.as_deref());
         let mut message = outgoing_text(text.clone(), context, &mentions);
         let expiration = self.apply_ephemeral(&chat, &mut message);
-        let link = link_preview
-            .then(|| first_link(&text))
-            .flatten()
-            .map(|url| (url, text.clone()));
+        let mut link_preview =
+            link_preview.filter(|preview| link_preview::matches_text(&text, preview));
+        let thumbnail = link_preview
+            .as_mut()
+            .and_then(|preview| preview.thumbnail.take());
+        if let Some(preview) = &link_preview {
+            message = with_link_preview(
+                message,
+                &text,
+                preview.clone(),
+                thumbnail.clone(),
+                expiration,
+            );
+        }
         let mentions = self.mentions_of(&mentions);
         let id = client.generate_message_id();
         let session_generation = self.session_generation;
@@ -2530,7 +2540,13 @@ impl Worker {
             sender_name: None,
             from_me: true,
             timestamp: crate::util::now(),
-            content: Content::text(text),
+            content: link_preview.as_ref().map_or_else(
+                || Content::text(text.clone()),
+                |preview| Content::Text {
+                    text: text.clone(),
+                    preview: Some(preview.clone()),
+                },
+            ),
             status: Delivery::Pending,
             delivered_at: None,
             read_at: None,
@@ -2539,7 +2555,7 @@ impl Worker {
             edited: false,
             mentions,
             forwarded: false,
-            thumbnail: None,
+            thumbnail,
         };
         self.store_message(row, Some(message.encode_to_vec()), None);
         let session = OutgoingSession {
@@ -2548,16 +2564,9 @@ impl Worker {
             generation: session_generation,
             generation_shared: session_generation_shared,
         };
-        tokio::spawn(async move {
-            let message = match link {
-                Some((url, text)) => match link_preview::fetch(url.clone()).await {
-                    Some(preview) => with_link_preview(message, &text, &url, preview, expiration),
-                    None => message,
-                },
-                None => message,
-            };
-            send_outgoing(session, chat, jid, id, message, expiration).await
-        });
+        tokio::spawn(
+            async move { send_outgoing(session, chat, jid, id, message, expiration).await },
+        );
     }
 
     fn set_link_previews(&self, enabled: bool) {
@@ -4306,12 +4315,12 @@ fn outgoing_text(
 }
 
 /// Wire message for text that links a page, with the title and description the
-/// recipient sees under it. The local row keeps the plain text.
+/// recipient sees under it.
 fn with_link_preview(
     message: wa::Message,
     text: &str,
-    url: &str,
-    preview: link_preview::Preview,
+    preview: crate::model::LinkPreview,
+    thumbnail: Option<Vec<u8>>,
     expiration: Option<u32>,
 ) -> wa::Message {
     use whatsapp_rust::prelude::MessageField;
@@ -4322,9 +4331,10 @@ fn with_link_preview(
     let mut wire = wa::Message {
         extended_text_message: MessageField::some(wa::message::ExtendedTextMessage {
             text: Some(text.to_owned()),
-            matched_text: Some(url.to_owned()),
+            matched_text: Some(preview.url),
             title: preview.title,
             description: preview.description,
+            jpeg_thumbnail: thumbnail,
             context_info: context.map_or_else(MessageField::none, MessageField::some),
             ..Default::default()
         }),
@@ -4481,11 +4491,10 @@ fn forwarded_of(base: &wa::Message) -> bool {
     })
 }
 
-/// Finds the first web address when preview metadata omits its URL.
 fn first_link(text: &str) -> Option<String> {
     text.split_whitespace()
         .find(|token| token.starts_with("http://") || token.starts_with("https://"))
-        .map(|token| token.trim_end_matches(['.', ',', ')', ']']).to_owned())
+        .map(|url| url.trim_end_matches(['.', ',', ')', ']']).to_owned())
 }
 
 /// Extracts the attachment or link-preview thumbnail.

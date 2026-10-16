@@ -70,6 +70,7 @@ impl NativeApplication {
                 && !self.audio.voice_send_pending
                 && chat.is_some_and(crate::model::Chat::can_send),
             can_send: chat.is_some_and(crate::model::Chat::can_send),
+            link_previews: self.settings.link_previews,
         }
     }
 
