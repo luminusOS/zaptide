@@ -103,8 +103,8 @@ pub(super) fn link_card(
     let card = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     if let Some(bytes) = thumbnail {
         let image = gtk::Image::new();
-        image.set_pixel_size(72);
-        image.set_valign(gtk::Align::Start);
+        image.set_pixel_size(120);
+        image.set_valign(gtk::Align::Center);
         image.add_css_class("zaptide-link-thumbnail");
         image.set_overflow(gtk::Overflow::Hidden);
         image.set_visible(false);
@@ -113,6 +113,7 @@ pub(super) fn link_card(
     }
     let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
     text.set_hexpand(true);
+    text.set_valign(gtk::Align::Center);
     let line = |value: &str, lines: i32, classes: &[&str]| {
         let label = gtk::Label::builder()
             .label(value)

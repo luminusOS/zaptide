@@ -8,30 +8,25 @@ pub(super) enum AttachmentRemoval {
     LinkPreview,
 }
 
-const THUMBNAIL_EDGE: i32 = 56;
+const PREVIEW_TILE_EDGE: i32 = 88;
+const THUMBNAIL_EDGE: i32 = 72;
 
 pub(super) fn loading_tile(url: &str) -> gtk::Widget {
     let tile = gtk::Box::builder()
         .spacing(12)
-        .height_request(super::CARD_EDGE)
+        .height_request(PREVIEW_TILE_EDGE)
         .width_request(320)
         .css_classes(["zaptide-attachment-file", "zaptide-link-tile"])
         .build();
-    let placeholder = gtk::Box::builder()
-        .width_request(THUMBNAIL_EDGE)
-        .height_request(THUMBNAIL_EDGE)
+    let spinner = gtk::Spinner::builder()
+        .spinning(true)
+        .halign(gtk::Align::Center)
         .valign(gtk::Align::Center)
-        .css_classes(["zaptide-link-thumbnail", "zaptide-link-placeholder"])
         .build();
-    placeholder.append(
-        &gtk::Spinner::builder()
-            .spinning(true)
-            .halign(gtk::Align::Center)
-            .valign(gtk::Align::Center)
-            .hexpand(true)
-            .build(),
-    );
-    tile.append(&placeholder);
+    tile.append(&thumbnail_slot(
+        spinner.upcast(),
+        &["zaptide-link-placeholder"],
+    ));
     let text = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .valign(gtk::Align::Center)
@@ -70,7 +65,7 @@ fn host_of(url: &str) -> Option<String> {
 pub(super) fn link_preview_tile(preview: &crate::model::LinkPreview) -> gtk::Widget {
     let tile = gtk::Box::builder()
         .spacing(12)
-        .height_request(super::CARD_EDGE)
+        .height_request(PREVIEW_TILE_EDGE)
         .width_request(320)
         .css_classes(["zaptide-attachment-file", "zaptide-link-tile"])
         .build();
@@ -79,15 +74,11 @@ pub(super) fn link_preview_tile(preview: &crate::model::LinkPreview) -> gtk::Wid
         .as_ref()
         .and_then(|bytes| gtk::gdk::Texture::from_bytes(&gtk::glib::Bytes::from(bytes)).ok())
     {
-        tile.append(
-            &gtk::Image::builder()
-                .paintable(&texture)
-                .pixel_size(THUMBNAIL_EDGE)
-                .valign(gtk::Align::Center)
-                .overflow(gtk::Overflow::Hidden)
-                .css_classes(["zaptide-link-thumbnail"])
-                .build(),
-        );
+        let image = gtk::Picture::for_paintable(&texture);
+        image.set_content_fit(gtk::ContentFit::Cover);
+        image.set_can_shrink(true);
+        image.set_size_request(THUMBNAIL_EDGE, THUMBNAIL_EDGE);
+        tile.append(&thumbnail_slot(image.upcast(), &[]));
     }
     let text = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -122,4 +113,61 @@ pub(super) fn link_preview_tile(preview: &crate::model::LinkPreview) -> gtk::Wid
     ));
     tile.append(&text);
     tile.upcast()
+}
+
+fn thumbnail_slot(child: gtk::Widget, classes: &[&str]) -> gtk::Widget {
+    let bounds = gtk::DrawingArea::builder()
+        .content_width(THUMBNAIL_EDGE)
+        .content_height(THUMBNAIL_EDGE)
+        .build();
+    let slot = gtk::Overlay::builder()
+        .child(&bounds)
+        .hexpand(false)
+        .vexpand(false)
+        .halign(gtk::Align::Center)
+        .valign(gtk::Align::Center)
+        .overflow(gtk::Overflow::Hidden)
+        .css_classes(["zaptide-link-thumbnail"])
+        .build();
+    for class in classes {
+        slot.add_css_class(class);
+    }
+    slot.add_overlay(&child);
+    slot.upcast()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "needs a display"]
+    fn preview_thumbnail_stays_bounded_and_loading_spinner_is_centered() {
+        gtk::init().unwrap();
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(192, 192)
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let preview = crate::model::LinkPreview {
+            url: "https://example.com".into(),
+            title: Some("Example".into()),
+            description: Some("A short description".into()),
+            thumbnail: Some(png.into_inner()),
+        };
+        for tile in [loading_tile(&preview.url), link_preview_tile(&preview)] {
+            let (_, height, _, _) = tile.measure(gtk::Orientation::Vertical, 640);
+            tile.allocate(640, height, -1, None);
+            let slot = tile.first_child().unwrap();
+            assert_eq!(
+                (slot.width(), slot.height()),
+                (THUMBNAIL_EDGE, THUMBNAIL_EDGE)
+            );
+            let overlay = slot.downcast::<gtk::Overlay>().unwrap();
+            let content = overlay.child().unwrap().next_sibling().unwrap();
+            let bounds = content.compute_bounds(&overlay).unwrap();
+            let center = THUMBNAIL_EDGE as f32 / 2.0;
+            assert!((bounds.x() + bounds.width() / 2.0 - center).abs() < 1.0);
+            assert!((bounds.y() + bounds.height() / 2.0 - center).abs() < 1.0);
+        }
+    }
 }

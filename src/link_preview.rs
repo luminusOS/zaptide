@@ -58,10 +58,11 @@ fn encode_thumbnail(bytes: Vec<u8>) -> Option<Vec<u8>> {
         .with_guessed_format()
         .ok()?;
     reader.limits(crate::native_media::image_limits());
-    let small = reader
-        .decode()
-        .ok()?
-        .thumbnail(THUMBNAIL_EDGE, THUMBNAIL_EDGE);
+    let small = reader.decode().ok()?.resize_to_fill(
+        THUMBNAIL_EDGE,
+        THUMBNAIL_EDGE,
+        image::imageops::FilterType::Triangle,
+    );
     let mut jpeg = Vec::new();
     small
         .to_rgb8()
@@ -222,10 +223,13 @@ mod tests {
             .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
             .unwrap();
         let jpeg = encode_thumbnail(png).unwrap();
-        assert!(matches!(
-            crate::native_media::decode_thumbnail(&jpeg),
-            crate::native_media::ThumbnailResult::Image(_)
-        ));
+        let crate::native_media::ThumbnailResult::Image(thumbnail) =
+            crate::native_media::decode_thumbnail(&jpeg)
+        else {
+            panic!("expected thumbnail image");
+        };
+        assert_eq!(thumbnail.width, thumbnail.height);
+        assert!(thumbnail.width <= crate::native_media::MAX_THUMBNAIL_EDGE);
     }
 
     #[test]
