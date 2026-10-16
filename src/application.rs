@@ -208,6 +208,7 @@ enum NativeEvent {
         id: String,
         about: Option<String>,
     },
+    LinkPreviewsChanged(bool),
     ProfileSaved {
         error: Option<String>,
     },
@@ -605,7 +606,10 @@ pub enum Input {
     },
     ClearAttachments,
     RemoveAttachment(std::path::PathBuf),
-    SendText(String),
+    SendText {
+        text: String,
+        link_preview: Option<crate::model::LinkPreview>,
+    },
     CopyTranscript,
     ActivateVoice,
     CycleVoiceSpeed,
@@ -1161,7 +1165,9 @@ impl SimpleComponent for NativeApplication {
             })
             .forward(sender.input_sender(), |output| match output {
                 ComposerViewOutput::DraftChanged(text) => Input::DraftChanged(text),
-                ComposerViewOutput::SendText(text) => Input::SendText(text),
+                ComposerViewOutput::SendText { text, link_preview } => {
+                    Input::SendText { text, link_preview }
+                }
                 ComposerViewOutput::PickAttachments { gallery } => {
                     Input::PickAttachments { gallery }
                 }

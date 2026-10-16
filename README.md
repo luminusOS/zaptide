@@ -28,6 +28,12 @@ stored locally in an encrypted archive.
   add the contact to your contacts app, or message it on WhatsApp.
   Use **Attach → Contact** to share a saved WhatsApp contact or choose a `.vcf`
   file through the system file chooser. Preview the contact before sending.
+- Link previews load in the composer before sending. Each account's setting is
+  available in its Profile dialog and syncs with that account's phone.
+  Loading a preview contacts the site directly while composing, without proxies
+  or redirects. Private and reserved network destinations are blocked. Removing
+  the preview keeps it dismissed until the link changes or leaves the draft.
+  Long links wrap in the input while preserving the space above and below the text.
 - Photos sent together appear as one album in a single bubble, and files can be
   dropped anywhere in a conversation to attach them.
 - The sticker picker shows your recently used stickers from your phone and

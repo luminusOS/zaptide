@@ -174,6 +174,9 @@ impl Worker {
                     composing: matches!(presence.state, ChatPresence::Composing),
                 });
             }
+            E::DisableLinkPreviewsUpdate(update) => {
+                self.emit(Event::LinkPreviewsChanged(!update.previews_disabled));
+            }
             E::Presence(presence) => {
                 self.emit(Event::Presence {
                     id: self.canonical(&presence.from),

@@ -31,6 +31,7 @@ pub(super) fn classify(base: &wa::Message) -> Option<Content> {
                 url,
                 title,
                 description,
+                thumbnail: None,
             })
         });
         return Some(Content::Text {

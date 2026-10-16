@@ -154,6 +154,7 @@ pub struct AccountSettings {
     pub last_chat: Option<String>,
     pub send_read_receipts: bool,
     pub send_typing: bool,
+    pub link_previews: bool,
     pub chat_lock_code_hash: Option<String>,
     pub chat_lock_hint_dismissed: bool,
 }
@@ -170,6 +171,7 @@ impl AccountSettings {
             last_chat: settings.last_chat.clone(),
             send_read_receipts: settings.send_read_receipts,
             send_typing: settings.send_typing,
+            link_previews: settings.link_previews,
             chat_lock_code_hash: settings.chat_lock_code_hash.clone(),
             chat_lock_hint_dismissed: settings.chat_lock_hint_dismissed,
         }
@@ -179,6 +181,7 @@ impl AccountSettings {
         settings.last_chat = self.last_chat.clone();
         settings.send_read_receipts = self.send_read_receipts;
         settings.send_typing = self.send_typing;
+        settings.link_previews = self.link_previews;
         settings.chat_lock_code_hash = self.chat_lock_code_hash.clone();
         settings.chat_lock_hint_dismissed = self.chat_lock_hint_dismissed;
     }

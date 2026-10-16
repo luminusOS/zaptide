@@ -17,6 +17,7 @@ pub(super) struct ProfileInit {
     pub(super) own_id: String,
     pub(super) send_read_receipts: bool,
     pub(super) send_typing: bool,
+    pub(super) link_previews: bool,
     pub(super) chat_lock_configured: bool,
 }
 
@@ -29,7 +30,7 @@ fn privacy_group(
         .title(gettext("Privacy"))
         .build();
     type Switch = (String, String, bool, fn(bool) -> PreferenceChange);
-    let switches: [Switch; 2] = [
+    let switches: [Switch; 3] = [
         (
             gettext("Send read receipts"),
             gettext("Let contacts know when messages are read"),
@@ -41,6 +42,12 @@ fn privacy_group(
             gettext("Let contacts know while you are typing"),
             init.send_typing,
             PreferenceChange::SetSendTyping,
+        ),
+        (
+            gettext("Link previews"),
+            gettext("Show a preview of the links you send"),
+            init.link_previews,
+            PreferenceChange::SetLinkPreviews,
         ),
     ];
     for (title, subtitle, active, change) in switches {

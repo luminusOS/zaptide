@@ -17,6 +17,7 @@ pub enum SettingsField {
     EnterSends,
     SendReadReceipts,
     SendTyping,
+    LinkPreviews,
     AutoDownload,
     ShowSenderPictures,
     NamesFromContacts,
@@ -137,6 +138,7 @@ pub enum PreferenceChange {
     SetEnterSends(bool),
     SetSendReadReceipts(bool),
     SetSendTyping(bool),
+    SetLinkPreviews(bool),
     SetAutoDownload(bool),
     SetShowSenderPictures(bool),
     SetNamesFromContacts(bool),
@@ -171,6 +173,10 @@ impl std::fmt::Debug for PreferenceChange {
             Change::SetSendTyping(value) => {
                 formatter.debug_tuple("SetSendTyping").field(value).finish()
             }
+            Change::SetLinkPreviews(value) => formatter
+                .debug_tuple("SetLinkPreviews")
+                .field(value)
+                .finish(),
             Change::SetAutoDownload(value) => formatter
                 .debug_tuple("SetAutoDownload")
                 .field(value)
@@ -228,6 +234,7 @@ impl PreferenceChange {
             Self::SetEnterSends(_) => SettingsField::EnterSends,
             Self::SetSendReadReceipts(_) => SettingsField::SendReadReceipts,
             Self::SetSendTyping(_) => SettingsField::SendTyping,
+            Self::SetLinkPreviews(_) => SettingsField::LinkPreviews,
             Self::SetAutoDownload(_) => SettingsField::AutoDownload,
             Self::SetShowSenderPictures(_) => SettingsField::ShowSenderPictures,
             Self::SetNamesFromContacts(_) => SettingsField::NamesFromContacts,
@@ -745,6 +752,7 @@ impl PreferenceChange {
             Self::SetEnterSends(value) => settings.enter_sends = value,
             Self::SetSendReadReceipts(value) => settings.send_read_receipts = value,
             Self::SetSendTyping(value) => settings.send_typing = value,
+            Self::SetLinkPreviews(value) => settings.link_previews = value,
             Self::SetAutoDownload(value) => settings.auto_download = value,
             Self::SetShowSenderPictures(value) => settings.show_sender_pictures = value,
             Self::SetNamesFromContacts(value) => settings.names_from_contacts = value,

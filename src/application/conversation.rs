@@ -103,7 +103,11 @@ impl NativeApplication {
         }
     }
 
-    pub(super) fn send_text(&mut self, text: String) {
+    pub(super) fn send_text(
+        &mut self,
+        text: String,
+        link_preview: Option<crate::model::LinkPreview>,
+    ) {
         // The draft keeps visible labels; only the backend gets `@<user>` tokens.
         let (wire, mentions) = self
             .active_chat
@@ -222,6 +226,11 @@ impl NativeApplication {
                     text: wire.clone(),
                     quoting: quote,
                     mentions,
+                    link_preview: self
+                        .settings
+                        .link_previews
+                        .then_some(link_preview)
+                        .flatten(),
                 });
                 self.status = gettext("Sending message");
             }
@@ -536,6 +545,11 @@ impl NativeApplication {
             .map(|(index, mut message)| {
                 let audio = self.project_voice(&message);
                 let (show_sender, mut show_timestamp) = boundaries[index];
+                if !self.settings.link_previews
+                    && let crate::model::Content::Text { preview, .. } = &mut message.content
+                {
+                    *preview = None;
+                }
                 let album = std::mem::take(&mut albums[index]);
                 // The album's delivery mark and spacing follow its last photo.
                 if let Some(last) = album.last() {
