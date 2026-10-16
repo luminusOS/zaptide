@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability privately
+    url: https://github.com/luminusOS/zaptide/security/advisories/new
+    about: Do not disclose vulnerabilities or credentials in public issues.
+  - name: Contribution and development guide
+    url: https://github.com/luminusOS/zaptide/blob/main/CONTRIBUTING.md
+    about: Read the development, testing, privacy, and PR requirements.

@@ -19,14 +19,16 @@ jobs:
       image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08
       options: --privileged
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Check Flatpak manifests
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           python3 -m venv /tmp/flatpak-tests
           /tmp/flatpak-tests/bin/pip install PyYAML
           /tmp/flatpak-tests/bin/python packaging/flatpak/test-packaging.py
-      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@79327416609af08178ad73b352877e51450790b3 # v6
         with:
           manifest-path: packaging/flatpak/dev.luminusos.ZapTide.yml
           bundle: zaptide-test-x86_64.flatpak

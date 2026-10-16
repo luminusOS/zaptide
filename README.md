@@ -103,6 +103,8 @@ typing or use your configured Return-to-send behavior without clicking the input
 
 ## Development
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for reporting issues, local checks, and the
+pull-request workflow. Report vulnerabilities privately using [SECURITY.md](SECURITY.md).
 See [ARCHITECTURE.md](ARCHITECTURE.md) for how the code is laid out, and
 [PACKAGING.md](PACKAGING.md) for build dependencies and Flatpak packaging.
 

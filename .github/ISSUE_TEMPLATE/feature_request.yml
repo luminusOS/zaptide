@@ -1,0 +1,35 @@
+name: Feature request
+description: Propose a focused improvement or accessibility enhancement.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe the task and who encounters the problem, without sharing personal data.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the expected user experience and observable acceptance criteria.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Existing workflows or simpler alternatives, if any.
+  - type: textarea
+    id: scope
+    attributes:
+      label: Compatibility, privacy, and accessibility
+      description: Optional. Note relevant platform, account-data, keyboard, or screen-reader considerations.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and understand that an accepted proposal is not a delivery promise.
+          required: true
