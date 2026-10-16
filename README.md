@@ -33,6 +33,7 @@ stored locally in an encrypted archive.
   Loading a preview contacts the site directly while composing, without proxies
   or redirects. Private and reserved network destinations are blocked. Removing
   the preview keeps it dismissed until the link changes or leaves the draft.
+  Long links wrap in the input while preserving the space above and below the text.
 - Photos sent together appear as one album in a single bubble, and files can be
   dropped anywhere in a conversation to attach them.
 - The sticker picker shows your recently used stickers from your phone and

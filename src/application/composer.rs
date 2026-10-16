@@ -4,6 +4,9 @@ use relm4::prelude::*;
 
 mod link_preview;
 
+#[cfg(test)]
+mod tests;
+
 use self::link_preview::{AttachmentRemoval, PreviewState, link_preview_tile, loading_tile};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -590,6 +593,19 @@ impl SimpleComponent for ComposerView {
         });
         let recording_meter_area = &init.recording_meter_area;
         let widgets = view_output!();
+        let composer = widgets.composer.downgrade();
+        // GTK skips viewport adjustment during animated scrolling. Reallocate after its
+        // final value change if wrapping resized the viewport while it was animating.
+        if let Some(adjustment) = widgets.composer.vadjustment() {
+            adjustment.connect_value_changed(move |adjustment| {
+                if let Some(composer) = composer.upgrade() {
+                    let height = f64::from(composer.visible_rect().height());
+                    if height > 0.0 && (adjustment.page_size() - height).abs() > 0.5 {
+                        composer.queue_allocate();
+                    }
+                }
+            });
+        }
         widgets.composer.add_controller(mention_keys);
         // Suggestions follow the caret and close once it leaves the `@query`
         // or the composer loses focus.
