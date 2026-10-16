@@ -1,0 +1,66 @@
+name: Bug report
+description: Report a reproducible problem in ZapTide.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search existing issues first. For vulnerabilities, use [private reporting](https://github.com/luminusOS/zaptide/security/advisories/new).
+        Never attach chats, archives, QR codes, pairing codes, tokens, phone numbers, or unredacted logs.
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Use the About dialog, package version, or development commit. Say unknown if unavailable.
+      placeholder: v0.7.1
+    validations:
+      required: true
+  - type: dropdown
+    id: installation
+    attributes:
+      label: Installation method
+      options: [Flatpak bundle, AppImage, Linux archive, Built from source, Other]
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Operating system and desktop
+      placeholder: Fedora 45, GNOME 51, Wayland, x86_64
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Use synthetic text and test accounts where possible.
+      placeholder: |
+        1. Open...
+        2. Select...
+        3. Observe...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Additional context or synthetic screenshots
+      description: Optional. Share only a minimal redacted log excerpt, not a full log or database.
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and removed personal data and credentials from this report.
+          required: true
