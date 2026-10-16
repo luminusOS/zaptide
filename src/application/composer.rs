@@ -88,6 +88,7 @@ pub(super) enum ComposerViewInput {
         preview: Option<crate::link_preview::Preview>,
     },
     Send(String),
+    InsertEmoji(String),
     RemoveLinkPreview,
 }
 
@@ -375,7 +376,7 @@ impl SimpleComponent for ComposerView {
                     set_popover: Some(&{
                         let emoji_sender = sender.clone();
                         crate::native_emoji::picker(move |emoji| {
-                            emoji_sender.output(ComposerViewOutput::InsertEmoji(emoji.to_owned())).unwrap();
+                            emoji_sender.input(ComposerViewInput::InsertEmoji(emoji.to_owned()));
                         })
                     }),
                 },
@@ -716,6 +717,12 @@ impl SimpleComponent for ComposerView {
                 sender
                     .output(ComposerViewOutput::SendText { text, link_preview })
                     .unwrap();
+            }
+            ComposerViewInput::InsertEmoji(emoji) => {
+                sender
+                    .output(ComposerViewOutput::InsertEmoji(emoji))
+                    .unwrap();
+                self.focus_text_view();
             }
             ComposerViewInput::RemoveLinkPreview => {
                 self.preview.dismiss();

@@ -96,6 +96,11 @@ encrypted by ZapTide. Use full-disk encryption if you need to protect those
 files and backups. ZapTide keeps its data separate from ZapFast, FastsApp and
 FastWhatsApp; link it as a separate companion device.
 
+## Emoji input
+
+Selecting an emoji returns keyboard focus to the message input, so you can keep
+typing or use your configured Return-to-send behavior without clicking the input.
+
 ## Development
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for how the code is laid out, and
