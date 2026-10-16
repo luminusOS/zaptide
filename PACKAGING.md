@@ -68,6 +68,16 @@ and Arch Linux ARM ships libadwaita 1.9. `build.sh` picks the `dnf` path when
 podman run --rm -v "$PWD":/src -w /src -e VERSION=dev registry.fedoraproject.org/fedora:45 ./packaging/appimage/build.sh
 ```
 
+Each AppImage embeds the update information
+`gh-releases-zsync|luminusOS|zaptide|latest|zaptide-*-<arch>.AppImage.zsync`, and
+the build writes the matching `.zsync` file next to it. The release publishes both,
+so [AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate) and
+`appimageupdatetool` download only the changed blocks:
+
+```sh
+appimageupdatetool zaptide.AppImage
+```
+
 ## Build dependencies
 
 | Dependency | Fedora | Notes |

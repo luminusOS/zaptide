@@ -2,7 +2,7 @@
 # Builds the ZapTide AppImage with quick-sharun. Run it as root inside an Arch
 # Linux container (Arch ships libadwaita 1.10 and has no 32-bit libs in /usr/lib):
 #   podman run --rm -v "$PWD":/src -w /src archlinux ./packaging/appimage/build.sh
-# The result is dist/zaptide-$ARCH.AppImage.
+# The result is dist/zaptide-$VERSION-$ARCH.AppImage and its .zsync file.
 set -eux
 
 ARCH="$(uname -m)"
@@ -42,6 +42,10 @@ export ICON=data/icons/zaptide.svg
 export DESKTOP=data/dev.luminusos.ZapTide.desktop
 export STARTUPWMCLASS=dev.luminusos.ZapTide
 export GTK_CLASS_FIX=1
+# Delta updates: AppImageUpdate reads this from the AppImage and fetches the
+# .zsync published next to it in the latest GitHub release.
+export UPINFO="gh-releases-zsync|luminusOS|zaptide|latest|zaptide-*-$ARCH.AppImage.zsync"
 
 ./quick-sharun /usr/bin/zaptide
 ./quick-sharun --make-appimage
+test -s "$OUTPATH/$OUTNAME.zsync"

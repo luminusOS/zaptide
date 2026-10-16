@@ -80,6 +80,10 @@ chmod +x ./zaptide.AppImage
 ./zaptide.AppImage
 ```
 
+Update an AppImage in place with
+[AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate); it
+downloads only what changed.
+
 On first launch, use WhatsApp's **Linked devices** menu to scan the QR code or
 link with your phone number. Recent history may take a few minutes to arrive.
 
