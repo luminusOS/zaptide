@@ -11,6 +11,34 @@ pub(super) enum AttachmentRemoval {
 const PREVIEW_TILE_EDGE: i32 = 88;
 const THUMBNAIL_EDGE: i32 = 72;
 
+/// Retains the draft URL after dismissal and invalidates results from older requests.
+#[derive(Default)]
+pub(super) struct PreviewState {
+    pub(super) url: Option<String>,
+    pub(super) loaded: Option<crate::model::LinkPreview>,
+    pub(super) loading: bool,
+    pub(super) generation: u64,
+}
+
+impl PreviewState {
+    pub(super) fn set_url(&mut self, url: Option<String>) -> bool {
+        if self.url == url {
+            return false;
+        }
+        self.generation = self.generation.wrapping_add(1);
+        self.loading = url.is_some();
+        self.url = url;
+        self.loaded = None;
+        true
+    }
+
+    pub(super) fn dismiss(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+        self.loaded = None;
+        self.loading = false;
+    }
+}
+
 pub(super) fn loading_tile(url: &str) -> gtk::Widget {
     let tile = gtk::Box::builder()
         .spacing(12)
@@ -116,6 +144,7 @@ pub(super) fn link_preview_tile(preview: &crate::model::LinkPreview) -> gtk::Wid
 }
 
 fn thumbnail_slot(child: gtk::Widget, classes: &[&str]) -> gtk::Widget {
+    // Overlay contents do not affect measurement, so natural image size cannot grow the slot.
     let bounds = gtk::DrawingArea::builder()
         .content_width(THUMBNAIL_EDGE)
         .content_height(THUMBNAIL_EDGE)
@@ -139,6 +168,33 @@ fn thumbnail_slot(child: gtk::Widget, classes: &[&str]) -> gtk::Widget {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dismissed_preview_stays_dismissed_until_the_draft_url_changes() {
+        let mut state = PreviewState::default();
+        assert!(state.set_url(Some("https://example.com".into())));
+        let generation = state.generation;
+        state.loaded = Some(crate::model::LinkPreview {
+            url: "https://example.com".into(),
+            title: Some("Example".into()),
+            description: None,
+            thumbnail: None,
+        });
+        state.dismiss();
+        assert!(!state.loading);
+        assert!(state.loaded.is_none());
+        assert!(!state.set_url(crate::link_preview::first_url(
+            "More text https://example.com"
+        )));
+        assert!(!state.loading);
+        assert!(state.generation > generation);
+        assert!(state.set_url(Some("https://other.example".into())));
+        assert!(state.loading);
+        state.dismiss();
+        assert!(state.set_url(None));
+        assert!(state.set_url(Some("https://other.example".into())));
+        assert!(state.loading);
+    }
 
     #[test]
     #[ignore = "needs a display"]

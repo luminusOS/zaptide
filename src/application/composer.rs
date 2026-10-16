@@ -4,7 +4,7 @@ use relm4::prelude::*;
 
 mod link_preview;
 
-use self::link_preview::{AttachmentRemoval, link_preview_tile, loading_tile};
+use self::link_preview::{AttachmentRemoval, PreviewState, link_preview_tile, loading_tile};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct ComposerState {
@@ -68,10 +68,7 @@ pub(super) struct ComposerView {
     attachment_list: Option<gtk::Box>,
     mention_popover: gtk::Popover,
     mention_list: gtk::ListBox,
-    preview_url: Option<String>,
-    link_preview: Option<crate::model::LinkPreview>,
-    preview_loading: bool,
-    preview_generation: u64,
+    preview: PreviewState,
 }
 
 #[derive(Debug)]
@@ -133,7 +130,7 @@ impl ComposerView {
     fn preview_for(&self, text: &str) -> Option<crate::model::LinkPreview> {
         self.state
             .link_previews
-            .then(|| self.link_preview.clone())
+            .then(|| self.preview.loaded.clone())
             .flatten()
             .filter(|preview| crate::link_preview::matches_text(text, preview))
     }
@@ -250,8 +247,8 @@ impl SimpleComponent for ComposerView {
                 add_css_class: "zaptide-attachments",
                 #[watch]
                 set_visible: model.state.attachment_count > 0
-                    || model.preview_loading
-                    || model.link_preview.is_some(),
+                    || model.preview.loading
+                    || model.preview.loaded.is_some(),
                 append = &gtk::Box {
                     set_spacing: 6,
                     #[watch]
@@ -489,10 +486,7 @@ impl SimpleComponent for ComposerView {
             attachment_list: None,
             mention_popover,
             mention_list,
-            preview_url: None,
-            link_preview: None,
-            preview_loading: false,
-            preview_generation: 0,
+            preview: PreviewState::default(),
         };
         let enter_setting = init.enter_sends;
         let input = sender.clone();
@@ -668,9 +662,9 @@ impl SimpleComponent for ComposerView {
             }
             ComposerViewInput::DraftChanged(text) => self.draft_changed(text, &sender),
             ComposerViewInput::LoadPreview { generation, url } => {
-                if self.preview_generation == generation
-                    && self.preview_url.as_deref() == Some(url.as_str())
-                    && self.preview_loading
+                if self.preview.generation == generation
+                    && self.preview.url.as_deref() == Some(url.as_str())
+                    && self.preview.loading
                 {
                     let input = sender.clone();
                     std::thread::spawn(move || {
@@ -688,11 +682,11 @@ impl SimpleComponent for ComposerView {
                 url,
                 preview,
             } => {
-                if self.preview_generation == generation
-                    && self.preview_url.as_deref() == Some(url.as_str())
+                if self.preview.generation == generation
+                    && self.preview.url.as_deref() == Some(url.as_str())
                 {
-                    self.preview_loading = false;
-                    self.link_preview = preview.map(|preview| crate::model::LinkPreview {
+                    self.preview.loading = false;
+                    self.preview.loaded = preview.map(|preview| crate::model::LinkPreview {
                         url,
                         title: preview.title,
                         description: preview.description,
@@ -708,10 +702,7 @@ impl SimpleComponent for ComposerView {
                     .unwrap();
             }
             ComposerViewInput::RemoveLinkPreview => {
-                self.preview_generation = self.preview_generation.wrapping_add(1);
-                self.preview_url = None;
-                self.link_preview = None;
-                self.preview_loading = false;
+                self.preview.dismiss();
                 self.rebuild_attachments(&sender);
             }
         }
@@ -742,18 +733,14 @@ impl ComposerView {
             .link_previews
             .then(|| crate::link_preview::first_url(&text))
             .flatten();
-        if url == self.preview_url {
+        if !self.preview.set_url(url.clone()) {
             return;
         }
-        self.preview_generation = self.preview_generation.wrapping_add(1);
-        self.preview_url = url.clone();
-        self.link_preview = None;
-        self.preview_loading = url.is_some();
         self.rebuild_attachments(sender);
         let Some(url) = url else {
             return;
         };
-        let generation = self.preview_generation;
+        let generation = self.preview.generation;
         let input = sender.clone();
         gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(400), move || {
             input.input(ComposerViewInput::LoadPreview { generation, url });
@@ -807,14 +794,14 @@ impl ComposerView {
         while let Some(child) = list.first_child() {
             list.remove(&child);
         }
-        if self.preview_loading {
+        if self.preview.loading {
             list.append(&attachment_card(
-                &loading_tile(self.preview_url.as_deref().unwrap_or_default()),
+                &loading_tile(self.preview.url.as_deref().unwrap_or_default()),
                 &gettext("Loading link preview"),
                 AttachmentRemoval::LinkPreview,
                 sender,
             ));
-        } else if let Some(preview) = &self.link_preview {
+        } else if let Some(preview) = &self.preview.loaded {
             list.append(&attachment_card(
                 &link_preview_tile(preview),
                 preview.title.as_deref().unwrap_or(&preview.url),

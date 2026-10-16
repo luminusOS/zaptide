@@ -215,6 +215,7 @@ impl NativeApplication {
             return;
         };
         let events = super::dispatch::drain_hidden(session);
+        let previous_settings = session.settings.clone();
         let mut profiles = Vec::new();
         let mut notices = Vec::new();
         let mut withdrawn = Vec::new();
@@ -228,6 +229,11 @@ impl NativeApplication {
                     notices.extend(apply_hidden_event(session, event, notifications, previews))
                 }
             }
+        }
+        if session.settings != previous_settings
+            && let Err(error) = session.settings.save(&session.dirs.account_settings_file())
+        {
+            log::warn!("could not save hidden account preferences: {error}");
         }
         for (phone, name) in profiles {
             // The switcher shows every account's picture, not only the active one's.
@@ -836,6 +842,7 @@ pub(super) fn apply_hidden_event(
             }
         },
         NativeEvent::ReceiptsPrivacy { disabled } => session.account_receipts_off = disabled,
+        NativeEvent::LinkPreviewsChanged(enabled) => session.settings.link_previews = enabled,
         NativeEvent::Stickers {
             saved,
             packs,
@@ -1021,6 +1028,19 @@ mod tests {
         assert!(session.chat_snapshots.is_empty());
         assert!(session.drafts.is_empty());
         assert!(session.avatars.is_empty());
+    }
+
+    #[test]
+    fn phone_preview_setting_updates_a_hidden_account() {
+        let mut session = AccountSession::detached_for_tests(AccountId(2));
+        session.settings.link_previews = true;
+        apply_hidden_event(
+            &mut session,
+            NativeEvent::LinkPreviewsChanged(false),
+            false,
+            false,
+        );
+        assert!(!session.settings.link_previews);
     }
 
     fn linked(registry: &mut crate::account::Registry, phone: &str) -> AccountId {
