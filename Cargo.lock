@@ -92,7 +92,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -103,7 +103,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -958,7 +958,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1089,7 +1089,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1522,7 +1522,7 @@ dependencies = [
  "gobject-sys",
  "libc",
  "system-deps 9.0.0",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1607,9 +1607,9 @@ dependencies = [
 
 [[package]]
 name = "glycin"
-version = "4.0.0"
+version = "4.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc9bb9cfa3d4db9eab0e2394f0e60fe4071fd31affd1704f2ecccc6bdd24c7b9"
+checksum = "72739235a1990a8ce4fcf35918b8109b83b17a4fe46ff187b399f6697cb721b1"
 dependencies = [
  "glycin-builtin",
  "glycin-external",
@@ -1617,9 +1617,9 @@ dependencies = [
 
 [[package]]
 name = "glycin-builtin"
-version = "4.0.0"
+version = "4.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b801b326426a0ccb61899174b0a08c2316defd323cfe78be9aa6232a2efdfeac"
+checksum = "4d0f24f915439a9b1aa51b63c4e0026fc5c29b3cfe727e6a90fc117b4fd8275b"
 dependencies = [
  "glycin-core",
 ]
@@ -1645,9 +1645,9 @@ dependencies = [
 
 [[package]]
 name = "glycin-core"
-version = "4.0.0"
+version = "4.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9466e4f18a53312faee414ea85813d6674d4cb5badad059365c4882984b40201"
+checksum = "1bb9767eb1a57ae1b0177f181331fe8e8c3935ae631271e752940753d4adedbe"
 dependencies = [
  "bytemuck",
  "futures-channel",
@@ -1678,9 +1678,9 @@ dependencies = [
 
 [[package]]
 name = "glycin-external"
-version = "4.0.0"
+version = "4.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7d335778b14437e1339d703afd1ce69e61df8ab5420882b4b7821b9a2ca9d4a"
+checksum = "93859463358b481ab88eb16c25e5c78cfe08e924d6fadc1a945f03ba439e32f4"
 dependencies = [
  "glycin-core",
 ]
@@ -1924,9 +1924,9 @@ dependencies = [
 
 [[package]]
 name = "gufo-exif"
-version = "0.5.0"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e99100988e312c22c6f209663b289e727db3918d06fbcbbc2315149457b42b75"
+checksum = "4183c4b2bf6cfd58823cf02b2e8a4d955da3605f8e1b98adbd3456a97e35ae16"
 dependencies = [
  "gufo-common",
  "indexmap",
@@ -2462,9 +2462,9 @@ dependencies = [
 
 [[package]]
 name = "keyring-core"
-version = "1.0.0"
+version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb1e621458ca9c51aa110bd0339d4751a056b9576bf1253aee1aa560dda0fc9d"
+checksum = "29fbf4b551298c67925f38cf341a1ada797a75f1837bdf8ae1fc8e2ebc6efb59"
 dependencies = [
  "log",
 ]
@@ -3762,14 +3762,14 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
 name = "rustls"
-version = "0.23.43"
+version = "0.23.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0283386ce02abc0151e1761d08802dfe86c173b0b494af5cbc086574e453da06"
+checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
  "log",
  "once_cell",
@@ -4033,7 +4033,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4296,7 +4296,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4595,7 +4595,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -5073,7 +5073,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
