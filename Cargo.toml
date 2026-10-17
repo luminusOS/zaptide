@@ -84,7 +84,7 @@ jiff = "0.2"
 # MIME detection for attachments.
 mime_guess2 = "2"
 
-rodio = { version = "0.22", default-features = false, features = ["playback", "recording", "mp3", "mp4", "wav", "vorbis"] }
+rodio = { version = "0.23", default-features = false, features = ["playback", "recording", "mp3", "mp4", "wav", "vorbis"] }
 opus = "0.4"
 ogg = "0.9"
 gstreamer = "0.25"
