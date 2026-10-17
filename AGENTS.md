@@ -149,8 +149,8 @@ protocol. These notes are for coding agents and new contributors.
 Never use em dashes in user-facing writing, including release titles, release
 notes, and agent responses. Use commas, colons, parentheses, or full stops.
 
-Before writing release notes, read the previous two stable releases of
-`../spotifast` and match their style: a short plain-language summary, `New`
+Before writing release notes, read the previous two stable releases of this
+repository and match their style: a short plain-language summary, `New`
 and `Fixed` sections with bold user-facing results, a `Thanks` section, and
 a full-changelog link. Credit who did what on the relevant item, with issue
 or PR numbers, and acknowledge reporters separately from implementers.
