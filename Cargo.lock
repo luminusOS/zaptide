@@ -1607,9 +1607,9 @@ dependencies = [
 
 [[package]]
 name = "glycin"
-version = "4.0.0"
+version = "4.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc9bb9cfa3d4db9eab0e2394f0e60fe4071fd31affd1704f2ecccc6bdd24c7b9"
+checksum = "1a2c4f0b15d8ec7347ba0e67d0c5c80533a7994929f3e02e2801d5b22e8946dc"
 dependencies = [
  "glycin-builtin",
  "glycin-external",
@@ -1617,9 +1617,9 @@ dependencies = [
 
 [[package]]
 name = "glycin-builtin"
-version = "4.0.0"
+version = "4.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b801b326426a0ccb61899174b0a08c2316defd323cfe78be9aa6232a2efdfeac"
+checksum = "4d0f24f915439a9b1aa51b63c4e0026fc5c29b3cfe727e6a90fc117b4fd8275b"
 dependencies = [
  "glycin-core",
 ]
@@ -1645,9 +1645,9 @@ dependencies = [
 
 [[package]]
 name = "glycin-core"
-version = "4.0.0"
+version = "4.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9466e4f18a53312faee414ea85813d6674d4cb5badad059365c4882984b40201"
+checksum = "1bb9767eb1a57ae1b0177f181331fe8e8c3935ae631271e752940753d4adedbe"
 dependencies = [
  "bytemuck",
  "futures-channel",
@@ -1678,9 +1678,9 @@ dependencies = [
 
 [[package]]
 name = "glycin-external"
-version = "4.0.0"
+version = "4.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7d335778b14437e1339d703afd1ce69e61df8ab5420882b4b7821b9a2ca9d4a"
+checksum = "93859463358b481ab88eb16c25e5c78cfe08e924d6fadc1a945f03ba439e32f4"
 dependencies = [
  "glycin-core",
 ]
@@ -1924,9 +1924,9 @@ dependencies = [
 
 [[package]]
 name = "gufo-exif"
-version = "0.5.0"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e99100988e312c22c6f209663b289e727db3918d06fbcbbc2315149457b42b75"
+checksum = "4183c4b2bf6cfd58823cf02b2e8a4d955da3605f8e1b98adbd3456a97e35ae16"
 dependencies = [
  "gufo-common",
  "indexmap",
