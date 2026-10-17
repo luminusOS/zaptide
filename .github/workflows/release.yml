@@ -173,16 +173,18 @@ jobs:
           for arch in x86_64 aarch64; do
             test -s "dist/zaptide-${GITHUB_REF_NAME}-${arch}.flatpak"
             test -s "dist/zaptide-${GITHUB_REF_NAME}-${arch}.AppImage"
+            test -s "dist/zaptide-${GITHUB_REF_NAME}-${arch}.AppImage.zsync"
             test -s "dist/zaptide-${GITHUB_REF_NAME}-${arch}-linux-gnu.tar.gz"
           done
       - name: Checksums
         working-directory: dist
-        run: sha256sum *.flatpak *.AppImage *.tar.gz > checksums.txt
+        run: sha256sum *.flatpak *.AppImage *.AppImage.zsync *.tar.gz > checksums.txt
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: |
             dist/*.flatpak
             dist/*.AppImage
+            dist/*.AppImage.zsync
             dist/*.tar.gz
             dist/checksums.txt
           fail_on_unmatched_files: true
