@@ -36,6 +36,15 @@
     <control>keyboard</control>
   </supports>
   <releases>
+    <release version="0.7.2" date="2026-10-16">
+      <description>
+        <p>Links you send now carry a preview with the page title,
+        description and image, loaded in the composer before you send. Each
+        account can turn link previews off, synced with its phone. Choosing
+        an emoji returns focus to the message input. AppImages can now
+        update in place with AppImageUpdate.</p>
+      </description>
+    </release>
     <release version="0.7.1" date="2026-10-15">
       <description>
         <p>Chats open at the first unread message, which is now easier to
