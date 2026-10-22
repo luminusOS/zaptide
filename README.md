@@ -50,6 +50,9 @@ stored locally in an encrypted archive.
   recovery, so a failure in those settings cannot hold back the phone's locks.
   For a new link, the ten second grace period starts when settings recovery
   begins; time spent waiting to pair does not count.
+- The tray icon follows the desktop's light/dark preference through the Settings
+  portal, independently of ZapTide's appearance setting. Without that preference,
+  its fallback pixels use a dark icon for a light panel.
 - When reading older messages, new arrivals keep your position and provide a
   button to return to recent messages.
 - Use light, dark or custom themes. Navigate with keyboard shortcuts and use
