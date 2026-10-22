@@ -923,6 +923,10 @@ impl NativeApplication {
                     self.focus_composer();
                 }
             }
+            Input::EscapePressed => {
+                self.press_escape();
+            }
+            Input::CloseChat => self.close_chat(),
             Input::DeleteSelected(everyone) => {
                 let dialog = adw::AlertDialog::builder()
                     .heading(gettext("Delete message?"))

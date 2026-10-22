@@ -436,6 +436,10 @@ msgstr "Escolha uma conversa que aceite mensagens antes de anexar arquivos"
 msgid "Clear the staged clipboard image before adding files"
 msgstr "Remova a imagem da área de transferência antes de adicionar arquivos"
 
+#: src/application/chats.rs
+msgid "_Close Chat"
+msgstr "_Fechar conversa"
+
 #: src/application/dispatch/attachments.rs:53 src/application.rs:1953
 msgid "Finish the active portal action first"
 msgstr "Conclua primeiro a ação do portal em andamento"
