@@ -927,6 +927,9 @@ impl NativeApplication {
                 self.press_escape();
             }
             Input::CloseChat => self.close_chat(),
+            Input::ToggleSelectedStar => self.toggle_selected_star(),
+            Input::ShowStarred => self.show_starred(),
+            Input::OpenStarred { chat, id } => self.open_starred(chat, id, &sender),
             Input::DeleteSelected(everyone) => {
                 let dialog = adw::AlertDialog::builder()
                     .heading(gettext("Delete message?"))

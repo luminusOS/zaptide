@@ -440,6 +440,34 @@ msgstr "Remova a imagem da área de transferência antes de adicionar arquivos"
 msgid "_Close Chat"
 msgstr "_Fechar conversa"
 
+#: src/application/stars.rs
+msgid "Star"
+msgstr "Favoritar"
+
+#: src/application/stars.rs
+msgid "Unstar"
+msgstr "Desfavoritar"
+
+#: src/application/stars.rs
+msgid "_Starred Messages"
+msgstr "_Mensagens favoritas"
+
+#: src/application/stars.rs
+msgid "Starred Messages"
+msgstr "Mensagens favoritas"
+
+#: src/application/stars.rs
+msgid "No Starred Messages"
+msgstr "Nenhuma mensagem favorita"
+
+#: src/application/stars.rs
+msgid "Star a message from its menu to find it here."
+msgstr "Favorite uma mensagem pelo menu dela para encontrá-la aqui."
+
+#: src/application/stars.rs
+msgid "You"
+msgstr "Você"
+
 #: src/application/dispatch/attachments.rs:53 src/application.rs:1953
 msgid "Finish the active portal action first"
 msgstr "Conclua primeiro a ação do portal em andamento"

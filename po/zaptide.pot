@@ -434,6 +434,34 @@ msgstr ""
 msgid "_Close Chat"
 msgstr ""
 
+#: src/application/stars.rs
+msgid "Star"
+msgstr ""
+
+#: src/application/stars.rs
+msgid "Unstar"
+msgstr ""
+
+#: src/application/stars.rs
+msgid "_Starred Messages"
+msgstr ""
+
+#: src/application/stars.rs
+msgid "Starred Messages"
+msgstr ""
+
+#: src/application/stars.rs
+msgid "No Starred Messages"
+msgstr ""
+
+#: src/application/stars.rs
+msgid "Star a message from its menu to find it here."
+msgstr ""
+
+#: src/application/stars.rs
+msgid "You"
+msgstr ""
+
 #: src/application/dispatch/attachments.rs:53 src/application.rs:1953
 msgid "Finish the active portal action first"
 msgstr ""

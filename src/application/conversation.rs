@@ -635,13 +635,18 @@ impl NativeApplication {
                 let avatar = (!message.from_me)
                     .then(|| self.avatars.get(&message.sender).cloned())
                     .flatten();
+                let starred = self.starred.contains(&message.id);
                 let mut row = message_row(
                     message,
                     &self.contacts,
                     self.pointer_sender.clone(),
                     &prefixes[index],
                     avatar,
-                    (show_sender, show_timestamp),
+                    RowFlags {
+                        show_sender,
+                        show_timestamp,
+                        starred,
+                    },
                     self.audio_registry(),
                 );
                 row.audio = audio;
