@@ -215,6 +215,23 @@ impl Worker {
                     .set_archived(&chat, update.action.archived.unwrap_or(false));
                 self.emit_chat(&chat);
             }
+            E::StarUpdate(update) => {
+                let chat = self.canonical(&update.chat_jid);
+                let starred = update.action.starred.unwrap_or(false);
+                let applied = self.archive.set_starred(
+                    &chat,
+                    &update.message_id,
+                    starred,
+                    update.timestamp.timestamp_millis(),
+                );
+                if applied.unwrap_or(false) {
+                    self.emit(Event::StarChanged {
+                        chat,
+                        id: update.message_id.clone(),
+                        starred,
+                    });
+                }
+            }
             E::PinUpdate(update) => {
                 let chat = self.canonical(&update.jid);
                 self.ensure_chat(&chat, None);

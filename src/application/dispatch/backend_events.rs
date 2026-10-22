@@ -73,6 +73,11 @@ pub(super) fn drain_and_convert(
                 events.push(NativeEvent::LinkPreviewsChanged(enabled))
             }
             Event::Info(message) => events.push(NativeEvent::Info(message)),
+            Event::StarChanged { chat, id, starred } => {
+                events.push(NativeEvent::StarChanged { chat, id, starred })
+            }
+            Event::StarredIds { chat, ids } => events.push(NativeEvent::StarredIds { chat, ids }),
+            Event::StarredList(list) => events.push(NativeEvent::StarredList(list)),
             Event::MessageDeleted { chat, id } => {
                 events.push(NativeEvent::MessageDeleted { chat, id })
             }
@@ -206,13 +211,7 @@ pub(super) fn handle_backend_ready(
                     app.loading_older = false;
                 }
                 app.apply_messages(chat.clone(), messages, older);
-                if let Some((target_chat, target_id)) = app.pending_quote_navigation.clone()
-                    && target_chat == chat
-                    && app.message_ids.contains(&target_id)
-                {
-                    app.pending_quote_navigation = None;
-                    app.scroll_message_into_view(&target_id);
-                }
+                app.continue_message_jump(&chat);
             }
             NativeEvent::OlderFetched { chat, more } => {
                 if app.active_chat.as_deref() == Some(&chat) {
@@ -267,6 +266,9 @@ pub(super) fn handle_backend_ready(
                 message,
                 result,
             } => app.media_completed(&chat, &message, result),
+            NativeEvent::StarChanged { chat, id, starred } => app.star_changed(&chat, id, starred),
+            NativeEvent::StarredIds { chat, ids } => app.starred_ids_loaded(&chat, ids),
+            NativeEvent::StarredList(list) => app.starred_list_loaded(list, &sender),
             NativeEvent::MessageDeleted { chat, id } => app.message_deleted(&chat, &id),
             NativeEvent::Incoming { chat, message } => {
                 if app.settings.auto_download

@@ -172,6 +172,11 @@ impl Worker {
                 mentions,
             } => self.edit_text(chat, id, text, mentions),
             Command::Revoke { chat, id } => self.revoke(chat, id),
+            Command::SetStarred { chat, id, starred } => self.set_starred(chat, id, starred),
+            Command::LoadStarred => match self.archive.starred_messages(STARRED_LIMIT) {
+                Ok(list) => self.emit(Event::StarredList(list)),
+                Err(error) => log::warn!("could not list starred messages: {error}"),
+            },
             Command::DeleteLocal { chat, id } => {
                 if let Ok(true) = self.archive.delete_message(&chat, &id) {
                     self.emit(Event::MessageDeleted {
