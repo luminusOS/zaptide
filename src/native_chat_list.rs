@@ -144,6 +144,10 @@ impl ChatListProjection {
         }
     }
 
+    pub fn clear_selection(&mut self) {
+        self.selected_id = None;
+    }
+
     pub fn selected_id(&self) -> Option<&str> {
         self.selected_id.as_deref()
     }
@@ -302,6 +306,15 @@ mod tests {
             assert_eq!(filters.private_only, private_only);
             assert_eq!(filters.groups_only, groups_only);
         }
+    }
+
+    #[test]
+    fn clearing_the_selection_keeps_the_chats() {
+        let mut projection = projection([chat("one", "One"), chat("two", "Two")]);
+        assert!(projection.select("two"));
+        projection.clear_selection();
+        assert_eq!(projection.selected_id(), None);
+        assert_eq!(ids(&projection), ["one", "two"]);
     }
 
     #[test]

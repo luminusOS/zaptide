@@ -430,6 +430,10 @@ msgstr ""
 msgid "Clear the staged clipboard image before adding files"
 msgstr ""
 
+#: src/application/chats.rs
+msgid "_Close Chat"
+msgstr ""
+
 #: src/application/dispatch/attachments.rs:53 src/application.rs:1953
 msgid "Finish the active portal action first"
 msgstr ""

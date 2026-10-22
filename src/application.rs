@@ -634,6 +634,8 @@ pub enum Input {
     ForwardSelected(Vec<String>),
     StartSelection,
     CancelSelection,
+    EscapePressed,
+    CloseChat,
     DeleteSelected(bool),
     VoteOption(usize),
     CreatePoll(crate::model::PollDraft),
@@ -1331,7 +1333,7 @@ impl SimpleComponent for NativeApplication {
         let selection_sender = sender.clone();
         selection_keys.connect_key_pressed(move |_, key, _, _| {
             if key == gtk::gdk::Key::Escape {
-                selection_sender.input(Input::CancelSelection);
+                selection_sender.input(Input::EscapePressed);
             }
             gtk::glib::Propagation::Proceed
         });
@@ -2533,6 +2535,13 @@ impl NativeApplication {
     }
 
     fn clear_active_chat(&mut self) {
+        self.reset_open_chat_state();
+        self.pending_send = None;
+        self.page_title = "Conversation unavailable".into();
+        self.status = gettext("This chat is no longer available.");
+    }
+
+    fn reset_open_chat_state(&mut self) {
         self.audio.media.stop_playback();
         self.audio.playing_audio = None;
         self.audio.waveform_queue.clear();
@@ -2544,7 +2553,6 @@ impl NativeApplication {
         self.audio.audio_errors.clear();
         self.audio.audio_registry.borrow_mut().clear();
         self.active_chat = None;
-        self.pending_send = None;
         self.pending_edit = None;
         self.reply_to = None;
         self.editing = None;
@@ -2555,8 +2563,6 @@ impl NativeApplication {
         self.audio.selected_voice = None;
         self.audio.selected_voice_message = None;
         self.messages.clear();
-        self.page_title = "Conversation unavailable".into();
-        self.status = gettext("This chat is no longer available.");
     }
 
     /// File names of the files staged for the open chat.

@@ -229,6 +229,9 @@ impl NativeApplication {
         section.append(Some(archive), Some("win.chat-archive"));
         self.chat_menu.append_section(None, &section);
         let section = gtk::gio::Menu::new();
+        section.append(Some(&gettext("_Close Chat")), Some("win.chat-close"));
+        self.chat_menu.append_section(None, &section);
+        let section = gtk::gio::Menu::new();
         section.append(
             Some(&gettext("Copy _Transcript")),
             Some("win.copy-transcript"),

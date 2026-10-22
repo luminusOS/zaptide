@@ -53,6 +53,9 @@ stored locally in an encrypted archive.
 - The tray icon follows the desktop's light/dark preference through the Settings
   portal, independently of ZapTide's appearance setting. Without that preference,
   its fallback pixels use a dark icon for a light panel.
+- Escape cancels message selection, then an edit or reply, then closes the open
+  chat and returns to the empty home screen. Close Chat in the chat menu does the
+  same. The draft stays with the chat, and closing marks nothing as read.
 - When reading older messages, new arrivals keep your position and provide a
   button to return to recent messages.
 - Use light, dark or custom themes. Navigate with keyboard shortcuts and use

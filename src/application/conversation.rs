@@ -1,7 +1,83 @@
 use super::*;
 use crate::i18n::gettext;
 
+/// What Escape does in the conversation, most specific first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum EscapeAction {
+    CancelSelection,
+    CancelEdit,
+    CancelReply,
+    CloseChat,
+    Nothing,
+}
+
+impl EscapeAction {
+    pub(super) fn for_state(
+        selecting: bool,
+        editing: bool,
+        replying: bool,
+        chat_open: bool,
+    ) -> Self {
+        match (selecting, editing, replying, chat_open) {
+            (true, ..) => Self::CancelSelection,
+            (_, true, ..) => Self::CancelEdit,
+            (_, _, true, _) => Self::CancelReply,
+            (.., true) => Self::CloseChat,
+            _ => Self::Nothing,
+        }
+    }
+}
+
 impl NativeApplication {
+    pub(super) fn press_escape(&mut self) -> EscapeAction {
+        let action = EscapeAction::for_state(
+            self.message_selection.is_some(),
+            self.editing.is_some(),
+            self.reply_to.is_some(),
+            self.active_chat.is_some(),
+        );
+        match action {
+            EscapeAction::CancelSelection => {
+                self.message_selection = None;
+                self.rebuild_message_rows(false);
+                self.focus_composer();
+            }
+            EscapeAction::CancelEdit => self.cancel_edit(),
+            EscapeAction::CancelReply => self.cancel_reply(),
+            EscapeAction::CloseChat => self.close_chat(),
+            EscapeAction::Nothing => {}
+        }
+        action
+    }
+
+    /// Returns to the empty home screen. The draft stays with the chat and
+    /// nothing is marked read, since reading only follows the open chat.
+    pub(super) fn close_chat(&mut self) {
+        let Some(chat) = self.active_chat.clone() else {
+            return;
+        };
+        self.cancel_edit();
+        self.cancel_reply();
+        self.cancel_portal_requests();
+        self.reset_open_chat_state();
+        self.composer.cancel_context(&chat);
+        self.chat_projection.clear_selection();
+        self.chats
+            .selection_model
+            .set_selected(gtk::INVALID_LIST_POSITION);
+        self.mark_open_chat();
+        self.sidebar_visible = true;
+        self.opened_unread = 0;
+        self.unread_marker = None;
+        self.recent_messages_pending = false;
+        self.history_complete = false;
+        self.loading_older = false;
+        self.message_target = None;
+        self.message_selection = None;
+        self.page_title = String::new();
+        self.status = String::new();
+    }
+
     /// Jumps to the message `message` quotes, loading older history if needed.
     pub(super) fn open_quoted(&mut self, message: crate::model::Message) {
         let Some(quoted_id) = message.quoted.map(|quoted| quoted.id) else {
@@ -709,5 +785,28 @@ mod tests {
         assert!(new_messages_need_notice(false, true));
         assert!(!new_messages_need_notice(true, true));
         assert!(!new_messages_need_notice(false, false));
+    }
+}
+
+#[cfg(test)]
+mod escape_tests {
+    use super::EscapeAction::{self, *};
+
+    #[test]
+    fn escape_dismisses_the_most_specific_state_before_closing_the_chat() {
+        for (state, expected) in [
+            ((true, true, true, true), CancelSelection),
+            ((false, true, true, true), CancelEdit),
+            ((false, false, true, true), CancelReply),
+            ((false, false, false, true), CloseChat),
+            ((false, false, false, false), Nothing),
+        ] {
+            let (selecting, editing, replying, chat_open) = state;
+            assert_eq!(
+                EscapeAction::for_state(selecting, editing, replying, chat_open),
+                expected,
+                "{state:?}"
+            );
+        }
     }
 }
