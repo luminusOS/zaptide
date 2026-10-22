@@ -169,7 +169,6 @@ impl NativeApplication {
             unread_chats: super::accounts::unread_chat_count(&self.chat_snapshots)
                 + self.unread_elsewhere(),
             notifications: self.settings.notifications,
-            light_theme: !adw::StyleManager::default().is_dark(),
         };
         if state == self.tray_state {
             return;
