@@ -12,6 +12,8 @@ pub(super) enum DialogAction {
     InsertMentionId(String),
     ForwardSelected(Vec<String>),
     SendSticker(std::path::PathBuf),
+    ShowStarred,
+    OpenStarred { chat: String, id: String },
 }
 
 pub(super) fn attach_tile(icon: &str, label: &str, tone: &str) -> gtk::Box {
@@ -1012,9 +1014,13 @@ pub(super) fn show_chat_info_dialog(
     contacts: &std::collections::HashMap<String, crate::model::Contact>,
     avatar: Option<&std::path::Path>,
     presence: Option<(bool, Option<i64>)>,
-    chats: &[crate::model::Chat],
-    avatars: &std::collections::HashMap<String, std::path::PathBuf>,
+    directory: (
+        &[crate::model::Chat],
+        &std::collections::HashMap<String, std::path::PathBuf>,
+    ),
+    on_action: &DialogActionCallback,
 ) -> Option<(String, adw::ActionRow)> {
+    let (chats, avatars) = directory;
     let name_of = |id: &str| {
         sender_label(
             contacts
@@ -1154,6 +1160,26 @@ pub(super) fn show_chat_info_dialog(
     }
     page.add(&settings);
 
+    let starred_group = adw::PreferencesGroup::new();
+    let starred = adw::ActionRow::builder()
+        .title(gettext("Starred Messages"))
+        .activatable(true)
+        .build();
+    starred.add_prefix(&gtk::Image::from_icon_name("starred-symbolic"));
+    starred.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
+    let on_action = on_action.clone();
+    starred.connect_activated(move |row| {
+        if let Some(dialog) = row
+            .ancestor(adw::Dialog::static_type())
+            .and_downcast::<adw::Dialog>()
+        {
+            dialog.close();
+        }
+        on_action(DialogAction::ShowStarred);
+    });
+    starred_group.add(&starred);
+    page.add(&starred_group);
+
     if !chat.is_group() {
         let mut shared: Vec<&crate::model::Chat> = chats
             .iter()
@@ -1221,4 +1247,83 @@ pub(super) fn show_chat_info_dialog(
         .build();
     dialog.present(Some(parent));
     chat.phone().map(|_| (chat.id.clone(), about))
+}
+
+/// One row of the starred messages list.
+pub(super) struct StarredEntry {
+    pub chat: String,
+    pub id: String,
+    pub sender: String,
+    pub summary: String,
+    pub when: String,
+}
+
+/// Starred messages of the open chat; choosing one scrolls to it.
+pub(super) fn show_starred_dialog(
+    parent: &adw::ApplicationWindow,
+    on_action: &DialogActionCallback,
+    entries: Vec<StarredEntry>,
+) {
+    let dialog = adw::Dialog::builder()
+        .title(gettext("Starred Messages"))
+        .content_width(440)
+        .content_height(560)
+        .build();
+    let content: gtk::Widget = if entries.is_empty() {
+        adw::StatusPage::builder()
+            .icon_name("starred-symbolic")
+            .title(gettext("No Starred Messages"))
+            .description(gettext("Star a message from its menu to find it here."))
+            .vexpand(true)
+            .build()
+            .upcast()
+    } else {
+        let list = gtk::ListBox::builder()
+            .selection_mode(gtk::SelectionMode::None)
+            .css_classes(["boxed-list"])
+            .margin_top(6)
+            .margin_bottom(12)
+            .margin_start(12)
+            .margin_end(12)
+            .build();
+        for entry in entries {
+            let row = adw::ActionRow::builder()
+                .title(glib_escape(&entry.sender))
+                .subtitle(glib_escape(&entry.summary))
+                .subtitle_lines(2)
+                .activatable(true)
+                .build();
+            row.add_suffix(
+                &gtk::Label::builder()
+                    .label(&entry.when)
+                    .valign(gtk::Align::Center)
+                    .css_classes(["caption", "dim-label"])
+                    .build(),
+            );
+            let (on_action, dialog, chat, id) =
+                (on_action.clone(), dialog.clone(), entry.chat, entry.id);
+            row.connect_activated(move |_| {
+                dialog.close();
+                on_action(DialogAction::OpenStarred {
+                    chat: chat.clone(),
+                    id: id.clone(),
+                });
+            });
+            list.append(&row);
+        }
+        gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .child(&list)
+            .build()
+            .upcast()
+    };
+    let toolbar = adw::ToolbarView::new();
+    toolbar.add_top_bar(&adw::HeaderBar::new());
+    toolbar.set_content(Some(&content));
+    dialog.set_child(Some(&toolbar));
+    dialog.present(Some(parent));
+}
+
+fn glib_escape(text: &str) -> String {
+    gtk::glib::markup_escape_text(text).to_string()
 }

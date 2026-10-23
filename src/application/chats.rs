@@ -118,6 +118,7 @@ impl NativeApplication {
         self.loading_older = false;
         self.message_ids.clear();
         self.message_selection = None;
+        self.starred.clear();
         self.message_snapshots.clear();
         self.editable_messages.clear();
         self.transcript.clear();

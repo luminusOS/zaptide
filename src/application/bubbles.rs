@@ -49,16 +49,27 @@ pub(super) fn set_delivery_ticks(area: &gtk::DrawingArea, glyph: &str) {
     area.queue_draw();
 }
 
+/// How a message sits among its neighbours and what marks it.
+pub(super) struct RowFlags {
+    pub show_sender: bool,
+    pub show_timestamp: bool,
+    pub starred: bool,
+}
+
 pub(super) fn message_row(
     message: crate::model::Message,
     contacts: &std::collections::HashMap<String, crate::model::Contact>,
     pointer_sender: ComponentSender<NativeApplication>,
     prefix: &str,
     avatar: Option<std::path::PathBuf>,
-    boundaries: (bool, bool),
+    flags: RowFlags,
     audio_registry: AudioRegistry,
 ) -> MessageRow {
-    let (show_sender, show_timestamp) = boundaries;
+    let RowFlags {
+        show_sender,
+        show_timestamp,
+        starred,
+    } = flags;
     const SENDER_CLASSES: [&str; 6] = [
         "zaptide-sender-blue",
         "zaptide-sender-green",
@@ -109,6 +120,9 @@ pub(super) fn message_row(
     }
     if message.edited {
         footer.push("Edited".to_owned());
+    }
+    if starred {
+        footer.push("★".to_owned());
     }
     let reactions = reaction_summary(&message.reactions);
     footer.push(clock.clone());

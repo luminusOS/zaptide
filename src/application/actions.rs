@@ -8,7 +8,7 @@ pub(super) fn install_message_actions(
 ) {
     let group = gtk::gio::SimpleActionGroup::new();
     type MessageAction = (&'static str, fn() -> Input);
-    let actions: [MessageAction; 12] = [
+    let actions: [MessageAction; 13] = [
         ("copy", || Input::CopySelectedText),
         ("attachment", || Input::ActivateSelectedAttachment),
         ("folder", || Input::ShowSelectedInFolder),
@@ -19,6 +19,7 @@ pub(super) fn install_message_actions(
         ("edit", || Input::EditSelected),
         ("forward", || Input::ShowForward),
         ("select", || Input::StartSelection),
+        ("star", || Input::ToggleSelectedStar),
         ("delete", || Input::DeleteSelected(false)),
         ("delete-everyone", || Input::DeleteSelected(true)),
     ];

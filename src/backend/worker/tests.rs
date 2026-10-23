@@ -3999,3 +3999,60 @@ fn a_link_preview_carries_its_thumbnail_on_the_wire() {
     assert_eq!(extended.jpeg_thumbnail.as_deref(), Some(&[0xff, 0xd8][..]));
     assert_eq!(thumbnail_of(&wire), Some(vec![0xff, 0xd8]));
 }
+
+mod stars {
+    use super::*;
+
+    const PEER: &str = "4917663430455@s.whatsapp.net";
+
+    fn star(starred: bool, millis: i64) -> wa_events::StarUpdate {
+        wa_events::StarUpdate::builder()
+            .chat_jid(PEER.parse().unwrap())
+            .message_id("STAR".to_owned())
+            .from_me(false)
+            .timestamp(
+                whatsapp_rust::wacore::chrono::DateTime::from_timestamp_millis(millis).unwrap(),
+            )
+            .from_full_sync(true)
+            .action(Box::new(wa::sync_action_value::StarAction {
+                starred: Some(starred),
+            }))
+            .build()
+    }
+
+    fn changes(events: &std::sync::mpsc::Receiver<Event>) -> Vec<bool> {
+        std::iter::from_fn(|| events.try_recv().ok())
+            .filter_map(|event| match event {
+                Event::StarChanged { id, starred, .. } if id == "STAR" => Some(starred),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_star_from_the_phone_applies_once_and_ignores_older_replays() {
+        let (mut worker, events, _, _) = worker();
+        for (starred, millis) in [(true, 2_000), (true, 3_000), (false, 1_000), (false, 4_000)] {
+            worker
+                .handle_wa_event(Arc::new(wa_events::Event::StarUpdate(star(
+                    starred, millis,
+                ))))
+                .await;
+        }
+        assert_eq!(changes(&events), [true, false]);
+        assert!(worker.archive.starred_ids(PEER).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn starring_here_is_stored_and_reported_without_a_connection() {
+        let (mut worker, events, _, _) = worker();
+        worker.archive.ensure_chat(PEER, "Fixture").unwrap();
+        let message = crate::archive::tests::message(PEER, "STAR", 10, false);
+        worker.archive.insert_message(&message, None).unwrap();
+        worker.set_starred(PEER.to_owned(), "STAR".to_owned(), true);
+        assert_eq!(changes(&events), [true]);
+        assert_eq!(worker.archive.starred_ids(PEER).unwrap(), ["STAR"]);
+        worker.set_starred(PEER.to_owned(), "UNKNOWN".to_owned(), true);
+        assert!(changes(&events).is_empty());
+    }
+}

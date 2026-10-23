@@ -22,6 +22,7 @@ mod presentation;
 mod profile_dialog;
 mod rows;
 mod sidebar;
+mod stars;
 mod transcript_view;
 
 use crate::i18n::gettext;
@@ -79,6 +80,8 @@ fn dialog_action_callback(
             dialogs::DialogAction::InsertMentionId(id) => Input::InsertMentionId(id),
             dialogs::DialogAction::ForwardSelected(ids) => Input::ForwardSelected(ids),
             dialogs::DialogAction::SendSticker(path) => Input::SendSticker(path),
+            dialogs::DialogAction::ShowStarred => Input::ShowStarred,
+            dialogs::DialogAction::OpenStarred { chat, id } => Input::OpenStarred { chat, id },
         });
     })
 }
@@ -228,6 +231,16 @@ enum NativeEvent {
         id: String,
         path: Option<std::path::PathBuf>,
     },
+    StarChanged {
+        chat: String,
+        id: String,
+        starred: bool,
+    },
+    StarredIds {
+        chat: String,
+        ids: Vec<String>,
+    },
+    StarredList(Vec<crate::archive::StarredMessage>),
     MessageDeleted {
         chat: String,
         id: String,
@@ -479,6 +492,10 @@ pub struct NativeApplication {
     message_ids: Vec<String>,
     message_snapshots: std::collections::HashMap<String, crate::model::Message>,
     pending_quote_navigation: Option<(String, String)>,
+    /// The jump to a starred message still has to load older history.
+    jump_needs_history: bool,
+    /// Starred messages of the open chat.
+    starred: std::collections::HashSet<String>,
     pointer_sender: ComponentSender<NativeApplication>,
     editable_messages: std::collections::HashMap<String, String>,
     transcript: Vec<crate::native_transcript::TranscriptRow>,
@@ -636,6 +653,12 @@ pub enum Input {
     CancelSelection,
     EscapePressed,
     CloseChat,
+    ToggleSelectedStar,
+    ShowStarred,
+    OpenStarred {
+        chat: String,
+        id: String,
+    },
     DeleteSelected(bool),
     VoteOption(usize),
     CreatePoll(crate::model::PollDraft),
@@ -1231,6 +1254,8 @@ impl SimpleComponent for NativeApplication {
             message_ids: Vec::new(),
             message_snapshots: std::collections::HashMap::new(),
             pending_quote_navigation: None,
+            jump_needs_history: false,
+            starred: std::collections::HashSet::new(),
             pointer_sender: sender.clone(),
             editable_messages: std::collections::HashMap::new(),
             transcript: Vec::new(),
@@ -1793,6 +1818,12 @@ impl NativeApplication {
             respond.append(Some(&gettext("Edit")), Some("message.edit"));
         }
         respond.append(Some(&gettext("Forward…")), Some("message.forward"));
+        let star = if self.starred.contains(&message.id) {
+            gettext("Unstar")
+        } else {
+            gettext("Star")
+        };
+        respond.append(Some(&star), Some("message.star"));
         respond.append(Some(&gettext("Select")), Some("message.select"));
         let vote = gtk::gio::Menu::new();
         if self.selected_poll_can_vote() {
@@ -2542,6 +2573,7 @@ impl NativeApplication {
     }
 
     fn reset_open_chat_state(&mut self) {
+        self.starred.clear();
         self.audio.media.stop_playback();
         self.audio.playing_audio = None;
         self.audio.waveform_queue.clear();

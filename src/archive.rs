@@ -16,7 +16,9 @@ mod media;
 mod polls;
 mod receipts;
 mod row;
+mod stars;
 pub use polls::PollVote;
+pub use stars::StarredMessage;
 
 #[derive(Clone, Debug)]
 pub struct PhoneSticker {
@@ -233,6 +235,7 @@ impl Archive {
         let transaction = connection.unchecked_transaction()?;
         transaction.execute_batch(SCHEMA)?;
         transaction.execute_batch(polls::SCHEMA)?;
+        transaction.execute_batch(stars::SCHEMA)?;
         for (table, column, definition) in MIGRATIONS {
             let columns = transaction
                 .prepare(&format!("PRAGMA table_info({table})"))?

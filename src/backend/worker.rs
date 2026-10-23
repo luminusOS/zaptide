@@ -46,6 +46,8 @@ mod polls;
 mod profile;
 mod protocol;
 mod reactions;
+mod stars;
+use stars::STARRED_LIMIT;
 
 #[cfg(test)]
 use history::ParsedHistory;
@@ -3087,6 +3089,14 @@ impl Worker {
     }
 
     fn load_chat(&mut self, chat: ChatId, before: Option<super::PageKey>) {
+        if before.is_none()
+            && let Ok(ids) = self.archive.starred_ids(&chat)
+        {
+            self.emit(Event::StarredIds {
+                chat: chat.clone(),
+                ids,
+            });
+        }
         self.send_page(&chat, before.clone());
         if before.is_none() && ChatKind::from_id(&chat) == ChatKind::Group {
             self.request_group_info(&chat, false);

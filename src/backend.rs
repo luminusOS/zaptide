@@ -338,6 +338,14 @@ pub enum Command {
         chat: ChatId,
         id: String,
     },
+    /// Stars or unstars a message, synced with the phone.
+    SetStarred {
+        chat: ChatId,
+        id: String,
+        starred: bool,
+    },
+    /// Asks for the starred messages of one chat.
+    LoadStarred(ChatId),
     DeleteLocal {
         chat: ChatId,
         id: String,
@@ -634,6 +642,19 @@ pub enum Event {
         chat: ChatId,
         id: String,
     },
+    /// A message was starred or unstarred here or on another device.
+    StarChanged {
+        chat: ChatId,
+        id: String,
+        starred: bool,
+    },
+    /// The starred messages of a chat that was just opened.
+    StarredIds {
+        chat: ChatId,
+        ids: Vec<String>,
+    },
+    /// Starred messages of one chat, newest first.
+    StarredList(Vec<crate::archive::StarredMessage>),
     /// Saved stickers, imported packs, and recent stickers for the picker.
     Stickers {
         saved: Vec<PathBuf>,
