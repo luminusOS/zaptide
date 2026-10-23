@@ -68,6 +68,11 @@ and Arch Linux ARM ships libadwaita 1.9. `build.sh` picks the `dnf` path when
 podman run --rm -v "$PWD":/src -w /src -e VERSION=dev registry.fedoraproject.org/fedora:45 ./packaging/appimage/build.sh
 ```
 
+The AppDir follows the AppImage convention: the application lives under `usr/`
+(`usr/bin`, `usr/lib`, `usr/share`). sharun's `AppRun` also looks for those
+directories beside itself, so `build.sh` leaves a link to each one at the top
+level. The build fails if `usr/bin/zaptide` is missing.
+
 Each AppImage embeds the update information
 `gh-releases-zsync|luminusOS|zaptide|latest|zaptide-*-<arch>.AppImage.zsync`, and
 the build writes the matching `.zsync` file next to it. The release publishes both,

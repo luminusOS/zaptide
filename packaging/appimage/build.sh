@@ -47,5 +47,19 @@ export GTK_CLASS_FIX=1
 export UPINFO="gh-releases-zsync|luminusOS|zaptide|latest|zaptide-*-$ARCH.AppImage.zsync"
 
 ./quick-sharun /usr/bin/zaptide
+
+# The AppDir convention keeps the application under usr/. sharun's AppRun and
+# hooks still look for these directories beside AppRun, so each one stays
+# behind as a link to the real directory.
+mkdir -p AppDir/usr
+for dir in bin lib share etc shared; do
+	[ -d "AppDir/$dir" ] && [ ! -L "AppDir/$dir" ] || continue
+	mv "AppDir/$dir" "AppDir/usr/$dir"
+	ln -s "usr/$dir" "AppDir/$dir"
+done
+test -x AppDir/usr/bin/zaptide
+test -d AppDir/usr/lib
+test -d AppDir/usr/share
+
 ./quick-sharun --make-appimage
 test -s "$OUTPATH/$OUTNAME.zsync"
