@@ -15,7 +15,7 @@ if command -v pacman >/dev/null; then
 
 	pacman -Syu --noconfirm base-devel git wget rustup gtk4 libadwaita alsa-lib \
 		gstreamer gst-plugins-base gst-plugins-good cmake libseccomp fontconfig \
-		glycin bubblewrap xorg-server-xvfb patchelf strace
+		glycin bubblewrap xorg-server-xvfb patchelf strace adwaita-icon-theme
 	rustup default stable
 else
 	# Fedora 45 has libadwaita 1.10; used for aarch64, where Arch has no official image.
@@ -23,7 +23,7 @@ else
 		@development-tools git wget file xz perl make rust cargo gtk4-devel libadwaita-devel \
 		alsa-lib-devel gstreamer1-devel gstreamer1-plugins-base gstreamer1-plugins-good \
 		cmake libseccomp-devel fontconfig-devel glycin-loaders bubblewrap \
-		xorg-x11-server-Xvfb dbus-daemon patchelf strace \
+		xorg-x11-server-Xvfb dbus-daemon patchelf strace adwaita-icon-theme \
 		libglvnd-gles libglvnd-egl libglvnd-glx mesa-dri-drivers mesa-vulkan-drivers vulkan-loader glibc-locale-source glibc-langpack-en
 fi
 
@@ -47,6 +47,15 @@ export GTK_CLASS_FIX=1
 export UPINFO="gh-releases-zsync|luminusOS|zaptide|latest|zaptide-*-$ARCH.AppImage.zsync"
 
 ./quick-sharun /usr/bin/zaptide
+
+# quick-sharun bundles only the build system's hicolor icons and expects the
+# desktop to provide Adwaita, so a system without it shows missing-image icons.
+# The cursors are 12 MB and unused. The check catches a package that stops
+# shipping the symbolic icons.
+mkdir -p AppDir/share/icons/Adwaita
+cp -r /usr/share/icons/Adwaita/. AppDir/share/icons/Adwaita/
+rm -rf AppDir/share/icons/Adwaita/cursors
+test -d AppDir/share/icons/Adwaita/symbolic
 
 # AppDir convention: the application lives under usr/. sharun's AppRun and
 # hooks expect these directories beside AppRun, and the app does not start

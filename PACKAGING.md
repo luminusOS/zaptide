@@ -50,8 +50,9 @@ both with `dev.luminusos.ZapTide.bundle.yml`, and lists every file in
 
 The x86_64 AppImage is built with
 [quick-sharun](https://github.com/pkgforge-dev/Anylinux-AppImages) in an Arch
-Linux container. It bundles glibc, GTK, libadwaita, GStreamer, the glycin
-loaders and bubblewrap, so it needs nothing from the host distribution. Arch
+Linux container. It bundles glibc, GTK, libadwaita, the Adwaita icon theme,
+GStreamer, the glycin loaders and bubblewrap, so it needs nothing from the host
+distribution. Arch
 stable has libadwaita 1.9, so `packaging/appimage/build.sh` enables the Arch
 testing repositories until 1.10 reaches `extra`. To build it locally:
 
