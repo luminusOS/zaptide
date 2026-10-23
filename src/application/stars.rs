@@ -40,8 +40,8 @@ impl NativeApplication {
     }
 
     pub(super) fn show_starred(&self) {
-        if let Some(backend) = &self.backend {
-            backend.send(crate::backend::Command::LoadStarred);
+        if let (Some(backend), Some(chat)) = (&self.backend, self.active_chat.clone()) {
+            backend.send(crate::backend::Command::LoadStarred(chat));
         }
     }
 
@@ -54,11 +54,6 @@ impl NativeApplication {
             .into_iter()
             .map(|starred| {
                 let message = starred.message;
-                let chat_name = self
-                    .chat_snapshots
-                    .iter()
-                    .find(|chat| chat.id == starred.chat)
-                    .map_or_else(|| gettext("Chat"), |chat| chat.name.clone());
                 let from = if message.from_me {
                     gettext("You")
                 } else {
@@ -66,7 +61,6 @@ impl NativeApplication {
                 };
                 StarredEntry {
                     chat: starred.chat,
-                    chat_name,
                     id: message.id.clone(),
                     sender: from,
                     summary: message.summary(),
@@ -77,19 +71,15 @@ impl NativeApplication {
         show_starred_dialog(&self.window, &dialog_action_callback(sender), entries);
     }
 
-    /// Opens the chat, then loads older history until the message is there.
-    pub(super) fn open_starred(
-        &mut self,
-        chat: String,
-        id: String,
-        sender: &ComponentSender<Self>,
-    ) {
-        self.handle_input(Input::OpenChatId(chat.clone()), sender.clone());
+    /// Scrolls to a starred message of the open chat, loading older history
+    /// first when it is not on screen.
+    pub(super) fn open_starred(&mut self, chat: String, id: String) {
         if self.active_chat.as_deref() != Some(chat.as_str()) {
             return;
         }
-        self.pending_quote_navigation = Some((chat, id));
+        self.pending_quote_navigation = Some((chat.clone(), id));
         self.jump_needs_history = true;
+        self.continue_message_jump(&chat);
     }
 
     /// Called after a page of the open chat arrived. Scrolls to the target of

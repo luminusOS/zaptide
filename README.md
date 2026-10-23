@@ -54,9 +54,9 @@ stored locally in an encrypted archive.
   portal, independently of ZapTide's appearance setting. Without that preference,
   its fallback pixels use a dark icon for a light panel.
 - Star a message from its menu to keep it, with a ★ beside its time. Starred
-  Messages in the main menu lists them across chats, newest first, and choosing
-  one opens its chat at that message. Stars sync with your phone, are kept per
-  account, and chats locked on the phone stay out of the list.
+  Messages in a chat's Contact Info or Group Info lists that chat's starred
+  messages, newest first, and choosing one scrolls to it. Stars sync with your
+  phone, are kept per account, and locked chats list none.
 - Escape cancels message selection, then an edit or reply, then closes the open
   chat and returns to the empty home screen. Close Chat in the chat menu does the
   same. The draft stays with the chat, and closing marks nothing as read.

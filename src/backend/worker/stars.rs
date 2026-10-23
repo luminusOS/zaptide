@@ -2,7 +2,7 @@
 
 use super::*;
 
-/// Most starred messages one listing carries.
+/// Most starred messages one chat's listing carries.
 pub(super) const STARRED_LIMIT: usize = 500;
 
 impl Worker {

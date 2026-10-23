@@ -173,7 +173,8 @@ impl Worker {
             } => self.edit_text(chat, id, text, mentions),
             Command::Revoke { chat, id } => self.revoke(chat, id),
             Command::SetStarred { chat, id, starred } => self.set_starred(chat, id, starred),
-            Command::LoadStarred => match self.archive.starred_messages(STARRED_LIMIT) {
+            Command::LoadStarred(chat) => match self.archive.starred_messages(&chat, STARRED_LIMIT)
+            {
                 Ok(list) => self.emit(Event::StarredList(list)),
                 Err(error) => log::warn!("could not list starred messages: {error}"),
             },

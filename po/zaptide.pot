@@ -443,10 +443,6 @@ msgid "Unstar"
 msgstr ""
 
 #: src/application/stars.rs
-msgid "_Starred Messages"
-msgstr ""
-
-#: src/application/stars.rs
 msgid "Starred Messages"
 msgstr ""
 

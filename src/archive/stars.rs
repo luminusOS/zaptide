@@ -53,21 +53,22 @@ impl Archive {
             .collect()
     }
 
-    /// Starred messages across chats, newest first. Locked chats stay out, as
-    /// they do from the chat list.
-    pub fn starred_messages(&self, limit: usize) -> Result<Vec<StarredMessage>> {
+    /// Starred messages of one chat, newest first. A locked chat lists none,
+    /// as it shows nothing in the chat list.
+    pub fn starred_messages(&self, chat: &str, limit: usize) -> Result<Vec<StarredMessage>> {
         let mut statement = self.connection.prepare(&format!(
             "SELECT {MESSAGE_COLUMNS}, chat
              FROM messages
-             WHERE EXISTS (SELECT 1 FROM stars
+             WHERE chat = ?1
+               AND EXISTS (SELECT 1 FROM stars
                            WHERE stars.chat = messages.chat AND stars.id = messages.id
                              AND stars.starred = 1)
                AND NOT COALESCE((SELECT locked FROM chats WHERE chats.id = messages.chat), 0)
              ORDER BY timestamp DESC, rowid DESC
-             LIMIT ?1"
+             LIMIT ?2"
         ))?;
         let chat_column = MESSAGE_COLUMNS.split(',').count();
-        let rows = statement.query_map(params![limit as i64], |row| {
+        let rows = statement.query_map(params![chat, limit as i64], |row| {
             let chat: String = row.get(chat_column)?;
             let message = row::message_from_row(&chat, row)?;
             Ok(StarredMessage { chat, message })
@@ -129,12 +130,17 @@ mod tests {
         archive
             .set_starred("chat@s.whatsapp.net", "late", true, 5)
             .unwrap();
-        assert!(archive.starred_messages(10).unwrap().is_empty());
+        assert!(
+            archive
+                .starred_messages("chat@s.whatsapp.net", 10)
+                .unwrap()
+                .is_empty()
+        );
         archive
             .upsert_chat(&Chat::new("chat@s.whatsapp.net".into(), "Chat".into()))
             .unwrap();
         archive.insert_message(&message("late", 100), None).unwrap();
-        let starred = archive.starred_messages(10).unwrap();
+        let starred = archive.starred_messages("chat@s.whatsapp.net", 10).unwrap();
         assert_eq!(starred.len(), 1);
         assert_eq!(starred[0].chat, "chat@s.whatsapp.net");
         assert_eq!(starred[0].message.id, "late");
@@ -156,12 +162,39 @@ mod tests {
             .set_starred("chat@s.whatsapp.net", "new", true, 1)
             .unwrap();
         let ids: Vec<_> = archive
-            .starred_messages(10)
+            .starred_messages("chat@s.whatsapp.net", 10)
             .unwrap()
             .into_iter()
             .map(|starred| starred.message.id)
             .collect();
         assert_eq!(ids, ["new", "old"]);
+    }
+
+    #[test]
+    fn a_chat_lists_only_its_own_starred_messages() {
+        let archive = archive();
+        for chat in ["chat@s.whatsapp.net", "other@s.whatsapp.net"] {
+            archive
+                .upsert_chat(&Chat::new(chat.into(), "Chat".into()))
+                .unwrap();
+        }
+        let mut other = message("elsewhere", 5);
+        other.chat = "other@s.whatsapp.net".into();
+        archive.insert_message(&message("here", 4), None).unwrap();
+        archive.insert_message(&other, None).unwrap();
+        archive
+            .set_starred("chat@s.whatsapp.net", "here", true, 1)
+            .unwrap();
+        archive
+            .set_starred("other@s.whatsapp.net", "elsewhere", true, 1)
+            .unwrap();
+        let ids: Vec<_> = archive
+            .starred_messages("chat@s.whatsapp.net", 10)
+            .unwrap()
+            .into_iter()
+            .map(|starred| starred.message.id)
+            .collect();
+        assert_eq!(ids, ["here"]);
     }
 
     #[test]
@@ -175,7 +208,12 @@ mod tests {
         archive
             .set_starred("chat@s.whatsapp.net", "m", true, 1)
             .unwrap();
-        assert!(archive.starred_messages(10).unwrap().is_empty());
+        assert!(
+            archive
+                .starred_messages("chat@s.whatsapp.net", 10)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

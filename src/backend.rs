@@ -344,8 +344,8 @@ pub enum Command {
         id: String,
         starred: bool,
     },
-    /// Asks for the starred messages of every chat.
-    LoadStarred,
+    /// Asks for the starred messages of one chat.
+    LoadStarred(ChatId),
     DeleteLocal {
         chat: ChatId,
         id: String,
@@ -653,7 +653,7 @@ pub enum Event {
         chat: ChatId,
         ids: Vec<String>,
     },
-    /// Starred messages across chats, newest first.
+    /// Starred messages of one chat, newest first.
     StarredList(Vec<crate::archive::StarredMessage>),
     /// Saved stickers, imported packs, and recent stickers for the picker.
     Stickers {

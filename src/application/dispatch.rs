@@ -405,8 +405,8 @@ impl NativeApplication {
                         &self.contacts,
                         self.avatars.get(&chat.id).map(std::path::PathBuf::as_path),
                         self.presence.get(&chat.id).copied(),
-                        &self.chat_snapshots,
-                        &self.avatars,
+                        (&self.chat_snapshots, &self.avatars),
+                        &dialog_action_callback(&sender),
                     );
                     if self.info_about.is_some()
                         && let Some(backend) = &self.backend
@@ -929,7 +929,7 @@ impl NativeApplication {
             Input::CloseChat => self.close_chat(),
             Input::ToggleSelectedStar => self.toggle_selected_star(),
             Input::ShowStarred => self.show_starred(),
-            Input::OpenStarred { chat, id } => self.open_starred(chat, id, &sender),
+            Input::OpenStarred { chat, id } => self.open_starred(chat, id),
             Input::DeleteSelected(everyone) => {
                 let dialog = adw::AlertDialog::builder()
                     .heading(gettext("Delete message?"))

@@ -80,6 +80,7 @@ fn dialog_action_callback(
             dialogs::DialogAction::InsertMentionId(id) => Input::InsertMentionId(id),
             dialogs::DialogAction::ForwardSelected(ids) => Input::ForwardSelected(ids),
             dialogs::DialogAction::SendSticker(path) => Input::SendSticker(path),
+            dialogs::DialogAction::ShowStarred => Input::ShowStarred,
             dialogs::DialogAction::OpenStarred { chat, id } => Input::OpenStarred { chat, id },
         });
     })
@@ -1129,7 +1130,6 @@ impl SimpleComponent for NativeApplication {
         let primary_menu = gtk::gio::Menu::new();
         let section = gtk::gio::Menu::new();
         section.append(Some(&gettext("_New Chat")), Some("win.new-chat"));
-        section.append(Some(&gettext("_Starred Messages")), Some("win.starred"));
         section.append(Some(&gettext("_Remove Account…")), Some("win.unlink"));
         primary_menu.append_section(None, &section);
         let section = gtk::gio::Menu::new();

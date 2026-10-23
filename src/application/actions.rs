@@ -61,7 +61,6 @@ pub(super) fn install_window_actions(
     add("chat-mute", input(|| Input::ToggleSelectedMute));
     add("chat-archive", input(|| Input::ToggleSelectedArchive));
     add("chat-close", input(|| Input::CloseChat));
-    add("starred", input(|| Input::ShowStarred));
     add("copy-transcript", input(|| Input::CopyTranscript));
     add("quit", input(|| Input::Quit));
     add("close", input(|| Input::Close));

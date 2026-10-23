@@ -449,10 +449,6 @@ msgid "Unstar"
 msgstr "Desfavoritar"
 
 #: src/application/stars.rs
-msgid "_Starred Messages"
-msgstr "_Mensagens favoritas"
-
-#: src/application/stars.rs
 msgid "Starred Messages"
 msgstr "Mensagens favoritas"
 
