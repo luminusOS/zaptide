@@ -6,8 +6,12 @@ const DOMAIN: &str = "zaptide";
 
 /// Binds the message catalogue. `ZAPTIDE_LOCALEDIR` overrides the install
 /// location, which is useful for a build that has not been installed.
+///
+/// Call it once, before the program starts any other thread.
 pub fn init() {
-    let _ = gettextrs::setlocale(gettextrs::LocaleCategory::LcAll, "");
+    // SAFETY: setlocale is not thread-safe, and the contract above keeps this
+    // the only thread running.
+    let _ = unsafe { gettextrs::setlocale(gettextrs::LocaleCategory::LcAll, "") };
     let dir = std::env::var_os("ZAPTIDE_LOCALEDIR")
         .map(std::path::PathBuf::from)
         .or_else(|| option_env!("ZAPTIDE_LOCALEDIR").map(std::path::PathBuf::from))
