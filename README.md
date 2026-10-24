@@ -21,19 +21,11 @@ without a browser engine. Messages stay in a local, encrypted archive.
 
 ## Features
 
-- Text, replies, reactions, polls, voice notes, stickers and drag-and-drop attachments.
-  Photos form albums; videos and documents open in desktop apps.
-- Chat search, older history from the archive or phone, and synced starred messages
-  in Contact Info or Group Info. Choose a star to scroll to it; locked chats list none.
-- Separate accounts and settings, account-aware notifications that open the right
-  chat, typing and delivery status, and synced read state, mute settings and locks.
-- Link previews with a synced per-account Profile switch. Share saved contacts or
-  preview a `.vcf` through **Attach > Contact**; copy, save or chat with received contacts.
-- Quick replies, single-select lists and saved names in mentions and copied transcripts.
-  The sticker picker has recent phone stickers and those sent or saved locally,
-  without automatically adding received ones.
-- Light, dark and custom themes. The tray follows the desktop independently;
-  GNOME needs a StatusNotifierItem extension such as AppIndicator.
+- Text, voice notes, polls, stickers and attachments.
+- Multiple accounts with separate history and settings.
+- Chat search, starred messages and link previews.
+- Desktop notifications and synced read status.
+- Light, dark and custom themes.
 
 ## Install
 
