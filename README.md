@@ -1,135 +1,122 @@
 <div align="center">
 
-<img src="data/icons/zaptide.svg" alt="ZapTide logo" width="160" height="160" />
+<img src="data/icons/zaptide.svg" alt="ZapTide logo" width="128" height="128" />
 
 # ZapTide
 
 A native WhatsApp companion for Linux, built with Rust, GTK4 and libadwaita.
 
-[LuminusOS](https://luminusos.org) · [Report a bug](https://github.com/luminusOS/zaptide/issues)
+[Download](https://github.com/luminusOS/zaptide/releases/latest) · [Features](#features) · [Install](#install) · [Report a bug](https://github.com/luminusOS/zaptide/issues)
 
 </div>
 
-ZapTide links to your phone through [whatsapp-rust](https://github.com/oxidezap/whatsapp-rust).
-It uses a native desktop interface instead of a browser engine. Messages are
-stored locally in an encrypted archive.
+ZapTide links to your phone through [whatsapp-rust](https://github.com/oxidezap/whatsapp-rust),
+without a browser engine. Messages stay in a local, encrypted archive.
 
 ![ZapTide showing a chat](packaging/screenshots/screenshot.png)
 
+> [!WARNING]
+> ZapTide is unofficial and is not affiliated with WhatsApp or Meta. Using an
+> unofficial client may violate WhatsApp's terms and put your account at risk.
+
 ## Features
 
-- Chat, search and send text, replies, reactions, polls, voice notes, stickers
-  and attachments. Older messages load from the archive or your phone.
-- Add and switch WhatsApp accounts from the avatar above the chat list. Each
-  account keeps its own local messages and settings. Notifications name the
-  receiving account when several are added, and open the right conversation.
-  **Remove Account…** unlinks that account and deletes its local data only.
-- Contact messages show names and phone numbers with actions to copy a number,
-  add the contact to your contacts app, or message it on WhatsApp.
-  Use **Attach → Contact** to share a saved WhatsApp contact or choose a `.vcf`
-  file through the system file chooser. Preview the contact before sending.
-- Link previews load in the composer before sending. Each account's setting is
-  available in its Profile dialog and syncs with that account's phone.
-  Loading a preview contacts the site directly while composing, without proxies
-  or redirects. Private and reserved network destinations are blocked. Removing
-  the preview keeps it dismissed until the link changes or leaves the draft.
-  Long links wrap in the input while preserving the space above and below the text.
-- Photos sent together appear as one album in a single bubble, and files can be
-  dropped anywhere in a conversation to attach them.
-- The sticker picker shows your recently used stickers from your phone and
-  stickers you sent or saved locally. Stickers received from other people stay
-  in chats and do not appear in the picker automatically.
-- Read and answer quick-reply buttons and single-select lists when a sender
-  delivers them. Mentioned contacts show their saved names in messages and
-  copied transcripts; unknown contacts can show their WhatsApp name on hover.
-- Get desktop notifications, see typing and delivery status, and keep chat
-  read state, mute settings and locks in sync with your phone. Chats already
-  stored on this computer appear even when that settings sync cannot be read
-  from your phone, and a notice says so; locked chats stay locked until the
-  phone's settings arrive. Lock recovery runs separately from mute and pin
-  recovery, so a failure in those settings cannot hold back the phone's locks.
-  For a new link, the ten second grace period starts when settings recovery
-  begins; time spent waiting to pair does not count.
-- The tray icon follows the desktop's light/dark preference through the Settings
-  portal, independently of ZapTide's appearance setting. Without that preference,
-  its fallback pixels use a dark icon for a light panel.
-- Star a message from its menu to keep it, with a ★ beside its time. Starred
-  Messages in a chat's Contact Info or Group Info lists that chat's starred
-  messages, newest first, and choosing one scrolls to it. Stars sync with your
-  phone, are kept per account, and locked chats list none.
-- Escape cancels message selection, then an edit or reply, then closes the open
-  chat and returns to the empty home screen. Close Chat in the chat menu does the
-  same. The draft stays with the chat, and closing marks nothing as read.
-- When reading older messages, new arrivals keep your position and provide a
-  button to return to recent messages.
-- Use light, dark or custom themes. Navigate with keyboard shortcuts and use
-  screen-reader labels; accessibility support is still incomplete.
-
-Videos and documents open in your default desktop apps. Calls, status posts,
-communities and group administration are not supported. Newsletter channels
-are read-only. Messages with disappearing timers remain in the local archive
-after they expire on your phone.
+- Text, voice notes, polls, stickers and attachments.
+- Multiple accounts with separate history and settings.
+- Chat search, starred messages and link previews.
+- Desktop notifications and synced read status.
+- Light, dark and custom themes.
 
 ## Install
 
-Download a Flatpak bundle or AppImage for x86_64 or aarch64 from
-[GitHub Releases](https://github.com/luminusOS/zaptide/releases).
+[Download a Flatpak or AppImage](https://github.com/luminusOS/zaptide/releases/latest)
+for x86_64 or aarch64 (ARM64). Native distribution packages are not available yet.
 
-With a Flathub remote configured, install the downloaded `.flatpak` bundle:
+### Flatpak
+
+Configure [Flathub](https://flathub.org/setup), then install the bundle (replace the filename):
 
 ```sh
 flatpak install --user ./zaptide-vX.Y.Z-x86_64.flatpak
+flatpak run dev.luminusos.ZapTide
 ```
 
-For an ARM64 system, use the `aarch64` bundle instead.
+For a newer bundle, use `--reinstall`:
 
-Save the downloaded AppImage as `zaptide.AppImage`, make it executable and run it:
+```sh
+flatpak install --user --reinstall ./zaptide-vX.Y.Z-x86_64.flatpak
+```
+
+For a system installation, replace `--user` with `--system`.
+
+### AppImage
+
+Save the download as `zaptide.AppImage` and run it:
 
 ```sh
 chmod +x ./zaptide.AppImage
 ./zaptide.AppImage
 ```
 
-Update an AppImage in place with
-[AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate); it
-downloads only what changed.
+Update in place with [AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate),
+which downloads only changed blocks. Replace pre-0.7.2 AppImages manually once;
+they lack update information.
 
-On first launch, use WhatsApp's **Linked devices** menu to scan the QR code or
-link with your phone number. Recent history may take a few minutes to arrive.
+After updating, quit from the menu and reopen. Closing the window can leave the
+old version running.
+
+## First steps
+
+Scan the QR code from WhatsApp's **Linked devices**, or link with your phone number.
+History may take a few minutes. The avatar adds or switches accounts;
+**Remove Account…** unlinks one and deletes only its local data.
+
+Enter sends; Shift+Enter adds a line (configurable). Emoji selection returns focus
+to the input. Escape dismisses selection, edits or replies before closing the chat.
+**Close Chat** also returns home; both keep drafts and mark nothing as read.
 
 ## Your data
 
-The message archive is encrypted with a key held by your OS keyring. Keep both
-the archive and the keyring credential when backing up or moving a profile:
-`archive.db` alone cannot be decrypted. If the keyring is locked, unlock it and
-retry. If the key is missing, restore the original credential store rather
-than replacing the key or deleting the archive.
+> [!IMPORTANT]
+> Back up the archive with its OS keyring credential: `archive.db` alone cannot
+> be decrypted. Unlock a locked keyring; restore a missing credential instead of
+> replacing the key or deleting the archive.
 
-Device credentials, downloaded files, saved stickers and settings are not
-encrypted by ZapTide. Use full-disk encryption if you need to protect those
-files and backups. ZapTide keeps its data separate from ZapFast, FastsApp and
-FastWhatsApp; link it as a separate companion device.
+Device credentials, downloads, saved stickers and settings are unencrypted; use
+full-disk encryption for them and backups. Data and keyring entries are separate
+from ZapFast, FastsApp and FastWhatsApp. Link ZapTide separately.
 
-## Emoji input
+Previews contact websites directly while composing, without proxies or redirects.
+Private/reserved destinations are blocked. Disable previews per account or remove one.
 
-Selecting an emoji returns keyboard focus to the message input, so you can keep
-typing or use your configured Return-to-send behavior without clicking the input.
+Stored chats remain available with a notice if phone settings cannot be read;
+locked chats stay locked until those settings arrive.
 
-## Development
+## Limitations
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for reporting issues, local checks, and the
-pull-request workflow. Report vulnerabilities privately using [SECURITY.md](SECURITY.md).
-See [ARCHITECTURE.md](ARCHITECTURE.md) for how the code is laid out, and
-[PACKAGING.md](PACKAGING.md) for build dependencies and Flatpak packaging.
+- Calls, status posts, communities and group administration are not supported.
+  Newsletter channels are read-only.
+- Messages with disappearing timers remain in the local archive after they
+  expire on your phone.
+- Keyboard shortcuts and screen-reader labels are available; accessibility is incomplete.
 
-## About this project
+## Build from source
 
-ZapTide is a hard fork of [ZapFast](https://github.com/crmne/zapfast) by Carmine Paolino. It
-started from ZapFast's code and has since diverged: the interface is a native GTK4 and
-libadwaita app built with Relm4, and it supports several accounts at once. It keeps its own
-data folders and keyring entry, separate from ZapFast's.
+Install Rust through rustup and the dependencies in [PACKAGING.md](PACKAGING.md).
+The toolchain is pinned. GTK 4.14+ and libadwaita 1.10+ are required; CI uses Fedora 45.
 
-ZapTide is unofficial and is not affiliated with WhatsApp or Meta. Using an
-unofficial client may violate WhatsApp's terms and put your account at risk.
+```sh
+git clone https://github.com/luminusOS/zaptide.git
+cd zaptide
+cargo build --locked
+```
 
-Licensed under [MIT](LICENSE). The original code is © Carmine Paolino; see the license file.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for checks and running with translations,
+and [ARCHITECTURE.md](ARCHITECTURE.md) for the code layout.
+Report vulnerabilities privately through [SECURITY.md](SECURITY.md).
+
+## About the project
+
+ZapTide is a [LuminusOS](https://luminusos.org) hard fork of
+[ZapFast](https://github.com/crmne/zapfast), with a Relm4 interface and multiple accounts.
+Original code © Carmine Paolino; see [LICENSE](LICENSE).
