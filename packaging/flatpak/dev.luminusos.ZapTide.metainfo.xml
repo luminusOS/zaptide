@@ -36,6 +36,16 @@
     <control>keyboard</control>
   </supports>
   <releases>
+    <release version="0.7.3" date="2026-10-23">
+      <description>
+        <p>Escape closes the open chat and returns to the home screen, and the
+        chat menu has a Close Chat item. Messages can be starred, and each
+        chat lists its starred messages in Contact Info or Group Info. The
+        tray icon follows the desktop's light or dark preference. AppImages
+        bundle the Adwaita icons, so every icon shows on systems without
+        them, and keep the application under usr/.</p>
+      </description>
+    </release>
     <release version="0.7.2" date="2026-10-16">
       <description>
         <p>Links you send now carry a preview with the page title,
