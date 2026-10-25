@@ -9,9 +9,6 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  # Baked into the binary by settings.rs; releases built without the
-  # secret simply ship keyless and the picker asks for one.
-  ZAPTIDE_GIPHY_KEY: ${{ secrets.ZAPTIDE_GIPHY_KEY }}
 
 jobs:
   version:
@@ -32,7 +29,7 @@ jobs:
           from pathlib import Path
 
           tag = os.environ["TAG"]
-          assert re.fullmatch(r"v\d+\.\d+\.\d+(?:-rc\d+)?", tag), f"Invalid release tag: {tag}"
+          assert re.fullmatch(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-rc\.?[1-9][0-9]*)?", tag), f"Invalid release tag: {tag}"
           version = tag[1:].split("-", 1)[0]
           manifest = tomllib.loads(Path("Cargo.toml").read_text())
           lock = tomllib.loads(Path("Cargo.lock").read_text())
@@ -57,6 +54,10 @@ jobs:
     # Linux builds need libadwaita 1.10 (GNOME 51), which Ubuntu does not
     # package yet.
     container: ${{ matrix.container }}
+    # Baked into the binary by settings.rs; releases built without the
+    # secret simply ship keyless and the picker asks for one.
+    env:
+      ZAPTIDE_GIPHY_KEY: ${{ secrets.ZAPTIDE_GIPHY_KEY }}
     strategy:
       fail-fast: false
       matrix:
@@ -114,6 +115,8 @@ jobs:
     name: Flatpak bundle (${{ matrix.arch }})
     needs: build
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
     container:
       image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08
       options: --privileged
@@ -137,17 +140,129 @@ jobs:
         run: |
           tar xzf "dist/zaptide-${GITHUB_REF_NAME}-${{ matrix.arch }}-linux-gnu.tar.gz" -C packaging/flatpak
           mv "packaging/flatpak/zaptide-${GITHUB_REF_NAME}-${{ matrix.arch }}-linux-gnu" packaging/flatpak/built
+      - id: flatpak-branch
+        name: Resolve Flatpak branch from release tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          branch="$(python3 packaging/flatpak/export_manifest.py branch --tag "$RELEASE_TAG")"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
       - uses: flatpak/flatpak-github-actions/flatpak-builder@79327416609af08178ad73b352877e51450790b3 # v6
         with:
           manifest-path: packaging/flatpak/dev.luminusos.ZapTide.bundle.yml
           bundle: zaptide-${{ github.ref_name }}-${{ matrix.arch }}.flatpak
           arch: ${{ matrix.arch }}
+          branch: ${{ steps.flatpak-branch.outputs.branch }}
           cache: false
           upload-artifact: false
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      - name: Verify Flatpak bundle
+        env:
+          ARCH: ${{ matrix.arch }}
+          BRANCH: ${{ steps.flatpak-branch.outputs.branch }}
+          BUNDLE: zaptide-${{ github.ref_name }}-${{ matrix.arch }}.flatpak
+        run: |
+          set -euo pipefail
+          repo="$RUNNER_TEMP/flatpak-check-${ARCH}.repo"
+          ostree init --repo="$repo" --mode=archive
+          flatpak build-import-bundle "$repo" "$BUNDLE"
+          ref="$(ostree refs --repo="$repo")"
+          expected_ref="app/dev.luminusos.ZapTide/${ARCH}/${BRANCH}"
+          test "$ref" = "$expected_ref"
+          commit="$(ostree rev-parse --repo="$repo" "$ref")"
+          ostree cat --repo="$repo" "$commit" metadata > "$RUNNER_TEMP/flatpak-metadata-${ARCH}"
+          python3 - "$RUNNER_TEMP/flatpak-metadata-${ARCH}" "$ARCH" "$commit" "$BRANCH" > "flatpak-export-report-${ARCH}.json" <<'PY'
+          import configparser
+          import json
+          import sys
+
+          metadata_path, arch, commit, branch = sys.argv[1:]
+          metadata = configparser.ConfigParser()
+          if not metadata.read(metadata_path) or "Application" not in metadata:
+              raise SystemExit("bundle metadata is missing its Application section")
+          app = metadata["Application"]
+          expected_runtime = f"org.gnome.Platform/{arch}/51"
+          if app.get("name") != "dev.luminusos.ZapTide":
+              raise SystemExit("bundle application id does not match")
+          if app.get("runtime") != expected_runtime:
+              raise SystemExit("bundle runtime or architecture does not match")
+          print(json.dumps({
+              "application": app["name"],
+              "architecture": arch,
+              "ref": f"app/{app['name']}/{arch}/{branch}",
+              "ostree_commit": commit,
+              "runtime": app["runtime"],
+          }, indent=2))
+          PY
+      - id: upload-bundle
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: flatpak-${{ matrix.arch }}
           path: "*.flatpak"
+          if-no-files-found: error
+      - name: Record bundle artifact id and digest
+        env:
+          ARCH: ${{ matrix.arch }}
+          ARTIFACT_ID: ${{ steps.upload-bundle.outputs.artifact-id }}
+          BUNDLE: zaptide-${{ github.ref_name }}-${{ matrix.arch }}.flatpak
+        run: |
+          python3 packaging/flatpak/export_manifest.py record \
+            --arch "$ARCH" --artifact-id "$ARTIFACT_ID" \
+            --bundle "$BUNDLE" --output "flatpak-export-${ARCH}.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: flatpak-export-${{ matrix.arch }}
+          path: |
+            flatpak-export-${{ matrix.arch }}.json
+            flatpak-export-report-${{ matrix.arch }}.json
+          if-no-files-found: error
+
+  manifest:
+    name: Build release manifest
+    needs: flatpak
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: flatpak-x86_64
+          path: dist/bundles/x86_64
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: flatpak-aarch64
+          path: dist/bundles/aarch64
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: flatpak-export-x86_64
+          path: dist/metadata/x86_64
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: flatpak-export-aarch64
+          path: dist/metadata/aarch64
+      - name: Build contract manifest and export report
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          SOURCE_REVISION: ${{ github.sha }}
+          SOURCE_RUN_ID: ${{ github.run_id }}
+          SOURCE_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          python3 -m venv /tmp/manifest-venv
+          /tmp/manifest-venv/bin/pip install jsonschema
+          /tmp/manifest-venv/bin/python packaging/flatpak/export_manifest.py manifest \
+            --tag "$RELEASE_TAG" --revision "$SOURCE_REVISION" \
+            --run-id "$SOURCE_RUN_ID" --run-attempt "$SOURCE_RUN_ATTEMPT" \
+            --metadata-dir dist/metadata --bundle-dir dist/bundles \
+            --report-dir dist/metadata --output flatpak-release-manifest.json \
+            --report-output flatpak-export-report.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: flatpak-release-manifest
+          path: |
+            flatpak-release-manifest.json
+            flatpak-export-report.json
           if-no-files-found: error
 
   appimage:
@@ -157,7 +272,7 @@ jobs:
 
   publish:
     name: GitHub release
-    needs: [build, flatpak, appimage]
+    needs: [build, flatpak, manifest, appimage]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -187,6 +302,8 @@ jobs:
             dist/*.AppImage.zsync
             dist/*.tar.gz
             dist/checksums.txt
+            dist/flatpak-release-manifest.json
+            dist/flatpak-export-report.json
           fail_on_unmatched_files: true
           generate_release_notes: true
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          prerelease: ${{ contains(github.ref_name, '-rc') }}

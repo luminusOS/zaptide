@@ -43,8 +43,14 @@ prohibit AI agents from submitting or writing submission interactions and
 require disclosure of generated material.
 
 The release workflow builds a native binary for each architecture, packages
-both with `dev.luminusos.ZapTide.bundle.yml`, and lists every file in
-`checksums.txt`.
+both with `dev.luminusos.ZapTide.bundle.yml`, and lists each package file in
+`checksums.txt`. It also attaches `flatpak-release-manifest.json`, which records
+the tag, source revision, workflow run and the two bundle artifact IDs, sizes
+and SHA-256 hashes. `flatpak-export-report.json` records the verified Flatpak
+refs, OSTree commits and runtimes for both architectures. The manifest follows
+the versioned distribution contract; the report is separate from that schema.
+Final tags export on the `stable` branch, while `-rcN` and `-rc.N` tags use
+`testing`.
 
 ## AppImage
 
