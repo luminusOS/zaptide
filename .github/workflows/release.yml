@@ -302,8 +302,6 @@ jobs:
             dist/*.AppImage.zsync
             dist/*.tar.gz
             dist/checksums.txt
-            dist/flatpak-release-manifest.json
-            dist/flatpak-export-report.json
           fail_on_unmatched_files: true
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-rc') }}
