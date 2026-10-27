@@ -216,8 +216,11 @@ pathlib.Path(sys.argv[sys.argv.index("-o") + 1]).write_text(json.dumps({"lock_sh
             if action.startswith("./"):
                 continue
             self.assertRegex(action, r"@(?:[a-f0-9]{40})(?:\s|$)", action)
-        self.assertIn("dist/flatpak-release-manifest.json", workflow_text)
-        self.assertIn("dist/flatpak-export-report.json", workflow_text)
+        publish_files = yaml.safe_load(workflow_text)["jobs"]["publish"]["steps"][-1]["with"]["files"]
+        self.assertIn("dist/checksums.txt", publish_files)
+        self.assertNotIn("manifest", publish_files)
+        self.assertNotIn("export-report", publish_files)
+        self.assertIn("flatpak-release-manifest.json", workflow_text)
 
     @staticmethod
     def _export_artifacts(directory, tag):

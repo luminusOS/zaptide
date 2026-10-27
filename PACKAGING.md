@@ -44,11 +44,15 @@ require disclosure of generated material.
 
 The release workflow builds a native binary for each architecture, packages
 both with `dev.luminusos.ZapTide.bundle.yml`, and lists each package file in
-`checksums.txt`. It also attaches `flatpak-release-manifest.json`, which records
-the tag, source revision, workflow run and the two bundle artifact IDs, sizes
-and SHA-256 hashes. `flatpak-export-report.json` records the verified Flatpak
-refs, OSTree commits and runtimes for both architectures. The manifest follows
-the versioned distribution contract; the report is separate from that schema.
+`checksums.txt`. The same run builds `flatpak-release-manifest.json`, which
+records the tag, source revision, workflow run and the two bundle artifact IDs,
+sizes and SHA-256 hashes, and `flatpak-export-report.json`, which records the
+verified Flatpak refs, OSTree commits and runtimes for both architectures. Both
+stay as artifacts of the workflow run and are not attached to the GitHub
+release. The manifest follows the versioned distribution contract; the report
+is separate from that schema. The Luminus Flatpak repository does not read them:
+it rebuilds the same record from `checksums.txt`, the downloaded bundles and the
+verified run.
 Final tags export on the `stable` branch, while `-rcN` and `-rc.N` tags use
 `testing`.
 
