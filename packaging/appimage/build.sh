@@ -25,6 +25,9 @@ else
 		cmake libseccomp-devel fontconfig-devel glycin-loaders bubblewrap \
 		xorg-x11-server-Xvfb dbus-daemon patchelf strace adwaita-icon-theme \
 		libglvnd-gles libglvnd-egl libglvnd-glx mesa-dri-drivers mesa-vulkan-drivers vulkan-loader glibc-locale-source glibc-langpack-en
+	# quick-sharun no longer finds this container's libraries on its own: /usr/lib has no
+	# libc.so on Fedora, which keeps them in /usr/lib64.
+	export LIB_DIR=/usr/lib64
 fi
 
 # ponytail: no get-debloated-pkgs; it downgrades gtk4 and libadwaita to builds for
