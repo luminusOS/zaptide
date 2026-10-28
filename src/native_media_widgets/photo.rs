@@ -960,6 +960,30 @@ fn photo_step_button(icon: &str, tooltip: &str, side: gtk::Align) -> gtk::Button
     button
 }
 
+/// How long glycin keeps a loader process after its last use.
+///
+/// glycin built for tokio never cancels the D-Bus task of a loader it retires,
+/// so each retirement leaves the loader's socket open for good, and enough of
+/// them exhaust the process's descriptors. Its default of 30 seconds retired
+/// loaders all day; this keeps retirement rare, and still frees the memory of
+/// an app left idle. Drop it once glycin cancels that task.
+const LOADER_RETENTION: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
+
+fn photo_pool() -> std::sync::Arc<glycin::Pool> {
+    static POOL: std::sync::LazyLock<std::sync::Arc<glycin::Pool>> =
+        std::sync::LazyLock::new(|| {
+            glycin::Pool::new(glycin::PoolConfig::new().retention_time(LOADER_RETENTION))
+        });
+    POOL.clone()
+}
+
+async fn open_photo(path: &std::path::Path) -> Result<glycin::Image, glycin::Error> {
+    let mut loader = glycin::Loader::new(gtk::gio::File::for_path(path));
+    loader.accepted_memory_formats(glycin::MemoryFormatSelection::R8g8b8a8);
+    loader.pool(photo_pool());
+    loader.load().await
+}
+
 fn photo_runtime() -> &'static tokio::runtime::Runtime {
     static RUNTIME: std::sync::LazyLock<tokio::runtime::Runtime> = std::sync::LazyLock::new(|| {
         tokio::runtime::Builder::new_multi_thread()
@@ -991,9 +1015,7 @@ fn load_photo(
             if !current.is_current() {
                 return None;
             }
-            let mut loader = glycin::Loader::new(gtk::gio::File::for_path(&path));
-            loader.accepted_memory_formats(glycin::MemoryFormatSelection::R8g8b8a8);
-            let mut image = loader.load().await.inspect_err(photo_error).ok()?;
+            let mut image = open_photo(&path).await.inspect_err(photo_error).ok()?;
             if !current.is_current() {
                 return None;
             }
@@ -1063,5 +1085,51 @@ fn photo_error(error: &impl std::fmt::Display) {
     static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
         log::warn!("photo could not be loaded: {error}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn open_sockets() -> usize {
+        std::fs::read_dir("/proc/self/fd")
+            .unwrap()
+            .flatten()
+            .filter(|entry| {
+                std::fs::read_link(entry.path())
+                    .is_ok_and(|target| target.to_string_lossy().starts_with("socket:"))
+            })
+            .count()
+    }
+
+    /// Needs glycin's loaders and bubblewrap, and waits out glycin's default
+    /// retention time three times, so it runs only on request:
+    /// `cargo test --lib loaders_do_not_leak -- --ignored`.
+    #[test]
+    #[ignore = "needs glycin loaders and bubblewrap; takes about two minutes"]
+    fn loaders_do_not_leak_sockets_while_the_app_sits_idle() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("photo.png");
+        image::RgbaImage::from_pixel(8, 8, image::Rgba([1, 2, 3, 255]))
+            .save(&path)
+            .unwrap();
+        let load = || {
+            photo_runtime().block_on(async {
+                let mut image = open_photo(&path).await.expect("loader starts");
+                image
+                    .specific_frame(glycin::FrameRequest::new().scale(8, 8))
+                    .await
+                    .expect("frame decodes");
+            })
+        };
+        load();
+        std::thread::sleep(std::time::Duration::from_secs(40));
+        let settled = open_sockets();
+        for _ in 0..2 {
+            load();
+            std::thread::sleep(std::time::Duration::from_secs(40));
+        }
+        assert_eq!(open_sockets(), settled);
     }
 }
