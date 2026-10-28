@@ -49,7 +49,23 @@ pub(super) fn install_icons(dir: &std::path::Path) {
     }
     if let Some(display) = gtk::gdk::Display::default() {
         gtk::IconTheme::for_display(&display).add_search_path(dir);
+        let appdir = std::env::var_os("APPDIR").map(std::path::PathBuf::from);
+        if let Some(theme) = bundled_icon_theme(appdir.as_deref()) {
+            gtk::Settings::for_display(&display).set_gtk_icon_theme_name(Some(theme));
+        }
     }
+}
+
+/// The icon theme an AppImage carries, when it carries one.
+///
+/// GTK looks for an icon only in the theme the desktop configured and in
+/// hicolor, so a theme without ZapTide's symbolic icons shows missing images
+/// even though Adwaita is bundled beside the app. Using the bundled theme
+/// gives the AppImage the same icons as the Flatpak on any desktop.
+fn bundled_icon_theme(appdir: Option<&std::path::Path>) -> Option<&'static str> {
+    appdir
+        .filter(|dir| dir.join("share/icons/Adwaita/index.theme").is_file())
+        .map(|_| "Adwaita")
 }
 
 /// Writes the icons that differ from their copy in `dir`; true if any did.
@@ -107,4 +123,26 @@ pub(super) fn paper_plane_icon() -> gtk::DrawingArea {
         let _ = cairo.fill();
     });
     icon
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bundled_icon_theme;
+
+    #[test]
+    fn an_appimage_with_adwaita_uses_it_whatever_the_desktop_configured() {
+        let appdir = tempfile::tempdir().unwrap();
+        let theme = appdir.path().join("share/icons/Adwaita");
+        std::fs::create_dir_all(&theme).unwrap();
+        std::fs::write(theme.join("index.theme"), "[Icon Theme]\nName=Adwaita\n").unwrap();
+        assert_eq!(bundled_icon_theme(Some(appdir.path())), Some("Adwaita"));
+    }
+
+    #[test]
+    fn the_desktop_theme_stays_when_nothing_is_bundled() {
+        let appdir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(appdir.path().join("share/icons/hicolor")).unwrap();
+        assert_eq!(bundled_icon_theme(Some(appdir.path())), None);
+        assert_eq!(bundled_icon_theme(None), None);
+    }
 }
