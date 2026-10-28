@@ -62,7 +62,8 @@ The x86_64 AppImage is built with
 [quick-sharun](https://github.com/pkgforge-dev/Anylinux-AppImages) in an Arch
 Linux container. It bundles glibc, GTK, libadwaita, the Adwaita icon theme,
 GStreamer, the glycin loaders and bubblewrap, so it needs nothing from the host
-distribution. Arch
+distribution. ZapTide uses the bundled icons whatever icon theme the desktop is
+set to, because GTK would otherwise look only in that theme. Arch
 stable has libadwaita 1.9, so `packaging/appimage/build.sh` enables the Arch
 testing repositories until 1.10 reaches `extra`. To build it locally:
 
