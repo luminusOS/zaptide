@@ -36,12 +36,13 @@
     <control>keyboard</control>
   </supports>
   <releases>
-    <release version="0.7.4" date="2026-10-27">
+    <release version="0.7.4" date="2026-10-29">
       <description>
-        <p>Release builds now check each Flatpak bundle and publish a manifest
-        with its source run and checksums, so the Luminus Flatpak repository
-        can import releases with provenance. The application itself is
-        unchanged.</p>
+        <p>GIFs release playback resources when hidden, and native video
+        playback avoids the GTK backend's descriptor leak and early-close
+        failure. AppImages use their bundled Adwaita icons on any desktop
+        icon theme. Release builds verify Flatpak bundles and retain a
+        provenance manifest as a build artifact.</p>
       </description>
     </release>
     <release version="0.7.3" date="2026-10-23">

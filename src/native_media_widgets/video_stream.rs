@@ -29,6 +29,7 @@ impl Mailbox {
                 return;
             }
             mailbox.sample = Some(sample);
+            // Only the first frame wakes GTK until the receiver waits again.
             mailbox.waker.take()
         };
         if let Some(waker) = waker {
@@ -151,11 +152,14 @@ mod imp {
 }
 
 glib::wrapper! {
+    /// A native video paintable with GTK playback controls and terminal shutdown.
     pub struct VideoStream(ObjectSubclass<imp::VideoStream>)
         @extends gtk::MediaStream, @implements gdk::Paintable;
 }
 
 impl VideoStream {
+    /// Prepare a local file, bounding delivered frame dimensions in pixels.
+    /// Call on the GTK thread; playback starts through `MediaStream::play`.
     pub(super) fn open(path: &Path, max_width: u32, max_height: u32) -> Result<Self> {
         gst::init().context("Video playback is unavailable")?;
         anyhow::ensure!(max_width > 0 && max_height > 0, "Invalid video bounds");
@@ -246,6 +250,8 @@ impl VideoStream {
         Ok(stream)
     }
 
+    /// Release playback resources, even before preparation completes.
+    /// Repeated calls are harmless; a closed stream cannot be reopened.
     pub(super) fn close(&self) {
         let imp = self.imp();
         if imp.closed.replace(true) {
@@ -322,6 +328,7 @@ impl VideoStream {
         if !self.is_prepared() {
             return;
         }
+        // Timestamp notifications can close the stream and take the pipeline.
         let position = self
             .imp()
             .pipeline

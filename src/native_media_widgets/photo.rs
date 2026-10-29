@@ -1,4 +1,4 @@
-use super::*;
+use super::{video_stream::VideoStream, *};
 use crate::i18n::gettext;
 
 /// Largest side of a photo in the transcript, in logical pixels.
@@ -339,7 +339,7 @@ pub(super) fn append_video(
             let projection = playback_projection(message);
             if projection == (PlaybackProjection::Native { looping: true }) {
                 picture.connect_map(move |picture| {
-                    let Ok(clip) = super::video_stream::VideoStream::open(&path, 600, 600) else {
+                    let Ok(clip) = VideoStream::open(&path, 600, 600) else {
                         log::warn!("video file could not be opened");
                         return;
                     };
@@ -352,10 +352,7 @@ pub(super) fn append_video(
                 // ListView caches unmapped rows, so dropping the row is not
                 // enough to release its decoder and full-resolution buffers.
                 picture.connect_unmap(move |picture| {
-                    if let Some(clip) = picture
-                        .paintable()
-                        .and_downcast::<super::video_stream::VideoStream>()
-                    {
+                    if let Some(clip) = picture.paintable().and_downcast::<VideoStream>() {
                         clip.close();
                     }
                     picture.set_paintable(thumbnail.as_ref());
@@ -425,7 +422,7 @@ fn show_video(
     details: &ViewerDetails,
     on_action: std::rc::Rc<dyn Fn(NativeMediaAction)>,
 ) {
-    let Ok(clip) = super::video_stream::VideoStream::open(path, 1920, 1080) else {
+    let Ok(clip) = VideoStream::open(path, 1920, 1080) else {
         on_action(NativeMediaAction::Open(path.to_path_buf()));
         return;
     };
@@ -472,7 +469,7 @@ fn show_video(
         if let Some(stream) = video
             .upgrade()
             .and_then(|video| video.media_stream())
-            .and_downcast::<super::video_stream::VideoStream>()
+            .and_downcast::<VideoStream>()
         {
             stream.close();
         }
