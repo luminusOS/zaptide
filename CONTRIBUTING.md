@@ -34,7 +34,7 @@ For a Fedora 45 development environment, the CI dependency set is:
 
 ```sh
 sudo dnf install gcc gcc-c++ git gtk4-devel libadwaita-devel alsa-lib-devel \
-  gstreamer1-devel cmake libseccomp-devel fontconfig-devel perl make tar zstd
+  gstreamer1-devel gstreamer1-plugins-base-devel cmake libseccomp-devel fontconfig-devel perl make tar zstd
 cargo build --locked
 ```
 

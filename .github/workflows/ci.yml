@@ -57,10 +57,16 @@ jobs:
         with:
           components: clippy
       - name: System dependencies
-        run: dnf install -y --setopt=install_weak_deps=False gcc gcc-c++ git gtk4-devel libadwaita-devel alsa-lib-devel gstreamer1-devel cmake libseccomp-devel fontconfig-devel perl make tar zstd
+        run: dnf install -y --setopt=install_weak_deps=False gcc gcc-c++ git gtk4-devel libadwaita-devel alsa-lib-devel gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-base gstreamer1-plugins-good xorg-x11-server-Xvfb cmake libseccomp-devel fontconfig-devel perl make tar zstd
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked --all-targets
+      - name: GIF playback lifecycle
+        env:
+          GDK_BACKEND: x11
+          GSK_RENDERER: cairo
+          G_DEBUG: fatal-criticals
+        run: timeout 60s xvfb-run -a cargo test --locked --lib inline_gifs_release_playback_when_unmapped -- --ignored --nocapture
       - name: Rustdoc
         env:
           RUSTDOCFLAGS: -D warnings

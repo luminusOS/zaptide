@@ -338,11 +338,28 @@ pub(super) fn append_video(
         Some(NativeMediaAction::Open(path)) => {
             let projection = playback_projection(message);
             if projection == (PlaybackProjection::Native { looping: true }) {
-                let clip = gtk::MediaFile::for_filename(&path);
-                clip.set_loop(true);
-                clip.set_muted(true);
-                clip.play();
-                picture.set_paintable(Some(&clip));
+                picture.connect_map(move |picture| {
+                    let Ok(clip) = super::video_stream::VideoStream::open(&path, 600, 600) else {
+                        log::warn!("video file could not be opened");
+                        return;
+                    };
+                    clip.set_loop(true);
+                    clip.set_muted(true);
+                    picture.set_paintable(Some(&clip));
+                    clip.play();
+                });
+                let thumbnail = picture.paintable();
+                // ListView caches unmapped rows, so dropping the row is not
+                // enough to release its decoder and full-resolution buffers.
+                picture.connect_unmap(move |picture| {
+                    if let Some(clip) = picture
+                        .paintable()
+                        .and_downcast::<super::video_stream::VideoStream>()
+                    {
+                        clip.close();
+                    }
+                    picture.set_paintable(thumbnail.as_ref());
+                });
                 parent.append(&frame);
                 return;
             }
@@ -408,8 +425,12 @@ fn show_video(
     details: &ViewerDetails,
     on_action: std::rc::Rc<dyn Fn(NativeMediaAction)>,
 ) {
+    let Ok(clip) = super::video_stream::VideoStream::open(path, 1920, 1080) else {
+        on_action(NativeMediaAction::Open(path.to_path_buf()));
+        return;
+    };
     let video = gtk::Video::builder()
-        .file(&gtk::gio::File::for_path(path))
+        .media_stream(&clip)
         .autoplay(true)
         .hexpand(true)
         .vexpand(true)
@@ -429,7 +450,6 @@ fn show_video(
             if let (Some(error), Some(stack), Some(failed)) =
                 (stream.error(), stack.upgrade(), failed.upgrade())
             {
-                // GStreamer names what is missing, such as a decoder.
                 log::warn!("video could not be played: {error}");
                 failed.set_description(Some(&format!(
                     "{error}\n\nOpen it with another app instead."
@@ -449,8 +469,12 @@ fn show_video(
     *target.borrow_mut() = dialog.downgrade();
     let video = video.downgrade();
     dialog.connect_closed(move |_| {
-        if let Some(stream) = video.upgrade().and_then(|video| video.media_stream()) {
-            stream.pause();
+        if let Some(stream) = video
+            .upgrade()
+            .and_then(|video| video.media_stream())
+            .and_downcast::<super::video_stream::VideoStream>()
+        {
+            stream.close();
         }
     });
     dialog.present(Some(parent));
