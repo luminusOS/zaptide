@@ -88,6 +88,8 @@ rodio = { version = "0.23", default-features = false, features = ["playback", "r
 opus = "0.4"
 ogg = "0.9"
 gstreamer = "0.25"
+gstreamer-app = "0.25"
+gstreamer-video = "0.25"
 # Loads photos through GNOME's sandboxed image loaders (glycin-loaders).
 glycin = { version = "4", default-features = false, features = ["gdk4", "tokio"] }
 notify = "8.2"

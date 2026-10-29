@@ -101,7 +101,7 @@ appimageupdatetool zaptide.AppImage
 |------------|--------|-------|
 | GTK 4.14+, libadwaita 1.10+ | `gtk4-devel libadwaita-devel` | GNOME 51 |
 | ALSA | `alsa-lib-devel` | Audio |
-| GStreamer | `gstreamer1-devel` | Playback; base and good plugins at runtime |
+| GStreamer | `gstreamer1-devel`, `gstreamer1-plugins-base-devel` | Playback; base and good plugins at runtime |
 | cmake | `cmake` | Builds libopus via opusic-sys |
 | libseccomp, fontconfig | `libseccomp-devel fontconfig-devel` | glycin; needs `glycin-loaders` and `bubblewrap` at runtime |
 | Perl | `perl` | Bundled OpenSSL |

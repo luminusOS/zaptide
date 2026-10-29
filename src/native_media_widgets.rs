@@ -56,7 +56,11 @@ mod cards;
 mod contacts;
 mod photo;
 mod sticker;
+mod video_stream;
 mod widget;
+
+#[cfg(test)]
+mod playback_tests;
 
 pub use audio::{AudioControls, RecordingMeter};
 pub(crate) use contacts::contact_preview;
@@ -128,7 +132,7 @@ mod tests {
     use super::*;
     use crate::model::{Delivery, Media, MediaState, Reaction};
 
-    fn message(content: Content) -> Message {
+    pub(super) fn message(content: Content) -> Message {
         Message {
             id: "message-id".into(),
             chat: "chat-id".into(),

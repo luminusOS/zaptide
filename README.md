@@ -75,6 +75,9 @@ Enter sends; Shift+Enter adds a line (configurable). Emoji selection returns foc
 to the input. Escape dismisses selection, edits or replies before closing the chat.
 **Close Chat** also returns home; both keep drafts and mark nothing as read.
 
+GIFs play silently while their rows are shown. Leaving the conversation or hiding
+the window releases their playback resources; showing them again restarts playback.
+
 ## Your data
 
 > [!IMPORTANT]
