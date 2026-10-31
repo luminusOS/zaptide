@@ -14,14 +14,14 @@ if command -v pacman >/dev/null; then
 	sed -i 's|^\[core\]|[core-testing]\nInclude = /etc/pacman.d/mirrorlist\n[extra-testing]\nInclude = /etc/pacman.d/mirrorlist\n\n[core]|' /etc/pacman.conf
 
 	pacman -Syu --noconfirm base-devel git wget rustup gtk4 libadwaita alsa-lib \
-		gstreamer gst-plugins-base gst-plugins-good cmake libseccomp fontconfig \
+		gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-libav cmake libseccomp fontconfig \
 		glycin bubblewrap xorg-server-xvfb patchelf strace adwaita-icon-theme
 	rustup default stable
 else
 	# Fedora 45 has libadwaita 1.10; used for aarch64, where Arch has no official image.
 	dnf install -y --setopt=install_weak_deps=False \
 		@development-tools git wget file xz perl make rust cargo gtk4-devel libadwaita-devel \
-		alsa-lib-devel gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-base gstreamer1-plugins-good \
+		alsa-lib-devel gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugins-bad-free gstreamer1-plugin-openh264 \
 		cmake libseccomp-devel fontconfig-devel glycin-loaders bubblewrap \
 		xorg-x11-server-Xvfb dbus-daemon patchelf strace adwaita-icon-theme \
 		libglvnd-gles libglvnd-egl libglvnd-glx mesa-dri-drivers mesa-vulkan-drivers vulkan-loader glibc-locale-source glibc-langpack-en
@@ -76,6 +76,7 @@ done
 test -x AppDir/usr/bin/zaptide
 test -d AppDir/usr/lib
 test -d AppDir/usr/share
+sh packaging/appimage/check-video-decoder.sh AppDir
 
 ./quick-sharun --make-appimage
 test -s "$OUTPATH/$OUTNAME.zsync"
