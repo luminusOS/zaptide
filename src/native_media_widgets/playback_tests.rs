@@ -266,6 +266,25 @@ fn inline_gifs_release_playback_when_unmapped() {
         released(&picture, &thumbnail, clip);
     }
     scroll_cached_gifs(&message);
+    let mp4 = directory.path().join("synthetic-h264.mp4");
+    let status = std::process::Command::new("gst-launch-1.0")
+        .args("-q videotestsrc num-buffers=15 ! video/x-raw,width=640,height=360,framerate=15/1 ! videoconvert ! openh264enc ! h264parse ! mp4mux ! filesink".split_whitespace())
+        .arg(format!("location={}", mp4.display()))
+        .status()
+        .expect("H.264 fixture generator");
+    assert!(status.success());
+    let mut mp4_message = message.clone();
+    let Content::Video { media, .. } = &mut mp4_message.content else {
+        unreachable!()
+    };
+    media.path = Some(mp4);
+    media.mime = "video/mp4".into();
+    let media = build_media_widget_with_action(&mp4_message, |_| {});
+    let picture = media_picture(&media);
+    let mp4_window = gtk::Window::builder().child(&media.widget).build();
+    mp4_window.present();
+    drop(playing(&picture));
+    mp4_window.destroy();
     let Content::Video { media, .. } = &message.content else {
         unreachable!()
     };
