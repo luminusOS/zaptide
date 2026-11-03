@@ -325,12 +325,17 @@ pub(super) fn handle_backend_ready(
                         &message,
                         app.settings.notification_previews,
                     );
+                    let sound = app.notification_sound.request(
+                        app.settings.notification_sound,
+                        app.settings.notification_sound_interval,
+                    );
                     if let Err(error) = app.notifications.show(
                         account,
                         &chat,
                         &title,
                         &body,
                         app.avatars.get(&chat).map(std::path::PathBuf::as_path),
+                        sound,
                     ) {
                         log::warn!("could not show a notification: {error}");
                     }

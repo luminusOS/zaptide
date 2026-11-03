@@ -73,6 +73,10 @@ pub struct Settings {
     /// than `media_retention_days`.
     pub media_retention: bool,
     pub media_retention_days: u32,
+    /// Play a short sound with each desktop notification.
+    pub notification_sound: bool,
+    /// Seconds to wait between two notification sounds.
+    pub notification_sound_interval: u32,
     /// Prefer address-book names over public profile names.
     pub names_from_contacts: bool,
     /// Voice and audio playback speed multiplier.
@@ -113,6 +117,8 @@ impl Default for Settings {
             offline_after_inactive_seconds: 300,
             media_retention: false,
             media_retention_days: crate::media_retention::DEFAULT_DAYS,
+            notification_sound: true,
+            notification_sound_interval: crate::notification_sound::DEFAULT_INTERVAL,
             names_from_contacts: true,
             save_contacts_to_phone: true,
             voice_speed: 1.0,
@@ -146,6 +152,12 @@ impl Settings {
         match std::fs::read_to_string(path) {
             Ok(contents) => match serde_json::from_str::<Self>(&contents) {
                 Ok(mut settings) => {
+                    if !crate::notification_sound::is_supported_interval(
+                        settings.notification_sound_interval,
+                    ) {
+                        settings.notification_sound_interval =
+                            crate::notification_sound::DEFAULT_INTERVAL;
+                    }
                     if let Some(code) = settings.chat_lock_code.take() {
                         settings.set_chat_lock_code(Some(&code));
                         if let Err(error) = settings.save(path) {
@@ -251,6 +263,29 @@ mod tests {
         assert!(!settings.enter_sends);
         assert!(settings.custom_theme_cache.is_none());
         assert_eq!(settings.custom_theme.as_deref(), Some("mine.json"));
+    }
+
+    #[test]
+    fn settings_from_before_the_notification_sound_keep_it_on_with_the_default_interval() {
+        let settings: Settings = serde_json::from_str(r#"{"notifications":false}"#).unwrap();
+        assert!(settings.notification_sound);
+        assert_eq!(settings.notification_sound_interval, 30);
+    }
+
+    #[test]
+    fn an_unsupported_sound_interval_on_disk_is_replaced_by_the_default() {
+        let dir = std::env::temp_dir().join(format!("zaptide-sound-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            &path,
+            r#"{"notification_sound_interval":45,"enter_sends":false}"#,
+        )
+        .unwrap();
+        let loaded = Settings::load(&path);
+        assert_eq!(loaded.notification_sound_interval, 30);
+        assert!(!loaded.enter_sends);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

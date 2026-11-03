@@ -34,6 +34,7 @@ pub mod native_theme;
 pub mod native_transcript;
 pub mod native_tray;
 pub mod native_voice;
+pub mod notification_sound;
 pub mod notifier;
 pub mod paths;
 pub mod portal;
