@@ -179,6 +179,9 @@ pub struct ProfileEdit {
 pub enum Command {
     /// Turns link previews on or off for this account, synced with the phone.
     SetLinkPreviews(bool),
+    /// Shows this account as online or offline. WhatsApp holds the phone's
+    /// notifications while ZapTide is online.
+    SetOnline(bool),
     PollHistoryFailed {
         session_generation: u64,
         chat: ChatId,

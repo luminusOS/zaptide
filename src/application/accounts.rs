@@ -495,6 +495,11 @@ impl NativeApplication {
         }
         self.leave_screen();
         std::mem::swap(&mut self.backend, &mut session.backend);
+        // The account leaving the screen goes offline; `update` reports the new one.
+        if let Some(backend) = &session.backend {
+            backend.send(crate::backend::Command::SetOnline(false));
+        }
+        self.presence_watch.reported = None;
         std::mem::swap(&mut self.notifier, &mut session.notifier);
         std::mem::swap(&mut self.active_drain, &mut session.drain);
         std::mem::swap(&mut self.active_dirs, &mut session.dirs);

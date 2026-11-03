@@ -18,6 +18,7 @@ mod icons;
 mod link_page;
 mod linking;
 mod motion;
+mod presence;
 mod presentation;
 mod profile_dialog;
 mod rows;
@@ -475,6 +476,7 @@ pub struct NativeApplication {
     tray_state: crate::native_tray::TrayState,
     /// Whether a tray host shows the icon, so closing can hide the window.
     tray_shown: bool,
+    presence_watch: presence::PresenceWatch,
     avatars: std::collections::HashMap<String, std::path::PathBuf>,
     avatar_requests: std::collections::HashSet<String>,
     /// Who is typing per chat: display name and sender ID.
@@ -722,6 +724,9 @@ pub enum Input {
     Tray(crate::native_tray::TrayAction),
     /// The window was shown or hidden outside the tray; `update` resyncs it.
     WindowVisibilityChanged,
+    /// Focus, the screensaver, use after inactivity, or a scheduled presence
+    /// check can change your online status; `update` reports it.
+    PresenceChanged,
     /// Opens the chat with a contact picked in New Chat, creating it if new.
     StartChat {
         id: String,
@@ -753,9 +758,11 @@ impl SimpleComponent for NativeApplication {
             connect_map[sender] => move |_| sender.input(Input::WindowMapped),
 
             connect_is_active_notify[sender] => move |window| {
-                if window.is_active() {
-                    sender.input(Input::WindowActivated);
-                }
+                sender.input(if window.is_active() {
+                    Input::WindowActivated
+                } else {
+                    Input::PresenceChanged
+                });
             },
 
             connect_close_request[sender] => move |_| {
@@ -1238,6 +1245,7 @@ impl SimpleComponent for NativeApplication {
             tray: None,
             tray_state: crate::native_tray::TrayState::default(),
             tray_shown: false,
+            presence_watch: Default::default(),
             avatars: std::collections::HashMap::new(),
             avatar_requests: std::collections::HashSet::new(),
             typing: std::collections::HashMap::new(),
@@ -1342,6 +1350,7 @@ impl SimpleComponent for NativeApplication {
             tray_actions,
         );
         model.tray_shown = model.tray.is_some();
+        model.watch_presence(&sender);
         let visibility_sender = sender.clone();
         root.connect_visible_notify(move |_| {
             visibility_sender.input(Input::WindowVisibilityChanged)
@@ -1504,7 +1513,8 @@ impl SimpleComponent for NativeApplication {
             _ => None,
         };
         let draft_changed = matches!(&input, Input::DraftChanged(_));
-        self.handle_input(input, sender);
+        self.handle_input(input, sender.clone());
+        self.sync_presence(&sender);
         if draft_changed {
             self.sync_composer_view();
         } else {
@@ -2717,7 +2727,10 @@ impl NativeApplication {
 pub fn run(dirs: AppDirs) {
     let application_id =
         std::env::var("FLATPAK_ID").unwrap_or_else(|_| "dev.luminusos.ZapTide".into());
-    RelmApp::new(&application_id).run::<NativeApplication>(Init { dirs });
+    let app = RelmApp::new(&application_id);
+    // GTK reports `screensaver-active` only for an app registered with the session.
+    relm4::main_application().set_register_session(true);
+    app.run::<NativeApplication>(Init { dirs });
 }
 
 #[cfg(test)]

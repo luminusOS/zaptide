@@ -107,6 +107,7 @@ impl Worker {
                 link_preview,
             } => self.send_text(chat, text, quoting, mentions, link_preview),
             Command::SetLinkPreviews(enabled) => self.set_link_previews(enabled),
+            Command::SetOnline(online) => self.set_online(online),
             Command::SendContact {
                 chat,
                 contact,

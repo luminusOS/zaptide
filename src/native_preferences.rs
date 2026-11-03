@@ -27,6 +27,8 @@ pub enum SettingsField {
     ChatLockCodeHash,
     Notifications,
     NotificationPreviews,
+    OfflineAfterLeavingSeconds,
+    OfflineAfterMinutes,
     KeepRunningInBackground,
     VoiceSpeed,
 }
@@ -72,6 +74,8 @@ pub struct PrivacyPreferences {
 pub struct NotificationPreferences {
     pub enabled: bool,
     pub previews: bool,
+    pub offline_after_leaving_seconds: u32,
+    pub offline_after_minutes: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -113,6 +117,8 @@ impl From<&Settings> for NativePreferences {
             notifications: NotificationPreferences {
                 enabled: settings.notifications,
                 previews: settings.notification_previews,
+                offline_after_leaving_seconds: settings.offline_after_leaving_seconds,
+                offline_after_minutes: settings.offline_after_minutes,
             },
             storage: StoragePreferences {
                 auto_download: settings.auto_download,
@@ -148,6 +154,8 @@ pub enum PreferenceChange {
     SetChatLockCode(Option<String>),
     SetNotifications(bool),
     SetNotificationPreviews(bool),
+    SetOfflineAfterLeavingSeconds(u32),
+    SetOfflineAfterMinutes(u32),
     SetKeepRunningInBackground(bool),
     SetVoiceSpeed(f32),
 }
@@ -213,6 +221,14 @@ impl std::fmt::Debug for PreferenceChange {
                 .debug_tuple("SetNotificationPreviews")
                 .field(value)
                 .finish(),
+            Change::SetOfflineAfterLeavingSeconds(value) => formatter
+                .debug_tuple("SetOfflineAfterLeavingSeconds")
+                .field(value)
+                .finish(),
+            Change::SetOfflineAfterMinutes(value) => formatter
+                .debug_tuple("SetOfflineAfterMinutes")
+                .field(value)
+                .finish(),
             Change::SetKeepRunningInBackground(value) => formatter
                 .debug_tuple("SetKeepRunningInBackground")
                 .field(value)
@@ -244,6 +260,8 @@ impl PreferenceChange {
             Self::SetChatLockCode(_) => SettingsField::ChatLockCodeHash,
             Self::SetNotifications(_) => SettingsField::Notifications,
             Self::SetNotificationPreviews(_) => SettingsField::NotificationPreviews,
+            Self::SetOfflineAfterLeavingSeconds(_) => SettingsField::OfflineAfterLeavingSeconds,
+            Self::SetOfflineAfterMinutes(_) => SettingsField::OfflineAfterMinutes,
             Self::SetKeepRunningInBackground(_) => SettingsField::KeepRunningInBackground,
             Self::SetVoiceSpeed(_) => SettingsField::VoiceSpeed,
         }
@@ -460,6 +478,11 @@ impl NativePreferencesDialog {
             change_sink.clone(),
             PreferenceChange::SetNotificationPreviews,
         );
+        add_online_status(
+            &notifications_page,
+            &preferences.notifications,
+            &change_sink,
+        );
 
         let storage_page = libadwaita::PreferencesPage::new();
         storage_page.set_title("Storage");
@@ -612,6 +635,79 @@ fn push_change(
     on_change();
 }
 
+fn add_online_status(
+    page: &libadwaita::PreferencesPage,
+    preferences: &NotificationPreferences,
+    change_sink: &PreferenceChangeSink,
+) {
+    use libadwaita::prelude::*;
+    let group = libadwaita::PreferencesGroup::new();
+    group.set_title("Online status");
+    group.set_description(Some(
+        "While ZapTide shows you as online, your phone does not receive notifications.",
+    ));
+    page.add(&group);
+    add_offline_row(
+        &group,
+        (
+            "Go offline when I leave ZapTide",
+            "Switch to another app or lock the screen",
+        ),
+        &[
+            ("After 10 seconds", 10),
+            ("After 1 minute", 60),
+            ("After 5 minutes", 300),
+            ("Never", 0),
+        ],
+        preferences.offline_after_leaving_seconds,
+        change_sink,
+        PreferenceChange::SetOfflineAfterLeavingSeconds,
+    );
+    add_offline_row(
+        &group,
+        (
+            "Go offline when inactive",
+            "No typing, clicks or pointer movement in ZapTide",
+        ),
+        &[
+            ("After 1 minute", 1),
+            ("After 5 minutes", 5),
+            ("After 15 minutes", 15),
+            ("Never", 0),
+        ],
+        preferences.offline_after_minutes,
+        change_sink,
+        PreferenceChange::SetOfflineAfterMinutes,
+    );
+}
+
+/// A row that chooses one of `choices`; a value of 0 means never.
+fn add_offline_row(
+    group: &libadwaita::PreferencesGroup,
+    (title, subtitle): (&str, &str),
+    choices: &'static [(&'static str, u32)],
+    current: u32,
+    change_sink: &PreferenceChangeSink,
+    change: fn(u32) -> PreferenceChange,
+) {
+    use libadwaita::prelude::*;
+    let row = libadwaita::ComboRow::new();
+    row.set_title(title);
+    row.set_subtitle(subtitle);
+    let labels: Vec<&str> = choices.iter().map(|(label, _)| *label).collect();
+    row.set_model(Some(&gtk4::StringList::new(&labels)));
+    if let Some(index) = choices.iter().position(|(_, value)| *value == current) {
+        row.set_selected(index as u32);
+    }
+    group.add(&row);
+    let sink = change_sink.clone();
+    row.connect_selected_notify(move |row| {
+        if let Some((_, value)) = choices.get(row.selected() as usize) {
+            sink.push(change(*value));
+        }
+    });
+}
+
 fn add_switch(
     group: &libadwaita::PreferencesGroup,
     title: &str,
@@ -762,6 +858,10 @@ impl PreferenceChange {
             Self::SetChatLockCode(value) => settings.set_chat_lock_code(value.as_deref()),
             Self::SetNotifications(value) => settings.notifications = value,
             Self::SetNotificationPreviews(value) => settings.notification_previews = value,
+            Self::SetOfflineAfterLeavingSeconds(value) => {
+                settings.offline_after_leaving_seconds = value
+            }
+            Self::SetOfflineAfterMinutes(value) => settings.offline_after_minutes = value,
             Self::SetKeepRunningInBackground(value) => settings.keep_running_in_background = value,
             Self::SetVoiceSpeed(value) => {
                 if ![1.0, 1.5, 2.0].contains(&value) {
