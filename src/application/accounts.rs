@@ -302,12 +302,17 @@ impl NativeApplication {
             notices.clear();
         }
         for notice in notices {
+            let sound = self.notification_sound.request(
+                self.settings.notification_sound,
+                self.settings.notification_sound_interval,
+            );
             if let Err(error) = self.notifications.show(
                 id,
                 &notice.chat,
                 &notice.title,
                 &notice.body,
                 notice.avatar.as_deref(),
+                sound,
             ) {
                 log::warn!("could not show a notification: {error}");
             }

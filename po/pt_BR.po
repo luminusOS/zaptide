@@ -1715,6 +1715,63 @@ msgstr ""
 "Reproduzir mais rápido requer o plugin scaletempo do GStreamer (gst-plugins-"
 "good)"
 
+msgid "Poll creation could not be completed."
+msgstr "Não foi possível concluir a criação da enquete."
+
+msgid "Could not send your vote."
+msgstr "Não foi possível enviar seu voto."
+
+msgid "The poll was sent, but its voting key could not be saved."
+msgstr ""
+"A enquete foi enviada, mas não foi possível salvar sua chave de votação."
+
+msgid "Your vote was sent, but could not be saved locally."
+msgstr "Seu voto foi enviado, mas não foi possível salvá-lo localmente."
+
+#: src/application/calls/screen.rs:88
+msgid "%1$s is also calling, with video"
+msgstr "%1$s também está ligando, com vídeo"
+
+#: src/application/calls/screen.rs:90
+msgid "%1$s is also calling"
+msgstr "%1$s também está ligando"
+
+#: src/native_preferences.rs:518
+msgid "Notification sound"
+msgstr "Som de notificação"
+
+#: src/native_preferences.rs:520
+msgid "Play a short sound with notifications, where the desktop supports it"
+msgstr "Toca um som curto com as notificações, onde o desktop permitir"
+
+#: src/native_preferences.rs:532
+msgid "Pause between sounds"
+msgstr "Pausa entre sons"
+
+#: src/native_preferences.rs:533
+msgid "Messages that arrive sooner stay silent"
+msgstr "Mensagens que chegarem antes ficam em silêncio"
+
+#: src/native_preferences.rs:535
+msgid "No pause"
+msgstr "Sem pausa"
+
+#: src/native_preferences.rs:536
+msgid "10 seconds"
+msgstr "10 segundos"
+
+#: src/native_preferences.rs:537
+msgid "30 seconds"
+msgstr "30 segundos"
+
+#: src/native_preferences.rs:538
+msgid "1 minute"
+msgstr "1 minuto"
+
+#: src/native_preferences.rs:539
+msgid "2 minutes"
+msgstr "2 minutos"
+
 #~ msgid "Decline new call"
 #~ msgstr "Recusar nova chamada"
 
@@ -1732,14 +1789,3 @@ msgstr ""
 
 #~ msgid "Pause"
 #~ msgstr "Pausar"
-msgid "Poll creation could not be completed."
-msgstr "Não foi possível concluir a criação da enquete."
-
-msgid "Could not send your vote."
-msgstr "Não foi possível enviar seu voto."
-
-msgid "The poll was sent, but its voting key could not be saved."
-msgstr "A enquete foi enviada, mas não foi possível salvar sua chave de votação."
-
-msgid "Your vote was sent, but could not be saved locally."
-msgstr "Seu voto foi enviado, mas não foi possível salvá-lo localmente."
