@@ -112,6 +112,6 @@ Calls add the `rtc-*` crates (DTLS, SCTP and data channels), which are still 0.2
 
 ## Flatpak limitations
 
-- **Calls**: voice calls use the PulseAudio socket. Video calls are not supported: the manifest grants no camera access (`--device=all` or the camera portal through PipeWire) and no H.264 codec extension (`org.freedesktop.Platform.openh264`). Neither was added because they widen the sandbox and nothing here can test them.
+- **Calls**: voice calls and the ring use the PulseAudio socket. The ring looks for the freedesktop sound theme in the data directories and falls back to a tone it makes, so it works without that theme. Notification buttons go through the notification portal; the desktop's do-not-disturb setting is read through GSettings and may not be visible in the sandbox. Video calls are not supported: the manifest grants no camera access (`--device=all` or the camera portal through PipeWire) and no H.264 codec extension (`org.freedesktop.Platform.openh264`). Neither was added because they widen the sandbox and nothing here can test them.
 
 - **Tray icon**: GNOME shows StatusNotifierItem only with an extension such as AppIndicator.

@@ -38,7 +38,7 @@ in `application/accounts.rs` and updated from their own backend.
 | `src/backend.rs`, `src/backend/` | The `Command` and `Event` types and the worker that owns the connection. |
 | `src/archive.rs`, `src/archive/` | The encrypted SQLite store of chats, messages and contacts. |
 | `src/model/` | The app's own types. Views never see a protobuf. `model/call.rs` holds the call state machine and event text. |
-| `src/calls/`, `src/backend/worker/calls.rs`, `src/application/calls.rs` | Calls: GStreamer microphone, speaker, camera and H.264 pipelines; the worker that drives whatsapp-rust's VoIP runtime and files call events as chat messages; the call window and Calls tab. |
+| `src/calls/`, `src/backend/worker/calls.rs`, `src/application/calls.rs` | Calls: GStreamer microphone, speaker, camera and H.264 pipelines; the worker that drives whatsapp-rust's VoIP runtime and files call events as chat messages; the call window and Calls tab. `calls/ringtone.rs` plays the ring (sound theme, or a made tone) and the call's notification carries its buttons through `native_notifications.rs`. |
 | `src/native_*.rs` | Toolkit-facing helpers: notifications, tray, portals, media widgets, preferences, theme. |
 | `src/account.rs`, `src/paths.rs`, `src/settings.rs` | Account registry, per-account folders, saved settings. |
 | `data/` | Everything that is not code: `style.css`, `theme-defaults.css`, the desktop file, icons. |

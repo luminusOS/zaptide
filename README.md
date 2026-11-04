@@ -86,14 +86,30 @@ the window releases their playback resources; showing them again restarts playba
 > [!WARNING]
 > Calls are new and have only been tested without a real call: no voice or video
 > call has been placed against a phone yet, so audio quality and video
-> interoperability are unverified. Expect rough edges.
+> interoperability are unverified. The ring and the notification buttons have
+> not been heard or clicked on a desktop either. Expect rough edges.
 
 Open a direct chat and use the phone or camera button in its header to call.
-Incoming calls open a call window and send a desktop notification (there is no
-ringtone). Decline, answer, mute, and turn the camera on or off from that window.
-Calls are listed under the Calls tab beside Chats and Archived, and each one also
+Incoming calls open a call window, ring and send a desktop notification with
+Answer and Decline buttons, whichever account they belong to. Decline, answer,
+mute, and turn the camera on or off from the window as well. Calls are listed under the Calls tab beside Chats and Archived, and each one also
 appears in its chat as an event such as "Missed voice call". Calls placed from
 your phone show up in the history after syncing.
+
+A call rings with the desktop's sound theme (`phone-incoming-call`, and
+`phone-outgoing-calling` while you place one), or with a tone of its own when
+that sound is not installed. The incoming ring stops when you answer, decline or
+close the window, and it stays quiet when Notifications are turned off in
+Preferences or the desktop's do-not-disturb is on; the tone for a call you place
+is not affected. Inside a sandbox the do-not-disturb setting may not be
+readable, in which case the call rings.
+
+When a second person calls during a call, the window and a notification offer
+**Decline new call** and **End and answer**. Declining tells the caller the call
+was declined. If you do nothing, it rings out and shows up as a missed call. A
+second call does not interrupt the first: ZapTide holds one call at a time, with
+no hold, and WhatsApp's library cannot send a "busy" reply, so only one waiting
+call is announced and a third just rings.
 
 Calls connect to WhatsApp's relay servers over UDP and use the default
 microphone and speaker. Video needs a camera, an H.264 encoder (the GStreamer
@@ -105,8 +121,8 @@ a voice call still works and a video call tells you what is missing.
 - **AppImage:** the bundle carries an H.264 decoder, but whether it carries an
   encoder and the camera plugins has not been checked; voice calls are the
   supported path.
-- Only one call runs at a time, group calls do not ring, and a call ends when
-  the app quits.
+- Only one call is live at a time (see above), group calls do not ring, and a
+  call ends when the app quits.
 
 ## Your data
 

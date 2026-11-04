@@ -124,7 +124,13 @@ protocol. These notes are for coding agents and new contributors.
   was never answered with a handle is turned down with `voip().reject`, only
   when we decided to end it, never when the caller or another device did. Close
   and hang up are one command: the worker knows the real phase, the window may
-  not. Media is released before waiting on the network. Never log a
+  not. Media is released before waiting on the network. The ring is
+  `calls/ringtone.rs`: one `Ringer` driven from `sync_ring`, never started
+  anywhere else, so every path that ends or closes a call must pass through
+  it. A call's notification buttons use their own token map keyed by account
+  and call id, separate from the chat's. A second incoming call becomes the
+  worker's `waiting` call and only rings; there is no hold and no busy reply,
+  because whatsapp-rust offers neither. Never log a
   `CallError`: it carries relay addresses and JIDs.
 - `src/paths.rs` uses a ZapTide-only XDG namespace. Never adopt or open ZapFast,
   FastsApp, or FastWhatsApp data automatically. The keyring service must remain
