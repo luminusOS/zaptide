@@ -64,8 +64,8 @@ pub struct Settings {
     /// screen) before WhatsApp shows you as offline; 0 is never. The phone shows
     /// no notifications while you are online.
     pub offline_after_leaving_seconds: u32,
-    /// Minutes without input in ZapTide before WhatsApp shows you as offline; 0 is never.
-    pub offline_after_minutes: u32,
+    /// Seconds without input in ZapTide before WhatsApp shows you as offline; 0 is never.
+    pub offline_after_inactive_seconds: u32,
     /// Prefer address-book names over public profile names.
     pub names_from_contacts: bool,
     /// Voice and audio playback speed multiplier.
@@ -102,7 +102,7 @@ impl Default for Settings {
             notifications: true,
             notification_previews: true,
             offline_after_leaving_seconds: 10,
-            offline_after_minutes: 5,
+            offline_after_inactive_seconds: 300,
             names_from_contacts: true,
             save_contacts_to_phone: true,
             voice_speed: 1.0,
@@ -212,7 +212,7 @@ mod tests {
             enter_sends: false,
             voice_speed: 1.5,
             offline_after_leaving_seconds: 0,
-            offline_after_minutes: 15,
+            offline_after_inactive_seconds: 900,
             ..Settings::default()
         };
         settings.save(&path).expect("saves");

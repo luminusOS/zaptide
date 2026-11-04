@@ -54,8 +54,8 @@ fn shows_use(event: gtk::gdk::EventType) -> bool {
 }
 
 /// Converts a stored setting to a limit; 0 is never.
-fn limit(value: u32, unit: u64) -> Option<Duration> {
-    (value > 0).then(|| Duration::from_secs(unit * u64::from(value)))
+fn limit(seconds: u32) -> Option<Duration> {
+    (seconds > 0).then(|| Duration::from_secs(u64::from(seconds)))
 }
 
 /// Whether you count as using ZapTide: looking at it, or away for less than the leave limit.
@@ -162,8 +162,8 @@ impl NativeApplication {
         let looking = self.window.is_active()
             && self.window.is_visible()
             && !relm4::main_application().is_screensaver_active();
-        let leave_limit = limit(self.settings.offline_after_leaving_seconds, 1);
-        let idle_limit = limit(self.settings.offline_after_minutes, 60);
+        let leave_limit = limit(self.settings.offline_after_leaving_seconds);
+        let idle_limit = limit(self.settings.offline_after_inactive_seconds);
         let now = Instant::now();
         let decision = self
             .presence_watch
@@ -241,8 +241,8 @@ mod tests {
 
     #[test]
     fn zero_means_never() {
-        assert_eq!(limit(0, 60), None);
-        assert_eq!(limit(5, 60), FIVE_MINUTES);
+        assert_eq!(limit(0), None);
+        assert_eq!(limit(300), FIVE_MINUTES);
     }
 
     fn seconds(count: u64) -> Duration {
