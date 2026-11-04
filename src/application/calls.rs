@@ -23,7 +23,7 @@ mod window;
 pub use screen::CallAction;
 use screen::{Screen, incoming_label, screen, starts_day, when};
 use waiting::Waiting;
-use window::CallWindow;
+use window::{CallWindow, Look};
 
 fn texture(frame: RgbaFrame) -> Option<gtk::gdk::Texture> {
     let (width, height) = (frame.width as usize, frame.height as usize);
@@ -150,13 +150,14 @@ impl CallsUi {
         let call_back = gtk::Button::with_label(&gettext("Call back"));
         call_back.add_css_class("pill");
         call_back.add_css_class("suggested-action");
+        call_back.add_css_class("call-primary");
         open_chat.connect_clicked(move |_| on_open_chat());
         call_back.connect_clicked(move |_| on_call_back());
         let actions = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         actions.set_halign(gtk::Align::Center);
         actions.set_margin_top(12);
-        actions.append(&open_chat);
         actions.append(&call_back);
+        actions.append(&open_chat);
         let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
         page.set_valign(gtk::Align::Center);
         page.set_margin_start(24);
@@ -662,13 +663,27 @@ impl NativeApplication {
             });
         }
         let screen = self.full_screen(&session, &name);
+        let allow_focus = self.window.is_active()
+            || self
+                .calls
+                .live
+                .as_ref()
+                .is_some_and(|live| live.window.window.is_active());
+        let waiting_avatar = self.calls.waiting.as_ref().and_then(|w| w.avatar.clone());
         let Some(live) = self.calls.live.as_mut() else {
             return;
         };
         live.session = session;
         live.avatar = avatar_image(avatar_path.as_deref());
-        live.window
-            .render(&live.session, &name, live.avatar.as_ref(), &screen);
+        live.window.render(
+            &name,
+            &Look {
+                avatar: live.avatar.as_ref(),
+                waiting_avatar: waiting_avatar.as_ref(),
+                allow_focus,
+            },
+            &screen,
+        );
         if !same {
             live.window.window.present();
         }
@@ -774,9 +789,23 @@ impl NativeApplication {
         };
         let name = chat_label(self.chats_of(account), &session.chat);
         let screen = self.full_screen(&session, &name);
+        let allow_focus = self.window.is_active()
+            || self
+                .calls
+                .live
+                .as_ref()
+                .is_some_and(|live| live.window.window.is_active());
+        let waiting_avatar = self.calls.waiting.as_ref().and_then(|w| w.avatar.clone());
         if let Some(live) = self.calls.live.as_mut() {
-            live.window
-                .render(&live.session, &name, live.avatar.as_ref(), &screen);
+            live.window.render(
+                &name,
+                &Look {
+                    avatar: live.avatar.as_ref(),
+                    waiting_avatar: waiting_avatar.as_ref(),
+                    allow_focus,
+                },
+                &screen,
+            );
         }
     }
 

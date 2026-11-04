@@ -141,14 +141,51 @@ window.translucent-sidebar .sidebar-pane .view {
 }
 .zaptide-unread-divider { font-weight: bold; font-size: 0.85em; border-radius: 9999px; padding: 3px 14px; color: var(--accent-color); background-color: color-mix(in srgb, var(--accent-bg-color) 18%, transparent); }
 .zaptide-call-event { padding: 2px 0; }
-.zaptide-call-button { min-height: 42px; padding: 0 18px; border-radius: 9px; font-size: 14px; font-weight: 600; color: #ffffff; background-image: none; }
-.zaptide-call-button.neutral { background-color: #45454A; }
-.zaptide-call-button.danger { background-color: #C01C28; }
-.zaptide-call-button.success { background-color: #1B7B4F; }
-.zaptide-call-button.primary { background-color: #1C5FAF; }
-.zaptide-call-button:hover { filter: brightness(1.12); }
-.zaptide-call-button:active { filter: brightness(0.9); }
-.zaptide-call-remote { background-color: #000000; }
-.zaptide-call-preview { border-radius: 12px; border: 2px solid rgba(255, 255, 255, 0.85); box-shadow: 0 2px 12px rgba(0, 0, 0, 0.45); }
+.zaptide-call-window button.call-control { min-height: 48px; padding: 0 22px; }
+.zaptide-call-window button.call-control image { -gtk-icon-size: 16px; }
+.zaptide-call-window button.call-control label { font-size: 15px; font-weight: 600; }
+.zaptide-call-window button.call-control.call-choice { min-width: 100px; }
+.zaptide-call-window button.call-control.circular { min-width: 48px; padding: 0; }
+.zaptide-call-window button.call-control.circular image { -gtk-icon-size: 20px; }
+.zaptide-call-window button.call-control:disabled { opacity: 0.55; }
+.zaptide-call-window button.call-control.circular:checked { background-color: var(--window-fg-color); color: var(--window-bg-color); }
+.zaptide-call-window button.call-control.circular.osd { color: #ffffff; background-color: rgba(0, 0, 0, 0.6); border: 1px solid rgba(255, 255, 255, 0.18); }
+.zaptide-call-window button.call-control.circular.osd:checked { color: #1e1e20; background-color: #f6f5f4; }
+/* libadwaita 1.10 draws destructive-action as a tint; a call needs the solid red of a hang-up. */
+.zaptide-call-window button.destructive-action.call-control { color: var(--destructive-fg-color); background-color: var(--destructive-bg-color); }
+.zaptide-call-window button.destructive-action.call-control:hover { background-image: image(color-mix(in srgb, currentColor 10%, transparent)); }
+.zaptide-call-window button.destructive-action.call-control:active { background-image: image(rgb(0 0 6 / 20%)); }
+/* Plain white on the accent-coloured Answer button needs 4.5:1, which the stock success green (3.4:1) does not give. */
+.zaptide-call-window button.call-answer { --accent-bg-color: #1b7b4f; --accent-fg-color: #ffffff; }
+/* The stock accent gives white text 4:1 at best; darkening it keeps the label at 4.5:1 whatever accent the person picked. */
+button.call-primary { color: #ffffff; background-color: color-mix(in srgb, var(--accent-bg-color) 78%, black); }
+.zaptide-call-window.call-narrow button.call-control { min-height: 56px; }
+.zaptide-call-window.call-narrow button.call-control.call-choice { min-width: 106px; }
+.zaptide-call-window.call-narrow button.call-control label { font-size: 16px; }
+.zaptide-call-window.call-narrow button.call-control image { -gtk-icon-size: 20px; }
+.zaptide-call-window.call-narrow button.call-control.circular { min-width: 56px; }
+.zaptide-call-window.call-narrow button.call-control.circular image { -gtk-icon-size: 24px; }
+.zaptide-call-window .call-controls { padding-bottom: 48px; }
+.zaptide-call-window.call-narrow .call-controls { padding-bottom: 32px; }
+.zaptide-call-window .call-name { font-size: 28px; font-weight: 700; }
+.zaptide-call-window .call-status { font-size: 15px; color: color-mix(in srgb, var(--window-fg-color) 72%, transparent); }
+.zaptide-call-window .call-status.error { color: var(--error-color); }
+.zaptide-call-window .call-detail { color: color-mix(in srgb, var(--window-fg-color) 72%, transparent); }
+.zaptide-call-window .call-ring-outer.on { padding: 16px; border-radius: 9999px; background-color: color-mix(in srgb, var(--window-fg-color) 6%, transparent); }
+.zaptide-call-window .call-ring-outer.on > .call-ring-inner { padding: 12px; border-radius: 9999px; background-color: color-mix(in srgb, var(--window-fg-color) 11%, transparent); }
+.zaptide-call-window .call-badge { padding: 9px; border-radius: 9999px; color: var(--destructive-fg-color); background-color: var(--destructive-bg-color); }
+.zaptide-call-window .call-card button.call-control, .zaptide-call-window.call-narrow .call-card button.call-control { min-height: 48px; padding: 0 16px; }
+.zaptide-call-window .call-card { padding: 12px 14px; border-radius: 18px; border: 1px solid color-mix(in srgb, var(--window-fg-color) 14%, transparent); background-color: color-mix(in srgb, var(--window-fg-color) 10%, var(--window-bg-color)); color: var(--window-fg-color); }
+.zaptide-call-window .call-card .call-card-hint { color: color-mix(in srgb, var(--window-fg-color) 72%, transparent); }
+.zaptide-call-window .zaptide-call-remote { background-color: #000000; }
+.zaptide-call-window .call-scrim-top { min-height: 150px; background-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.7), rgba(0, 0, 0, 0)); }
+.zaptide-call-window .call-scrim-bottom { min-height: 190px; background-image: linear-gradient(to bottom, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.78)); }
+.zaptide-call-window.call-over-video headerbar { color: #ffffff; background: none; box-shadow: none; }
+.zaptide-call-window.call-over-video windowtitle .title { font-size: 18px; font-weight: 700; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6); }
+.zaptide-call-window.call-over-video windowtitle .subtitle { font-size: 13px; opacity: 1; color: rgba(255, 255, 255, 0.85); text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6); }
+.zaptide-call-window .call-pip { min-width: 160px; min-height: 120px; border-radius: 14px; border: 1px solid rgba(255, 255, 255, 0.28); background-color: #17171a; color: #ffffff; }
+.zaptide-call-window.call-narrow .call-pip { min-width: 96px; min-height: 128px; }
+.zaptide-call-window .call-pip-chip { padding: 2px 8px; border-radius: 9999px; font-size: 12px; font-weight: 600; color: #ffffff; background-color: rgba(0, 0, 0, 0.55); }
+.zaptide-call-window .call-pip-off label { font-size: 12px; color: rgba(255, 255, 255, 0.85); }
 row.zaptide-call-missed .title { color: var(--error-color); }
 image.zaptide-call-missed-icon { color: var(--error-color); -gtk-icon-palette: error var(--error-color); }

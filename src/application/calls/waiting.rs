@@ -9,6 +9,7 @@ use crate::backend::Command;
 pub(super) struct Waiting {
     pub(super) account: AccountId,
     pub(super) session: CallSession,
+    pub(super) avatar: Option<gtk::gdk::Texture>,
 }
 
 /// What declining the waiting call asks of its account. When it belongs to
@@ -55,6 +56,7 @@ impl NativeApplication {
                 screen,
                 &chat_label(self.chats_of(waiting.account), &waiting.session.chat),
                 waiting.session.video,
+                name,
             ),
             _ => screen,
         }
@@ -111,7 +113,12 @@ impl NativeApplication {
             &name,
             avatar.as_deref(),
         );
-        self.calls.waiting = Some(Waiting { account, session });
+        let avatar = avatar_image(avatar.as_deref());
+        self.calls.waiting = Some(Waiting {
+            account,
+            session,
+            avatar,
+        });
         self.call_tick();
     }
 
