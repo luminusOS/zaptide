@@ -1010,6 +1010,51 @@ mod tests {
     }
 
     #[test]
+    fn notifications_name_the_kind_and_stay_generic_without_previews() {
+        use crate::model::{Content, unsupported};
+        let kinds = [
+            (
+                Content::Unsupported {
+                    what: unsupported::ANIMATED_STICKER.into(),
+                },
+                "Animated sticker",
+            ),
+            (
+                Content::Sticker {
+                    media: crate::model::Media {
+                        mime: "image/webp".into(),
+                        size: 1,
+                        width: None,
+                        height: None,
+                        path: None,
+                        state: Default::default(),
+                    },
+                    animated: false,
+                },
+                "Sticker",
+            ),
+            (
+                Content::Unsupported {
+                    what: unsupported::GENERIC.into(),
+                },
+                "Unsupported message",
+            ),
+        ];
+        let group = crate::model::Chat::new("room@g.us".into(), "Room".into());
+        for (content, preview) in kinds {
+            let mut message = message("chat", "unused");
+            message.content = content;
+            assert_eq!(notice_text(None, &message, true).1, preview);
+            assert_eq!(notice_text(None, &message, false).1, "New message");
+            assert_eq!(notice_text(Some(&group), &message, false).1, "New message");
+            assert_eq!(
+                notice_text(Some(&group), &message, true).1,
+                format!("Alice: {preview}")
+            );
+        }
+    }
+
+    #[test]
     fn switching_carries_each_account_s_drafts_into_the_composer() {
         let drafts = std::collections::HashMap::from([("chat".to_owned(), "see you".to_owned())]);
         assert_eq!(composer_with_drafts(&drafts).draft("chat"), "see you");

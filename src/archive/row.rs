@@ -4,7 +4,7 @@ use super::{kind_from_name, status_from_rank};
 
 fn content_from_json(json: &str) -> Content {
     serde_json::from_str(json).unwrap_or(Content::Unsupported {
-        what: "unreadable".into(),
+        what: crate::model::unsupported::UNREADABLE.into(),
     })
 }
 

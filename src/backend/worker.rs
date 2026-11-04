@@ -61,7 +61,7 @@ use history::{HistoryReaction, HistoryReactionBody, parse_history};
 use outbound::{PastedImageRequest, download_staging_path, media_path};
 #[cfg(test)]
 use outbound::{THUMBNAIL_SIDE, consume_attachment_reply, encode_jpeg, thumbnail_jpeg};
-use protocol::classify;
+use protocol::{base_message, classify};
 
 use super::{Command, Event, LinkStatus, Wake, read_sync::ReadSync};
 use crate::archive::Archive;
@@ -987,7 +987,7 @@ impl Worker {
 
     fn backfill(&mut self) {
         // Bump to re-derive stored rows after `classify` or `thumbnail_of` change.
-        const VERSION: &str = "5";
+        const VERSION: &str = "6";
         if self.archive.meta("derived").ok().flatten().as_deref() == Some(VERSION) {
             return;
         }
@@ -1006,7 +1006,7 @@ impl Worker {
             let Ok(message) = wa::Message::decode_from_slice(&raw) else {
                 continue;
             };
-            let base = message.get_base_message();
+            let base = base_message(&message);
             let Some(mut content) = classify(base) else {
                 continue;
             };
@@ -1905,7 +1905,7 @@ impl Worker {
             self.canonical(&info.source.sender)
         };
         let push_name = (!info.push_name.is_empty()).then(|| info.push_name.clone());
-        let base = message.get_base_message();
+        let base = base_message(message);
         if let Some(expiration) = base.get_ephemeral_expiration()
             && self
                 .archive
@@ -1955,7 +1955,7 @@ impl Worker {
                 }
                 Some(Type::MESSAGE_EDIT) => {
                     if let Some(edited) = protocol.edited_message.as_option()
-                        && let Some(mut content) = classify(edited.get_base_message())
+                        && let Some(mut content) = classify(edited)
                     {
                         // Preserve downloaded media when updating a caption.
                         if let Ok(Some(existing)) = self.archive.message(&chat, &target)
@@ -2056,7 +2056,7 @@ impl Worker {
             from_me: false,
             timestamp: info.timestamp.timestamp(),
             content: Content::Unsupported {
-                what: "Waiting for this message. Open WhatsApp on your phone".to_owned(),
+                what: crate::model::unsupported::UNDECRYPTED.to_owned(),
             },
             status: Delivery::None,
             delivered_at: None,
@@ -2164,15 +2164,13 @@ impl Worker {
             .quoted_message
             .as_option()
             .map(|quoted| {
-                let base = quoted.get_base_message();
                 (
-                    classify(base)
-                        .map(|content| content.summary())
-                        .unwrap_or_default(),
-                    self.mentions_of(&mentioned_of(base)),
+                    classify(quoted)
+                        .map_or_else(Content::generic_summary, |content| content.summary()),
+                    self.mentions_of(&mentioned_of(base_message(quoted))),
                 )
             })
-            .unwrap_or_default();
+            .unwrap_or_else(|| (Content::generic_summary(), Vec::new()));
         // Recover quote mentions from `@user` tokens when metadata is missing.
         let summary = self.pn_tokens(&summary);
         let mentions = if listed.is_empty() {
@@ -3226,7 +3224,7 @@ impl Worker {
             });
             return;
         };
-        let base = message.get_base_message().clone();
+        let base = base_message(&message).clone();
         let (downloadable, mime, file_name): (Box<dyn Downloadable>, String, Option<String>) =
             if let Some(image) = base.image_message.as_option() {
                 (
@@ -4079,7 +4077,7 @@ impl Worker {
 // --- free helpers ----------------------------------------------------------
 
 fn outgoing_forward(original: &wa::Message, expiration: Option<u32>) -> (wa::Message, Option<u32>) {
-    let mut message = original.get_base_message().prepare_for_forward();
+    let mut message = base_message(original).prepare_for_forward();
     if let Some(mut context) = context_of(&message).cloned() {
         // A forward belongs to the destination chat. The library retains the
         // source timer, including when the destination has no timer at all.

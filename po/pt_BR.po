@@ -6,7 +6,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: zaptide\n"
 "Report-Msgid-Bugs-To: https://github.com/luminusOS/zaptide/issues\n"
-"POT-Creation-Date: 2026-11-04 11:45-0300\n"
+"POT-Creation-Date: 2026-11-04 11:56-0300\n"
 "PO-Revision-Date: 2026-10-13 17:25-0300\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -201,7 +201,7 @@ msgstr "Realizada"
 msgid "Incoming"
 msgstr "Recebida"
 
-#: src/application/calls/window.rs:24
+#: src/application/calls/window.rs:24 src/model/mod.rs:629
 msgid "Call"
 msgstr "Chamada"
 
@@ -270,7 +270,8 @@ msgstr "Compartilhar um contato"
 msgid "Emoji"
 msgstr "Emoji"
 
-#: src/application/composer.rs:387 src/native_media_widgets/sticker.rs:12
+#: src/application/composer.rs:387 src/model/mod.rs:473
+#: src/native_media_widgets/sticker.rs:12
 #: src/native_media_widgets/sticker.rs:21
 #: src/native_media_widgets/sticker.rs:23
 #: src/native_media_widgets/sticker.rs:156
@@ -1246,6 +1247,111 @@ msgstr "Falha na chamada de vídeo"
 msgid "%1$s · %2$s"
 msgstr "%1$s · %2$s"
 
+#: src/model/mod.rs:446
+msgid "Photo"
+msgstr "Foto"
+
+#: src/model/mod.rs:449
+msgid "GIF"
+msgstr "GIF"
+
+#: src/model/mod.rs:451
+msgid "Video"
+msgstr "Vídeo"
+
+#: src/model/mod.rs:461
+msgid "Voice message"
+msgstr "Mensagem de voz"
+
+#: src/model/mod.rs:463
+msgid "Audio"
+msgstr "Áudio"
+
+#: src/model/mod.rs:471
+#, rust-format
+msgid "Document: {name}"
+msgstr "Documento: {name}"
+
+#: src/model/mod.rs:475
+#, rust-format
+msgid "Location: {name}"
+msgstr "Localização: {name}"
+
+#: src/model/mod.rs:476
+msgid "Location"
+msgstr "Localização"
+
+#: src/model/mod.rs:479
+#, rust-format
+msgid "Contact: {name}"
+msgstr "Contato: {name}"
+
+#: src/model/mod.rs:482
+#, rust-format
+msgid "Poll: {question}"
+msgstr "Enquete: {question}"
+
+#: src/model/mod.rs:486
+msgid "Buttons"
+msgstr "Botões"
+
+#: src/model/mod.rs:490
+#, rust-format
+msgid "List: {title}"
+msgstr "Lista: {title}"
+
+#: src/model/mod.rs:491
+msgid "List"
+msgstr "Lista"
+
+#: src/model/mod.rs:502
+msgid "This message was deleted"
+msgstr "Esta mensagem foi apagada"
+
+#: src/model/mod.rs:510
+msgid "Message"
+msgstr "Mensagem"
+
+#: src/model/mod.rs:628
+msgid "Animated sticker"
+msgstr "Figurinha animada"
+
+#: src/model/mod.rs:630
+msgid "Event"
+msgstr "Evento"
+
+#: src/model/mod.rs:631
+msgid "Group invitation"
+msgstr "Convite de grupo"
+
+#: src/model/mod.rs:632
+msgid "Interactive message"
+msgstr "Mensagem interativa"
+
+#: src/model/mod.rs:633
+msgid "List message"
+msgstr "Mensagem de lista"
+
+#: src/model/mod.rs:634
+msgid "Payment"
+msgstr "Pagamento"
+
+#: src/model/mod.rs:635
+msgid "Product"
+msgstr "Produto"
+
+#: src/model/mod.rs:636
+msgid "Sticker pack"
+msgstr "Pacote de figurinhas"
+
+#: src/model/mod.rs:638
+msgid "Waiting for this message. Open WhatsApp on your phone"
+msgstr "Aguardando esta mensagem. Abra o WhatsApp no celular"
+
+#: src/model/mod.rs:640
+msgid "Unsupported message"
+msgstr "Mensagem não compatível"
+
 #: src/native_emoji.rs:147
 msgid "Search emoji"
 msgstr "Buscar emoji"
@@ -1371,11 +1477,15 @@ msgstr "Abra com outro aplicativo"
 msgid "Open in Another App"
 msgstr "Abrir em outro aplicativo"
 
-#: src/native_media_widgets/widget.rs:388
+#: src/native_media_widgets/widget.rs:366
+msgid "This message type cannot be displayed"
+msgstr "Este tipo de mensagem não pode ser exibido"
+
+#: src/native_media_widgets/widget.rs:389
 msgid "Image preview"
 msgstr "Pré-visualização da imagem"
 
-#: src/native_media_widgets/widget.rs:400
+#: src/native_media_widgets/widget.rs:401
 msgid "Open or download attachment"
 msgstr "Abrir ou baixar o anexo"
 
@@ -1434,14 +1544,8 @@ msgstr "1 ano"
 msgid "Custom ({} days)"
 msgstr "Personalizado ({} dias)"
 
-#~ msgid "Photo"
-#~ msgstr "Foto"
+#~ msgid "Actual Size"
+#~ msgstr "Tamanho real"
 
 #~ msgid "Pause"
 #~ msgstr "Pausar"
-
-#~ msgid "Video"
-#~ msgstr "Vídeo"
-
-#~ msgid "Actual Size"
-#~ msgstr "Tamanho real"

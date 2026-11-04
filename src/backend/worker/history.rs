@@ -126,7 +126,7 @@ pub(super) fn parse_conversation(conversation: wa::Conversation) -> ParsedChat {
         let from_me = key.from_me.unwrap_or(false);
         let timestamp = info.message_timestamp.unwrap_or(0) as i64;
         newest = newest.max(timestamp);
-        let base = message.get_base_message();
+        let base = base_message(message);
         if let Some(protocol) = base.protocol_message.as_option() {
             if protocol.r#type == Some(wa::message::protocol_message::Type::REVOKE)
                 && let Some(target) = protocol.key.as_option().and_then(|key| key.id.clone())
@@ -236,9 +236,8 @@ pub(super) fn parse_conversation(conversation: wa::Conversation) -> ParsedChat {
                 summary: context
                     .quoted_message
                     .as_option()
-                    .and_then(|quoted| classify(quoted.get_base_message()))
-                    .map(|content| content.summary())
-                    .unwrap_or_default(),
+                    .and_then(classify)
+                    .map_or_else(Content::generic_summary, |content| content.summary()),
             })
         });
         let reactions = info

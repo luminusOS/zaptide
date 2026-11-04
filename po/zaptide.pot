@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: zaptide\n"
 "Report-Msgid-Bugs-To: https://github.com/luminusOS/zaptide/issues\n"
-"POT-Creation-Date: 2026-11-04 11:45-0300\n"
+"POT-Creation-Date: 2026-11-04 11:56-0300\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -202,7 +202,7 @@ msgstr ""
 msgid "Incoming"
 msgstr ""
 
-#: src/application/calls/window.rs:24
+#: src/application/calls/window.rs:24 src/model/mod.rs:629
 msgid "Call"
 msgstr ""
 
@@ -271,7 +271,8 @@ msgstr ""
 msgid "Emoji"
 msgstr ""
 
-#: src/application/composer.rs:387 src/native_media_widgets/sticker.rs:12
+#: src/application/composer.rs:387 src/model/mod.rs:473
+#: src/native_media_widgets/sticker.rs:12
 #: src/native_media_widgets/sticker.rs:21
 #: src/native_media_widgets/sticker.rs:23
 #: src/native_media_widgets/sticker.rs:156
@@ -1239,6 +1240,111 @@ msgstr ""
 msgid "%1$s · %2$s"
 msgstr ""
 
+#: src/model/mod.rs:446
+msgid "Photo"
+msgstr ""
+
+#: src/model/mod.rs:449
+msgid "GIF"
+msgstr ""
+
+#: src/model/mod.rs:451
+msgid "Video"
+msgstr ""
+
+#: src/model/mod.rs:461
+msgid "Voice message"
+msgstr ""
+
+#: src/model/mod.rs:463
+msgid "Audio"
+msgstr ""
+
+#: src/model/mod.rs:471
+#, rust-format
+msgid "Document: {name}"
+msgstr ""
+
+#: src/model/mod.rs:475
+#, rust-format
+msgid "Location: {name}"
+msgstr ""
+
+#: src/model/mod.rs:476
+msgid "Location"
+msgstr ""
+
+#: src/model/mod.rs:479
+#, rust-format
+msgid "Contact: {name}"
+msgstr ""
+
+#: src/model/mod.rs:482
+#, rust-format
+msgid "Poll: {question}"
+msgstr ""
+
+#: src/model/mod.rs:486
+msgid "Buttons"
+msgstr ""
+
+#: src/model/mod.rs:490
+#, rust-format
+msgid "List: {title}"
+msgstr ""
+
+#: src/model/mod.rs:491
+msgid "List"
+msgstr ""
+
+#: src/model/mod.rs:502
+msgid "This message was deleted"
+msgstr ""
+
+#: src/model/mod.rs:510
+msgid "Message"
+msgstr ""
+
+#: src/model/mod.rs:628
+msgid "Animated sticker"
+msgstr ""
+
+#: src/model/mod.rs:630
+msgid "Event"
+msgstr ""
+
+#: src/model/mod.rs:631
+msgid "Group invitation"
+msgstr ""
+
+#: src/model/mod.rs:632
+msgid "Interactive message"
+msgstr ""
+
+#: src/model/mod.rs:633
+msgid "List message"
+msgstr ""
+
+#: src/model/mod.rs:634
+msgid "Payment"
+msgstr ""
+
+#: src/model/mod.rs:635
+msgid "Product"
+msgstr ""
+
+#: src/model/mod.rs:636
+msgid "Sticker pack"
+msgstr ""
+
+#: src/model/mod.rs:638
+msgid "Waiting for this message. Open WhatsApp on your phone"
+msgstr ""
+
+#: src/model/mod.rs:640
+msgid "Unsupported message"
+msgstr ""
+
 #: src/native_emoji.rs:147
 msgid "Search emoji"
 msgstr ""
@@ -1364,11 +1470,15 @@ msgstr ""
 msgid "Open in Another App"
 msgstr ""
 
-#: src/native_media_widgets/widget.rs:388
+#: src/native_media_widgets/widget.rs:366
+msgid "This message type cannot be displayed"
+msgstr ""
+
+#: src/native_media_widgets/widget.rs:389
 msgid "Image preview"
 msgstr ""
 
-#: src/native_media_widgets/widget.rs:400
+#: src/native_media_widgets/widget.rs:401
 msgid "Open or download attachment"
 msgstr ""
 

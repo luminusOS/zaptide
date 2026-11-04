@@ -24,6 +24,7 @@ src/backend/worker/calls.rs
 src/backend/worker/calls/runtime.rs
 src/calls/mod.rs
 src/model/call.rs
+src/model/mod.rs
 src/native_emoji.rs
 src/native_media_widgets/audio.rs
 src/native_media_widgets/contacts.rs
