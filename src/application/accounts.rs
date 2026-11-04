@@ -503,7 +503,11 @@ impl NativeApplication {
         self.leave_screen();
         std::mem::swap(&mut self.backend, &mut session.backend);
         // The account leaving the screen goes offline; `update` reports the new one.
-        if let Some(backend) = &session.backend {
+        // One in a call stays online until the call ends: `call_changed` then
+        // takes it offline.
+        if !self.calls.is_busy_for(self.active_account)
+            && let Some(backend) = &session.backend
+        {
             backend.send(crate::backend::Command::SetOnline(false));
         }
         self.presence_watch.reported = None;

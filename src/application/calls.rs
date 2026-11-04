@@ -425,6 +425,15 @@ struct LiveCall {
 }
 
 impl LiveCall {
+    /// Calling, connecting or talking. A ringing call does not count, so the
+    /// phone keeps its notification until it is answered here.
+    fn holds_presence(&self) -> bool {
+        matches!(
+            self.session.phase,
+            CallPhase::Calling | CallPhase::Connecting | CallPhase::Connected { .. }
+        )
+    }
+
     fn stop_timer(&mut self) {
         if let Some(tick) = self.tick.take() {
             tick.remove();
@@ -555,6 +564,19 @@ impl CallsUi {
 
     pub(super) fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    pub(super) fn holds_presence(&self, account: AccountId) -> bool {
+        self.live
+            .as_ref()
+            .is_some_and(|live| live.account == account && live.holds_presence())
+    }
+
+    /// Whether `account` has a call that has not finished, ringing included.
+    pub(super) fn is_busy_for(&self, account: AccountId) -> bool {
+        self.live
+            .as_ref()
+            .is_some_and(|live| live.account == account && !live.session.phase.is_finished())
     }
 
     pub(super) fn in_call(&self) -> bool {
@@ -826,6 +848,12 @@ impl NativeApplication {
         session: CallSession,
         sender: &ComponentSender<Self>,
     ) {
+        if session.phase.is_finished()
+            && account != self.active_account
+            && let Some(backend) = self.call_backend(account)
+        {
+            backend.send(crate::backend::Command::SetOnline(false));
+        }
         if let Some((abandoned, id)) = &self.calls.abandoned
             && *abandoned == account
         {
