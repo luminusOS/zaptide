@@ -6,7 +6,8 @@ use crate::calls::ringtone::{Ring, Ringer};
 use crate::calls::{RgbaFrame, VideoSlots};
 use crate::i18n::gettext;
 use crate::model::call::{
-    CallEntry, CallKind, CallPhase, CallSession, call_summary, unseen_missed, with_detail,
+    CallEntry, CallKind, CallPhase, CallSession, call_summary, direction_label, unseen_missed,
+    with_detail,
 };
 use crate::native_notifications::{CallBanner, CallChoice};
 use std::sync::Arc;
@@ -20,7 +21,7 @@ mod waiting;
 mod window;
 
 pub use screen::CallAction;
-use screen::{Screen, incoming_label, kind_label, screen, when};
+use screen::{Screen, incoming_label, screen, starts_day, when};
 use waiting::Waiting;
 use window::CallWindow;
 
@@ -269,16 +270,28 @@ impl CallsUi {
         while let Some(row) = self.list.first_child() {
             self.list.remove(&row);
         }
+        let days: Vec<i64> = self.entries.iter().map(|entry| entry.timestamp).collect();
+        self.list.set_header_func(move |row, before| {
+            let index = usize::try_from(row.index()).ok();
+            let timestamp = index.and_then(|index| days.get(index)).copied();
+            let previous = before
+                .and_then(|before| usize::try_from(before.index()).ok())
+                .and_then(|index| days.get(index))
+                .copied();
+            match timestamp {
+                Some(timestamp) if starts_day(previous, timestamp) => {
+                    row.set_header(Some(&day_heading(timestamp)));
+                }
+                _ => row.set_header(None::<&gtk::Widget>),
+            }
+        });
         for entry in &self.entries {
             let row = adw::ActionRow::new();
             row.set_title(&gtk::glib::markup_escape_text(&chat_label(
                 chats,
                 &entry.chat,
             )));
-            row.set_subtitle(&with_detail(
-                &kind_label(entry.kind()),
-                &when(entry.timestamp),
-            ));
+            row.set_subtitle(&entry.history_line(&crate::util::clock(entry.timestamp)));
             let avatar = adw::Avatar::new(40, Some(&chat_label(chats, &entry.chat)), true);
             avatar.set_custom_image(avatar_for(avatars, &entry.chat).as_ref());
             row.add_prefix(&avatar);
@@ -326,7 +339,10 @@ impl CallsUi {
             entry.outcome,
             entry.seconds,
         ));
-        self.detail.moment.set_label(&when(entry.timestamp));
+        self.detail.moment.set_label(&with_detail(
+            &direction_label(entry.outgoing, entry.video),
+            &when(entry.timestamp),
+        ));
         self.detail.call_back.set_sensitive(!busy);
         self.detail.stack.set_visible_child_name("detail");
     }
@@ -360,6 +376,17 @@ fn banners_hidden() -> bool {
     gtk::gio::SettingsSchemaSource::default()
         .and_then(|source| source.lookup(SCHEMA, true))
         .is_some_and(|_| !gtk::gio::Settings::new(SCHEMA).boolean("show-banners"))
+}
+
+fn day_heading(timestamp: i64) -> gtk::Label {
+    let heading = gtk::Label::new(Some(&crate::util::day_label(timestamp)));
+    heading.add_css_class("heading");
+    heading.set_xalign(0.0);
+    heading.set_margin_top(12);
+    heading.set_margin_bottom(4);
+    heading.set_margin_start(12);
+    heading.set_margin_end(12);
+    heading
 }
 
 fn chat_label(chats: &[crate::model::Chat], id: &str) -> String {
