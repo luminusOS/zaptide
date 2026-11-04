@@ -430,6 +430,8 @@ impl NativeApplication {
             return;
         }
         self.notifications.clear_account(id);
+        self.calls.forget_account(id);
+        self.sync_ring();
         let backend = self.accounts.remove(&id).and_then(|mut session| {
             if let Some(drain) = &session.drain {
                 drain.close();

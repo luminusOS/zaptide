@@ -2724,6 +2724,7 @@ impl NativeApplication {
             }
         }
         self.portals.cancel_all();
+        self.calls.stop_ring();
         if self.save_settings().is_err() {
             self.status = gettext("Could not save preferences");
         }

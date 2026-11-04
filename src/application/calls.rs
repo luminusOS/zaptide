@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::account::AccountId;
+use crate::calls::ringtone::{Ring, Ringer};
 use crate::calls::{RgbaFrame, VideoSlots};
 use crate::i18n::gettext;
 use crate::model::call::{
@@ -105,6 +106,7 @@ pub(super) struct CallsUi {
     selected: Option<usize>,
     live: Option<LiveCall>,
     slots: Option<(AccountId, Arc<VideoSlots>)>,
+    ringer: Ringer,
     /// The account whose call was closed here and has not reported its end yet.
     abandoned: Option<(AccountId, String)>,
 }
@@ -190,6 +192,7 @@ impl CallsUi {
             selected: None,
             live: None,
             slots: None,
+            ringer: Ringer::new(),
             abandoned: None,
         }
     }
@@ -223,6 +226,20 @@ impl CallsUi {
 
     pub(super) fn in_call(&self) -> bool {
         self.live.as_ref().is_some_and(LiveCall::is_active)
+    }
+
+    pub(super) fn stop_ring(&mut self) {
+        self.ringer.stop();
+    }
+
+    pub(super) fn forget_account(&mut self, account: AccountId) {
+        if self
+            .live
+            .as_ref()
+            .is_some_and(|live| live.account == account)
+        {
+            self.live = None;
+        }
     }
 
     pub(super) fn reset(&mut self) {
@@ -301,6 +318,25 @@ impl CallsUi {
         self.detail.call_back.set_sensitive(!busy);
         self.detail.stack.set_visible_child_name("detail");
     }
+}
+
+/// The ring a call in `phase` makes. `incoming_allowed` is asked only for an
+/// incoming call, the one sound the person may have turned off.
+fn ring_for(session: &CallSession, incoming_allowed: impl FnOnce() -> bool) -> Option<Ring> {
+    match session.phase {
+        CallPhase::Ringing => incoming_allowed().then_some(Ring::Incoming),
+        CallPhase::Calling => Some(Ring::Outgoing),
+        _ => None,
+    }
+}
+
+/// Whether the desktop is set not to show banners, its do-not-disturb switch.
+fn banners_hidden() -> bool {
+    use gtk::gio::prelude::*;
+    const SCHEMA: &str = "org.gnome.desktop.notifications";
+    gtk::gio::SettingsSchemaSource::default()
+        .and_then(|source| source.lookup(SCHEMA, true))
+        .is_some_and(|_| !gtk::gio::Settings::new(SCHEMA).boolean("show-banners"))
 }
 
 fn chat_label(chats: &[crate::model::Chat], id: &str) -> String {
@@ -483,6 +519,27 @@ impl NativeApplication {
         session: CallSession,
         sender: &ComponentSender<Self>,
     ) {
+        self.apply_call_change(account, session, sender);
+        self.sync_ring();
+    }
+
+    /// Rings while the call in the window is incoming or being placed, and
+    /// only for an incoming call when the person has not asked for quiet.
+    pub(super) fn sync_ring(&mut self) {
+        let tone = self.calls.live.as_ref().and_then(|live| {
+            ring_for(&live.session, || {
+                self.settings.notifications && !banners_hidden()
+            })
+        });
+        self.calls.ringer.set(tone);
+    }
+
+    fn apply_call_change(
+        &mut self,
+        account: AccountId,
+        session: CallSession,
+        sender: &ComponentSender<Self>,
+    ) {
         if session.phase.is_finished()
             && account != self.active_account
             && let Some(backend) = self.call_backend(account)
@@ -625,6 +682,11 @@ impl NativeApplication {
     }
 
     pub(super) fn call_action(&mut self, action: CallAction, sender: &ComponentSender<Self>) {
+        self.run_call_action(action, sender);
+        self.sync_ring();
+    }
+
+    fn run_call_action(&mut self, action: CallAction, sender: &ComponentSender<Self>) {
         let Some(live) = &self.calls.live else {
             return;
         };

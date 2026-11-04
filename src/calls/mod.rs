@@ -9,6 +9,7 @@ use gstreamer as gst;
 use gstreamer::prelude::*;
 
 pub mod audio;
+pub mod ringtone;
 pub mod video;
 
 /// Why call media could not start, in words fit for the window.

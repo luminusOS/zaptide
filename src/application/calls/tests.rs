@@ -1,5 +1,6 @@
 use super::screen::{Screen, Tone};
 use super::*;
+use crate::calls::ringtone::Ring;
 use crate::model::call::{CallDirection, CallOutcome, CallSignal};
 
 pub(super) fn session(direction: CallDirection, video: bool) -> CallSession {
@@ -166,4 +167,31 @@ fn frames_with_the_wrong_size_never_become_pictures() {
         data: vec![0; 3],
     };
     assert!(texture(frame).is_none());
+}
+
+#[test]
+fn a_ringing_call_rings_unless_quiet_and_a_call_being_placed_always_does() {
+    let incoming = session(CallDirection::Incoming, false);
+    assert_eq!(ring_for(&incoming, || true), Some(Ring::Incoming));
+    assert_eq!(ring_for(&incoming, || false), None);
+    let outgoing = session(CallDirection::Outgoing, false);
+    assert_eq!(ring_for(&outgoing, || false), Some(Ring::Outgoing));
+}
+
+#[test]
+fn the_ring_stops_once_the_call_is_answered_or_over() {
+    let never = || -> bool { unreachable!("only a ringing call asks") };
+    let mut call = session(CallDirection::Incoming, false);
+    call.apply(CallSignal::LocalAnswered, 100);
+    assert_eq!(ring_for(&call, never), None);
+    call.apply(CallSignal::MediaUp, 100);
+    assert_eq!(ring_for(&call, never), None);
+    call.apply(CallSignal::LocalHangup, 101);
+    assert_eq!(ring_for(&call, never), None);
+    let mut outgoing = session(CallDirection::Outgoing, false);
+    outgoing.apply(CallSignal::PeerAnswered, 100);
+    assert_eq!(ring_for(&outgoing, never), None);
+    let mut failed = session(CallDirection::Outgoing, false);
+    failed.apply(CallSignal::MediaFailed, 100);
+    assert_eq!(ring_for(&failed, never), None);
 }
