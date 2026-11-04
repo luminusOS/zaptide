@@ -16,6 +16,8 @@ pub(super) struct PresenceWish {
 }
 
 impl Worker {
+    /// The announcer applies this asynchronously and coalesces wishes made
+    /// before it ran, so only the latest one is sent.
     pub(super) fn set_online(&mut self, online: bool) {
         self.presence_wish
             .send_if_modified(|wish| std::mem::replace(&mut wish.online, online) != online);
@@ -71,7 +73,6 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
 
-    /// Runs the announcer and records what it sends.
     fn announcer(
         succeeds: bool,
     ) -> (

@@ -11,7 +11,8 @@ use std::time::{Duration, Instant};
 pub(super) struct PresenceWatch {
     /// The last input event in the main window.
     last_input: Rc<Cell<Instant>>,
-    /// Set while only inactivity keeps ZapTide offline; the next input reports again.
+    /// Set while only inactivity keeps ZapTide offline. Pointer motion is
+    /// frequent, so only the first input after idling may wake `update`.
     waiting_for_input: Rc<Cell<bool>>,
     /// Whether the window had focus on an unlocked screen at the last report.
     looking: bool,
@@ -36,7 +37,8 @@ impl Default for PresenceWatch {
     }
 }
 
-/// Input events that show that a person uses the window.
+/// `MotionNotify` counts, `EnterNotify` does not: GTK synthesizes crossing
+/// events when the layout changes under a still pointer.
 fn shows_use(event: gtk::gdk::EventType) -> bool {
     use gtk::gdk::EventType;
     matches!(
@@ -138,6 +140,8 @@ impl NativeApplication {
     /// Records input in the main window and follows the screensaver.
     pub(super) fn watch_presence(&self, sender: &ComponentSender<Self>) {
         let input = gtk::EventControllerLegacy::new();
+        // On the window in the Capture phase, so input counts wherever it lands
+        // and no widget can stop it first.
         input.set_propagation_phase(gtk::PropagationPhase::Capture);
         let last_input = self.presence_watch.last_input.clone();
         let waiting = self.presence_watch.waiting_for_input.clone();
