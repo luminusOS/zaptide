@@ -328,22 +328,24 @@ pub(super) fn reaction_bar(
         .spacing(2)
         .css_classes(["zaptide-reactions"])
         .build();
-    for emoji in ["👍", "❤️", "😂", "😮", "😢", "🙏"] {
-        let chosen = current.as_deref() == Some(emoji);
+    for emoji in reaction_drawer::current_quick() {
+        let chosen = current
+            .as_deref()
+            .is_some_and(|current| reaction_drawer::same_emoji(current, &emoji));
         let button = gtk::Button::builder()
-            .label(emoji)
-            .tooltip_text(if chosen { "Remove reaction" } else { emoji })
+            .label(&emoji)
+            .tooltip_text(if chosen {
+                gettext("Remove reaction")
+            } else {
+                emoji.clone()
+            })
             .css_classes(["flat", "circular", "zaptide-reaction"])
             .build();
         if chosen {
             button.add_css_class("chosen");
         }
         let (menu, sender) = (menu.clone(), sender.clone());
-        let emoji = if chosen {
-            String::new()
-        } else {
-            emoji.to_owned()
-        };
+        let emoji = if chosen { String::new() } else { emoji };
         button.connect_clicked(move |_| {
             menu.popdown();
             sender.input(Input::ReactSelected(emoji.clone()));

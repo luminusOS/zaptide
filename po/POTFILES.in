@@ -15,6 +15,7 @@ src/application/dispatch.rs
 src/application/helpers.rs
 src/application/link_page.rs
 src/application/profile_dialog.rs
+src/application/reaction_drawer.rs
 src/application/rows.rs
 src/application.rs
 src/application/sidebar.rs
