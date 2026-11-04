@@ -724,9 +724,11 @@ pub enum Input {
     Tray(crate::native_tray::TrayAction),
     /// The window was shown or hidden outside the tray; `update` resyncs it.
     WindowVisibilityChanged,
-    /// Focus, the screensaver, use after inactivity, or a scheduled presence
-    /// check can change your online status; `update` reports it.
+    /// Focus, the screensaver, or use after inactivity can change your online
+    /// status; `update` reports it.
     PresenceChanged,
+    /// The wake-up scheduled for this time arrived.
+    PresenceDue(std::time::Instant),
     /// Opens the chat with a contact picked in New Chat, creating it if new.
     StartChat {
         id: String,
