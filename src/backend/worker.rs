@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
 use whatsapp_rust::download::MediaType;
+use whatsapp_rust::features::PresencePolicy;
 use whatsapp_rust::features::message_edit::{
     SecretEncKind, decrypt_secret_encrypted_with_fallback, extract_secret_encrypted,
 };
@@ -43,6 +44,7 @@ mod history;
 mod outbound;
 mod poll_history;
 mod polls;
+mod presence;
 mod profile;
 mod protocol;
 mod reactions;
@@ -555,6 +557,7 @@ pub async fn run(
         pending_revokes: HashMap::new(),
         next_revoke_attempt: 0,
         poll_sending: HashSet::new(),
+        presence_wish: tokio::sync::watch::Sender::new(Default::default()),
     };
     worker.load_state();
     worker.recover_interrupted_answers();
@@ -700,6 +703,8 @@ struct Worker {
     pending_revokes: HashMap<(ChatId, String), PendingRevoke>,
     next_revoke_attempt: u64,
     poll_sending: HashSet<(ChatId, String)>,
+    /// What the window wants announced as this account's presence.
+    presence_wish: tokio::sync::watch::Sender<presence::PresenceWish>,
     dirs: AppDirs,
     events: std::sync::mpsc::Sender<Event>,
     commands: mpsc::UnboundedSender<Command>,
@@ -1063,6 +1068,8 @@ impl Worker {
         let sender = self.wa_sender.clone();
         let bot = Bot::builder()
             .with_backend(store)
+            // The window owns presence; see `worker::presence`.
+            .with_presence_policy(PresencePolicy::Manual)
             // WhatsApp reads the linked-device name, version, and icon at pairing.
             .with_device_props(
                 DevicePropsOverride::new()
@@ -1076,6 +1083,7 @@ impl Worker {
         match bot {
             Ok(bot) => {
                 let handle = bot.spawn();
+                self.spawn_presence(handle.client());
                 self.client = Some(handle.client());
                 self.handle = Some(handle);
                 self.set_status(LinkStatus::Connecting);

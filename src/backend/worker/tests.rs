@@ -1870,6 +1870,7 @@ pub(in crate::backend::worker) fn worker() -> (
         pending_revokes: HashMap::new(),
         next_revoke_attempt: 0,
         poll_sending: HashSet::new(),
+        presence_wish: tokio::sync::watch::Sender::new(Default::default()),
     };
     (worker, events_rx, inbox, test_wa_events)
 }

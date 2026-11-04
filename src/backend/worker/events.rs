@@ -74,14 +74,12 @@ impl Worker {
                 self.poll_history.reconnect(Instant::now());
                 let _ = self.archive.retry_poll_votes();
                 self.pump_poll_votes();
+                self.renew_presence();
                 if let Some(client) = self.client.clone() {
                     let me = self.me_pn.clone().and_then(|pn| Self::jid_of(&pn));
                     let commands = self.commands.clone();
                     let session_generation = self.session_generation;
                     tokio::spawn(async move {
-                        if let Err(error) = client.presence().set_available().await {
-                            log::debug!("presence not announced: {error}");
-                        }
                         // whatsapp-rust also enforces the account privacy setting.
                         match client.fetch_privacy_settings().await {
                             Ok(settings) => {
@@ -344,6 +342,7 @@ impl Worker {
                 self.me_name = Some(update.new_name.clone());
                 let _ = self.archive.set_meta("me_name", &update.new_name);
                 self.emit_profile();
+                self.renew_presence();
             }
             E::OfflineSyncCompleted(_) => self.emit_chats(),
             _ => {}

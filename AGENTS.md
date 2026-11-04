@@ -37,6 +37,11 @@ protocol. These notes are for coding agents and new contributors.
   `Bot`, the message archive, downloads, and profile pictures. The two
   sides talk only through `Command` (interface to runtime) and `Event`
   (runtime to interface); every event wakes the window through `Waker`.
+- The window owns the account's online presence (`src/application/presence.rs`,
+  `backend/worker/presence.rs`): WhatsApp holds the phone's notifications while
+  ZapTide is online. The bot uses `PresencePolicy::Manual`; reverting to
+  Automatic announces "available" on every connect and silently breaks phone
+  notifications.
 - `src/archive.rs` is the SQLite store of chats, messages, contacts, and
   privacy-id mappings. WhatsApp replays history once, at link time, so the
   archive is the only copy. It keeps each message's raw protobuf because

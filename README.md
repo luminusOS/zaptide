@@ -25,6 +25,8 @@ without a browser engine. Messages stay in a local, encrypted archive.
 - Multiple accounts with separate history and settings.
 - Chat search, starred messages and link previews.
 - Desktop notifications and synced read status.
+- Phone notifications while you do not use ZapTide: ZapTide goes offline soon
+  after you leave it or stop using it (Preferences, Notifications).
 - Light, dark and custom themes.
 
 ## Install

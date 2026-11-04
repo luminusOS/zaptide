@@ -60,6 +60,12 @@ pub struct Settings {
     pub notifications: bool,
     /// Show the sender and message text in notifications.
     pub notification_previews: bool,
+    /// Seconds after you leave ZapTide (another app, a hidden window or a locked
+    /// screen) before WhatsApp shows you as offline; 0 is never. The phone shows
+    /// no notifications while you are online.
+    pub offline_after_leaving_seconds: u32,
+    /// Seconds without input in ZapTide before WhatsApp shows you as offline; 0 is never.
+    pub offline_after_inactive_seconds: u32,
     /// Prefer address-book names over public profile names.
     pub names_from_contacts: bool,
     /// Voice and audio playback speed multiplier.
@@ -95,6 +101,8 @@ impl Default for Settings {
             keep_running_in_background: true,
             notifications: true,
             notification_previews: true,
+            offline_after_leaving_seconds: 10,
+            offline_after_inactive_seconds: 300,
             names_from_contacts: true,
             save_contacts_to_phone: true,
             voice_speed: 1.0,
@@ -203,6 +211,8 @@ mod tests {
             zoom: 1.25,
             enter_sends: false,
             voice_speed: 1.5,
+            offline_after_leaving_seconds: 0,
+            offline_after_inactive_seconds: 900,
             ..Settings::default()
         };
         settings.save(&path).expect("saves");

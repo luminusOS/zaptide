@@ -466,6 +466,8 @@ impl NativeApplication {
                 }
             }
             Input::WindowVisibilityChanged => {}
+            Input::PresenceChanged => {}
+            Input::PresenceDue(due) => self.presence_watch.woke(due),
             Input::TogglePhoneLinking => {
                 // Leaving a requested or shown code goes back to the QR code.
                 if self.pairing_requested() || self.pair_code().is_some() {

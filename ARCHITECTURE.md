@@ -46,6 +46,13 @@ in `application/accounts.rs` and updated from their own backend.
 | `po/` | Translations. |
 | `tests/` | Integration tests. |
 
+## Presence
+
+WhatsApp holds the phone's notifications while a linked device is online, so the window decides when
+ZapTide is online (`src/application/presence.rs`) and sends `Command::SetOnline`; the worker announces it
+(`src/backend/worker/presence.rs`). The bot is built with `PresencePolicy::Manual`. Reverting to Automatic
+announces "available" on every connect and silently breaks phone notifications.
+
 ## Styling
 
 Static CSS is in `data/style.css` and `data/theme-defaults.css` and is embedded at build time by

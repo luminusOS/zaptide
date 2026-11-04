@@ -27,6 +27,8 @@ pub enum SettingsField {
     ChatLockCodeHash,
     Notifications,
     NotificationPreviews,
+    OfflineAfterLeavingSeconds,
+    OfflineAfterInactiveSeconds,
     KeepRunningInBackground,
     VoiceSpeed,
 }
@@ -72,6 +74,8 @@ pub struct PrivacyPreferences {
 pub struct NotificationPreferences {
     pub enabled: bool,
     pub previews: bool,
+    pub offline_after_leaving_seconds: u32,
+    pub offline_after_inactive_seconds: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -113,6 +117,8 @@ impl From<&Settings> for NativePreferences {
             notifications: NotificationPreferences {
                 enabled: settings.notifications,
                 previews: settings.notification_previews,
+                offline_after_leaving_seconds: settings.offline_after_leaving_seconds,
+                offline_after_inactive_seconds: settings.offline_after_inactive_seconds,
             },
             storage: StoragePreferences {
                 auto_download: settings.auto_download,
@@ -148,6 +154,8 @@ pub enum PreferenceChange {
     SetChatLockCode(Option<String>),
     SetNotifications(bool),
     SetNotificationPreviews(bool),
+    SetOfflineAfterLeavingSeconds(u32),
+    SetOfflineAfterInactiveSeconds(u32),
     SetKeepRunningInBackground(bool),
     SetVoiceSpeed(f32),
 }
@@ -213,6 +221,14 @@ impl std::fmt::Debug for PreferenceChange {
                 .debug_tuple("SetNotificationPreviews")
                 .field(value)
                 .finish(),
+            Change::SetOfflineAfterLeavingSeconds(value) => formatter
+                .debug_tuple("SetOfflineAfterLeavingSeconds")
+                .field(value)
+                .finish(),
+            Change::SetOfflineAfterInactiveSeconds(value) => formatter
+                .debug_tuple("SetOfflineAfterInactiveSeconds")
+                .field(value)
+                .finish(),
             Change::SetKeepRunningInBackground(value) => formatter
                 .debug_tuple("SetKeepRunningInBackground")
                 .field(value)
@@ -244,6 +260,8 @@ impl PreferenceChange {
             Self::SetChatLockCode(_) => SettingsField::ChatLockCodeHash,
             Self::SetNotifications(_) => SettingsField::Notifications,
             Self::SetNotificationPreviews(_) => SettingsField::NotificationPreviews,
+            Self::SetOfflineAfterLeavingSeconds(_) => SettingsField::OfflineAfterLeavingSeconds,
+            Self::SetOfflineAfterInactiveSeconds(_) => SettingsField::OfflineAfterInactiveSeconds,
             Self::SetKeepRunningInBackground(_) => SettingsField::KeepRunningInBackground,
             Self::SetVoiceSpeed(_) => SettingsField::VoiceSpeed,
         }
@@ -460,6 +478,11 @@ impl NativePreferencesDialog {
             change_sink.clone(),
             PreferenceChange::SetNotificationPreviews,
         );
+        add_online_status(
+            &notifications_page,
+            &preferences.notifications,
+            &change_sink,
+        );
 
         let storage_page = libadwaita::PreferencesPage::new();
         storage_page.set_title("Storage");
@@ -602,6 +625,12 @@ fn push_change(
         PreferenceChange::SetVoiceSpeed(value) if ![1.0, 1.5, 2.0].contains(value) => {
             Some(ValidationError::UnsupportedVoiceSpeed)
         }
+        PreferenceChange::SetOfflineAfterLeavingSeconds(value)
+        | PreferenceChange::SetOfflineAfterInactiveSeconds(value)
+            if *value > MAX_OFFLINE_SECONDS =>
+        {
+            Some(ValidationError::OfflineDelayOutOfRange)
+        }
         _ => None,
     };
     if let Some(error) = validation {
@@ -610,6 +639,92 @@ fn push_change(
         changes.borrow_mut().push(change);
     }
     on_change();
+}
+
+fn add_online_status(
+    page: &libadwaita::PreferencesPage,
+    preferences: &NotificationPreferences,
+    change_sink: &PreferenceChangeSink,
+) {
+    use libadwaita::prelude::*;
+    let group = libadwaita::PreferencesGroup::new();
+    group.set_title("Online status");
+    group.set_description(Some(
+        "While ZapTide shows you as online, your phone does not receive notifications.",
+    ));
+    page.add(&group);
+    add_offline_row(
+        &group,
+        (
+            "Go offline when I leave ZapTide",
+            "Switch to another app or lock the screen",
+        ),
+        &[
+            ("After 10 seconds", 10),
+            ("After 1 minute", 60),
+            ("After 5 minutes", 300),
+            ("Never", 0),
+        ],
+        preferences.offline_after_leaving_seconds,
+        change_sink,
+        PreferenceChange::SetOfflineAfterLeavingSeconds,
+    );
+    add_offline_row(
+        &group,
+        (
+            "Go offline when inactive",
+            "No typing, clicks or pointer movement in ZapTide",
+        ),
+        &[
+            ("After 1 minute", 60),
+            ("After 5 minutes", 300),
+            ("After 15 minutes", 900),
+            ("Never", 0),
+        ],
+        preferences.offline_after_inactive_seconds,
+        change_sink,
+        PreferenceChange::SetOfflineAfterInactiveSeconds,
+    );
+}
+
+/// A row that chooses one of `choices`; a value of 0 means never.
+fn add_offline_row(
+    group: &libadwaita::PreferencesGroup,
+    (title, subtitle): (&str, &str),
+    choices: &[(&str, u32)],
+    current: u32,
+    change_sink: &PreferenceChangeSink,
+    change: fn(u32) -> PreferenceChange,
+) {
+    use libadwaita::prelude::*;
+    let row = libadwaita::ComboRow::new();
+    row.set_title(title);
+    row.set_subtitle(subtitle);
+    let (labels, values, selected) = offline_choices(choices, current);
+    let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+    row.set_model(Some(&gtk4::StringList::new(&labels)));
+    row.set_selected(selected as u32);
+    group.add(&row);
+    let sink = change_sink.clone();
+    row.connect_selected_notify(move |row| {
+        if let Some(value) = values.get(row.selected() as usize) {
+            sink.push(change(*value));
+        }
+    });
+}
+
+/// The labels, values and selected index of a row. A value that is not one of
+/// `choices`, such as one from a hand-edited file, stays in force, so the row
+/// lists it first instead of showing another choice.
+fn offline_choices(choices: &[(&str, u32)], current: u32) -> (Vec<String>, Vec<u32>, usize) {
+    let mut labels: Vec<String> = choices.iter().map(|(label, _)| (*label).into()).collect();
+    let mut values: Vec<u32> = choices.iter().map(|(_, value)| *value).collect();
+    let selected = values.iter().position(|value| *value == current);
+    if selected.is_none() {
+        labels.insert(0, format!("Custom ({current} s)"));
+        values.insert(0, current);
+    }
+    (labels, values, selected.unwrap_or(0))
 }
 
 fn add_switch(
@@ -710,6 +825,7 @@ pub enum ValidationError {
     ZoomOutOfRange,
     InvalidCustomThemeFilename,
     UnsupportedVoiceSpeed,
+    OfflineDelayOutOfRange,
 }
 
 impl std::fmt::Display for ValidationError {
@@ -718,12 +834,22 @@ impl std::fmt::Display for ValidationError {
             Self::ZoomOutOfRange => "zoom must be finite and between 0.6 and 2.0",
             Self::InvalidCustomThemeFilename => "custom theme must be a local filename",
             Self::UnsupportedVoiceSpeed => "voice speed must be 1.0, 1.5, or 2.0",
+            Self::OfflineDelayOutOfRange => "offline delay must be at most 24 hours",
         };
         formatter.write_str(message)
     }
 }
 
 impl std::error::Error for ValidationError {}
+
+const MAX_OFFLINE_SECONDS: u32 = 24 * 60 * 60;
+
+fn checked_offline_delay(seconds: u32) -> Result<u32, ValidationError> {
+    if seconds > MAX_OFFLINE_SECONDS {
+        return Err(ValidationError::OfflineDelayOutOfRange);
+    }
+    Ok(seconds)
+}
 
 impl PreferenceChange {
     /// Validate and apply one change. Invalid values leave `settings` untouched.
@@ -762,6 +888,12 @@ impl PreferenceChange {
             Self::SetChatLockCode(value) => settings.set_chat_lock_code(value.as_deref()),
             Self::SetNotifications(value) => settings.notifications = value,
             Self::SetNotificationPreviews(value) => settings.notification_previews = value,
+            Self::SetOfflineAfterLeavingSeconds(value) => {
+                settings.offline_after_leaving_seconds = checked_offline_delay(value)?
+            }
+            Self::SetOfflineAfterInactiveSeconds(value) => {
+                settings.offline_after_inactive_seconds = checked_offline_delay(value)?
+            }
             Self::SetKeepRunningInBackground(value) => settings.keep_running_in_background = value,
             Self::SetVoiceSpeed(value) => {
                 if ![1.0, 1.5, 2.0].contains(&value) {
@@ -787,6 +919,36 @@ mod tests {
 
         assert!(chat_lock.contains("[REDACTED]"));
         assert!(!chat_lock.contains("2468"));
+    }
+
+    #[test]
+    fn a_custom_offline_delay_stays_selectable_and_in_force() {
+        let choices = [("After 10 seconds", 10), ("Never", 0)];
+        let (labels, values, selected) = offline_choices(&choices, 10);
+        assert_eq!((labels.len(), values[selected]), (2, 10));
+        let (labels, values, selected) = offline_choices(&choices, 30);
+        assert_eq!(labels[selected], "Custom (30 s)");
+        assert_eq!(values, [30, 10, 0]);
+        assert_eq!(selected, 0);
+    }
+
+    #[test]
+    fn offline_delays_beyond_a_day_are_rejected() {
+        let mut settings = Settings::default();
+        let before = settings.clone();
+        for change in [
+            PreferenceChange::SetOfflineAfterLeavingSeconds(MAX_OFFLINE_SECONDS + 1),
+            PreferenceChange::SetOfflineAfterInactiveSeconds(u32::MAX),
+        ] {
+            assert_eq!(
+                change.apply(&mut settings),
+                Err(ValidationError::OfflineDelayOutOfRange)
+            );
+        }
+        assert_eq!(settings, before);
+        PreferenceChange::SetOfflineAfterInactiveSeconds(MAX_OFFLINE_SECONDS)
+            .apply(&mut settings)
+            .expect("a day is allowed");
     }
 
     #[test]
