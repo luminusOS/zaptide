@@ -1110,10 +1110,17 @@ pub(super) fn show_video(
     details: &ViewerDetails,
     on_action: Rc<dyn Fn(NativeMediaAction)>,
 ) {
-    let Ok(clip) = VideoStream::open(path, 1920, 1080) else {
-        on_action(NativeMediaAction::Open(path.to_path_buf()));
-        return;
-    };
+    let dialog_slot: Rc<std::cell::OnceCell<glib::WeakRef<adw::Dialog>>> = Rc::default();
+    let clip = VideoStream::open_in_background(path, 1920, 1080, {
+        let (path, on_action, dialog_slot) =
+            (path.to_path_buf(), on_action.clone(), dialog_slot.clone());
+        move || {
+            on_action(NativeMediaAction::Open(path));
+            if let Some(dialog) = dialog_slot.get().and_then(glib::WeakRef::upgrade) {
+                dialog.close();
+            }
+        }
+    });
     let picture = gtk::Picture::builder()
         .paintable(&clip)
         .content_fit(gtk::ContentFit::Contain)
@@ -1153,12 +1160,15 @@ pub(super) fn show_video(
         &[folder.upcast(), open.clone().upcast()],
     );
     let dialog = viewer.dialog.clone();
+    let _ = dialog_slot.set(dialog.downgrade());
     keep_while_open(&dialog, [path.to_path_buf()]);
     open.connect_clicked(open_and_close(path, &on_action, &dialog));
     another.connect_clicked(open_and_close(path, &on_action, &dialog));
 
     let controls = video_controls(&clip, &dialog, parent);
     let overlay = gtk::Overlay::builder().child(&picture).build();
+    let waiting = video_placeholder(details, &clip);
+    overlay.add_overlay(&waiting);
     overlay.add_overlay(&controls.big_play);
     overlay.add_overlay(&controls.bar);
     let stack = gtk::Stack::new();
@@ -1189,6 +1199,50 @@ pub(super) fn show_video(
     // dialog may already have let go of by the time it reports closing.
     dialog.connect_closed(move |_| clip.close());
     dialog.present(Some(parent));
+}
+
+/// The sender's thumbnail with a spinner over it, shown until the clip has a
+/// frame of its own or fails.
+fn video_placeholder(details: &ViewerDetails, clip: &VideoStream) -> gtk::Overlay {
+    let poster = gtk::Picture::builder()
+        .content_fit(gtk::ContentFit::Contain)
+        .can_shrink(true)
+        .build();
+    poster.set_paintable(
+        details
+            .thumbnail
+            .as_deref()
+            .and_then(|bytes| gdk::Texture::from_bytes(&glib::Bytes::from(bytes)).ok())
+            .as_ref(),
+    );
+    let placeholder = gtk::Overlay::builder()
+        .child(&poster)
+        .can_target(false)
+        .build();
+    placeholder.add_overlay(
+        &adw::Spinner::builder()
+            .width_request(32)
+            .height_request(32)
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::Center)
+            .build(),
+    );
+    let update = glib::clone!(
+        #[weak]
+        placeholder,
+        move |clip: &VideoStream| {
+            let shown =
+                clip.error().is_none() && !(clip.is_prepared() && clip.intrinsic_width() > 0);
+            placeholder.set_visible(shown);
+        }
+    );
+    let update = Rc::new(update);
+    clip.connect_invalidate_size({
+        let update = update.clone();
+        move |clip| update(clip)
+    });
+    clip.connect_notify_local(None, move |clip, _| update(clip));
+    placeholder
 }
 
 fn open_and_close(
@@ -1376,6 +1430,327 @@ mod tests {
         message.sender_name = Some("Marina Costa".into());
         message.thumbnail = Some(thumbnail);
         message
+    }
+
+    fn init_display() -> tokio::runtime::Runtime {
+        gtk::init().expect("display");
+        adw::init().expect("libadwaita");
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let provider = gtk::CssProvider::new();
+        provider.load_from_string(include_str!("../../data/style.css"));
+        gtk::style_context_add_provider_for_display(
+            &gdk::Display::default().unwrap(),
+            &provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+        adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceDark);
+        runtime
+    }
+
+    struct Opening {
+        returned: std::time::Duration,
+        first_frame: Option<std::time::Duration>,
+        settled: std::time::Duration,
+        worst_stall: std::time::Duration,
+    }
+
+    /// Runs `open`, then pumps the main loop until `settled` holds plus a
+    /// moment more, recording how long the call blocked, when the viewer
+    /// first painted, when it settled, and the longest gap in which the
+    /// main loop did not turn.
+    fn measure_opening(
+        window: &adw::Window,
+        open: impl FnOnce(),
+        settled: impl Fn() -> bool,
+    ) -> Opening {
+        use std::time::{Duration, Instant};
+        let window_ref = window.upcast_ref::<gtk::Window>();
+        let started = Instant::now();
+        let last = Rc::new(Cell::new(started));
+        let worst = Rc::new(Cell::new(Duration::ZERO));
+        let first_frame = Rc::new(Cell::new(None));
+        let source = glib::timeout_add_local(Duration::from_millis(2), {
+            let (last, worst) = (last.clone(), worst.clone());
+            move || {
+                let now = Instant::now();
+                let gap = now - last.replace(now);
+                worst.set(worst.get().max(gap));
+                glib::ControlFlow::Continue
+            }
+        });
+        let clock = window.frame_clock().expect("frame clock");
+        let painted = clock.connect_after_paint({
+            let (first_frame, window) = (first_frame.clone(), window_ref.clone());
+            move |_| {
+                if first_frame.get().is_none() && has_button(&window, "Close") {
+                    first_frame.set(Some(started.elapsed()));
+                }
+            }
+        });
+        open();
+        let returned = started.elapsed();
+        super::super::playback_tests::wait_until("viewer did not settle", &settled);
+        let settled_at = started.elapsed();
+        let tail = Instant::now() + Duration::from_millis(300);
+        super::super::playback_tests::wait_until("tail", || Instant::now() >= tail);
+        source.remove();
+        clock.disconnect(painted);
+        Opening {
+            returned,
+            first_frame: first_frame.get(),
+            settled: settled_at,
+            worst_stall: worst.get(),
+        }
+    }
+
+    fn report(label: &str, opening: &Opening) {
+        let ms = |duration: std::time::Duration| duration.as_secs_f64() * 1000.0;
+        eprintln!(
+            "OPEN {label}: call returns {:.1} ms, first viewer frame {} ms, ready {:.1} ms, worst main-loop stall {:.1} ms",
+            ms(opening.returned),
+            opening
+                .first_frame
+                .map_or("never".to_owned(), |d| format!("{:.1}", ms(d))),
+            ms(opening.settled),
+            ms(opening.worst_stall),
+        );
+    }
+
+    fn generate(directory: &std::path::Path, name: &str, pipeline: &str) -> std::path::PathBuf {
+        let path = directory.join(name);
+        let status = std::process::Command::new("gst-launch-1.0")
+            .arg("-q")
+            .args(pipeline.split_whitespace())
+            .arg(format!("location={}", path.display()))
+            .status()
+            .expect("GStreamer fixture generator");
+        assert!(status.success(), "{pipeline}");
+        path
+    }
+
+    fn media_message(
+        content: impl FnOnce(crate::model::Media) -> Content,
+        path: &std::path::Path,
+        mime: &str,
+        (width, height): (u32, u32),
+    ) -> Message {
+        let mut message = fixture_message(path.parent().unwrap(), "thumb.png", 64, 40);
+        message.content = content(crate::model::Media {
+            mime: mime.into(),
+            size: std::fs::metadata(path).unwrap().len(),
+            width: Some(width),
+            height: Some(height),
+            path: Some(path.to_path_buf()),
+            state: crate::model::MediaState::Idle,
+        });
+        message
+    }
+
+    /// Needs a display, glycin loaders, bubblewrap and GStreamer's
+    /// openh264 plugins; prints the timings it measures:
+    /// `cargo test --lib opening_media -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "needs a display, glycin loaders and GStreamer H.264 plugins"]
+    fn opening_media_keeps_the_main_loop_turning() {
+        use super::super::playback_tests::{drain, wait_until};
+        let runtime = init_display();
+        let _runtime = runtime.enter();
+        let directory = tempfile::tempdir().unwrap();
+        let big_jpeg = generate(
+            directory.path(),
+            "big.jpg",
+            "videotestsrc num-buffers=1 pattern=circular ! video/x-raw,width=6000,height=4000 ! jpegenc quality=90 ! filesink",
+        );
+        let big_png = generate(
+            directory.path(),
+            "big.png",
+            "videotestsrc num-buffers=1 pattern=circular ! video/x-raw,width=6000,height=4000 ! pngenc compression-level=1 ! filesink",
+        );
+        let phone_jpeg = generate(
+            directory.path(),
+            "phone.jpg",
+            "videotestsrc num-buffers=1 pattern=circular ! video/x-raw,width=1197,height=1229 ! jpegenc quality=90 ! filesink",
+        );
+        let clip = generate(
+            directory.path(),
+            "clip.mp4",
+            "videotestsrc num-buffers=90 pattern=ball ! video/x-raw,width=1920,height=1080,framerate=30/1 ! videoconvert ! openh264enc ! h264parse ! mp4mux ! filesink",
+        );
+        let window = adw::Window::builder()
+            .default_width(1100)
+            .default_height(760)
+            .content(&gtk::Box::new(gtk::Orientation::Vertical, 0))
+            .build();
+        window.present();
+        drain();
+        let window_ref = window.upcast_ref::<gtk::Window>();
+        let on_action: Rc<dyn Fn(NativeMediaAction)> = Rc::new(|_| {});
+
+        for (label, path, mime, size) in [
+            (
+                "phone JPEG 1197x1229",
+                &phone_jpeg,
+                "image/jpeg",
+                (1197, 1229),
+            ),
+            ("JPEG 6000x4000", &big_jpeg, "image/jpeg", (6000, 4000)),
+            ("PNG 6000x4000", &big_png, "image/png", (6000, 4000)),
+        ] {
+            let message = media_message(
+                |media| Content::Image {
+                    caption: None,
+                    media,
+                },
+                path,
+                mime,
+                size,
+            );
+            let item = PhotoItem {
+                path: path.clone(),
+                details: ViewerDetails::of(&message),
+            };
+            for attempt in ["cold", "warm"] {
+                let items = Rc::new(vec![item.clone()]);
+                let opening = measure_opening(
+                    &window,
+                    || show_photo(&window, items, 0, on_action.clone()),
+                    || button(window_ref, "Copy Image").is_sensitive(),
+                );
+                report(&format!("{label} {attempt}"), &opening);
+                assert!(
+                    opening.returned < std::time::Duration::from_millis(100),
+                    "{label} {attempt} blocked the caller"
+                );
+                assert!(
+                    opening
+                        .first_frame
+                        .is_some_and(|frame| frame < std::time::Duration::from_millis(250)),
+                    "{label} {attempt} was late to appear"
+                );
+                button(window_ref, "Close").emit_clicked();
+                wait_until("viewer did not close", || !has_button(window_ref, "Close"));
+                drain();
+            }
+        }
+
+        let message = media_message(
+            |media| Content::Video {
+                caption: None,
+                media,
+                seconds: Some(3),
+                gif: false,
+            },
+            &clip,
+            "video/mp4",
+            (1920, 1080),
+        );
+        let details = ViewerDetails::of(&message);
+        for attempt in ["cold", "warm"] {
+            let opening = measure_opening(
+                &window,
+                || show_video(&window, &clip, &details, on_action.clone()),
+                || has_button(window_ref, "Pause"),
+            );
+            report(&format!("video H.264 1920x1080 {attempt}"), &opening);
+            assert!(
+                opening.returned < std::time::Duration::from_millis(100),
+                "video {attempt} blocked the caller"
+            );
+            button(window_ref, "Close").emit_clicked();
+            wait_until("viewer did not close", || !has_button(window_ref, "Close"));
+            drain();
+        }
+        window.destroy();
+        drain();
+        wait_until("quiet", || true);
+    }
+
+    /// Needs a display and GStreamer's VP8 plugins:
+    /// `cargo test --lib videos_open_in -- --ignored`.
+    #[test]
+    #[ignore = "needs a display and GStreamer VP8 plugins"]
+    fn videos_open_in_the_background_with_a_poster() {
+        use super::super::playback_tests::{drain, wait_until};
+        let runtime = init_display();
+        let _runtime = runtime.enter();
+        let directory = tempfile::tempdir().unwrap();
+        let clip = generate(
+            directory.path(),
+            "clip.webm",
+            "videotestsrc num-buffers=90 ! video/x-raw,width=640,height=360,framerate=30/1 ! vp8enc deadline=1 ! webmmux ! filesink",
+        );
+        let message = media_message(
+            |media| Content::Video {
+                caption: None,
+                media,
+                seconds: Some(3),
+                gif: false,
+            },
+            &clip,
+            "video/webm",
+            (640, 360),
+        );
+        let details = ViewerDetails::of(&message);
+        let window = adw::Window::builder()
+            .default_width(1100)
+            .default_height(760)
+            .content(&gtk::Box::new(gtk::Orientation::Vertical, 0))
+            .build();
+        window.present();
+        drain();
+        let window_ref = window.upcast_ref::<gtk::Window>();
+        let opened = Rc::new(RefCell::new(Vec::new()));
+        let on_action: Rc<dyn Fn(NativeMediaAction)> = {
+            let opened = opened.clone();
+            Rc::new(move |action| {
+                if let NativeMediaAction::Open(path) = action {
+                    opened.borrow_mut().push(path);
+                }
+            })
+        };
+        let spinner_shown = |window: &gtk::Window| {
+            tree(window)
+                .into_iter()
+                .any(|widget| widget.is::<adw::Spinner>() && widget.is_mapped())
+        };
+
+        show_video(&window, &clip, &details, on_action.clone());
+        assert!(has_button(window_ref, "Close"), "the viewer is up at once");
+        assert!(
+            !has_button(window_ref, "Pause"),
+            "playing waits for the pipeline"
+        );
+        drain();
+        wait_until("video controls did not appear", || {
+            has_button(window_ref, "Pause")
+        });
+        wait_until("the poster stayed over the video", || {
+            !spinner_shown(window_ref)
+        });
+        assert!(opened.borrow().is_empty());
+        button(window_ref, "Close").emit_clicked();
+        wait_until("viewer did not close", || !has_button(window_ref, "Close"));
+
+        let broken = directory.path().join("broken.webm");
+        std::fs::write(&broken, b"synthetic invalid video").unwrap();
+        show_video(&window, &broken, &details, on_action.clone());
+        wait_until("failure page did not show", || {
+            failure_button(window_ref).is_some()
+        });
+        assert!(!spinner_shown(window_ref));
+        button(window_ref, "Close").emit_clicked();
+        wait_until("viewer did not close", || !has_button(window_ref, "Close"));
+
+        show_video(&window, &clip, &details, on_action);
+        button(window_ref, "Close").emit_clicked();
+        wait_until("viewer did not close", || !has_button(window_ref, "Close"));
+        drain();
+        window.destroy();
+        drain();
     }
 
     #[test]
