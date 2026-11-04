@@ -157,10 +157,21 @@ glib::wrapper! {
         @extends gtk::MediaStream, @implements gdk::Paintable;
 }
 
-impl VideoStream {
-    /// Prepare a local file, bounding delivered frame dimensions in pixels.
-    /// Call on the GTK thread; playback starts through `MediaStream::play`.
-    pub(super) fn open(path: &Path, max_width: u32, max_height: u32) -> Result<Self> {
+/// A playbin and the appsink feeding a `VideoStream`. Building one and
+/// starting its state change loads plugins and probes decoders, so it may be
+/// done on any thread and attached to a stream later.
+struct Pipeline {
+    pipeline: gst::Element,
+    sink: gst_app::AppSink,
+}
+
+impl Pipeline {
+    fn start(
+        path: &Path,
+        max_width: u32,
+        max_height: u32,
+        mailbox: &Arc<Mutex<Mailbox>>,
+    ) -> Result<Self> {
         gst::init().context("Video playback is unavailable")?;
         anyhow::ensure!(max_width > 0 && max_height > 0, "Invalid video bounds");
         let uri =
@@ -168,6 +179,7 @@ impl VideoStream {
         let pipeline = gst::ElementFactory::make("playbin")
             .build()
             .context("Video playback is unavailable")?;
+        let (samples, prerolls) = (mailbox.clone(), mailbox.clone());
         let sink = gst_app::AppSink::builder()
             .caps(
                 &gst::Caps::builder("video/x-raw")
@@ -187,14 +199,6 @@ impl VideoStream {
             .drop(true)
             .sync(true)
             .build();
-        pipeline.set_property("uri", uri.as_str());
-        pipeline.set_property("video-sink", &sink);
-        let stream: Self = glib::Object::new();
-        let imp = stream.imp();
-        imp.pipeline.replace(Some(pipeline.clone()));
-        imp.sink.replace(Some(sink.clone()));
-        let samples = imp.mailbox.clone();
-        let prerolls = samples.clone();
         sink.set_callbacks(
             gst_app::AppSinkCallbacks::builder()
                 .new_sample(move |sink| {
@@ -209,6 +213,86 @@ impl VideoStream {
                 })
                 .build(),
         );
+        pipeline.set_property("uri", uri.as_str());
+        pipeline.set_property("video-sink", &sink);
+        if pipeline.set_state(gst::State::Paused).is_err() {
+            let _ = pipeline.set_state(gst::State::Null);
+            anyhow::bail!("Cannot prepare video");
+        }
+        Ok(Self { pipeline, sink })
+    }
+
+    fn discard(self) {
+        self.sink
+            .set_callbacks(gst_app::AppSinkCallbacks::builder().build());
+        let _ = self.pipeline.set_state(gst::State::Null);
+    }
+}
+
+impl VideoStream {
+    /// Prepare a local file, bounding delivered frame dimensions in pixels.
+    /// Call on the GTK thread; playback starts through `MediaStream::play`.
+    pub(super) fn open(path: &Path, max_width: u32, max_height: u32) -> Result<Self> {
+        let stream = Self::detached();
+        let pipeline = Pipeline::start(path, max_width, max_height, &stream.imp().mailbox)?;
+        stream.attach(pipeline)?;
+        Ok(stream)
+    }
+
+    /// Like `open`, but the pipeline is built and started on another thread
+    /// so the caller returns at once; the stream reports `prepared` or
+    /// `error` as usual, and `unavailable` runs instead if no pipeline could
+    /// be made at all.
+    pub(super) fn open_in_background(
+        path: &Path,
+        max_width: u32,
+        max_height: u32,
+        unavailable: impl FnOnce() + 'static,
+    ) -> Self {
+        let stream = Self::detached();
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let mailbox = stream.imp().mailbox.clone();
+        let path = path.to_path_buf();
+        let _ = std::thread::Builder::new()
+            .name("zaptide-video-open".into())
+            .spawn(move || {
+                let _ = sender.send(Pipeline::start(&path, max_width, max_height, &mailbox));
+            });
+        let weak = stream.downgrade();
+        glib::spawn_future_local(async move {
+            let started = match receiver.await {
+                Ok(Ok(pipeline)) => Some(pipeline),
+                Ok(Err(error)) => {
+                    log::warn!("video could not be prepared: {error}");
+                    None
+                }
+                Err(_) => None,
+            };
+            let Some(stream) = weak.upgrade() else {
+                if let Some(pipeline) = started {
+                    pipeline.discard();
+                }
+                return;
+            };
+            match started {
+                Some(pipeline) if !stream.imp().closed.get() => {
+                    if stream.attach(pipeline).is_err() {
+                        unavailable();
+                    }
+                }
+                Some(pipeline) => pipeline.discard(),
+                None => {
+                    stream.close();
+                    unavailable();
+                }
+            }
+        });
+        stream
+    }
+
+    fn detached() -> Self {
+        let stream: Self = glib::Object::new();
+        let imp = stream.imp();
         let weak = stream.downgrade();
         let mailbox = imp.mailbox.clone();
         imp.task
@@ -234,20 +318,38 @@ impl VideoStream {
                     }
                 },
             )));
-        let weak = stream.downgrade();
-        let bus = pipeline.bus().context("Video playback is unavailable")?;
-        imp.bus.replace(Some(bus.add_watch_local(move |_, message| {
-            let Some(stream) = weak.upgrade() else {
-                return glib::ControlFlow::Break;
-            };
-            stream.handle_message(message);
-            glib::ControlFlow::Continue
-        })?));
-        if pipeline.set_state(gst::State::Paused).is_err() {
-            stream.close();
-            anyhow::bail!("Cannot prepare video");
+        stream
+    }
+
+    fn attach(&self, started: Pipeline) -> Result<()> {
+        let imp = self.imp();
+        let Pipeline { pipeline, sink } = started;
+        imp.pipeline.replace(Some(pipeline.clone()));
+        imp.sink.replace(Some(sink));
+        let weak = self.downgrade();
+        let watch = pipeline
+            .bus()
+            .context("Video playback is unavailable")
+            .and_then(|bus| {
+                bus.add_watch_local(move |_, message| {
+                    let Some(stream) = weak.upgrade() else {
+                        return glib::ControlFlow::Break;
+                    };
+                    stream.handle_message(message);
+                    glib::ControlFlow::Continue
+                })
+                .context("Video playback is unavailable")
+            });
+        match watch {
+            Ok(watch) => {
+                imp.bus.replace(Some(watch));
+                Ok(())
+            }
+            Err(error) => {
+                self.close();
+                Err(error)
+            }
         }
-        Ok(stream)
     }
 
     /// Release playback resources, even before preparation completes.

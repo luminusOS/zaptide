@@ -560,6 +560,10 @@ async fn open_photo(path: &std::path::Path) -> Result<glycin::Image, glycin::Err
     let mut loader = glycin::Loader::new(gtk::gio::File::for_path(path));
     loader.accepted_memory_formats(glycin::MemoryFormatSelection::R8g8b8a8);
     loader.pool(photo_pool());
+    // Left on Auto, glycin runs its file and D-Bus work on the GTK main context
+    // because this thread has none of its own, and a large photo then stalls
+    // the window while it loads.
+    loader.main_context_selector(glycin::MainContextSelector::Managed);
     loader.load().await
 }
 

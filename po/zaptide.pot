@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: zaptide\n"
 "Report-Msgid-Bugs-To: https://github.com/luminusOS/zaptide/issues\n"
-"POT-Creation-Date: 2026-11-04 14:17-0300\n"
+"POT-Creation-Date: 2026-11-04 17:24-0300\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -19,8 +19,8 @@ msgstr ""
 
 #: src/application/accounts.rs:151 src/application/accounts.rs:152
 #: src/application/dispatch/backend_events.rs:425
-#: src/application/dispatch.rs:157 src/application/dispatch.rs:158
-#: src/application/dispatch.rs:472 src/application.rs:2750
+#: src/application/dispatch.rs:168 src/application/dispatch.rs:169
+#: src/application/dispatch.rs:483 src/application.rs:2750
 msgid "Could not save preferences"
 msgstr ""
 
@@ -29,7 +29,7 @@ msgid "Preferences saved"
 msgstr ""
 
 #: src/application/accounts.rs:157 src/application/accounts.rs:158
-#: src/application/dispatch.rs:162 src/application/dispatch.rs:163
+#: src/application/dispatch.rs:173 src/application/dispatch.rs:174
 msgid "Preference value is invalid"
 msgstr ""
 
@@ -217,7 +217,7 @@ msgstr ""
 #: src/application/composer.rs:235 src/application/contact_sharing.rs:439
 #: src/application/dialogs.rs:52 src/application/dialogs.rs:77
 #: src/application/dialogs.rs:224 src/application/dialogs.rs:401
-#: src/application/dispatch.rs:968 src/application/link_page.rs:85
+#: src/application/dispatch.rs:979 src/application/link_page.rs:85
 #: src/application/profile_dialog.rs:115 src/application.rs:961
 #: src/application.rs:2790 src/native_preferences.rs:863
 msgid "Cancel"
@@ -300,10 +300,10 @@ msgstr ""
 msgid "Sending contact"
 msgstr ""
 
-#: src/application/contact_sharing.rs:76 src/application/dispatch.rs:245
-#: src/application/dispatch.rs:417 src/application/dispatch.rs:536
-#: src/application/dispatch.rs:561 src/application/dispatch.rs:861
-#: src/application/dispatch.rs:868
+#: src/application/contact_sharing.rs:76 src/application/dispatch.rs:256
+#: src/application/dispatch.rs:428 src/application/dispatch.rs:547
+#: src/application/dispatch.rs:572 src/application/dispatch.rs:872
+#: src/application/dispatch.rs:879
 msgid "Backend unavailable"
 msgstr ""
 
@@ -652,68 +652,96 @@ msgstr ""
 msgid "Copy selected text"
 msgstr ""
 
-#: src/application/dispatch.rs:176
+#: src/application/dispatch.rs:135
+msgid "Media viewer"
+msgstr ""
+
+#: src/application/dispatch.rs:137
+msgid "Previous photo"
+msgstr ""
+
+#: src/application/dispatch.rs:138
+msgid "Next photo"
+msgstr ""
+
+#: src/application/dispatch.rs:139
+msgid "Zoom in"
+msgstr ""
+
+#: src/application/dispatch.rs:140
+msgid "Zoom out"
+msgstr ""
+
+#: src/application/dispatch.rs:141
+msgid "Fit to window"
+msgstr ""
+
+#: src/application/dispatch.rs:142
+msgid "Actual size"
+msgstr ""
+
+#: src/application/dispatch.rs:187
 msgid "Starting backend"
 msgstr ""
 
-#: src/application/dispatch.rs:377
+#: src/application/dispatch.rs:388
 msgid "Reconnecting to WhatsApp"
 msgstr ""
 
-#: src/application/dispatch.rs:396
+#: src/application/dispatch.rs:407
 msgid "Refreshing messages"
 msgstr ""
 
-#: src/application/dispatch.rs:415
+#: src/application/dispatch.rs:426
 msgid "Unlinking this computer"
 msgstr ""
 
-#: src/application/dispatch.rs:512 src/application/dispatch.rs:520
+#: src/application/dispatch.rs:523 src/application/dispatch.rs:531
 msgid "Code copied"
 msgstr ""
 
-#: src/application/dispatch.rs:528 src/application/dispatch.rs:529
-#: src/application/dispatch.rs:541 src/application/dispatch.rs:542
+#: src/application/dispatch.rs:539 src/application/dispatch.rs:540
+#: src/application/dispatch.rs:552 src/application/dispatch.rs:553
 msgid "Enter valid phone number with country code"
 msgstr ""
 
-#: src/application/dispatch.rs:534
+#: src/application/dispatch.rs:545
 msgid "Requesting a pairing code from WhatsApp"
 msgstr ""
 
-#: src/application/dispatch.rs:559
+#: src/application/dispatch.rs:570
 msgid "Checking contact on WhatsApp"
 msgstr ""
 
-#: src/application/dispatch.rs:665
+#: src/application/dispatch.rs:676
 msgid "Contact opened"
 msgstr ""
 
-#: src/application/dispatch.rs:796
+#: src/application/dispatch.rs:807
 msgid "Could not save attachment"
 msgstr ""
 
-#: src/application/dispatch.rs:801
+#: src/application/dispatch.rs:812
 msgid "Clipboard or portal action failed"
 msgstr ""
 
-#: src/application/dispatch.rs:820
+#: src/application/dispatch.rs:831
 msgid "Copied"
 msgstr ""
 
-#: src/application/dispatch.rs:836
+#: src/application/dispatch.rs:847
 msgid "Phone number copied"
 msgstr ""
 
-#: src/application/dispatch.rs:961
+#: src/application/dispatch.rs:972
 msgid "Delete message?"
 msgstr ""
 
-#: src/application/dispatch.rs:969
+#: src/application/dispatch.rs:980
 msgid "Delete"
 msgstr ""
 
-#: src/application/dispatch.rs:1005
+#: src/application/dispatch.rs:1016
 msgid "Shutdown complete"
 msgstr ""
 
@@ -920,8 +948,8 @@ msgid "Could not save theme preference"
 msgstr ""
 
 #: src/application.rs:1878 src/native_media_widgets/photo.rs:439
-#: src/native_media_widgets/viewer.rs:688
-#: src/native_media_widgets/viewer.rs:1139
+#: src/native_media_widgets/viewer.rs:927
+#: src/native_media_widgets/viewer.rs:1461
 msgid "Show in Folder"
 msgstr ""
 
@@ -1117,15 +1145,15 @@ msgstr ""
 msgid "Calls"
 msgstr ""
 
-#: src/application/sidebar.rs:343
+#: src/application/sidebar.rs:347
 msgid "Recent calls"
 msgstr ""
 
-#: src/application/sidebar.rs:364
+#: src/application/sidebar.rs:368
 msgid "No Calls Yet"
 msgstr ""
 
-#: src/application/sidebar.rs:365
+#: src/application/sidebar.rs:369
 msgid "Voice and video calls appear here"
 msgstr ""
 
@@ -1133,7 +1161,7 @@ msgstr ""
 msgid "Message starred"
 msgstr ""
 
-#: src/application/stars.rs:79 src/native_media_widgets/viewer.rs:38
+#: src/application/stars.rs:79 src/native_media_widgets/viewer.rs:42
 msgid "You"
 msgstr ""
 
@@ -1446,88 +1474,97 @@ msgstr ""
 msgid "Downloading"
 msgstr ""
 
-#: src/native_media_widgets/viewer.rs:156
+#: src/native_media_widgets/viewer.rs:155
 #, rust-format
 msgid "{current} of {total}"
 msgstr ""
 
-#: src/native_media_widgets/viewer.rs:196
+#: src/native_media_widgets/viewer.rs:191
 #, rust-format
 msgid "Photo from {name}"
 msgstr ""
 
-#: src/native_media_widgets/viewer.rs:200
+#: src/native_media_widgets/viewer.rs:195
 #, rust-format
 msgid "Video from {name}"
 msgstr ""
 
-#: src/native_media_widgets/viewer.rs:229
-msgid "Fit"
+#: src/native_media_widgets/viewer.rs:251
+#, rust-format
+msgid "Zoom level {percent} percent"
 msgstr ""
 
-#: src/native_media_widgets/viewer.rs:269
+#: src/native_media_widgets/viewer.rs:256
 msgid "Zoom Out"
 msgstr ""
 
-#: src/native_media_widgets/viewer.rs:270
+#: src/native_media_widgets/viewer.rs:257
 msgid "Zoom In"
 msgstr ""
 
-#: src/native_media_widgets/viewer.rs:438
+#: src/native_media_widgets/viewer.rs:332
+msgid "Actual Size"
+msgstr ""
+
+#: src/native_media_widgets/viewer.rs:334
+msgid "Fit to Window"
+msgstr ""
+
+#: src/native_media_widgets/viewer.rs:452
 msgid "Close"
 msgstr ""
 
-#: src/native_media_widgets/viewer.rs:686
+#: src/native_media_widgets/viewer.rs:925
 msgid "Copy Image"
 msgstr ""
 
-#: src/native_media_widgets/viewer.rs:691
-#: src/native_media_widgets/viewer.rs:1146
+#: src/native_media_widgets/viewer.rs:930
+#: src/native_media_widgets/viewer.rs:1468
 msgid "Open With Another App"
 msgstr ""
 
-#: src/native_media_widgets/viewer.rs:695
+#: src/native_media_widgets/viewer.rs:934
 msgid "Previous Photo"
 msgstr ""
 
-#: src/native_media_widgets/viewer.rs:698
+#: src/native_media_widgets/viewer.rs:937
 msgid "Next Photo"
 msgstr ""
 
-#: src/native_media_widgets/viewer.rs:836
-#: src/native_media_widgets/viewer.rs:917
-#: src/native_media_widgets/viewer.rs:923
+#: src/native_media_widgets/viewer.rs:1151
+#: src/native_media_widgets/viewer.rs:1232
+#: src/native_media_widgets/viewer.rs:1238
 msgid "Play"
 msgstr ""
 
-#: src/native_media_widgets/viewer.rs:849
+#: src/native_media_widgets/viewer.rs:1164
 msgid "Seek"
 msgstr ""
 
-#: src/native_media_widgets/viewer.rs:865
-#: src/native_media_widgets/viewer.rs:868
-#: src/native_media_widgets/viewer.rs:874
+#: src/native_media_widgets/viewer.rs:1180
+#: src/native_media_widgets/viewer.rs:1183
+#: src/native_media_widgets/viewer.rs:1189
 msgid "Volume"
 msgstr ""
 
-#: src/native_media_widgets/viewer.rs:875
-#: src/native_media_widgets/viewer.rs:880
+#: src/native_media_widgets/viewer.rs:1190
+#: src/native_media_widgets/viewer.rs:1195
 msgid "Fullscreen"
 msgstr ""
 
-#: src/native_media_widgets/viewer.rs:878
+#: src/native_media_widgets/viewer.rs:1193
 msgid "Exit Fullscreen"
 msgstr ""
 
-#: src/native_media_widgets/viewer.rs:1129
+#: src/native_media_widgets/viewer.rs:1451
 msgid "Can't Play This Video"
 msgstr ""
 
-#: src/native_media_widgets/viewer.rs:1130
+#: src/native_media_widgets/viewer.rs:1452
 msgid "Open it with another app instead"
 msgstr ""
 
-#: src/native_media_widgets/viewer.rs:1133
+#: src/native_media_widgets/viewer.rs:1455
 msgid "Open in Another App"
 msgstr ""
 
