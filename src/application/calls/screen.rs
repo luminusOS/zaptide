@@ -1,7 +1,9 @@
 //! What the call window says and offers for each moment of a call.
 
 use crate::i18n::gettext;
-use crate::model::call::{CallKind, CallPhase, CallSession, call_clock, call_summary, with_detail};
+use crate::model::call::{
+    CallPhase, CallSession, call_clock, call_summary, direction_label, with_detail,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CallAction {
@@ -77,11 +79,7 @@ fn timed(label: String, seconds: Option<u32>) -> String {
 }
 
 pub(super) fn incoming_label(video: bool) -> String {
-    if video {
-        gettext("Incoming video call")
-    } else {
-        gettext("Incoming voice call")
-    }
+    direction_label(false, video)
 }
 
 /// Adds the call that came in during this one: who it is, and what to do with it.
@@ -254,12 +252,10 @@ fn connected(session: &CallSession, name: &str, now: i64) -> Screen {
     }
 }
 
-pub(super) fn kind_label(kind: CallKind) -> String {
-    match kind {
-        CallKind::Missed => gettext("Missed"),
-        CallKind::Outgoing => gettext("Outgoing"),
-        CallKind::Incoming => gettext("Incoming"),
-    }
+/// Whether the history row at `timestamp` opens a new day heading, given the
+/// row listed just before it.
+pub(super) fn starts_day(previous: Option<i64>, timestamp: i64) -> bool {
+    previous.is_none_or(|previous| !crate::util::same_day(previous, timestamp))
 }
 
 pub(super) fn when(timestamp: i64) -> String {

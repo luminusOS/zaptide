@@ -144,10 +144,35 @@ fn a_finished_call_returns_to_the_chat_and_a_failed_one_can_retry() {
 }
 
 #[test]
-fn history_rows_use_plain_words_for_the_call_kind() {
-    assert_eq!(kind_label(CallKind::Missed), "Missed");
-    assert_eq!(kind_label(CallKind::Outgoing), "Outgoing");
-    assert_eq!(kind_label(CallKind::Incoming), "Incoming");
+fn the_ringing_label_names_the_kind_of_call() {
+    assert_eq!(incoming_label(false), "Incoming voice call");
+    assert_eq!(incoming_label(true), "Incoming video call");
+}
+
+#[test]
+fn history_rows_start_a_heading_when_the_day_changes() {
+    let noon = crate::util::noon_today();
+    let day = 24 * 3600;
+    let stamps = [
+        noon + 600,
+        noon,
+        noon - day,
+        noon - day - 60,
+        noon - 10 * day,
+    ];
+    let starts: Vec<bool> = (0..stamps.len())
+        .map(|index| starts_day(index.checked_sub(1).map(|prev| stamps[prev]), stamps[index]))
+        .collect();
+    assert_eq!(starts, [true, false, true, false, true]);
+}
+
+#[test]
+fn history_headings_name_today_yesterday_and_older_dates() {
+    let noon = crate::util::noon_today();
+    let day = 24 * 3600;
+    assert_eq!(crate::util::day_label(noon), "Today");
+    assert_eq!(crate::util::day_label(noon - day), "Yesterday");
+    assert!(crate::util::day_label(noon - 30 * day).contains(','));
 }
 
 #[test]

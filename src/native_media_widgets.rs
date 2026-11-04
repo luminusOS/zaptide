@@ -61,6 +61,8 @@ mod viewer;
 mod widget;
 
 #[cfg(test)]
+mod call_tests;
+#[cfg(test)]
 mod playback_tests;
 
 pub use audio::{AudioControls, RecordingMeter};
