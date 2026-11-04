@@ -151,3 +151,4 @@ window.translucent-sidebar .sidebar-pane .view {
 .zaptide-call-remote { background-color: #000000; }
 .zaptide-call-preview { border-radius: 12px; border: 2px solid rgba(255, 255, 255, 0.85); box-shadow: 0 2px 12px rgba(0, 0, 0, 0.45); }
 row.zaptide-call-missed .title { color: var(--error-color); }
+image.zaptide-call-missed-icon { color: var(--error-color); -gtk-icon-palette: error var(--error-color); }
