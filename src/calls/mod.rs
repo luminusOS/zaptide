@@ -137,6 +137,10 @@ pub struct RgbaFrame {
 /// The newest remote and local picture. GStreamer threads overwrite them and
 /// the window takes them when it is woken, so a slow window drops frames
 /// instead of queueing them.
+///
+/// `remote` and `local` are `Option<Option<_>>`: the outer layer says the
+/// picture changed since the last `take`, the inner one is `None` when it was
+/// cleared rather than replaced.
 pub struct VideoSlots {
     remote: Mutex<Option<Option<RgbaFrame>>>,
     local: Mutex<Option<Option<RgbaFrame>>>,
@@ -279,6 +283,10 @@ impl VideoPlan {
 pub struct CallControls {
     microphone: gst::Pipeline,
     microphone_frames: async_channel::Receiver<Vec<i16>>,
+    /// The latest wish about the microphone. Mutes run on separate blocking
+    /// threads and may finish out of order, so each applies this value rather
+    /// than its own; call `controls()` once per call, or two copies would
+    /// keep different wishes.
     microphone_wanted: Arc<AtomicBool>,
     camera: Arc<Mutex<Option<gst::Pipeline>>>,
 }

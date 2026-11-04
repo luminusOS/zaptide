@@ -129,17 +129,11 @@ impl CallPhase {
 /// What happened to the call, as the state machine sees it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CallSignal {
-    /// The person here accepted an incoming call.
     LocalAnswered,
-    /// The person here declined an incoming call.
     LocalDeclined,
-    /// The person here ended or cancelled the call.
     LocalHangup,
-    /// The other side answered our call.
     PeerAnswered,
-    /// The other side declined our call.
     PeerDeclined,
-    /// The other side ended the call or gave up ringing.
     PeerTerminated,
     /// Another linked device answered or declined.
     HandledElsewhere,

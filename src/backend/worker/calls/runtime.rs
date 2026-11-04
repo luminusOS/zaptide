@@ -16,6 +16,7 @@ use crate::calls::{
 };
 use crate::i18n::gettext;
 
+/// How long ending a call may wait on the network before giving up on it.
 const TERMINATE_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn guard<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -31,6 +32,8 @@ pub(super) struct CallShared {
     media: Mutex<Option<CallMedia>>,
     controls: Mutex<Option<CallControls>>,
     upgrade: Mutex<Option<VideoUpgradeToken>>,
+    /// Set before a call is torn down, so tasks still setting it up notice and
+    /// release the devices they opened, which nothing else knows about.
     cancelled: AtomicBool,
 }
 

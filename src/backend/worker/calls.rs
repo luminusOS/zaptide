@@ -28,13 +28,19 @@ use runtime::{
     teardown,
 };
 
+/// Prefix of the id an outgoing call carries until the runtime assigns the
+/// real one; signals for it are matched by peer instead.
 const PENDING_ID: &str = "pending-";
+/// How long closing the app waits for a hang-up. It is shorter than
+/// `TERMINATE_TIMEOUT` because the window is waiting to close.
 const SHUTDOWN_HANGUP: Duration = Duration::from_secs(2);
 const KNOWN_OFFERS: usize = 32;
 
 #[derive(Default)]
 pub(super) struct Calls {
     active: Option<ActiveCall>,
+    /// Counts calls begun. Notices carry the number of the call they belong
+    /// to, so one from an earlier call cannot touch the current one.
     generations: u64,
     history_dirty: bool,
     /// Offers seen lately, so a missed-call event, which carries only the
@@ -78,6 +84,7 @@ impl Calls {
 struct ActiveCall {
     generation: u64,
     session: CallSession,
+    /// Set only for an incoming call: the offer to answer or reject.
     offer: Option<Box<IncomingCall>>,
     shared: Arc<CallShared>,
     slots: Arc<VideoSlots>,

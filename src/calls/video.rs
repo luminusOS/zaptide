@@ -14,6 +14,7 @@ use super::{Fault, FaultHandler, MediaError, RgbaFrame, VideoSlots, pipeline_fro
 /// assumes for a plain channel source.
 const FRAMES_PER_SECOND: i32 = 15;
 const KEYFRAME_INTERVAL: i32 = 2 * FRAMES_PER_SECOND;
+/// Encoded pictures waiting for the VoIP runtime; a full queue drops the newest.
 const FRAMES_QUEUED: usize = 8;
 const LOCAL_PREVIEW_WIDTH: i32 = 480;
 const REMOTE_MAX_SIDE: i32 = 960;
@@ -82,6 +83,8 @@ fn rgba_of(sample: &gst::Sample) -> Option<RgbaFrame> {
     let stride = usize::try_from(frame.plane_stride()[0]).ok()?;
     let (width, height) = (info.width() as usize, info.height() as usize);
     let row = width * 4;
+    // Rows are padded to `stride`; refuse a buffer shorter than it claims
+    // rather than read past the plane.
     if stride < row || plane.len() < stride * (height.saturating_sub(1)) + row {
         return None;
     }
@@ -109,6 +112,9 @@ impl Camera {
         slots: Arc<VideoSlots>,
         faults: FaultHandler,
     ) -> Result<Self, MediaError> {
+        // 640 px wide keeps the bitrate and the encoder load low enough for a
+        // relayed call. `config-interval=-1` repeats the stream parameters
+        // with every keyframe, so a decoder that joins late can start.
         let pipeline = pipeline_from(&format!(
             "{source} ! videoconvert ! videoscale ! videorate ! \
              video/x-raw,width=640,pixel-aspect-ratio=1/1,framerate={FRAMES_PER_SECOND}/1 ! \
@@ -153,6 +159,7 @@ impl Camera {
             let _ = pipeline.set_state(gst::State::Null);
             return Err(MediaError::NoCamera);
         }
+        // A camera that has not settled in 3 s is treated as missing.
         let (result, _, _) = pipeline.state(gst::ClockTime::from_seconds(3));
         if result.is_err() {
             let _ = pipeline.set_state(gst::State::Null);

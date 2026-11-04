@@ -6,8 +6,10 @@ use whatsapp_rust::types::call::MissedCall;
 use super::{Offer, is_pending};
 
 const CALL_HISTORY_LIMIT: usize = 200;
+/// When the Calls tab was last looked at. The first read starts it at now, so
+/// missed calls from before this feature existed do not show as unseen.
 const CALLS_SEEN_KEY: &str = "calls_seen_at";
-/// Missed calls replayed after a reconnect are only worth a notification while fresh.
+/// Seconds a missed call replayed after a reconnect stays worth a notification.
 const FRESH_MISSED_CALL: i64 = 10 * 60;
 
 /// Whether filing a call may raise an unread count and a notification.

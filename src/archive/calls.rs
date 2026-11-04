@@ -6,6 +6,8 @@ use crate::model::Content;
 use crate::model::call::CallEntry;
 use rusqlite::params;
 
+/// The partial index `messages_calls` is built on this exact text, and SQLite
+/// only uses it for a query whose expression matches it character for character.
 const KIND: &str = "CASE WHEN json_valid(content) THEN json_extract(content, '$.kind') END";
 
 pub fn schema() -> String {

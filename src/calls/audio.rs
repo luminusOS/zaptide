@@ -8,6 +8,8 @@ use super::{Fault, FaultHandler, MediaError, pipeline_from, watch};
 
 /// Samples in one 60 ms frame at 16 kHz.
 const FRAME_SAMPLES: usize = 960;
+/// A full queue drops frames instead of delaying the call: a late sound is
+/// worse than a missing one, and 8 frames is about half a second.
 const FRAMES_QUEUED: usize = 8;
 
 /// Cuts a byte stream of little-endian 16-bit samples into whole frames.
@@ -44,6 +46,8 @@ fn settle(pipeline: &gst::Pipeline, missing: MediaError) -> Result<(), MediaErro
         let _ = pipeline.set_state(gst::State::Null);
         return Err(missing);
     }
+    // A device that has not settled in 3 s is treated as missing, so a stuck
+    // sound server cannot hold the call in "Connecting".
     let (result, _, _) = pipeline.state(gst::ClockTime::from_seconds(3));
     if result.is_err() {
         let _ = pipeline.set_state(gst::State::Null);
@@ -132,6 +136,8 @@ impl Playout {
 
     pub(super) fn with_sink(sink: &str, faults: FaultHandler) -> Result<Self, MediaError> {
         let pipeline = pipeline_from(&format!(
+            // Leaky: when the speaker falls behind, the oldest sound is dropped
+            // so playback catches up instead of lagging further.
             "appsrc name=in is-live=true format=time do-timestamp=true max-bytes=64000 \
              leaky-type=downstream \
              caps=audio/x-raw,format=S16LE,rate=16000,channels=1,layout=interleaved ! \
