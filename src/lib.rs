@@ -36,6 +36,7 @@ pub mod native_tray;
 pub mod native_voice;
 pub mod notifier;
 pub mod paths;
+pub mod portal;
 pub mod safety;
 pub mod services;
 pub mod settings;

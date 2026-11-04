@@ -1195,29 +1195,41 @@ msgstr ""
 msgid "Video could not be started"
 msgstr ""
 
-#: src/calls/mod.rs:31
+#: src/calls/mod.rs:39
 msgid "No microphone is available"
 msgstr ""
 
-#: src/calls/mod.rs:32
+#: src/calls/mod.rs:40
 msgid "No audio output is available"
 msgstr ""
 
-#: src/calls/mod.rs:33
+#: src/calls/mod.rs:41
 msgid "No camera is available"
 msgstr ""
 
-#: src/calls/mod.rs:35
+#: src/calls/mod.rs:42
+msgid "Camera access was denied"
+msgstr ""
+
+#: src/calls/mod.rs:44
+msgid "Camera access was not answered in time"
+msgstr ""
+
+#: src/calls/mod.rs:47
+msgid "The system camera portal is not available"
+msgstr ""
+
+#: src/calls/mod.rs:50
 msgid ""
 "Video calls need an H.264 encoder (the GStreamer x264 or OpenH264 plugin)"
 msgstr ""
 
-#: src/calls/mod.rs:38
+#: src/calls/mod.rs:53
 msgid ""
 "Video calls need an H.264 decoder (the GStreamer libav or OpenH264 plugin)"
 msgstr ""
 
-#: src/calls/mod.rs:40
+#: src/calls/mod.rs:55
 msgid "Call audio is unavailable"
 msgstr ""
 

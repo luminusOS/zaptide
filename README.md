@@ -116,10 +116,20 @@ call is announced and a third just rings.
 Calls connect to WhatsApp's relay servers over UDP and use the default
 microphone and speaker. Video needs a camera, an H.264 encoder (the GStreamer
 `openh264` or `x264` plugin) and a decoder (`libav` or `openh264`). Without them
-a voice call still works and a video call tells you what is missing.
+a voice call still works and a video call tells you what is missing. Outside a
+sandbox the camera is opened directly; when that finds none, ZapTide asks the
+camera portal, which also reaches cameras that only PipeWire exposes.
 
-- **Flatpak:** video calls are not supported yet. The sandbox has no camera
-  access and no H.264 codec extension, so only voice calls can work.
+- **Flatpak:** the camera is opened through the desktop's camera portal, which
+  asks for permission the first time and can be changed in the desktop's
+  settings. If you refuse, or do not answer within a minute, a video call you
+  place stops with a message saying so; one you answer carries on without your
+  picture. The sandbox grants no direct access to camera devices. The portal
+  route has been run against a real session portal and camera outside a
+  sandbox, but not yet inside a Flatpak. The GNOME runtime has no H.264 encoder
+  of its own: x264 comes from its `codecs-extra` extension, which Flatpak
+  installs with the app when a remote offers it. Without that extension a
+  video call reports a missing H.264 component (not tested).
 - **AppImage:** the bundle carries an H.264 decoder, but whether it carries an
   encoder and the camera plugins has not been checked; voice calls are the
   supported path.
