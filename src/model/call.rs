@@ -161,6 +161,8 @@ pub struct CallSession {
     pub video_requested: bool,
     /// The camera is being switched on or off.
     pub camera_busy: bool,
+    /// A video call that went on without a camera because none could be opened.
+    pub camera_unavailable: bool,
     pub started_at: i64,
     /// Talk time once a connected call has ended.
     pub talk_seconds: Option<u32>,
@@ -190,6 +192,7 @@ impl CallSession {
             peer_video: false,
             video_requested: false,
             camera_busy: false,
+            camera_unavailable: false,
             started_at,
             talk_seconds: None,
             answered: false,

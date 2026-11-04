@@ -522,6 +522,23 @@ async fn a_camera_change_is_refused_while_another_is_in_flight() {
 }
 
 #[tokio::test]
+async fn a_video_call_without_a_camera_says_so_until_the_camera_comes_on() {
+    let (mut worker, events, _, _) = worker();
+    worker.on_call_signal(&offer("NOCAM", true));
+    let _ = calls_in(&events);
+    answer_in_place(&mut worker);
+    worker.on_call_notice(1, CallNotice::MediaUp);
+    let _ = calls_in(&events);
+    worker.on_call_notice(1, CallNotice::Camera(false));
+    worker.on_call_notice(1, CallNotice::CameraUnavailable);
+    let session = calls_in(&events).pop().expect("the call is reported");
+    assert!(session.camera_unavailable && !session.camera_on);
+    worker.on_call_notice(1, CallNotice::Camera(true));
+    let session = calls_in(&events).pop().expect("the call is reported");
+    assert!(!session.camera_unavailable && session.camera_on);
+}
+
+#[tokio::test]
 async fn a_missed_event_for_a_group_call_is_not_filed_as_a_one_to_one_call() {
     let (mut worker, events, _, _) = worker();
     let mut group = offer("GROUPMISS", false);

@@ -406,10 +406,14 @@ pub(super) async fn run_call(
     let Prepared { media, video } = prepared?;
     let (microphone, speaker) = (media.microphone(), media.speaker());
     let has_camera = video.as_ref().is_some_and(|video| video.camera);
+    let missing_camera = video.is_some() && !has_camera;
     if !adopt_media(&shared, media).await {
         return Ok(());
     }
     reporter.notice(CallNotice::Camera(has_camera));
+    if missing_camera {
+        reporter.notice(CallNotice::CameraUnavailable);
+    }
     match dial.start(&client, microphone, speaker, video).await {
         Some(handle) => {
             adopt(handle, shared, reporter).await;
@@ -468,6 +472,9 @@ pub(super) async fn accept_video(shared: &Arc<CallShared>, reporter: &Reporter) 
     match handle.accept_video(token, source, sink).await {
         Ok(()) => {
             reporter.notice(CallNotice::Camera(camera));
+            if !camera {
+                reporter.notice(CallNotice::CameraUnavailable);
+            }
             reporter.notice(CallNotice::VideoStarted);
         }
         Err(_) => {

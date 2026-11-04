@@ -623,6 +623,8 @@ pub enum CallNotice {
     VideoRequestEnded,
     /// The local camera was switched on or off.
     Camera(bool),
+    /// A video call went on without a camera, as none could be opened.
+    CameraUnavailable,
     /// A camera change started or finished.
     CameraBusy(bool),
     /// The camera pipeline reported an error.

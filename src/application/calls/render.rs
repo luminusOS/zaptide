@@ -1,14 +1,62 @@
 use super::screen::with_waiting;
 use super::tests::{connected, session};
+use super::window::Look;
 use super::*;
 use crate::model::call::{CallDirection, CallOutcome, CallSignal};
+
+fn look(allow_focus: bool) -> Look<'static> {
+    Look {
+        avatar: None,
+        waiting_avatar: None,
+        allow_focus,
+    }
+}
+
+/// A switch keeps its widget, and so its keyboard focus, while the model
+/// flips it; the default button is focused only when allowed.
+fn controls_follow_the_model() {
+    let mut window = CallWindow::new(std::rc::Rc::new(|_| {}));
+    let voice = connected(CallDirection::Outgoing, false);
+    window.render("Ana", &look(true), &screen(&voice, "Ana", 100));
+    let mute = window.control(CallAction::ToggleMute).unwrap();
+    mute.grab_focus();
+    let mut muted = voice.clone();
+    muted.muted = true;
+    window.render("Ana", &look(true), &screen(&muted, "Ana", 100));
+    let after = window.control(CallAction::ToggleMute).unwrap();
+    assert_eq!(mute, after, "the switch is updated, not replaced");
+    let toggle = after.downcast_ref::<gtk::ToggleButton>().unwrap();
+    assert!(toggle.is_active());
+    assert_eq!(after.tooltip_text().as_deref(), Some("Unmute"));
+    assert_eq!(
+        gtk::prelude::GtkWindowExt::focus(&window.window).as_ref(),
+        Some(mute.upcast_ref())
+    );
+    window.window.destroy();
+
+    for (allowed, expected) in [(true, true), (false, false)] {
+        let mut window = CallWindow::new(std::rc::Rc::new(|_| {}));
+        window.window.present();
+        let ringing = session(CallDirection::Incoming, false);
+        window.render("Ana", &look(allowed), &screen(&ringing, "Ana", 100));
+        let answer = window.control(CallAction::Answer).unwrap();
+        let focused =
+            gtk::prelude::GtkWindowExt::focus(&window.window).as_ref() == Some(answer.upcast_ref());
+        assert_eq!(focused, expected, "Answer focus when allowed is {allowed}");
+        window.window.destroy();
+    }
+}
 
 /// Renders every call screen and the Calls tab to PNGs under
 /// `$RENDER_DIR`, light and dark. Run under a display:
 /// `RENDER_DIR=/tmp/r cargo test --lib render_call_screens -- --ignored`.
+/// `ZAPTIDE_LOCALEDIR` and `LANGUAGE` render a translation.
 #[test]
 #[ignore = "needs a display"]
 fn render_call_screens() {
+    if std::env::var_os("ZAPTIDE_LOCALEDIR").is_some() {
+        crate::i18n::init();
+    }
     gtk::init().unwrap();
     adw::init().unwrap();
     let dir = std::path::PathBuf::from(std::env::var("RENDER_DIR").expect("RENDER_DIR"));
@@ -59,16 +107,23 @@ fn render_call_screens() {
             })
             .collect(),
     };
+    controls_follow_the_model();
     let clicked = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-    let record = clicked.clone();
-    let mut window = CallWindow::new(std::rc::Rc::new(move |action| {
-        record.borrow_mut().push(action)
-    }));
     let mut muted = connected(CallDirection::Outgoing, false);
     muted.muted = true;
     let mut video = connected(CallDirection::Outgoing, true);
     video.camera_on = true;
     video.peer_video = true;
+    let mut camera_off = video.clone();
+    camera_off.camera_on = false;
+    let mut no_camera = connected(CallDirection::Incoming, true);
+    no_camera.peer_video = true;
+    no_camera.camera_unavailable = true;
+    let mut no_camera_voice = connected(CallDirection::Incoming, true);
+    no_camera_voice.camera_unavailable = true;
+    let mut voice_camera = connected(CallDirection::Outgoing, false);
+    voice_camera.video = true;
+    voice_camera.camera_on = true;
     let mut ended = connected(CallDirection::Outgoing, false);
     ended.apply(CallSignal::LocalHangup, 100 + 138);
     let mut failed = session(CallDirection::Outgoing, false);
@@ -79,48 +134,95 @@ fn render_call_screens() {
         ("incoming", session(CallDirection::Incoming, false)),
         ("incoming-video", session(CallDirection::Incoming, true)),
         ("calling", session(CallDirection::Outgoing, false)),
+        ("calling-video", session(CallDirection::Outgoing, true)),
         ("voice", connected(CallDirection::Outgoing, false)),
         ("muted", muted),
+        ("voice-camera", voice_camera),
         ("video", video),
+        ("video-camera-off", camera_off),
+        ("video-no-camera", no_camera),
+        ("no-camera", no_camera_voice),
         ("request", request),
         ("waiting", connected(CallDirection::Outgoing, false)),
         ("ended", ended),
         ("failed", failed),
     ];
-    for (scheme_name, scheme) in [
-        ("light", adw::ColorScheme::ForceLight),
-        ("dark", adw::ColorScheme::ForceDark),
-    ] {
-        adw::StyleManager::default().set_color_scheme(scheme);
-        for (name, call) in &screens {
-            let mut shown = screen(call, "Ana Souza", 100 + 138);
-            if *name == "waiting" {
-                shown = with_waiting(shown, "Bruno Lima", true);
-            }
-            window.render(call, "Ana Souza", None, &shown);
-            if call.peer_video {
-                window
-                    .remote
-                    .set_paintable(texture(gradient(320, 240, 90)).as_ref());
-                window
-                    .preview
-                    .set_paintable(texture(gradient(120, 160, 200)).as_ref());
-            }
+    let name = std::env::var("RENDER_NAME").unwrap_or_else(|_| "Ana Souza".into());
+    let other = std::env::var("RENDER_OTHER").unwrap_or_else(|_| "Bruno Lima".into());
+    let height = std::env::var("RENDER_HEIGHT")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(640);
+    for (size_name, width) in [("wide", 420), ("narrow", 360)] {
+        for (scheme_name, scheme) in [
+            ("light", adw::ColorScheme::ForceLight),
+            ("dark", adw::ColorScheme::ForceDark),
+        ] {
+            adw::StyleManager::default().set_color_scheme(scheme);
+            let record = clicked.clone();
+            let mut window = CallWindow::new(std::rc::Rc::new(move |action| {
+                record.borrow_mut().push(action)
+            }));
+            window.window.set_default_size(width, height);
             window.window.present();
-            shoot(
-                &format!("call-{name}-{scheme_name}"),
-                window.window.upcast_ref(),
-            );
+            for (state, call) in &screens {
+                let mut shown = screen(call, &name, 100 + 138);
+                if *state == "waiting" {
+                    shown = with_waiting(shown, &other, true, &name);
+                }
+                window.render(
+                    &name,
+                    &Look {
+                        avatar: None,
+                        waiting_avatar: None,
+                        allow_focus: true,
+                    },
+                    &shown,
+                );
+                if call.peer_video {
+                    window
+                        .remote
+                        .set_paintable(texture(gradient(320, 240, 90)).as_ref());
+                }
+                if call.camera_on {
+                    window
+                        .preview
+                        .set_paintable(texture(gradient(120, 160, 200)).as_ref());
+                }
+                shoot(
+                    &format!("call-{state}-{size_name}-{scheme_name}"),
+                    window.window.upcast_ref(),
+                );
+                let bounds = gtk::graphene::Rect::new(
+                    0.0,
+                    0.0,
+                    window.window.width() as f32,
+                    window.window.height() as f32,
+                );
+                if width < 400
+                    && let Some(end) = window.control(CallAction::HangUp)
+                {
+                    assert_eq!(end.height(), 56, "{state}: End call in a narrow window");
+                }
+                for control in window.controls() {
+                    let (w, h) = (control.width(), control.height());
+                    assert!(
+                        w >= 44 && h >= 48,
+                        "{state} {size_name}: a control is {w}x{h}"
+                    );
+                    let inside = control
+                        .compute_bounds(&window.window)
+                        .is_some_and(|b| bounds.contains_rect(&b));
+                    assert!(inside, "{state} {size_name}: a control leaves the window");
+                }
+            }
+            if width == 420 && scheme_name == "light" {
+                window.control(CallAction::Retry).unwrap().emit_clicked();
+                assert_eq!(clicked.borrow().last(), Some(&CallAction::Retry));
+            }
+            window.window.destroy();
         }
     }
-    let first = window
-        .buttons
-        .first_child()
-        .and_downcast::<gtk::Button>()
-        .unwrap();
-    first.emit_clicked();
-    assert_eq!(clicked.borrow().len(), 1);
-    window.window.destroy();
 
     let ui = CallsUi::new(|_| {}, || {}, || {});
     let chats = [

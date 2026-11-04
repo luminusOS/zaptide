@@ -562,7 +562,14 @@ impl Worker {
             CallNotice::Ended => self.signal_call(CallSignal::PeerTerminated),
             CallNotice::Camera(on) => {
                 call.session.camera_on = on;
+                if on {
+                    call.session.camera_unavailable = false;
+                }
                 call.session.video |= on;
+                self.emit_call();
+            }
+            CallNotice::CameraUnavailable => {
+                call.session.camera_unavailable = true;
                 self.emit_call();
             }
             CallNotice::CameraBusy(busy) => {

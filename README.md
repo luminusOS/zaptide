@@ -94,7 +94,11 @@ the window releases their playback resources; showing them again restarts playba
 Open a direct chat and use the phone or camera button in its header to call.
 Incoming calls open a call window, ring and send a desktop notification with
 Answer and Decline buttons, whichever account they belong to. Decline, answer,
-mute, and turn the camera on or off from the window as well. Calls are listed under the Calls tab beside Chats and Archived, and each one also
+mute, and turn the camera on or off from the window as well: the choices are
+pill buttons, and Mute and the camera are round switches that show a crossed-out
+icon while the microphone or camera is off. The window rearranges itself below
+about 400 px wide, and the incoming call notification stays on screen until you
+use it. Calls are listed under the Calls tab beside Chats and Archived, and each one also
 appears in its chat as an event such as "Missed voice call". Calls placed from
 your phone show up in the history after syncing.
 
@@ -107,7 +111,7 @@ is not affected. Inside a sandbox the do-not-disturb setting may not be
 readable, in which case the call rings.
 
 When a second person calls during a call, the window and a notification offer
-**Decline new call** and **End and answer**. Declining tells the caller the call
+**Decline** and **End and answer**. Declining tells the caller the call
 was declined. If you do nothing, it rings out and shows up as a missed call. A
 second call does not interrupt the first: ZapTide holds one call at a time, with
 no hold, and WhatsApp's library cannot send a "busy" reply, so only one waiting
@@ -116,7 +120,9 @@ call is announced and a third just rings.
 Calls connect to WhatsApp's relay servers over UDP and use the default
 microphone and speaker. Video needs a camera, an H.264 encoder (the GStreamer
 `openh264` or `x264` plugin) and a decoder (`libav` or `openh264`). Without them
-a voice call still works and a video call tells you what is missing. Outside a
+a voice call still works and a video call tells you what is missing. When a video
+call goes on without a camera, the window says "No camera available" and the camera
+button stays off. Outside a
 sandbox the camera is opened directly; when that finds none, ZapTide asks the
 camera portal, which also reaches cameras that only PipeWire exposes.
 
