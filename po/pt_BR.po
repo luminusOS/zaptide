@@ -1032,13 +1032,80 @@ msgstr "Abrir com outro aplicativo"
 msgid "Photo"
 msgstr "Foto"
 
-#: src/native_media_widgets/photo.rs:732 src/native_media_widgets/photo.rs:734
-msgid "Actual Size"
-msgstr "Tamanho real"
-
 #: src/native_media_widgets/photo.rs:795 src/native_media_widgets/photo.rs:797
 msgid "Copy Image"
 msgstr "Copiar imagem"
+
+#: src/native_media_widgets/viewer.rs
+#, rust-format
+msgid "{current} of {total}"
+msgstr "{current} de {total}"
+
+#: src/native_media_widgets/viewer.rs
+msgid "Fit"
+msgstr "Ajustar"
+
+#: src/native_media_widgets/viewer.rs
+msgid "Zoom Out"
+msgstr "Diminuir zoom"
+
+#: src/native_media_widgets/viewer.rs
+msgid "Zoom In"
+msgstr "Aumentar zoom"
+
+#: src/native_media_widgets/viewer.rs
+msgid "Close"
+msgstr "Fechar"
+
+#: src/native_media_widgets/viewer.rs
+msgid "Previous Photo"
+msgstr "Foto anterior"
+
+#: src/native_media_widgets/viewer.rs
+msgid "Next Photo"
+msgstr "Próxima foto"
+
+#: src/native_media_widgets/viewer.rs
+msgid "Play"
+msgstr "Reproduzir"
+
+#: src/native_media_widgets/viewer.rs
+msgid "Pause"
+msgstr "Pausar"
+
+#: src/native_media_widgets/viewer.rs
+#, rust-format
+msgid "Photo from {name}"
+msgstr "Foto de {name}"
+
+#: src/native_media_widgets/viewer.rs
+#, rust-format
+msgid "Video from {name}"
+msgstr "Vídeo de {name}"
+
+#: src/native_media_widgets/viewer.rs
+msgid "Seek"
+msgstr "Posição"
+
+#: src/native_media_widgets/viewer.rs
+msgid "Volume"
+msgstr "Volume"
+
+#: src/native_media_widgets/viewer.rs
+msgid "Fullscreen"
+msgstr "Tela cheia"
+
+#: src/native_media_widgets/viewer.rs
+msgid "Exit Fullscreen"
+msgstr "Sair da tela cheia"
+
+#: src/native_media_widgets/viewer.rs
+msgid "Video"
+msgstr "Vídeo"
+
+#: src/native_media_widgets/viewer.rs
+msgid "Open in Another App"
+msgstr "Abrir em outro aplicativo"
 
 #: src/native_media_widgets/widget.rs:376
 msgid "Image preview"

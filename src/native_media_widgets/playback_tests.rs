@@ -33,7 +33,7 @@ impl RelmListItem for CachedRow {
     }
 }
 
-fn wait_until(reason: &str, mut ready: impl FnMut() -> bool) {
+pub(super) fn wait_until(reason: &str, mut ready: impl FnMut() -> bool) {
     let context = glib::MainContext::default();
     let deadline = Instant::now() + Duration::from_secs(10);
     while !ready() {
@@ -43,7 +43,7 @@ fn wait_until(reason: &str, mut ready: impl FnMut() -> bool) {
     }
 }
 
-fn drain() {
+pub(super) fn drain() {
     let deadline = Instant::now() + Duration::from_millis(150);
     wait_until("context drain", || Instant::now() >= deadline);
 }

@@ -1026,12 +1026,79 @@ msgstr ""
 msgid "Photo"
 msgstr ""
 
-#: src/native_media_widgets/photo.rs:732 src/native_media_widgets/photo.rs:734
-msgid "Actual Size"
-msgstr ""
-
 #: src/native_media_widgets/photo.rs:795 src/native_media_widgets/photo.rs:797
 msgid "Copy Image"
+msgstr ""
+
+#: src/native_media_widgets/viewer.rs
+#, rust-format
+msgid "{current} of {total}"
+msgstr ""
+
+#: src/native_media_widgets/viewer.rs
+msgid "Fit"
+msgstr ""
+
+#: src/native_media_widgets/viewer.rs
+msgid "Zoom Out"
+msgstr ""
+
+#: src/native_media_widgets/viewer.rs
+msgid "Zoom In"
+msgstr ""
+
+#: src/native_media_widgets/viewer.rs
+msgid "Close"
+msgstr ""
+
+#: src/native_media_widgets/viewer.rs
+msgid "Previous Photo"
+msgstr ""
+
+#: src/native_media_widgets/viewer.rs
+msgid "Next Photo"
+msgstr ""
+
+#: src/native_media_widgets/viewer.rs
+msgid "Play"
+msgstr ""
+
+#: src/native_media_widgets/viewer.rs
+msgid "Pause"
+msgstr ""
+
+#: src/native_media_widgets/viewer.rs
+#, rust-format
+msgid "Photo from {name}"
+msgstr ""
+
+#: src/native_media_widgets/viewer.rs
+#, rust-format
+msgid "Video from {name}"
+msgstr ""
+
+#: src/native_media_widgets/viewer.rs
+msgid "Seek"
+msgstr ""
+
+#: src/native_media_widgets/viewer.rs
+msgid "Volume"
+msgstr ""
+
+#: src/native_media_widgets/viewer.rs
+msgid "Fullscreen"
+msgstr ""
+
+#: src/native_media_widgets/viewer.rs
+msgid "Exit Fullscreen"
+msgstr ""
+
+#: src/native_media_widgets/viewer.rs
+msgid "Video"
+msgstr ""
+
+#: src/native_media_widgets/viewer.rs
+msgid "Open in Another App"
 msgstr ""
 
 #: src/native_media_widgets/widget.rs:376
