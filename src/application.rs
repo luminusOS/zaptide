@@ -1168,7 +1168,7 @@ impl SimpleComponent for NativeApplication {
         link_menu.append(Some(&gettext("_Remove Account…")), Some("win.unlink"));
         link_menu.append(Some(&gettext("_Preferences")), Some("win.preferences"));
         link_menu.append(Some(&gettext("_About ZapTide")), Some("win.about"));
-        link_menu.append(Some(&gettext("_Quit")), Some("win.quit"));
+        link_menu.append(Some(&gettext("_Quit")), Some("app.quit"));
         let (switch_sender, add_sender, profile_sender) =
             (sender.clone(), sender.clone(), sender.clone());
         let link_switcher = account_switcher::AccountSwitcher::new(
@@ -1207,7 +1207,7 @@ impl SimpleComponent for NativeApplication {
         section.append(Some(&gettext("_Preferences")), Some("win.preferences"));
         section.append(Some(&gettext("_Keyboard Shortcuts")), Some("win.shortcuts"));
         section.append(Some(&gettext("_About ZapTide")), Some("win.about"));
-        section.append(Some(&gettext("_Quit")), Some("win.quit"));
+        section.append(Some(&gettext("_Quit")), Some("app.quit"));
         primary_menu.append_section(None, &section);
         let (switch_sender, add_sender, profile_sender) =
             (sender.clone(), sender.clone(), sender.clone());
@@ -1411,6 +1411,7 @@ impl SimpleComponent for NativeApplication {
         };
         model.spawn_hidden_accounts(&sender);
         install_window_actions(&root, &sender);
+        install_accelerators(&relm4::main_application());
         install_icons(&icon_dir);
         let (tray_actions, tray_receiver) = relm4::channel();
         let tray_sender = sender.clone();

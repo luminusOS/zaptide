@@ -6,7 +6,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: zaptide\n"
 "Report-Msgid-Bugs-To: https://github.com/luminusOS/zaptide/issues\n"
-"POT-Creation-Date: 2026-11-04 11:56-0300\n"
+"POT-Creation-Date: 2026-11-04 12:14-0300\n"
 "PO-Revision-Date: 2026-10-13 17:25-0300\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -18,8 +18,8 @@ msgstr ""
 
 #: src/application/accounts.rs:151 src/application/accounts.rs:152
 #: src/application/dispatch/backend_events.rs:425
-#: src/application/dispatch.rs:147 src/application/dispatch.rs:148
-#: src/application/dispatch.rs:462 src/application.rs:2740
+#: src/application/dispatch.rs:157 src/application/dispatch.rs:158
+#: src/application/dispatch.rs:472 src/application.rs:2741
 msgid "Could not save preferences"
 msgstr "Não foi possível salvar as preferências"
 
@@ -28,7 +28,7 @@ msgid "Preferences saved"
 msgstr "Preferências salvas"
 
 #: src/application/accounts.rs:157 src/application/accounts.rs:158
-#: src/application/dispatch.rs:152 src/application/dispatch.rs:153
+#: src/application/dispatch.rs:162 src/application/dispatch.rs:163
 msgid "Preference value is invalid"
 msgstr "O valor da preferência é inválido"
 
@@ -81,7 +81,7 @@ msgstr "Nenhuma chamada selecionada"
 msgid "Pick a call to see its details"
 msgstr "Escolha uma chamada para ver os detalhes"
 
-#: src/application/calls.rs:147
+#: src/application/calls.rs:147 src/application/dispatch.rs:117
 msgid "Open chat"
 msgstr "Abrir conversa"
 
@@ -232,9 +232,9 @@ msgstr "Enviar mensagem de voz"
 #: src/application/composer.rs:235 src/application/contact_sharing.rs:439
 #: src/application/dialogs.rs:52 src/application/dialogs.rs:77
 #: src/application/dialogs.rs:224 src/application/dialogs.rs:401
-#: src/application/dispatch.rs:958 src/application/link_page.rs:85
+#: src/application/dispatch.rs:968 src/application/link_page.rs:85
 #: src/application/profile_dialog.rs:115 src/application.rs:960
-#: src/application.rs:2780 src/native_preferences.rs:863
+#: src/application.rs:2781 src/native_preferences.rs:863
 msgid "Cancel"
 msgstr "Cancelar"
 
@@ -319,10 +319,10 @@ msgstr "Contato não enviado: a conversa ou a conta vinculada mudou"
 msgid "Sending contact"
 msgstr "Enviando contato"
 
-#: src/application/contact_sharing.rs:76 src/application/dispatch.rs:235
-#: src/application/dispatch.rs:407 src/application/dispatch.rs:526
-#: src/application/dispatch.rs:551 src/application/dispatch.rs:851
-#: src/application/dispatch.rs:858
+#: src/application/contact_sharing.rs:76 src/application/dispatch.rs:245
+#: src/application/dispatch.rs:417 src/application/dispatch.rs:536
+#: src/application/dispatch.rs:561 src/application/dispatch.rs:861
+#: src/application/dispatch.rs:868
 msgid "Backend unavailable"
 msgstr "Serviço indisponível"
 
@@ -592,7 +592,7 @@ msgstr "Escolha uma conversa que aceite mensagens antes de anexar arquivos"
 msgid "Clear the staged clipboard image before adding files"
 msgstr "Remova a imagem da área de transferência antes de adicionar arquivos"
 
-#: src/application/dispatch/attachments.rs:53 src/application.rs:2072
+#: src/application/dispatch/attachments.rs:53 src/application.rs:2073
 msgid "Finish the active portal action first"
 msgstr "Conclua primeiro a ação do portal em andamento"
 
@@ -617,74 +617,122 @@ msgid "Not connected to WhatsApp"
 msgstr "Sem conexão com o WhatsApp"
 
 #: src/application/dispatch.rs:55 src/application/dispatch.rs:56
-#: src/application/dispatch.rs:66 src/application.rs:2201
-#: src/application.rs:2202 src/application.rs:2216 src/application.rs:2217
-#: src/application.rs:2241 src/application.rs:2242
+#: src/application/dispatch.rs:66 src/application.rs:2202
+#: src/application.rs:2203 src/application.rs:2217 src/application.rs:2218
+#: src/application.rs:2242 src/application.rs:2243
 msgid "Could not open themes folder"
 msgstr "Não foi possível abrir a pasta de temas"
 
-#: src/application/dispatch.rs:166
+#: src/application/dispatch.rs:106
+msgid "General"
+msgstr "Geral"
+
+#: src/application/dispatch.rs:108
+msgid "Close window"
+msgstr "Fechar janela"
+
+#: src/application/dispatch.rs:109 src/application.rs:2782
+msgid "Quit"
+msgstr "Sair"
+
+#: src/application/dispatch.rs:113
+msgid "Chat List"
+msgstr "Lista de conversas"
+
+#: src/application/dispatch.rs:115
+msgid "Previous chat"
+msgstr "Conversa anterior"
+
+#: src/application/dispatch.rs:116
+msgid "Next chat"
+msgstr "Próxima conversa"
+
+#: src/application/dispatch.rs:121
+msgid "Composer"
+msgstr "Campo de mensagem"
+
+#: src/application/dispatch.rs:123
+msgid "Send message"
+msgstr "Enviar mensagem"
+
+#: src/application/dispatch.rs:124
+msgid "New line"
+msgstr "Nova linha"
+
+#: src/application/dispatch.rs:128
+msgid "Messages"
+msgstr "Mensagens"
+
+#: src/application/dispatch.rs:130
+msgid "Open message menu"
+msgstr "Abrir menu da mensagem"
+
+#: src/application/dispatch.rs:131
+msgid "Copy selected text"
+msgstr "Copiar texto selecionado"
+
+#: src/application/dispatch.rs:176
 msgid "Starting backend"
 msgstr "Iniciando o serviço"
 
-#: src/application/dispatch.rs:367
+#: src/application/dispatch.rs:377
 msgid "Reconnecting to WhatsApp"
 msgstr "Reconectando ao WhatsApp"
 
-#: src/application/dispatch.rs:386
+#: src/application/dispatch.rs:396
 msgid "Refreshing messages"
 msgstr "Atualizando mensagens"
 
-#: src/application/dispatch.rs:405
+#: src/application/dispatch.rs:415
 msgid "Unlinking this computer"
 msgstr "Desvinculando este computador"
 
-#: src/application/dispatch.rs:502 src/application/dispatch.rs:510
+#: src/application/dispatch.rs:512 src/application/dispatch.rs:520
 msgid "Code copied"
 msgstr "Código copiado"
 
-#: src/application/dispatch.rs:518 src/application/dispatch.rs:519
-#: src/application/dispatch.rs:531 src/application/dispatch.rs:532
+#: src/application/dispatch.rs:528 src/application/dispatch.rs:529
+#: src/application/dispatch.rs:541 src/application/dispatch.rs:542
 msgid "Enter valid phone number with country code"
 msgstr "Informe um número de telefone válido, com o código do país"
 
-#: src/application/dispatch.rs:524
+#: src/application/dispatch.rs:534
 msgid "Requesting a pairing code from WhatsApp"
 msgstr "Pedindo um código de pareamento ao WhatsApp"
 
-#: src/application/dispatch.rs:549
+#: src/application/dispatch.rs:559
 msgid "Checking contact on WhatsApp"
 msgstr "Verificando o contato no WhatsApp"
 
-#: src/application/dispatch.rs:655
+#: src/application/dispatch.rs:665
 msgid "Contact opened"
 msgstr "Contato aberto"
 
-#: src/application/dispatch.rs:786
+#: src/application/dispatch.rs:796
 msgid "Could not save attachment"
 msgstr "Não foi possível salvar o anexo"
 
-#: src/application/dispatch.rs:791
+#: src/application/dispatch.rs:801
 msgid "Clipboard or portal action failed"
 msgstr "A área de transferência ou o portal falhou"
 
-#: src/application/dispatch.rs:810
+#: src/application/dispatch.rs:820
 msgid "Copied"
 msgstr "Copiado"
 
-#: src/application/dispatch.rs:826
+#: src/application/dispatch.rs:836
 msgid "Phone number copied"
 msgstr "Número de telefone copiado"
 
-#: src/application/dispatch.rs:951
+#: src/application/dispatch.rs:961
 msgid "Delete message?"
 msgstr "Apagar mensagem?"
 
-#: src/application/dispatch.rs:959
+#: src/application/dispatch.rs:969
 msgid "Delete"
 msgstr "Apagar"
 
-#: src/application/dispatch.rs:995
+#: src/application/dispatch.rs:1005
 msgid "Shutdown complete"
 msgstr "Encerramento concluído"
 
@@ -881,155 +929,151 @@ msgstr "_Nova conversa"
 msgid "_Keyboard Shortcuts"
 msgstr "Atalhos do _teclado"
 
-#: src/application.rs:1718
+#: src/application.rs:1719
 msgid "Could not save theme preference"
 msgstr "Não foi possível salvar a preferência de tema"
 
-#: src/application.rs:1874 src/native_media_widgets/photo.rs:439
+#: src/application.rs:1875 src/native_media_widgets/photo.rs:439
 #: src/native_media_widgets/viewer.rs:688
 #: src/native_media_widgets/viewer.rs:1139
 msgid "Show in Folder"
 msgstr "Mostrar na pasta"
 
-#: src/application.rs:1875
+#: src/application.rs:1876
 msgid "Save Attachment…"
 msgstr "Salvar anexo…"
 
-#: src/application.rs:1885
+#: src/application.rs:1886
 msgid "Open Link"
 msgstr "Abrir link"
 
-#: src/application.rs:1889
+#: src/application.rs:1890
 msgid "Go to Quoted Message"
 msgstr "Ir para a mensagem citada"
 
-#: src/application.rs:1899
+#: src/application.rs:1900
 msgid "Copy Text"
 msgstr "Copiar texto"
 
-#: src/application.rs:1901
+#: src/application.rs:1902
 msgid "Reply"
 msgstr "Responder"
 
-#: src/application.rs:1903
+#: src/application.rs:1904
 msgid "Edit"
 msgstr "Editar"
 
-#: src/application.rs:1905
+#: src/application.rs:1906
 msgid "Forward…"
 msgstr "Encaminhar…"
 
-#: src/application.rs:1907
+#: src/application.rs:1908
 msgid "Unstar"
 msgstr "Desfavoritar"
 
-#: src/application.rs:1909
+#: src/application.rs:1910
 msgid "Star"
 msgstr "Favoritar"
 
-#: src/application.rs:1912
+#: src/application.rs:1913
 msgid "Select"
 msgstr "Selecionar"
 
-#: src/application.rs:1930
+#: src/application.rs:1931
 msgid "Delete for Me"
 msgstr "Apagar para mim"
 
-#: src/application.rs:1933
+#: src/application.rs:1934
 msgid "Delete for Everyone"
 msgstr "Apagar para todos"
 
-#: src/application.rs:2048
+#: src/application.rs:2049
 msgid "Downloading attachment"
 msgstr "Baixando anexo"
 
-#: src/application.rs:2060
+#: src/application.rs:2061
 msgid "Could not open attachment"
 msgstr "Não foi possível abrir o anexo"
 
-#: src/application.rs:2076
+#: src/application.rs:2077
 msgid "Clipboard is unavailable"
 msgstr "A área de transferência não está disponível"
 
-#: src/application.rs:2134
+#: src/application.rs:2135
 msgid "Reading clipboard image"
 msgstr "Lendo imagem da área de transferência"
 
-#: src/application.rs:2136
+#: src/application.rs:2137
 msgid "Could not read clipboard image"
 msgstr "Não foi possível ler a imagem da área de transferência"
 
-#: src/application.rs:2142
+#: src/application.rs:2143
 msgid "Choose an available conversation before pasting an image"
 msgstr "Escolha uma conversa disponível antes de colar uma imagem"
 
-#: src/application.rs:2156
+#: src/application.rs:2157
 msgid "Send or clear the staged attachment before pasting an image"
 msgstr "Envie ou remova o anexo pendente antes de colar uma imagem"
 
-#: src/application.rs:2160
+#: src/application.rs:2161
 msgid "Clipboard image ready"
 msgstr "Imagem da área de transferência pronta"
 
-#: src/application.rs:2193
+#: src/application.rs:2194
 msgid "Opening link"
 msgstr "Abrindo link"
 
-#: src/application.rs:2195
+#: src/application.rs:2196
 msgid "Link is not supported"
 msgstr "Link não suportado"
 
-#: src/application.rs:2211
+#: src/application.rs:2212
 msgid "Preparing themes folder"
 msgstr "Preparando a pasta de temas"
 
-#: src/application.rs:2238
+#: src/application.rs:2239
 msgid "Opening themes folder"
 msgstr "Abrindo a pasta de temas"
 
-#: src/application.rs:2279
+#: src/application.rs:2280
 msgid "Choose save location"
 msgstr "Escolher onde salvar"
 
-#: src/application.rs:2281
+#: src/application.rs:2282
 msgid "Could not open save dialog"
 msgstr "Não foi possível abrir a janela para salvar"
 
-#: src/application.rs:2370
+#: src/application.rs:2371
 msgid "Choose another available conversation"
 msgstr "Escolha outra conversa disponível"
 
-#: src/application.rs:2429
+#: src/application.rs:2430
 msgid "Deleting message for everyone"
 msgstr "Apagando mensagem para todos"
 
-#: src/application.rs:2433
+#: src/application.rs:2434
 msgid "Deleting message"
 msgstr "Apagando mensagem"
 
-#: src/application.rs:2476
+#: src/application.rs:2477
 msgid "Enter a question and two different poll options"
 msgstr "Informe uma pergunta e duas opções diferentes"
 
-#: src/application.rs:2484
+#: src/application.rs:2485
 msgid "Creating poll"
 msgstr "Criando enquete"
 
-#: src/application.rs:2650
+#: src/application.rs:2651
 msgid "Message deleted"
 msgstr "Mensagem apagada"
 
-#: src/application.rs:2657
+#: src/application.rs:2658
 msgid "This chat is no longer available."
 msgstr "Esta conversa não está mais disponível."
 
-#: src/application.rs:2742
+#: src/application.rs:2743
 msgid "Shutdown requested"
 msgstr "Encerramento solicitado"
-
-#: src/application.rs:2781
-msgid "Quit"
-msgstr "Sair"
 
 #: src/application/sidebar.rs:84
 msgid "Updating messages"

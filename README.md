@@ -67,8 +67,8 @@ Update in place with [AppImageUpdate](https://github.com/AppImageCommunity/AppIm
 which downloads only changed blocks. Replace pre-0.7.2 AppImages manually once;
 they lack update information.
 
-After updating, quit from the menu and reopen. Closing the window can leave the
-old version running.
+After updating, quit from the menu or with Ctrl+Q and reopen. Closing the window
+(Ctrl+W) can leave the old version running.
 
 ## First steps
 
