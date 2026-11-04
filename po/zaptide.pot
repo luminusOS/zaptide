@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: zaptide\n"
 "Report-Msgid-Bugs-To: https://github.com/luminusOS/zaptide/issues\n"
-"POT-Creation-Date: 2026-11-04 14:07-0300\n"
+"POT-Creation-Date: 2026-11-04 14:17-0300\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -78,132 +78,112 @@ msgstr ""
 msgid "More Reactions"
 msgstr ""
 
-#: src/application/calls.rs:136
+#: src/application/calls.rs:137
 msgid "No Call Selected"
 msgstr ""
 
-#: src/application/calls.rs:137
+#: src/application/calls.rs:138
 msgid "Pick a call to see its details"
 msgstr ""
 
-#: src/application/calls.rs:147 src/application/dispatch.rs:117
+#: src/application/calls.rs:148 src/application/dispatch.rs:117
 msgid "Open chat"
 msgstr ""
 
-#: src/application/calls.rs:149
+#: src/application/calls.rs:150
 msgid "Call back"
 msgstr ""
 
-#: src/application/calls.rs:177
+#: src/application/calls.rs:178
 msgid "Call details"
 msgstr ""
 
-#: src/application/calls/screen.rs:81
-msgid "Incoming video call"
-msgstr ""
-
-#: src/application/calls/screen.rs:83
-msgid "Incoming voice call"
-msgstr ""
-
-#: src/application/calls/screen.rs:90
+#: src/application/calls/screen.rs:88
 msgid "%1$s is also calling, with video"
 msgstr ""
 
-#: src/application/calls/screen.rs:92
+#: src/application/calls/screen.rs:90
 msgid "%1$s is also calling"
 msgstr ""
 
-#: src/application/calls/screen.rs:101
+#: src/application/calls/screen.rs:99
 msgid "Decline new call"
 msgstr ""
 
-#: src/application/calls/screen.rs:107 src/native_notifications.rs:261
+#: src/application/calls/screen.rs:105 src/native_notifications.rs:261
 msgid "End and answer"
 msgstr ""
 
-#: src/application/calls/screen.rs:134
+#: src/application/calls/screen.rs:132
 msgid "Back to chat"
 msgstr ""
 
-#: src/application/calls/screen.rs:143
+#: src/application/calls/screen.rs:141
 msgid "Calling…"
 msgstr ""
 
-#: src/application/calls/screen.rs:143
+#: src/application/calls/screen.rs:141
 msgid "Cancel call"
 msgstr ""
 
-#: src/application/calls/screen.rs:145
+#: src/application/calls/screen.rs:143
 msgid "Connecting…"
 msgstr ""
 
-#: src/application/calls/screen.rs:145 src/application/calls/screen.rs:249
+#: src/application/calls/screen.rs:143 src/application/calls/screen.rs:247
 msgid "End call"
 msgstr ""
 
-#: src/application/calls/screen.rs:158
+#: src/application/calls/screen.rs:156
 msgid "Couldn't connect the call"
 msgstr ""
 
-#: src/application/calls/screen.rs:162
+#: src/application/calls/screen.rs:160
 msgid "Try again"
 msgstr ""
 
-#: src/application/calls/screen.rs:178 src/native_notifications.rs:255
+#: src/application/calls/screen.rs:176 src/native_notifications.rs:255
 msgid "Decline"
 msgstr ""
 
-#: src/application/calls/screen.rs:184 src/native_notifications.rs:260
+#: src/application/calls/screen.rs:182 src/native_notifications.rs:260
 msgid "Answer"
 msgstr ""
 
-#: src/application/calls/screen.rs:196
+#: src/application/calls/screen.rs:194
 msgid "Unmute"
 msgstr ""
 
-#: src/application/calls/screen.rs:203
+#: src/application/calls/screen.rs:201
 msgid "Mute"
 msgstr ""
 
-#: src/application/calls/screen.rs:212
+#: src/application/calls/screen.rs:210
 msgid "Turn camera off"
 msgstr ""
 
-#: src/application/calls/screen.rs:214
+#: src/application/calls/screen.rs:212
 msgid "Turn camera on"
 msgstr ""
 
-#: src/application/calls/screen.rs:216
+#: src/application/calls/screen.rs:214
 msgid "Start video"
 msgstr ""
 
-#: src/application/calls/screen.rs:227
+#: src/application/calls/screen.rs:225
 msgid "Microphone muted"
 msgstr ""
 
-#: src/application/calls/screen.rs:229
+#: src/application/calls/screen.rs:227
 msgid "Connected"
 msgstr ""
 
-#: src/application/calls/screen.rs:234
+#: src/application/calls/screen.rs:232
 msgid "%1$s wants to switch to video"
 msgstr ""
 
-#: src/application/calls/screen.rs:238
+#: src/application/calls/screen.rs:236
 msgid "Accept video"
-msgstr ""
-
-#: src/application/calls/screen.rs:259
-msgid "Missed"
-msgstr ""
-
-#: src/application/calls/screen.rs:260
-msgid "Outgoing"
-msgstr ""
-
-#: src/application/calls/screen.rs:261
-msgid "Incoming"
 msgstr ""
 
 #: src/application/calls/window.rs:24 src/model/mod.rs:629
@@ -1289,8 +1269,24 @@ msgstr ""
 msgid "Video call failed"
 msgstr ""
 
-#: src/model/call.rs:91
+#: src/model/call.rs:93
 msgid "%1$s · %2$s"
+msgstr ""
+
+#: src/model/call.rs:288
+msgid "Outgoing voice call"
+msgstr ""
+
+#: src/model/call.rs:289
+msgid "Outgoing video call"
+msgstr ""
+
+#: src/model/call.rs:290
+msgid "Incoming voice call"
+msgstr ""
+
+#: src/model/call.rs:291
+msgid "Incoming video call"
 msgstr ""
 
 #: src/model/mod.rs:446
@@ -1523,15 +1519,15 @@ msgstr ""
 msgid "Open in Another App"
 msgstr ""
 
-#: src/native_media_widgets/widget.rs:366
+#: src/native_media_widgets/widget.rs:370
 msgid "This message type cannot be displayed"
 msgstr ""
 
-#: src/native_media_widgets/widget.rs:389
+#: src/native_media_widgets/widget.rs:393
 msgid "Image preview"
 msgstr ""
 
-#: src/native_media_widgets/widget.rs:401
+#: src/native_media_widgets/widget.rs:405
 msgid "Open or download attachment"
 msgstr ""
 

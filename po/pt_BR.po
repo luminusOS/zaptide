@@ -6,7 +6,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: zaptide\n"
 "Report-Msgid-Bugs-To: https://github.com/luminusOS/zaptide/issues\n"
-"POT-Creation-Date: 2026-11-04 14:07-0300\n"
+"POT-Creation-Date: 2026-11-04 14:17-0300\n"
 "PO-Revision-Date: 2026-10-13 17:25-0300\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -77,133 +77,113 @@ msgstr "Remover reação"
 msgid "More Reactions"
 msgstr "Mais reações"
 
-#: src/application/calls.rs:136
+#: src/application/calls.rs:137
 msgid "No Call Selected"
 msgstr "Nenhuma chamada selecionada"
 
-#: src/application/calls.rs:137
+#: src/application/calls.rs:138
 msgid "Pick a call to see its details"
 msgstr "Escolha uma chamada para ver os detalhes"
 
-#: src/application/calls.rs:147 src/application/dispatch.rs:117
+#: src/application/calls.rs:148 src/application/dispatch.rs:117
 msgid "Open chat"
 msgstr "Abrir conversa"
 
-#: src/application/calls.rs:149
+#: src/application/calls.rs:150
 msgid "Call back"
 msgstr "Retornar chamada"
 
-#: src/application/calls.rs:177
+#: src/application/calls.rs:178
 msgid "Call details"
 msgstr "Detalhes da chamada"
 
-#: src/application/calls/screen.rs:81
-msgid "Incoming video call"
-msgstr "Chamada de vídeo recebida"
-
-#: src/application/calls/screen.rs:83
-msgid "Incoming voice call"
-msgstr "Chamada de voz recebida"
-
-#: src/application/calls/screen.rs:90
+#: src/application/calls/screen.rs:88
 msgid "%1$s is also calling, with video"
 msgstr "%1$s também está ligando, com vídeo"
 
-#: src/application/calls/screen.rs:92
+#: src/application/calls/screen.rs:90
 msgid "%1$s is also calling"
 msgstr "%1$s também está ligando"
 
-#: src/application/calls/screen.rs:101
+#: src/application/calls/screen.rs:99
 msgid "Decline new call"
 msgstr "Recusar nova chamada"
 
-#: src/application/calls/screen.rs:107 src/native_notifications.rs:261
+#: src/application/calls/screen.rs:105 src/native_notifications.rs:261
 msgid "End and answer"
 msgstr "Encerrar e atender"
 
-#: src/application/calls/screen.rs:134
+#: src/application/calls/screen.rs:132
 msgid "Back to chat"
 msgstr "Voltar à conversa"
 
-#: src/application/calls/screen.rs:143
+#: src/application/calls/screen.rs:141
 msgid "Calling…"
 msgstr "Chamando…"
 
-#: src/application/calls/screen.rs:143
+#: src/application/calls/screen.rs:141
 msgid "Cancel call"
 msgstr "Cancelar chamada"
 
-#: src/application/calls/screen.rs:145
+#: src/application/calls/screen.rs:143
 msgid "Connecting…"
 msgstr "Conectando…"
 
-#: src/application/calls/screen.rs:145 src/application/calls/screen.rs:249
+#: src/application/calls/screen.rs:143 src/application/calls/screen.rs:247
 msgid "End call"
 msgstr "Encerrar chamada"
 
-#: src/application/calls/screen.rs:158
+#: src/application/calls/screen.rs:156
 msgid "Couldn't connect the call"
 msgstr "Não foi possível conectar a chamada"
 
-#: src/application/calls/screen.rs:162
+#: src/application/calls/screen.rs:160
 msgid "Try again"
 msgstr "Tentar novamente"
 
-#: src/application/calls/screen.rs:178 src/native_notifications.rs:255
+#: src/application/calls/screen.rs:176 src/native_notifications.rs:255
 msgid "Decline"
 msgstr "Recusar"
 
-#: src/application/calls/screen.rs:184 src/native_notifications.rs:260
+#: src/application/calls/screen.rs:182 src/native_notifications.rs:260
 msgid "Answer"
 msgstr "Atender"
 
-#: src/application/calls/screen.rs:196
+#: src/application/calls/screen.rs:194
 msgid "Unmute"
 msgstr "Ativar microfone"
 
-#: src/application/calls/screen.rs:203
+#: src/application/calls/screen.rs:201
 msgid "Mute"
 msgstr "Silenciar"
 
-#: src/application/calls/screen.rs:212
+#: src/application/calls/screen.rs:210
 msgid "Turn camera off"
 msgstr "Desligar câmera"
 
-#: src/application/calls/screen.rs:214
+#: src/application/calls/screen.rs:212
 msgid "Turn camera on"
 msgstr "Ligar câmera"
 
-#: src/application/calls/screen.rs:216
+#: src/application/calls/screen.rs:214
 msgid "Start video"
 msgstr "Iniciar vídeo"
 
-#: src/application/calls/screen.rs:227
+#: src/application/calls/screen.rs:225
 msgid "Microphone muted"
 msgstr "Microfone silenciado"
 
-#: src/application/calls/screen.rs:229
+#: src/application/calls/screen.rs:227
 msgid "Connected"
 msgstr "Conectado"
 
-#: src/application/calls/screen.rs:234
+#: src/application/calls/screen.rs:232
 msgid "%1$s wants to switch to video"
 msgstr "%1$s quer mudar para vídeo"
 
-#: src/application/calls/screen.rs:238
+#: src/application/calls/screen.rs:236
 msgid "Accept video"
 msgstr "Aceitar vídeo"
-
-#: src/application/calls/screen.rs:259
-msgid "Missed"
-msgstr "Perdida"
-
-#: src/application/calls/screen.rs:260
-msgid "Outgoing"
-msgstr "Realizada"
-
-#: src/application/calls/screen.rs:261
-msgid "Incoming"
-msgstr "Recebida"
 
 #: src/application/calls/window.rs:24 src/model/mod.rs:629
 msgid "Call"
@@ -1296,9 +1276,25 @@ msgstr "Falha na chamada de voz"
 msgid "Video call failed"
 msgstr "Falha na chamada de vídeo"
 
-#: src/model/call.rs:91
+#: src/model/call.rs:93
 msgid "%1$s · %2$s"
 msgstr "%1$s · %2$s"
+
+#: src/model/call.rs:288
+msgid "Outgoing voice call"
+msgstr "Chamada de voz realizada"
+
+#: src/model/call.rs:289
+msgid "Outgoing video call"
+msgstr "Chamada de vídeo realizada"
+
+#: src/model/call.rs:290
+msgid "Incoming voice call"
+msgstr "Chamada de voz recebida"
+
+#: src/model/call.rs:291
+msgid "Incoming video call"
+msgstr "Chamada de vídeo recebida"
 
 #: src/model/mod.rs:446
 msgid "Photo"
@@ -1530,15 +1526,15 @@ msgstr "Abra com outro aplicativo"
 msgid "Open in Another App"
 msgstr "Abrir em outro aplicativo"
 
-#: src/native_media_widgets/widget.rs:366
+#: src/native_media_widgets/widget.rs:370
 msgid "This message type cannot be displayed"
 msgstr "Este tipo de mensagem não pode ser exibido"
 
-#: src/native_media_widgets/widget.rs:389
+#: src/native_media_widgets/widget.rs:393
 msgid "Image preview"
 msgstr "Pré-visualização da imagem"
 
-#: src/native_media_widgets/widget.rs:401
+#: src/native_media_widgets/widget.rs:405
 msgid "Open or download attachment"
 msgstr "Abrir ou baixar o anexo"
 
@@ -1596,6 +1592,15 @@ msgstr "1 ano"
 #, rust-format
 msgid "Custom ({} days)"
 msgstr "Personalizado ({} dias)"
+
+#~ msgid "Missed"
+#~ msgstr "Perdida"
+
+#~ msgid "Outgoing"
+#~ msgstr "Realizada"
+
+#~ msgid "Incoming"
+#~ msgstr "Recebida"
 
 #~ msgid "Actual Size"
 #~ msgstr "Tamanho real"

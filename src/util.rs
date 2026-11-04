@@ -72,6 +72,23 @@ pub fn day_label(unix_seconds: i64) -> String {
     }
 }
 
+/// Whether two Unix times fall on the same local calendar day.
+pub fn same_day(first: i64, second: i64) -> bool {
+    match (zoned(first), zoned(second)) {
+        (Some(first), Some(second)) => first.date() == second.date(),
+        _ => first == second,
+    }
+}
+
+#[cfg(test)]
+pub fn noon_today() -> i64 {
+    today()
+        .at(12, 0, 0, 0)
+        .to_zoned(jiff::tz::TimeZone::system())
+        .map(|noon| noon.timestamp().as_second())
+        .unwrap_or_else(|_| now())
+}
+
 fn weekday_name(weekday: jiff::civil::Weekday) -> &'static str {
     match weekday {
         jiff::civil::Weekday::Monday => "Monday",

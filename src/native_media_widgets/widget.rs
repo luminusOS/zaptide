@@ -352,7 +352,11 @@ pub fn build_media_widget_with_action(
         NativeMediaContent::Call { icon, text } => {
             let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
             line.add_css_class("zaptide-call-event");
-            line.append(&gtk::Image::from_icon_name(icon));
+            let glyph = gtk::Image::from_icon_name(icon);
+            if *icon == crate::model::call::MISSED_ICON {
+                glyph.add_css_class("zaptide-call-missed-icon");
+            }
+            line.append(&glyph);
             let label = gtk::Label::new(Some(text));
             label.set_xalign(0.0);
             label.set_wrap(true);

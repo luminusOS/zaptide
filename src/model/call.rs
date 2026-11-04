@@ -54,10 +54,12 @@ pub fn call_label(video: bool, outgoing: bool, outcome: CallOutcome) -> String {
     }
 }
 
+pub const MISSED_ICON: &str = "call-missed-symbolic";
+
 /// Symbolic icon of a call event: missed, outgoing, or incoming.
 pub fn call_icon(outgoing: bool, outcome: CallOutcome) -> &'static str {
     match (outcome, outgoing) {
-        (CallOutcome::Missed, false) => "call-missed-symbolic",
+        (CallOutcome::Missed, false) => MISSED_ICON,
         (_, true) => "call-outgoing-symbolic",
         (_, false) => "call-incoming-symbolic",
     }
@@ -280,6 +282,16 @@ pub struct CallEntry {
     pub timestamp: i64,
 }
 
+/// Who placed the call and whether it carried video: "Outgoing voice call".
+pub fn direction_label(outgoing: bool, video: bool) -> String {
+    match (outgoing, video) {
+        (true, false) => gettext("Outgoing voice call"),
+        (true, true) => gettext("Outgoing video call"),
+        (false, false) => gettext("Incoming voice call"),
+        (false, true) => gettext("Incoming video call"),
+    }
+}
+
 impl CallEntry {
     /// Missed, outgoing, or incoming, as the history row words it.
     pub fn kind(&self) -> CallKind {
@@ -287,6 +299,25 @@ impl CallEntry {
             (CallOutcome::Missed, false) => CallKind::Missed,
             (_, true) => CallKind::Outgoing,
             (_, false) => CallKind::Incoming,
+        }
+    }
+
+    /// What kind of call the history row names: "Missed video call" or
+    /// "Incoming voice call".
+    pub fn history_label(&self) -> String {
+        match self.kind() {
+            CallKind::Missed => call_label(self.video, false, CallOutcome::Missed),
+            CallKind::Outgoing | CallKind::Incoming => direction_label(self.outgoing, self.video),
+        }
+    }
+
+    /// The history row's subtitle at the local time `time`, with the talk time
+    /// when the call connected: "Incoming video call · 16:21 · 01:33".
+    pub fn history_line(&self, time: &str) -> String {
+        let line = with_detail(&self.history_label(), time);
+        match (self.outcome, self.seconds) {
+            (CallOutcome::Completed, Some(seconds)) => with_detail(&line, &call_clock(seconds)),
+            _ => line,
         }
     }
 }
@@ -470,10 +501,7 @@ mod tests {
 
     #[test]
     fn event_icons_tell_missed_from_outgoing_and_incoming_calls() {
-        assert_eq!(
-            call_icon(false, CallOutcome::Missed),
-            "call-missed-symbolic"
-        );
+        assert_eq!(call_icon(false, CallOutcome::Missed), MISSED_ICON);
         assert_eq!(
             call_icon(true, CallOutcome::Missed),
             "call-outgoing-symbolic"
@@ -485,6 +513,81 @@ mod tests {
         assert_eq!(
             call_icon(false, CallOutcome::Declined),
             "call-incoming-symbolic"
+        );
+    }
+
+    fn history_entry(
+        video: bool,
+        outgoing: bool,
+        outcome: CallOutcome,
+        seconds: Option<u32>,
+    ) -> CallEntry {
+        CallEntry {
+            chat: "chat".into(),
+            id: "call".into(),
+            video,
+            outgoing,
+            outcome,
+            seconds,
+            timestamp: 0,
+        }
+    }
+
+    #[test]
+    fn history_rows_name_direction_and_kind_with_the_time() {
+        let line = |video, outgoing, outcome, seconds| {
+            history_entry(video, outgoing, outcome, seconds).history_line("16:24")
+        };
+        assert_eq!(
+            line(false, true, CallOutcome::Cancelled, None),
+            "Outgoing voice call · 16:24"
+        );
+        assert_eq!(
+            line(true, true, CallOutcome::Cancelled, None),
+            "Outgoing video call · 16:24"
+        );
+        assert_eq!(
+            line(false, false, CallOutcome::Missed, None),
+            "Missed voice call · 16:24"
+        );
+        assert_eq!(
+            line(true, false, CallOutcome::Missed, None),
+            "Missed video call · 16:24"
+        );
+        assert_eq!(
+            line(false, false, CallOutcome::Declined, None),
+            "Incoming voice call · 16:24"
+        );
+        assert_eq!(
+            line(true, false, CallOutcome::Failed, None),
+            "Incoming video call · 16:24"
+        );
+    }
+
+    #[test]
+    fn history_rows_add_the_talk_time_only_to_answered_calls() {
+        let line = |video, outgoing, outcome, seconds| {
+            history_entry(video, outgoing, outcome, seconds).history_line("16:21")
+        };
+        assert_eq!(
+            line(true, false, CallOutcome::Completed, Some(93)),
+            "Incoming video call · 16:21 · 01:33"
+        );
+        assert_eq!(
+            line(false, true, CallOutcome::Completed, Some(3725)),
+            "Outgoing voice call · 16:21 · 1:02:05"
+        );
+        assert_eq!(
+            line(false, true, CallOutcome::Completed, None),
+            "Outgoing voice call · 16:21"
+        );
+        assert_eq!(
+            line(true, true, CallOutcome::Cancelled, Some(9)),
+            "Outgoing video call · 16:21"
+        );
+        assert_eq!(
+            line(false, false, CallOutcome::Missed, Some(9)),
+            "Missed voice call · 16:21"
         );
     }
 
