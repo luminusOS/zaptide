@@ -2826,3 +2826,7 @@ pub fn run(dirs: AppDirs) {
 #[cfg(test)]
 #[path = "application/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "application/sidebar_sections_tests.rs"]
+mod sidebar_sections_tests;

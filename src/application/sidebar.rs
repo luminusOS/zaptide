@@ -302,13 +302,17 @@ impl SimpleComponent for Sidebar {
                                 },
                             },
                         },
+                        // A click yields two outputs, so the state synced back in
+                        // between is stale; if that sync counted as a click, the
+                        // two stale values would overwrite each other forever.
                         #[watch]
+                        #[block_signal(section_handler)]
                         set_active_name: Some(if model.state.calls { "calls" } else if model.state.archived { "archived" } else { "chats" }),
                         connect_active_name_notify[sender] => move |group| {
                             let name = group.active_name();
                             sender.output(SidebarOutput::ShowCalls(name.as_deref() == Some("calls"))).unwrap();
                             sender.output(SidebarOutput::SetArchivedFilter(name.as_deref() == Some("archived"))).unwrap();
-                        },
+                        } @section_handler,
                     },
                 },
                 append = &gtk::ScrolledWindow {
