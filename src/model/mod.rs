@@ -7,6 +7,9 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+pub mod call;
+pub use call::CallOutcome;
+
 /// Chat JID string: `<phone>@s.whatsapp.net`, `<id>@g.us`, or `<id>@lid`.
 pub type ChatId = String;
 
@@ -292,6 +295,14 @@ pub enum Content {
         #[serde(default)]
         links: Vec<TemplateLink>,
     },
+    /// A voice or video call event shown in the chat.
+    Call {
+        video: bool,
+        outgoing: bool,
+        outcome: CallOutcome,
+        #[serde(default)]
+        seconds: Option<u32>,
+    },
     /// "This message was deleted."
     Revoked,
     /// Unsupported content with a user-facing description.
@@ -451,6 +462,12 @@ impl Content {
                 .or_else(|| links.first().map(|link| link.label.as_str()))
                 .unwrap_or("Message")
                 .to_owned(),
+            Self::Call {
+                video,
+                outgoing,
+                outcome,
+                seconds,
+            } => call::call_summary(*video, *outgoing, *outcome, *seconds),
             Self::Revoked => "This message was deleted".to_owned(),
             Self::Unsupported { what } => format!("Unsupported message ({what})"),
         }

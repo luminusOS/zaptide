@@ -326,7 +326,10 @@ mod tests {
         };
         let addresses = resolver.resolve(&uri, &config, timeout()).unwrap();
         assert_eq!(addresses.len(), 1);
-        assert_eq!(addresses[0], "8.8.8.8:443".parse().unwrap());
+        assert_eq!(
+            addresses[0],
+            "8.8.8.8:443".parse::<std::net::SocketAddr>().unwrap()
+        );
         assert_eq!(answers.load(std::sync::atomic::Ordering::SeqCst), 1);
         assert!(resolver.resolve(&uri, &config, timeout()).is_err());
     }
@@ -368,7 +371,10 @@ mod tests {
             assert!(details.config.proxy().is_none());
             assert_eq!(details.uri.host(), Some("example.com"));
             assert_eq!(details.addrs.len(), 1);
-            assert_eq!(details.addrs[0], "8.8.8.8:443".parse().unwrap());
+            assert_eq!(
+                details.addrs[0],
+                "8.8.8.8:443".parse::<std::net::SocketAddr>().unwrap()
+            );
             Err(ureq::Error::ConnectionFailed)
         }
     }
@@ -386,12 +392,12 @@ mod tests {
             let mut addresses = self.empty();
             let call = self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             addresses.push(if call == 0 {
-                "8.8.8.8:443".parse().unwrap()
+                "8.8.8.8:443".parse::<std::net::SocketAddr>().unwrap()
             } else {
                 "127.0.0.1:443".parse().unwrap()
             });
             if call > 0 {
-                addresses.push("8.8.8.8:443".parse().unwrap());
+                addresses.push("8.8.8.8:443".parse::<std::net::SocketAddr>().unwrap());
             }
             Ok(addresses)
         }

@@ -136,3 +136,14 @@ window.translucent-sidebar .sidebar-pane .view {
   }
 }
 .zaptide-unread-divider { font-weight: bold; font-size: 0.85em; border-radius: 9999px; padding: 3px 14px; color: var(--accent-color); background-color: color-mix(in srgb, var(--accent-bg-color) 18%, transparent); }
+.zaptide-call-event { padding: 2px 0; }
+.zaptide-call-button { min-height: 42px; padding: 0 18px; border-radius: 9px; font-size: 14px; font-weight: 600; color: #ffffff; background-image: none; }
+.zaptide-call-button.neutral { background-color: #45454A; }
+.zaptide-call-button.danger { background-color: #C01C28; }
+.zaptide-call-button.success { background-color: #1B7B4F; }
+.zaptide-call-button.primary { background-color: #1C5FAF; }
+.zaptide-call-button:hover { filter: brightness(1.12); }
+.zaptide-call-button:active { filter: brightness(0.9); }
+.zaptide-call-remote { background-color: #000000; }
+.zaptide-call-preview { border-radius: 12px; border: 2px solid rgba(255, 255, 255, 0.85); box-shadow: 0 2px 12px rgba(0, 0, 0, 0.45); }
+row.zaptide-call-missed .title { color: var(--error-color); }

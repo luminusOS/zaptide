@@ -988,6 +988,21 @@ impl Worker {
                 }
                 self.emit_chat(&chat);
             }
+            Command::StartCall { chat, video } => self.start_call(chat, video),
+            Command::AnswerCall => self.answer_call(),
+            Command::DeclineCall => self.decline_call(),
+            Command::DeclineWaitingCall => self.decline_waiting_call(),
+            Command::EndAndAnswerWaiting => self.end_and_answer_waiting(),
+            Command::HangUpCall => self.hang_up_call(),
+            Command::SetCallMuted(muted) => self.set_call_muted(muted),
+            Command::SetCallCamera(on) => self.set_call_camera(on),
+            Command::AcceptCallVideo => self.accept_call_video(),
+            Command::LoadCalls => {
+                self.emit_calls();
+                self.emit_active_call();
+            }
+            Command::MarkCallsSeen => self.mark_calls_seen(),
+            Command::CallNotice { generation, notice } => self.on_call_notice(generation, notice),
         }
     }
 }

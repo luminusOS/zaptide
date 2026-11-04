@@ -77,6 +77,20 @@ fn should_be_online(
     present(looking, away, leave_limit) && idle_limit.is_none_or(|limit| quiet < limit)
 }
 
+/// What the evaluation is given. A call counts as use whichever window has
+/// focus, and talking makes no input, so a call also lifts the inactivity limit.
+fn presence_inputs(
+    in_call: bool,
+    window_in_use: bool,
+    idle_limit: Option<Duration>,
+) -> (bool, Option<Duration>) {
+    if in_call {
+        (true, None)
+    } else {
+        (window_in_use, idle_limit)
+    }
+}
+
 /// The outcome of one presence evaluation.
 #[derive(Debug, PartialEq, Eq)]
 struct Decision {
@@ -163,11 +177,15 @@ impl NativeApplication {
 
     /// Tells the active account's backend whether to show you as online.
     pub(super) fn sync_presence(&mut self, sender: &ComponentSender<Self>) {
-        let looking = self.window.is_active()
+        let window_in_use = self.window.is_active()
             && self.window.is_visible()
             && !relm4::main_application().is_screensaver_active();
         let leave_limit = limit(self.settings.offline_after_leaving_seconds);
-        let idle_limit = limit(self.settings.offline_after_inactive_seconds);
+        let (looking, idle_limit) = presence_inputs(
+            self.calls.holds_presence(self.active_account),
+            window_in_use,
+            limit(self.settings.offline_after_inactive_seconds),
+        );
         let now = Instant::now();
         let decision = self
             .presence_watch
@@ -241,6 +259,43 @@ mod tests {
             FIVE_MINUTES
         ));
         assert!(should_be_online(false, Duration::MAX, quiet, None, None));
+    }
+
+    #[test]
+    fn a_call_keeps_the_account_online_when_unfocused_and_without_input() {
+        let start = Instant::now();
+        let hour_later = start + seconds(3600);
+        let decide = |in_call, window_in_use, now| {
+            let mut watch = watch(start);
+            watch.evaluate(start, true, TEN_SECONDS, FIVE_MINUTES);
+            let (looking, idle_limit) = presence_inputs(in_call, window_in_use, FIVE_MINUTES);
+            watch.evaluate(now, looking, TEN_SECONDS, idle_limit).online
+        };
+        assert!(decide(true, false, hour_later));
+        assert!(!decide(false, false, hour_later));
+        assert!(!decide(false, true, hour_later));
+        assert!(decide(false, true, start + seconds(1)));
+    }
+
+    #[test]
+    fn a_call_that_ends_hands_presence_back_to_the_window() {
+        let start = Instant::now();
+        let mut watch = watch(start);
+        let (looking, idle) = presence_inputs(true, false, FIVE_MINUTES);
+        assert!(
+            watch
+                .evaluate(start + seconds(3000), looking, TEN_SECONDS, idle)
+                .online
+        );
+        watch.last_input.set(start + seconds(3000));
+        let (looking, idle) = presence_inputs(false, false, FIVE_MINUTES);
+        let after = start + seconds(3001);
+        assert!(watch.evaluate(after, looking, TEN_SECONDS, idle).online);
+        assert!(
+            !watch
+                .evaluate(after + seconds(10), looking, TEN_SECONDS, idle)
+                .online
+        );
     }
 
     #[test]

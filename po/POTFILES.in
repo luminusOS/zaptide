@@ -1,6 +1,9 @@
 src/application/accounts.rs
 src/application/audio.rs
 src/application/bubbles.rs
+src/application/calls.rs
+src/application/calls/screen.rs
+src/application/calls/window.rs
 src/application/chats.rs
 src/application/composer.rs
 src/application/contact_sharing.rs
@@ -17,6 +20,10 @@ src/application.rs
 src/application/sidebar.rs
 src/application/stars.rs
 src/application/transcript_view.rs
+src/backend/worker/calls.rs
+src/backend/worker/calls/runtime.rs
+src/calls/mod.rs
+src/model/call.rs
 src/native_emoji.rs
 src/native_media_widgets/audio.rs
 src/native_media_widgets/contacts.rs
@@ -24,4 +31,5 @@ src/native_media_widgets/photo.rs
 src/native_media_widgets/sticker.rs
 src/native_media_widgets/viewer.rs
 src/native_media_widgets/widget.rs
+src/native_notifications.rs
 src/native_preferences.rs

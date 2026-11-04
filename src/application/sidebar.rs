@@ -9,6 +9,9 @@ pub(super) struct SidebarState {
     pub(super) filters: crate::native_chat_list::ChatListFilters,
     pub(super) archived: bool,
     pub(super) archived_unread: usize,
+    pub(super) calls: bool,
+    pub(super) calls_unseen: usize,
+    pub(super) calls_empty: bool,
     pub(super) refreshing: bool,
     pub(super) empty: bool,
     pub(super) empty_title: &'static str,
@@ -22,6 +25,9 @@ impl Default for SidebarState {
             filters: Default::default(),
             archived: false,
             archived_unread: 0,
+            calls: false,
+            calls_unseen: 0,
+            calls_empty: true,
             refreshing: false,
             empty: true,
             empty_title: "No Chats Yet",
@@ -34,6 +40,7 @@ pub(super) struct SidebarInit {
     pub(super) account_button: gtk::MenuButton,
     pub(super) state: SidebarState,
     pub(super) chat_view: gtk::ListView,
+    pub(super) calls_view: gtk::ListBox,
     pub(super) chat_targets: std::rc::Rc<std::cell::RefCell<super::chats::ChatTargets>>,
     pub(super) menu: gtk::gio::Menu,
 }
@@ -56,6 +63,7 @@ pub(super) enum SidebarOutput {
     SetChatKindFilter(crate::native_chat_list::ChatKindFilter),
     SetArchivedFilter(bool),
     SetMutedFilter(bool),
+    ShowCalls(bool),
     SelectChat(crate::account::AccountId, String),
     NewChat,
 }
@@ -96,6 +104,8 @@ impl SimpleComponent for Sidebar {
                 set_orientation: gtk::Orientation::Vertical,
                 append = &gtk::Box {
                     add_css_class: "linked",
+                    #[watch]
+                    set_visible: !model.state.calls,
                     set_margin_start: 12,
                     set_margin_end: 12,
                     set_margin_bottom: 6,
@@ -270,10 +280,34 @@ impl SimpleComponent for Sidebar {
                                 },
                             },
                         },
+                        add = adw::Toggle {
+                            set_name: Some("calls"),
+                            set_label: Some(&gettext("Calls")),
+                            set_tooltip: "Calls",
+                            #[wrap(Some)]
+                            set_child = &gtk::Box {
+                                set_spacing: 6,
+                                set_halign: gtk::Align::Center,
+                                append = &gtk::Image {
+                                    set_icon_name: Some("call-start-symbolic"),
+                                },
+                                append = &gtk::Label {
+                                    add_css_class: "zaptide-unread-pill",
+                                    add_css_class: "compact",
+                                    set_valign: gtk::Align::Center,
+                                    #[watch]
+                                    set_visible: model.state.calls_unseen > 0,
+                                    #[watch]
+                                    set_label: &model.state.calls_unseen.to_string(),
+                                },
+                            },
+                        },
                         #[watch]
-                        set_active_name: Some(if model.state.archived { "archived" } else { "chats" }),
+                        set_active_name: Some(if model.state.calls { "calls" } else if model.state.archived { "archived" } else { "chats" }),
                         connect_active_name_notify[sender] => move |group| {
-                            sender.output(SidebarOutput::SetArchivedFilter(group.active_name().as_deref() == Some("archived"))).unwrap();
+                            let name = group.active_name();
+                            sender.output(SidebarOutput::ShowCalls(name.as_deref() == Some("calls"))).unwrap();
+                            sender.output(SidebarOutput::SetArchivedFilter(name.as_deref() == Some("archived"))).unwrap();
                         },
                     },
                 },
@@ -281,7 +315,7 @@ impl SimpleComponent for Sidebar {
                     set_vexpand: true,
                     set_hscrollbar_policy: gtk::PolicyType::Never,
                     #[watch]
-                    set_visible: !model.state.empty,
+                    set_visible: !model.state.empty && !model.state.calls,
                     #[local_ref]
                     chat_view -> gtk::ListView {
                         add_css_class: "navigation-sidebar",
@@ -299,11 +333,38 @@ impl SimpleComponent for Sidebar {
                     set_vexpand: true,
                     set_icon_name: Some("system-search-symbolic"),
                     #[watch]
-                    set_visible: model.state.empty,
+                    set_visible: model.state.empty && !model.state.calls,
                     #[watch]
                     set_title: model.state.empty_title,
                     #[watch]
                     set_description: Some(model.state.empty_description),
+                },
+                append = &gtk::Label {
+                    set_label: &gettext("Recent calls"),
+                    set_halign: gtk::Align::Start,
+                    set_margin_start: 18,
+                    set_margin_end: 12,
+                    set_margin_bottom: 6,
+                    add_css_class: "heading",
+                    #[watch]
+                    set_visible: model.state.calls && !model.state.calls_empty,
+                },
+                append = &gtk::ScrolledWindow {
+                    set_vexpand: true,
+                    set_hscrollbar_policy: gtk::PolicyType::Never,
+                    #[watch]
+                    set_visible: model.state.calls && !model.state.calls_empty,
+                    #[local_ref]
+                    calls_view -> gtk::ListBox {},
+                },
+                append = &adw::StatusPage {
+                    add_css_class: "compact",
+                    set_vexpand: true,
+                    set_icon_name: Some("call-start-symbolic"),
+                    set_title: &gettext("No Calls Yet"),
+                    set_description: Some(&gettext("Voice and video calls appear here")),
+                    #[watch]
+                    set_visible: model.state.calls && model.state.calls_empty,
                 },
             },
         }
@@ -320,6 +381,7 @@ impl SimpleComponent for Sidebar {
         };
         let chat_view = &init.chat_view;
         let chat_targets = init.chat_targets;
+        let calls_view = &init.calls_view;
         let widgets = view_output!();
         model.search_entry = Some(widgets.search_entry.clone());
         ComponentParts { model, widgets }

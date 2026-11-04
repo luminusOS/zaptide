@@ -10,9 +10,33 @@ use relm4::gtk;
 use relm4::gtk::prelude::*;
 
 const OPEN_CHAT_ACTION: &str = "open-chat";
+const CALL_ANSWER_ACTION: &str = "call-answer";
+const CALL_DECLINE_ACTION: &str = "call-decline";
+const CALL_END_AND_ANSWER_ACTION: &str = "call-end-and-answer";
+const CALL_FOCUS_ACTION: &str = "call-focus";
 const MAX_PENDING_ACTIVATIONS: usize = 256;
 
 use crate::account::AccountId;
+use crate::i18n::gettext;
+
+/// What the person chose on a call's notification.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CallChoice {
+    Answer,
+    Decline,
+    EndAndAnswer,
+    /// The notification itself was clicked.
+    Show,
+}
+
+/// Which buttons a call's notification carries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CallBanner {
+    /// The only call: answer or decline it.
+    Ringing,
+    /// A call that came in during another: decline it or end the first and answer.
+    Waiting,
+}
 
 #[derive(Default)]
 pub struct ActivationTokens {
@@ -39,6 +63,12 @@ impl ActivationTokens {
     fn activate(&mut self, token: &str) -> Option<(AccountId, String)> {
         self.order.retain(|existing| existing != token);
         self.chats.remove(token)
+    }
+
+    /// The target of a token that stays valid, as the buttons of a call's
+    /// notification share one.
+    fn get(&self, token: &str) -> Option<&(AccountId, String)> {
+        self.chats.get(token)
     }
 
     fn remove_chat(&mut self, chat_id: &(AccountId, String)) -> Vec<String> {
@@ -91,6 +121,7 @@ impl ActivationTokens {
 pub struct NativeNotifications {
     application: gtk::Application,
     tokens: std::rc::Rc<std::cell::RefCell<ActivationTokens>>,
+    calls: std::rc::Rc<std::cell::RefCell<ActivationTokens>>,
 }
 
 impl NativeNotifications {
@@ -98,6 +129,7 @@ impl NativeNotifications {
     pub fn new(
         application: &gtk::Application,
         open_chat: impl Fn(AccountId, String) + 'static,
+        call_choice: impl Fn(AccountId, String, CallChoice) + 'static,
     ) -> Self {
         use gtk::gio::prelude::*;
 
@@ -115,9 +147,32 @@ impl NativeNotifications {
         });
         application.add_action(&action);
 
+        let calls = std::rc::Rc::new(std::cell::RefCell::new(ActivationTokens::default()));
+        let call_choice = std::rc::Rc::new(call_choice);
+        for (name, choice) in [
+            (CALL_ANSWER_ACTION, CallChoice::Answer),
+            (CALL_DECLINE_ACTION, CallChoice::Decline),
+            (CALL_END_AND_ANSWER_ACTION, CallChoice::EndAndAnswer),
+            (CALL_FOCUS_ACTION, CallChoice::Show),
+        ] {
+            let action = gtk::gio::SimpleAction::new(name, Some(&String::static_variant_type()));
+            let (calls, call_choice) = (calls.clone(), call_choice.clone());
+            action.connect_activate(move |_, parameter| {
+                let Some(token) = parameter.and_then(|value| value.get::<String>()) else {
+                    return;
+                };
+                let target = calls.borrow().get(&token).cloned();
+                if let Some((account, call_id)) = target {
+                    call_choice(account, call_id, choice);
+                }
+            });
+            application.add_action(&action);
+        }
+
         Self {
             application: application.clone(),
             tokens,
+            calls,
         }
     }
 
@@ -158,18 +213,7 @@ impl NativeNotifications {
             self.application.withdraw_notification(&evicted);
         }
 
-        let notification = gtk::gio::Notification::new(title);
-        notification.set_body(Some(body));
-        // The notification portal drops file icons, so a Flatpak build sends the bytes.
-        // Without a picture, draw the same coloured initials the chat list shows.
-        let bytes = icon
-            .and_then(round_icon)
-            .and_then(|path| std::fs::read(path).ok())
-            .map(gtk::glib::Bytes::from_owned)
-            .or_else(|| initials_icon(title));
-        if let Some(bytes) = bytes {
-            notification.set_icon(&gtk::gio::BytesIcon::new(&bytes));
-        }
+        let notification = notification(title, body, icon);
         notification.set_default_action_and_target_value(
             &format!("app.{OPEN_CHAT_ACTION}"),
             Some(&token.to_variant()),
@@ -177,6 +221,57 @@ impl NativeNotifications {
         self.application
             .send_notification(Some(&token), &notification);
         Ok(())
+    }
+
+    /// Shows or replaces a call's notification. Its buttons act on the call
+    /// whatever account it belongs to; the call id stays in the token map.
+    pub fn show_call(
+        &self,
+        account: AccountId,
+        call_id: &str,
+        banner: CallBanner,
+        title: &str,
+        body: &str,
+        icon: Option<&std::path::Path>,
+    ) -> Result<(), getrandom::Error> {
+        use gtk::gio::prelude::*;
+
+        if !self.application.is_registered() {
+            return Ok(());
+        }
+        let target = (account, call_id.to_owned());
+        let existing = self.calls.borrow().token_for(&target);
+        let token = match existing {
+            Some(token) => token,
+            None => activation_token()?,
+        };
+        self.calls.borrow_mut().insert(token.clone(), target);
+
+        let notification = notification(title, body, icon);
+        let value = token.to_variant();
+        notification
+            .set_default_action_and_target_value(&format!("app.{CALL_FOCUS_ACTION}"), Some(&value));
+        notification.add_button_with_target_value(
+            &gettext("Decline"),
+            &format!("app.{CALL_DECLINE_ACTION}"),
+            Some(&value),
+        );
+        let (label, action) = match banner {
+            CallBanner::Ringing => (gettext("Answer"), CALL_ANSWER_ACTION),
+            CallBanner::Waiting => (gettext("End and answer"), CALL_END_AND_ANSWER_ACTION),
+        };
+        notification.add_button_with_target_value(&label, &format!("app.{action}"), Some(&value));
+        self.application
+            .send_notification(Some(&token), &notification);
+        Ok(())
+    }
+
+    /// Withdraws a call's notification and forgets its token.
+    pub fn clear_call(&self, account: AccountId, call_id: &str) {
+        let target = (account, call_id.to_owned());
+        for token in self.calls.borrow_mut().remove_chat(&target) {
+            self.application.withdraw_notification(&token);
+        }
     }
 
     /// Withdraws pending notifications and activation tokens for one chat.
@@ -192,10 +287,28 @@ impl NativeNotifications {
 
     /// Invalidates every notification belonging to a removed or signed-out account.
     pub fn clear_account(&self, account: AccountId) {
-        for token in self.tokens.borrow_mut().remove_account(account) {
+        let removed = self.tokens.borrow_mut().remove_account(account);
+        let removed_calls = self.calls.borrow_mut().remove_account(account);
+        for token in removed.into_iter().chain(removed_calls) {
             self.application.withdraw_notification(&token);
         }
     }
+}
+
+fn notification(title: &str, body: &str, icon: Option<&std::path::Path>) -> gtk::gio::Notification {
+    let notification = gtk::gio::Notification::new(title);
+    notification.set_body(Some(body));
+    // The notification portal drops file icons, so a Flatpak build sends the bytes.
+    // Without a picture, draw the same coloured initials the chat list shows.
+    let bytes = icon
+        .and_then(round_icon)
+        .and_then(|path| std::fs::read(path).ok())
+        .map(gtk::glib::Bytes::from_owned)
+        .or_else(|| initials_icon(title));
+    if let Some(bytes) = bytes {
+        notification.set_icon(&gtk::gio::BytesIcon::new(&bytes));
+    }
+    notification
 }
 
 /// Coloured initials as PNG bytes, for chats without a picture. Drawn straight
@@ -299,6 +412,23 @@ mod tests {
 
     fn chat(id: &str) -> (AccountId, String) {
         (AccountId(1), id.to_owned())
+    }
+
+    #[test]
+    fn a_call_token_serves_every_button_until_the_call_is_cleared() {
+        let mut calls = ActivationTokens::default();
+        calls.insert("ring".into(), (AccountId(2), "CALL1".into()));
+        calls.insert("other".into(), (AccountId(1), "CALL1".into()));
+        for _ in 0..3 {
+            assert_eq!(calls.get("ring"), Some(&(AccountId(2), "CALL1".into())));
+        }
+        assert_eq!(
+            calls.token_for(&(AccountId(1), "CALL1".into())).as_deref(),
+            Some("other")
+        );
+        assert_eq!(calls.remove_chat(&(AccountId(2), "CALL1".into())), ["ring"]);
+        assert_eq!(calls.get("ring"), None);
+        assert!(calls.get("other").is_some());
     }
 
     #[test]

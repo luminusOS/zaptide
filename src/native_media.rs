@@ -137,6 +137,11 @@ pub enum NativeMediaContent {
         footer: Option<String>,
         links: Vec<(String, String)>,
     },
+    /// A call event: the symbolic icon and its text.
+    Call {
+        icon: &'static str,
+        text: String,
+    },
     VideoPlaceholder,
     UnsupportedPlaceholder,
     Other,
@@ -152,6 +157,7 @@ impl fmt::Debug for NativeMediaContent {
             Self::Buttons { .. } => "Buttons",
             Self::List { .. } => "List",
             Self::Template { .. } => "Template",
+            Self::Call { .. } => "Call",
             Self::VideoPlaceholder => "VideoPlaceholder",
             Self::UnsupportedPlaceholder => "UnsupportedPlaceholder",
             Self::Other => "Other",
@@ -329,6 +335,15 @@ pub fn project_content(message: &Message) -> NativeMessageContent {
                 .iter()
                 .map(|link| (link.label.clone(), link.url.clone()))
                 .collect(),
+        },
+        Content::Call {
+            video,
+            outgoing,
+            outcome,
+            seconds,
+        } => NativeMediaContent::Call {
+            icon: crate::model::call::call_icon(*outgoing, *outcome),
+            text: crate::model::call::call_summary(*video, *outgoing, *outcome, *seconds),
         },
         Content::Video { .. } => NativeMediaContent::VideoPlaceholder,
         Content::Unsupported { .. } => NativeMediaContent::UnsupportedPlaceholder,
@@ -762,5 +777,29 @@ mod tests {
         ] {
             assert!(!debug.contains(secret));
         }
+    }
+
+    #[test]
+    fn call_events_project_to_an_icon_and_their_summary() {
+        let projected = project_content(&message(Content::Call {
+            video: false,
+            outgoing: false,
+            outcome: crate::model::CallOutcome::Missed,
+            seconds: None,
+        }));
+        assert!(matches!(
+            &projected.content,
+            NativeMediaContent::Call { icon: "call-missed-symbolic", text } if text == "Missed voice call"
+        ));
+        let projected = project_content(&message(Content::Call {
+            video: true,
+            outgoing: true,
+            outcome: crate::model::CallOutcome::Completed,
+            seconds: Some(138),
+        }));
+        assert!(matches!(
+            &projected.content,
+            NativeMediaContent::Call { icon: "call-outgoing-symbolic", text } if text == "Video call ended · 02:18"
+        ));
     }
 }

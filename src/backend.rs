@@ -559,6 +559,64 @@ pub enum Command {
         session_generation: u64,
         disabled: bool,
     },
+    /// Places a voice or video call to a direct chat.
+    StartCall {
+        chat: ChatId,
+        video: bool,
+    },
+    /// Answers the ringing call.
+    AnswerCall,
+    /// Declines the ringing call.
+    DeclineCall,
+    /// Declines the call that came in during another one.
+    DeclineWaitingCall,
+    /// Ends the call in progress and answers the one that came in during it.
+    EndAndAnswerWaiting,
+    /// Ends or cancels the call in progress.
+    HangUpCall,
+    SetCallMuted(bool),
+    /// Turns the camera on or off, upgrading a voice call to video when needed.
+    SetCallCamera(bool),
+    /// Accepts the other side's request to switch to video.
+    AcceptCallVideo,
+    /// Asks for the call history.
+    LoadCalls,
+    /// The Calls tab was opened: missed calls so far stop counting.
+    MarkCallsSeen,
+    /// Internal call progress from the VoIP runtime.
+    CallNotice {
+        generation: u64,
+        notice: CallNotice,
+    },
+}
+
+/// Progress of the call in progress, reported by the tasks that drive it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CallNotice {
+    /// The offer went out under this call id.
+    Placed(String),
+    /// The relay media path is live.
+    MediaUp,
+    /// Setup failed or the media path was lost.
+    MediaFailed,
+    /// The other side started or stopped sending video.
+    PeerVideo(bool),
+    /// The other side asked to switch to video.
+    VideoRequested,
+    /// The other side no longer wants video.
+    VideoRequestEnded,
+    /// The local camera was switched on or off.
+    Camera(bool),
+    /// A camera change started or finished.
+    CameraBusy(bool),
+    /// The camera pipeline reported an error.
+    CameraLost,
+    /// The incoming picture could not be decoded.
+    DecoderLost,
+    /// The local camera pipeline is running and sending.
+    VideoStarted,
+    /// The runtime reports the call over.
+    Ended,
 }
 
 #[derive(Debug)]
@@ -687,6 +745,20 @@ pub enum Event {
     ContactReady {
         id: String,
         name: Option<String>,
+    },
+    /// The call in progress, whenever its state changes. A finished call is
+    /// reported once more and then forgotten.
+    Call(crate::model::call::CallSession),
+    /// The call that came in during another one, or `None` once it is gone.
+    CallWaiting(Option<crate::model::call::CallSession>),
+    /// Pictures of the call in progress; fetch them when [`Event::CallFrames`] arrives.
+    CallVideo(Arc<crate::calls::VideoSlots>),
+    /// A call picture is ready.
+    CallFrames,
+    /// The call history, newest first, and when the Calls tab was last opened.
+    Calls {
+        entries: Vec<crate::model::call::CallEntry>,
+        seen_at: i64,
     },
     /// Informational toast message.
     Info(String),

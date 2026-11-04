@@ -8,6 +8,7 @@ pub mod application;
 pub mod archive;
 pub mod audio;
 pub mod backend;
+pub mod calls;
 pub mod color;
 pub mod contact_cards;
 pub mod countries;

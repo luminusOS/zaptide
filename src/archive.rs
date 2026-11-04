@@ -9,6 +9,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::model::{Chat, ChatKind, Content, Delivery, Message};
 
+mod calls;
 mod contacts;
 mod encryption;
 pub use encryption::{archive_key_identity, copy_archive_key, forget_archive_key};
@@ -255,6 +256,7 @@ impl Archive {
                  chat, (CASE WHEN json_valid(quoted) THEN json_extract(quoted, '$.id') END), status)
              WHERE from_me = 1 AND quoted IS NOT NULL AND raw IS NOT NULL;",
         )?;
+        transaction.execute_batch(&calls::schema())?;
         transaction.commit()?;
         Ok(Self { connection })
     }

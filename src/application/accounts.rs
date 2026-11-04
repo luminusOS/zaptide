@@ -219,12 +219,17 @@ impl NativeApplication {
         let mut profiles = Vec::new();
         let mut notices = Vec::new();
         let mut withdrawn = Vec::new();
+        let mut call_events = Vec::new();
         for event in events {
             if matches!(event, NativeEvent::Link(LinkStatus::LoggedOut)) {
                 withdrawn.extend(session.chat_snapshots.iter().map(|chat| chat.id.clone()));
             }
             match event {
                 NativeEvent::Profile { phone, name } => profiles.push((phone, name)),
+                event @ (NativeEvent::Call(_)
+                | NativeEvent::CallWaiting(_)
+                | NativeEvent::CallVideo(_)
+                | NativeEvent::CallFrames) => call_events.push(event),
                 event => {
                     notices.extend(apply_hidden_event(session, event, notifications, previews))
                 }
@@ -234,6 +239,9 @@ impl NativeApplication {
             && let Err(error) = session.settings.save(&session.dirs.account_settings_file())
         {
             log::warn!("could not save hidden account preferences: {error}");
+        }
+        for event in call_events {
+            self.handle_call_event(id, event, sender);
         }
         for (phone, name) in profiles {
             // The switcher shows every account's picture, not only the active one's.
@@ -423,6 +431,8 @@ impl NativeApplication {
             return;
         }
         self.notifications.clear_account(id);
+        self.calls.forget_account(id);
+        self.sync_ring();
         let backend = self.accounts.remove(&id).and_then(|mut session| {
             if let Some(drain) = &session.drain {
                 drain.close();
@@ -496,7 +506,11 @@ impl NativeApplication {
         self.leave_screen();
         std::mem::swap(&mut self.backend, &mut session.backend);
         // The account leaving the screen goes offline; `update` reports the new one.
-        if let Some(backend) = &session.backend {
+        // One in a call stays online until the call ends: `call_changed` then
+        // takes it offline.
+        if !self.calls.is_busy_for(self.active_account)
+            && let Some(backend) = &session.backend
+        {
             backend.send(crate::backend::Command::SetOnline(false));
         }
         self.presence_watch.reported = None;
@@ -544,6 +558,7 @@ impl NativeApplication {
         let chats = std::mem::take(&mut self.chat_snapshots);
         self.apply_chat_changes(vec![ChatChange::Snapshot(chats)]);
         self.flush_chats();
+        self.reload_calls();
         self.refresh_sticker_picker(sender);
         if restore_chat && let Some(chat) = self.settings.last_chat.clone() {
             self.handle_input(Input::OpenChatId(chat), sender.clone());
