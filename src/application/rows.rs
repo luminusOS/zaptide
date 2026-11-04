@@ -167,6 +167,7 @@ pub(super) struct MessageRowWidgets {
     action_generation: std::rc::Rc<std::cell::Cell<u64>>,
     decode_token: Option<crate::native_media::DecodeToken>,
     menu_target: MenuTarget,
+    hover: reaction_drawer::HoverSlot,
 }
 
 /// The bound message and its sender, read by the row's context-menu gesture.
@@ -387,6 +388,25 @@ impl RelmListItem for MessageRow {
             }
         });
         bubble.add_controller(context_click);
+        let hover: reaction_drawer::HoverSlot = std::rc::Rc::default();
+        let hover_motion = gtk::EventControllerMotion::new();
+        hover_motion.connect_enter({
+            let (bubble, hover) = (bubble.downgrade(), hover.clone());
+            move |controller, _, _| {
+                if let Some(bubble) = bubble.upgrade() {
+                    reaction_drawer::pointer_entered(&bubble, controller, &hover);
+                }
+            }
+        });
+        hover_motion.connect_leave({
+            let bubble = bubble.downgrade();
+            move |_| {
+                if let Some(bubble) = bubble.upgrade() {
+                    reaction_drawer::pointer_left(&bubble);
+                }
+            }
+        });
+        bubble.add_controller(hover_motion);
         let menu_keys = gtk::EventControllerKey::new();
         menu_keys.set_propagation_phase(gtk::PropagationPhase::Capture);
         let key_target = menu_target.clone();
@@ -438,6 +458,7 @@ impl RelmListItem for MessageRow {
                 action_generation,
                 decode_token: None,
                 menu_target,
+                hover,
             },
         )
     }
@@ -508,6 +529,15 @@ impl RelmListItem for MessageRow {
             .body
             .update_property(&[gtk::accessible::Property::Label(&self.accessible_label)]);
         *widgets.menu_target.borrow_mut() = Some((self.id.clone(), self.pointer_sender.clone()));
+        *widgets.hover.borrow_mut() = (self.selected.is_none()
+            && reaction_drawer::can_react(&self.message))
+        .then(|| reaction_drawer::HoverTarget {
+            id: self.id.clone(),
+            outgoing,
+            mine: reaction_drawer::own_reaction(&self.message).map(str::to_owned),
+            sender: self.pointer_sender.clone(),
+        });
+        reaction_drawer::rebound(&widgets.bubble);
         widgets.footer.set(&self.notes, &self.clock, self.starred);
         while let Some(child) = widgets.reactions.first_child() {
             widgets.reactions.remove(&child);

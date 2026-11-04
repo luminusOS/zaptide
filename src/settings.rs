@@ -54,6 +54,9 @@ pub struct Settings {
     pub translucent_sidebar: bool,
     /// Recently used emoji, newest first.
     pub recent_emoji: Vec<String>,
+    /// Emoji last used to react to a message, newest first. The quick
+    /// reactions over a hovered message are filled from it.
+    pub recent_reactions: Vec<String>,
     /// Keep ZapTide running after its window closes.
     pub keep_running_in_background: bool,
     /// Desktop notifications while away from the chat.
@@ -102,6 +105,7 @@ impl Default for Settings {
             show_shortcut_hints: true,
             translucent_sidebar: false,
             recent_emoji: Vec::new(),
+            recent_reactions: Vec::new(),
             keep_running_in_background: true,
             notifications: true,
             notification_previews: true,
@@ -210,6 +214,12 @@ mod tests {
             serde_json::from_str(r#"{"theme":"light","future_field":1}"#).expect("parses");
         assert_eq!(parsed.theme, ThemeChoice::Light);
         assert!(parsed.enter_sends);
+    }
+
+    #[test]
+    fn settings_saved_before_quick_reactions_load_with_none() {
+        let old: Settings = serde_json::from_str(r#"{"theme":"light"}"#).unwrap();
+        assert!(old.recent_reactions.is_empty());
     }
 
     #[test]

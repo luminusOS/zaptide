@@ -22,6 +22,7 @@ mod motion;
 mod presence;
 mod presentation;
 mod profile_dialog;
+mod reaction_drawer;
 mod rows;
 mod sidebar;
 mod stars;
@@ -1136,6 +1137,7 @@ impl SimpleComponent for NativeApplication {
             .apply_to(&mut settings);
         }
         enter_sends.set(settings.enter_sends);
+        reaction_drawer::set_recent(&settings.recent_reactions);
         let mut theme_catalog = crate::theme::custom::Catalog::default();
         theme_catalog.enable_desktop_themes();
         theme_catalog.start(
@@ -1815,6 +1817,7 @@ impl NativeApplication {
         y: f32,
         sender: &ComponentSender<NativeApplication>,
     ) {
+        reaction_drawer::dismiss();
         // Selection mode acts on the picked set, not one message.
         if self.message_selection.is_some() {
             return;
@@ -2293,6 +2296,12 @@ impl NativeApplication {
         let Some((chat, message)) = self.active_chat.clone().zip(self.selected_message_id()) else {
             return;
         };
+        if reaction_drawer::remember_reaction(&mut self.settings.recent_reactions, &emoji) {
+            reaction_drawer::set_recent(&self.settings.recent_reactions);
+            if let Err(error) = self.save_settings() {
+                log::warn!("could not save recent reactions: {error}");
+            }
+        }
         let action = crate::native_actions::react(chat, message, emoji);
         if let crate::model::Action::React {
             chat,
