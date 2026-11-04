@@ -314,6 +314,11 @@ pub(super) fn teardown(
     tokio::spawn(async move { hang_up(&shared, client.as_deref(), offer.as_deref()).await });
 }
 
+/// Turns an offer down without holding up the worker.
+pub(super) fn reject_in_background(client: Arc<Client>, offer: Box<IncomingCall>) {
+    tokio::spawn(async move { reject_offer(&client, &offer).await });
+}
+
 /// Keeps the prepared devices, unless the call was ended while they opened, in
 /// which case they are released here, because nothing else knows about them.
 async fn adopt_media(shared: &Arc<CallShared>, media: CallMedia) -> bool {

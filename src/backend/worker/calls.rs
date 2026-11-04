@@ -24,8 +24,8 @@ mod runtime;
 mod tests;
 
 use runtime::{
-    CallShared, Dial, Reporter, accept_video, hang_up, run_call, stop_camera, switch_camera_on,
-    teardown,
+    CallShared, Dial, Reporter, accept_video, hang_up, reject_in_background, run_call, stop_camera,
+    switch_camera_on, teardown,
 };
 
 /// Prefix of the id an outgoing call carries until the runtime assigns the
@@ -43,6 +43,9 @@ pub(super) struct Calls {
     /// to, so one from an earlier call cannot touch the current one.
     generations: u64,
     history_dirty: bool,
+    /// An incoming call that came in during another one. It only rings: there
+    /// is one media session at a time, and the runtime has no hold.
+    waiting: Option<Waiting>,
     /// Offers seen lately, so a missed-call event, which carries only the
     /// caller and the id, can be told from a group call and given its kind.
     offers: VecDeque<(String, Offer)>,
@@ -79,6 +82,11 @@ impl Calls {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
     }
+}
+
+struct Waiting {
+    session: CallSession,
+    offer: Box<IncomingCall>,
 }
 
 struct ActiveCall {
@@ -199,20 +207,46 @@ impl Worker {
         let offer = self.rejection_of(&call, turns_offer_down(signal));
         teardown(call.shared.clone(), self.client.clone(), offer);
         self.record_finished(&call);
+        if let Some(waiting) = self.calls.waiting.take() {
+            self.emit(Event::CallWaiting(None));
+            self.begin_call(waiting.session, Some(waiting.offer));
+        }
     }
 
     /// The offer to turn down when `reject` and the call has no handle yet.
     fn rejection_of(&self, call: &ActiveCall, reject: bool) -> Option<Box<IncomingCall>> {
         let offer = call.unanswered_offer().filter(|_| reject);
-        #[cfg(test)]
         if offer.is_some() {
-            self.calls
-                .rejected
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .push(call.session.id.clone());
+            self.note_rejected(&call.session.id);
         }
         offer
+    }
+
+    #[cfg(test)]
+    fn note_rejected(&self, id: &str) {
+        self.calls
+            .rejected
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(id.to_owned());
+    }
+
+    #[cfg(not(test))]
+    fn note_rejected(&self, _: &str) {}
+
+    fn waiting_is(&self, id: &str) -> bool {
+        self.calls
+            .waiting
+            .as_ref()
+            .is_some_and(|waiting| waiting.session.id == id)
+    }
+
+    /// Forgets the waiting call `id`, if that is the one waiting.
+    fn drop_waiting(&mut self, id: &str) {
+        if self.waiting_is(id) {
+            self.calls.waiting = None;
+            self.emit(Event::CallWaiting(None));
+        }
     }
 
     pub(super) fn on_call_signal(&mut self, call: &IncomingCall) {
@@ -230,6 +264,9 @@ impl Worker {
                 call_id, reason, ..
             } if reason.is_none() && self.addressed_call(call_id, &call.from) => {
                 self.signal_call(CallSignal::PeerDeclined);
+            }
+            CallAction::Terminate { call_id, .. } if self.waiting_is(call_id) => {
+                self.drop_waiting(call_id);
             }
             CallAction::Terminate {
                 call_id, reason, ..
@@ -264,10 +301,7 @@ impl Worker {
             return;
         }
         if self.calls.active.is_some() {
-            // Left to ring: turning it down would tell the caller, and every
-            // other device of ours, that the call was declined. The library
-            // reports it as missed when the caller gives up.
-            log::debug!("call offer while busy");
+            self.wait_for_answer(call, call_id, video);
             return;
         }
         let chat = self.canonical(&call.from);
@@ -281,7 +315,58 @@ impl Worker {
         );
         self.begin_call(session, Some(Box::new(call.clone())));
     }
+
+    /// Keeps a call that came in during another one ringing, to be declined, or
+    /// answered once the first is ended. Not rejected here: that would tell the
+    /// caller, and every other device of ours, that the call was declined, and
+    /// the library has no busy reply. One waiting call at a time; a later one
+    /// is left to ring out, and reported missed if its caller gives up.
+    fn wait_for_answer(&mut self, call: &IncomingCall, call_id: &str, video: bool) {
+        if self.calls.waiting.is_some() {
+            log::debug!("a second call is already waiting");
+            return;
+        }
+        let chat = self.canonical(&call.from);
+        self.ensure_chat(&chat, call.notify.as_deref());
+        let session = CallSession::new(
+            call_id.to_owned(),
+            chat,
+            CallDirection::Incoming,
+            video,
+            call.timestamp.timestamp(),
+        );
+        self.calls.waiting = Some(Waiting {
+            session: session.clone(),
+            offer: Box::new(call.clone()),
+        });
+        self.emit(Event::CallWaiting(Some(session)));
+    }
+
+    pub(super) fn decline_waiting_call(&mut self) {
+        let Some(Waiting { mut session, offer }) = self.calls.waiting.take() else {
+            return;
+        };
+        self.emit(Event::CallWaiting(None));
+        self.note_rejected(&session.id);
+        if let Some(client) = self.client.clone() {
+            reject_in_background(client, offer);
+        }
+        session.apply(CallSignal::LocalDeclined, crate::util::now());
+        self.record_call(&session, CallOutcome::Declined);
+    }
+
+    /// Hangs up the call in progress, which brings the waiting call up as the
+    /// ringing one, and answers it.
+    pub(super) fn end_and_answer_waiting(&mut self) {
+        if self.calls.waiting.is_none() {
+            return;
+        }
+        self.hang_up_call();
+        self.answer_call();
+    }
+
     pub(super) fn on_call_elsewhere(&mut self, ended: &CallEndedElsewhere) {
+        self.drop_waiting(&ended.call_id);
         if self.addressed_call(&ended.call_id, &ended.from) {
             self.signal_call(CallSignal::HandledElsewhere);
         }
@@ -520,11 +605,15 @@ impl Worker {
 
     /// Ends the call for a logout, without waiting on the network.
     pub(super) fn abandon_call(&mut self) {
+        if self.calls.waiting.take().is_some() {
+            self.emit(Event::CallWaiting(None));
+        }
         self.signal_call(CallSignal::MediaFailed);
     }
 
     /// Hangs up before the connection closes with the window.
     pub(super) async fn end_call_for_shutdown(&mut self) {
+        self.calls.waiting = None;
         let Some(call) = self.calls.active.take() else {
             return;
         };

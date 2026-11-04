@@ -81,7 +81,7 @@ impl Worker {
         self.record_call(&session, outcome);
     }
 
-    fn record_call(&mut self, session: &CallSession, outcome: CallOutcome) {
+    pub(super) fn record_call(&mut self, session: &CallSession, outcome: CallOutcome) {
         let message = self.call_message(session, outcome);
         let notify = outcome == CallOutcome::Missed && !session.is_outgoing();
         self.file_call(message, Filing::notify_if(notify));
@@ -121,6 +121,7 @@ impl Worker {
     }
 
     pub(in crate::backend::worker) fn on_missed_call(&mut self, missed: &MissedCall) {
+        self.drop_waiting(&missed.call_id);
         if self.addressed_call(&missed.call_id, &missed.from) {
             self.signal_call(CallSignal::PeerTerminated);
             return;

@@ -246,6 +246,7 @@ enum NativeEvent {
     },
     StarredList(Vec<crate::archive::StarredMessage>),
     Call(crate::model::call::CallSession),
+    CallWaiting(Option<crate::model::call::CallSession>),
     CallVideo(std::sync::Arc<crate::calls::VideoSlots>),
     CallFrames,
     Calls {

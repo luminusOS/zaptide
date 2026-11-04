@@ -1,4 +1,5 @@
-use super::screen::{Screen, Tone};
+use super::screen::{Screen, Tone, with_waiting};
+use super::waiting::{decline_command, end_and_answer_commands};
 use super::*;
 use crate::calls::ringtone::Ring;
 use crate::model::call::{CallDirection, CallOutcome, CallSignal};
@@ -213,4 +214,45 @@ fn notification_buttons_act_only_on_a_ringing_call() {
         assert!(choice_command(choice, answered.phase).is_none());
     }
     assert!(choice_command(CallChoice::Show, CallPhase::Ringing).is_none());
+}
+
+#[test]
+fn a_waiting_call_adds_who_it_is_and_two_ways_to_deal_with_it() {
+    let live = screen(&connected(CallDirection::Outgoing, false), "Ana", 100);
+    let before = actions(&live);
+    let shown = with_waiting(live, "Bruno", false);
+    assert_eq!(shown.detail.as_deref(), Some("Bruno is also calling"));
+    let mut expected = before;
+    expected.extend([CallAction::DeclineWaiting, CallAction::EndAndAnswer]);
+    assert_eq!(actions(&shown), expected);
+
+    let mut request = connected(CallDirection::Incoming, false);
+    request.video_requested = true;
+    let shown = with_waiting(screen(&request, "Ana", 100), "Bruno", true);
+    let detail = shown.detail.unwrap();
+    assert!(detail.starts_with("Ana wants to switch to video\n"));
+    assert!(detail.ends_with("Bruno is also calling, with video"));
+}
+
+#[test]
+fn deciding_about_a_waiting_call_reaches_the_account_that_holds_it() {
+    use crate::backend::Command;
+    let (one, two) = (AccountId(1), AccountId(2));
+    assert!(matches!(
+        decline_command(one, one),
+        Command::DeclineWaitingCall
+    ));
+    assert!(matches!(decline_command(one, two), Command::DeclineCall));
+
+    let within = end_and_answer_commands(one, one);
+    assert!(matches!(
+        within.as_slice(),
+        [(account, Command::EndAndAnswerWaiting)] if *account == one
+    ));
+    let across = end_and_answer_commands(one, two);
+    assert!(matches!(
+        across.as_slice(),
+        [(first, Command::HangUpCall), (second, Command::AnswerCall)]
+            if *first == one && *second == two
+    ));
 }

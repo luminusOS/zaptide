@@ -16,10 +16,12 @@ mod render;
 mod screen;
 #[cfg(test)]
 mod tests;
+mod waiting;
 mod window;
 
 pub use screen::CallAction;
-use screen::{incoming_label, kind_label, screen, when};
+use screen::{Screen, incoming_label, kind_label, screen, when};
+use waiting::Waiting;
 use window::CallWindow;
 
 fn texture(frame: RgbaFrame) -> Option<gtk::gdk::Texture> {
@@ -108,6 +110,7 @@ pub(super) struct CallsUi {
     live: Option<LiveCall>,
     slots: Option<(AccountId, Arc<VideoSlots>)>,
     ringer: Ringer,
+    waiting: Option<Waiting>,
     /// The account whose call was closed here and has not reported its end yet.
     abandoned: Option<(AccountId, String)>,
 }
@@ -194,6 +197,7 @@ impl CallsUi {
             live: None,
             slots: None,
             ringer: Ringer::new(),
+            waiting: None,
             abandoned: None,
         }
     }
@@ -240,6 +244,13 @@ impl CallsUi {
             .is_some_and(|live| live.account == account)
         {
             self.live = None;
+        }
+        if self
+            .waiting
+            .as_ref()
+            .is_some_and(|waiting| waiting.account == account)
+        {
+            self.waiting = None;
         }
     }
 
@@ -501,6 +512,7 @@ impl NativeApplication {
             }
             NativeEvent::CallFrames => self.paint_call_video(),
             NativeEvent::Call(session) => self.call_changed(account, session, sender),
+            NativeEvent::CallWaiting(session) => self.waiting_changed(account, session),
             _ => {}
         }
     }
@@ -534,7 +546,11 @@ impl NativeApplication {
         if session.phase != CallPhase::Ringing {
             self.notifications.clear_call(account, &session.id);
         }
+        let finished = session.phase.is_finished();
         self.apply_call_change(account, session, sender);
+        if finished {
+            self.promote_waiting(account, sender);
+        }
         self.sync_ring();
     }
 
@@ -583,16 +599,20 @@ impl NativeApplication {
             .and_then(|avatars| avatars.get(&session.chat))
             .cloned();
         if !same && self.calls.busy_for_other(account) {
-            if session.phase == CallPhase::Ringing {
-                self.notify_ringing(account, &session, &name, avatar_path.as_deref());
-            }
+            self.other_account_call(account, session);
             return;
         }
         if !same && session.phase.is_finished() {
             return;
         }
         if session.phase == CallPhase::Ringing && !same {
-            self.notify_ringing(account, &session, &name, avatar_path.as_deref());
+            self.notify_call(
+                account,
+                &session,
+                CallBanner::Ringing,
+                &name,
+                avatar_path.as_deref(),
+            );
         }
         if matches!(
             session.phase,
@@ -614,7 +634,7 @@ impl NativeApplication {
                 tick: None,
             });
         }
-        let screen = screen(&session, &name, crate::util::now());
+        let screen = self.full_screen(&session, &name);
         let Some(live) = self.calls.live.as_mut() else {
             return;
         };
@@ -655,27 +675,28 @@ impl NativeApplication {
         }
     }
 
-    fn notify_ringing(
+    /// Announces a call that rings. The main window being in front already
+    /// shows a lone incoming call, but a waiting one is announced regardless,
+    /// as the call window is taken.
+    fn notify_call(
         &self,
         account: AccountId,
         session: &CallSession,
+        banner: CallBanner,
         name: &str,
         avatar: Option<&std::path::Path>,
     ) {
-        if !self.settings.notifications
-            || (account == self.active_account && self.window.is_active())
-        {
+        let seen_anyway = banner == CallBanner::Ringing
+            && account == self.active_account
+            && self.window.is_active();
+        if !self.settings.notifications || seen_anyway {
             return;
         }
         let body = incoming_label(session.video);
-        if let Err(error) = self.notifications.show_call(
-            account,
-            &session.id,
-            CallBanner::Ringing,
-            name,
-            &body,
-            avatar,
-        ) {
+        if let Err(error) =
+            self.notifications
+                .show_call(account, &session.id, banner, name, &body, avatar)
+        {
             log::warn!("could not show a notification: {error}");
         }
     }
@@ -683,6 +704,19 @@ impl NativeApplication {
     /// A button or the body of a call's notification was used. A notification
     /// left over from a call that is no longer ringing does nothing.
     pub(super) fn call_choice(&mut self, account: AccountId, call_id: &str, choice: CallChoice) {
+        if self.is_waiting(account, call_id) {
+            match choice {
+                CallChoice::Decline => self.decline_waiting(),
+                CallChoice::EndAndAnswer => self.end_and_answer(),
+                CallChoice::Show => {
+                    if let Some(live) = &self.calls.live {
+                        live.window.window.present();
+                    }
+                }
+                CallChoice::Answer => {}
+            }
+            return;
+        }
         let Some(live) = self
             .calls
             .live
@@ -703,21 +737,20 @@ impl NativeApplication {
     }
 
     pub(super) fn call_tick(&mut self) {
-        let Some((account, chat)) = self
+        let Some((account, session)) = self
             .calls
             .live
             .as_ref()
-            .map(|live| (live.account, live.session.chat.clone()))
+            .map(|live| (live.account, live.session.clone()))
         else {
             return;
         };
-        let name = chat_label(self.chats_of(account), &chat);
-        let Some(live) = self.calls.live.as_mut() else {
-            return;
-        };
-        let screen = screen(&live.session, &name, crate::util::now());
-        live.window
-            .render(&live.session, &name, live.avatar.as_ref(), &screen);
+        let name = chat_label(self.chats_of(account), &session.chat);
+        let screen = self.full_screen(&session, &name);
+        if let Some(live) = self.calls.live.as_mut() {
+            live.window
+                .render(&live.session, &name, live.avatar.as_ref(), &screen);
+        }
     }
 
     pub(super) fn call_action(&mut self, action: CallAction, sender: &ComponentSender<Self>) {
@@ -752,6 +785,8 @@ impl NativeApplication {
                     });
                 }
             }
+            CallAction::DeclineWaiting => self.decline_waiting(),
+            CallAction::EndAndAnswer => self.end_and_answer(),
             CallAction::BackToChat => {
                 self.close_call_window(account);
                 sender.input(Input::OpenAccountChat(account, session.chat));

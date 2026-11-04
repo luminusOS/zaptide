@@ -227,6 +227,7 @@ impl NativeApplication {
             match event {
                 NativeEvent::Profile { phone, name } => profiles.push((phone, name)),
                 event @ (NativeEvent::Call(_)
+                | NativeEvent::CallWaiting(_)
                 | NativeEvent::CallVideo(_)
                 | NativeEvent::CallFrames) => call_events.push(event),
                 event => {

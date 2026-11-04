@@ -12,6 +12,8 @@ pub enum CallAction {
     ToggleCamera,
     AcceptVideo,
     Retry,
+    DeclineWaiting,
+    EndAndAnswer,
     BackToChat,
     Close,
 }
@@ -80,6 +82,33 @@ pub(super) fn incoming_label(video: bool) -> String {
     } else {
         gettext("Incoming voice call")
     }
+}
+
+/// Adds the call that came in during this one: who it is, and what to do with it.
+pub(super) fn with_waiting(mut screen: Screen, caller: &str, video: bool) -> Screen {
+    let line = if video {
+        gettext("%1$s is also calling, with video")
+    } else {
+        gettext("%1$s is also calling")
+    }
+    .replace("%1$s", caller);
+    screen.detail = Some(match screen.detail {
+        Some(detail) => format!("{detail}\n{line}"),
+        None => line,
+    });
+    screen.buttons.push(button(
+        CallAction::DeclineWaiting,
+        gettext("Decline new call"),
+        "call-stop-symbolic",
+        Tone::Danger,
+    ));
+    screen.buttons.push(button(
+        CallAction::EndAndAnswer,
+        gettext("End and answer"),
+        "call-start-symbolic",
+        Tone::Success,
+    ));
+    screen
 }
 
 fn screen_of(status: String, buttons: Vec<CallButton>) -> Screen {

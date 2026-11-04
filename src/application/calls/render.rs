@@ -1,3 +1,4 @@
+use super::screen::with_waiting;
 use super::tests::{connected, session};
 use super::*;
 use crate::model::call::{CallDirection, CallOutcome, CallSignal};
@@ -82,6 +83,7 @@ fn render_call_screens() {
         ("muted", muted),
         ("video", video),
         ("request", request),
+        ("waiting", connected(CallDirection::Outgoing, false)),
         ("ended", ended),
         ("failed", failed),
     ];
@@ -91,7 +93,10 @@ fn render_call_screens() {
     ] {
         adw::StyleManager::default().set_color_scheme(scheme);
         for (name, call) in &screens {
-            let shown = screen(call, "Ana Souza", 100 + 138);
+            let mut shown = screen(call, "Ana Souza", 100 + 138);
+            if *name == "waiting" {
+                shown = with_waiting(shown, "Bruno Lima", true);
+            }
             window.render(call, "Ana Souza", None, &shown);
             if call.peer_video {
                 window

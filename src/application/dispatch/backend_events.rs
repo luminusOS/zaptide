@@ -116,6 +116,7 @@ pub(super) fn drain_and_convert(
                 path,
             } => events.push(NativeEvent::Avatar { id, path }),
             Event::Call(session) => events.push(NativeEvent::Call(session)),
+            Event::CallWaiting(session) => events.push(NativeEvent::CallWaiting(session)),
             Event::CallVideo(slots) => events.push(NativeEvent::CallVideo(slots)),
             Event::CallFrames => events.push(NativeEvent::CallFrames),
             Event::Calls { entries, seen_at } => {
@@ -290,10 +291,10 @@ pub(super) fn handle_backend_ready(
             NativeEvent::StarredList(list) => app.starred_list_loaded(list, &sender),
             NativeEvent::MessageDeleted { chat, id } => app.message_deleted(&chat, &id),
             NativeEvent::Calls { entries, seen_at } => app.calls_loaded(entries, seen_at),
-            event
-            @ (NativeEvent::Call(_) | NativeEvent::CallVideo(_) | NativeEvent::CallFrames) => {
-                app.handle_call_event(account, event, &sender)
-            }
+            event @ (NativeEvent::Call(_)
+            | NativeEvent::CallWaiting(_)
+            | NativeEvent::CallVideo(_)
+            | NativeEvent::CallFrames) => app.handle_call_event(account, event, &sender),
             NativeEvent::Incoming { chat, message } => {
                 if app.settings.auto_download
                     && should_auto_download(message.content.media())

@@ -131,6 +131,7 @@ async fn a_second_offer_while_busy_is_left_alone_and_filed_when_the_library_repo
             .map(|call| call.session.id.as_str()),
         Some("FIRST")
     );
+    assert_eq!(waiting_ids(&events), [Some("SECOND".to_owned())]);
     assert!(
         worker.calls.rejected().is_empty(),
         "turning it down would tell the caller it was declined"
@@ -150,6 +151,7 @@ async fn a_second_offer_while_busy_is_left_alone_and_filed_when_the_library_repo
         whatsapp_rust::types::call::MissedReason::Remote,
     );
     worker.on_missed_call(&missed);
+    assert_eq!(waiting_ids(&events), [None]);
     let stored = worker
         .archive
         .message(other_peer, "SECOND")
@@ -163,6 +165,204 @@ async fn a_second_offer_while_busy_is_left_alone_and_filed_when_the_library_repo
             ..
         }
     ));
+}
+
+const OTHER: &str = "15550003333@s.whatsapp.net";
+
+/// The waiting-call events so far: the id of the call that waits, or `None`
+/// when no call waits any more. Leaves the other events alone.
+fn waiting_ids(events: &std::sync::mpsc::Receiver<Event>) -> Vec<Option<String>> {
+    events
+        .try_iter()
+        .filter_map(|event| match event {
+            Event::CallWaiting(session) => Some(session.map(|session| session.id)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn from_other(mut call: IncomingCall) -> IncomingCall {
+    call.from = jid(OTHER);
+    call
+}
+
+/// A call in progress (`FIRST`, answered) with `SECOND` waiting behind it.
+fn first_call_with_second_waiting(worker: &mut Worker, events: &std::sync::mpsc::Receiver<Event>) {
+    worker.on_call_signal(&offer("FIRST", false));
+    answer_in_place(worker);
+    worker.on_call_signal(&from_other(offer("SECOND", true)));
+    assert_eq!(waiting_ids(events), [Some("SECOND".to_owned())]);
+}
+
+fn active_id(worker: &Worker) -> Option<&str> {
+    worker
+        .calls
+        .active
+        .as_ref()
+        .map(|call| call.session.id.as_str())
+}
+
+#[tokio::test]
+async fn declining_the_waiting_call_turns_it_down_and_leaves_the_first_alone() {
+    let (mut worker, events, _, _) = worker();
+    first_call_with_second_waiting(&mut worker, &events);
+
+    worker.decline_waiting_call();
+
+    assert_eq!(worker.calls.rejected(), ["SECOND"]);
+    assert_eq!(waiting_ids(&events), [None]);
+    assert_eq!(active_id(&worker), Some("FIRST"));
+    let stored = worker.archive.message(OTHER, "SECOND").unwrap().unwrap();
+    assert!(matches!(
+        stored.content,
+        Content::Call {
+            video: true,
+            outcome: CallOutcome::Declined,
+            ..
+        }
+    ));
+    assert_eq!(worker.archive.chat(OTHER).unwrap().unwrap().unread, 0);
+}
+
+#[tokio::test]
+async fn ending_the_first_call_brings_the_waiting_one_up_to_ring() {
+    let (mut worker, events, _, _) = worker();
+    first_call_with_second_waiting(&mut worker, &events);
+
+    worker.hang_up_call();
+
+    assert_eq!(active_id(&worker), Some("SECOND"));
+    assert_eq!(waiting_ids(&events), [None]);
+    let call = worker.calls.active.as_ref().unwrap();
+    assert_eq!(call.session.phase, CallPhase::Ringing);
+    assert!(call.session.video);
+    assert!(call.offer.is_some());
+    assert_eq!(worker.calls.rejected(), ["FIRST"]);
+}
+
+#[tokio::test]
+async fn end_and_answer_hangs_up_the_first_call_and_goes_on_to_answer_the_second() {
+    let (mut worker, events, _, _) = worker();
+    first_call_with_second_waiting(&mut worker, &events);
+
+    worker.end_and_answer_waiting();
+
+    assert_eq!(active_id(&worker), Some("SECOND"));
+    assert!(worker.calls.waiting.is_none());
+    assert_eq!(worker.calls.rejected(), ["FIRST"]);
+    let shown: Vec<Event> = events.try_iter().collect();
+    assert!(
+        shown
+            .iter()
+            .any(|event| matches!(event, Event::CallWaiting(None)))
+    );
+    assert!(
+        shown.iter().any(
+            |event| matches!(event, Event::Info(text) if text == "The call could not be answered")
+        ),
+        "the answer was attempted; a worker without a connection cannot place it"
+    );
+}
+
+#[tokio::test]
+async fn end_and_answer_does_nothing_without_a_waiting_call() {
+    let (mut worker, events, _, _) = worker();
+    worker.on_call_signal(&offer("ONLY", false));
+    answer_in_place(&mut worker);
+    let _ = calls_in(&events);
+
+    worker.end_and_answer_waiting();
+
+    assert_eq!(active_id(&worker), Some("ONLY"));
+    assert!(worker.calls.rejected().is_empty());
+}
+
+#[tokio::test]
+async fn a_waiting_caller_giving_up_clears_the_wait_and_files_a_missed_call() {
+    let (mut worker, events, _, _) = worker();
+    first_call_with_second_waiting(&mut worker, &events);
+
+    worker.on_call_signal(&from_other(terminate("SECOND", None)));
+    assert_eq!(waiting_ids(&events), [None]);
+    assert_eq!(active_id(&worker), Some("FIRST"));
+    let missed = MissedCall::new(
+        jid(OTHER),
+        "SECOND".into(),
+        whatsapp_rust::wacore::chrono::Utc::now(),
+        whatsapp_rust::types::call::MissedReason::Remote,
+    );
+    worker.on_missed_call(&missed);
+
+    assert!(
+        waiting_ids(&events).is_empty(),
+        "nothing waits to be cleared twice"
+    );
+    let stored = worker.archive.message(OTHER, "SECOND").unwrap().unwrap();
+    assert!(matches!(
+        stored.content,
+        Content::Call {
+            outcome: CallOutcome::Missed,
+            ..
+        }
+    ));
+    assert!(worker.calls.rejected().is_empty());
+}
+
+#[tokio::test]
+async fn a_waiting_call_answered_on_another_device_is_dismissed_without_a_record() {
+    let (mut worker, events, _, _) = worker();
+    first_call_with_second_waiting(&mut worker, &events);
+
+    worker.on_call_signal(&from_other(terminate("SECOND", Some("accepted_elsewhere"))));
+
+    assert_eq!(waiting_ids(&events), [None]);
+    assert!(worker.archive.message(OTHER, "SECOND").unwrap().is_none());
+}
+
+#[tokio::test]
+async fn only_one_call_waits_and_a_repeated_offer_changes_nothing() {
+    let (mut worker, events, _, _) = worker();
+    first_call_with_second_waiting(&mut worker, &events);
+
+    worker.on_call_signal(&from_other(offer("SECOND", true)));
+    let mut third = offer("THIRD", false);
+    third.from = jid("15550004444@s.whatsapp.net");
+    worker.on_call_signal(&third);
+
+    assert!(waiting_ids(&events).is_empty());
+    assert_eq!(
+        worker
+            .calls
+            .waiting
+            .as_ref()
+            .map(|waiting| waiting.session.id.as_str()),
+        Some("SECOND")
+    );
+    assert!(worker.calls.rejected().is_empty(), "the third rings out");
+}
+
+#[tokio::test]
+async fn a_waiting_call_does_not_survive_a_logout_or_a_shutdown() {
+    let (mut worker, events, _, _) = worker();
+    first_call_with_second_waiting(&mut worker, &events);
+    worker.abandon_call();
+    assert!(worker.calls.waiting.is_none());
+    assert!(
+        events
+            .try_iter()
+            .any(|event| matches!(event, Event::CallWaiting(None)))
+    );
+    assert!(
+        worker.calls.active.is_none(),
+        "no waiting call is brought up when the account goes"
+    );
+
+    let (mut worker, events, _, _) = self::worker();
+    first_call_with_second_waiting(&mut worker, &events);
+    worker.end_call_for_shutdown().await;
+    assert!(worker.calls.waiting.is_none());
+    assert!(worker.calls.active.is_none());
+    assert_eq!(worker.calls.rejected(), ["FIRST"]);
 }
 
 fn answer_in_place(worker: &mut Worker) {

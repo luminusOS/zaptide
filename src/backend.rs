@@ -568,6 +568,10 @@ pub enum Command {
     AnswerCall,
     /// Declines the ringing call.
     DeclineCall,
+    /// Declines the call that came in during another one.
+    DeclineWaitingCall,
+    /// Ends the call in progress and answers the one that came in during it.
+    EndAndAnswerWaiting,
     /// Ends or cancels the call in progress.
     HangUpCall,
     SetCallMuted(bool),
@@ -745,6 +749,8 @@ pub enum Event {
     /// The call in progress, whenever its state changes. A finished call is
     /// reported once more and then forgotten.
     Call(crate::model::call::CallSession),
+    /// The call that came in during another one, or `None` once it is gone.
+    CallWaiting(Option<crate::model::call::CallSession>),
     /// Pictures of the call in progress; fetch them when [`Event::CallFrames`] arrives.
     CallVideo(Arc<crate::calls::VideoSlots>),
     /// A call picture is ready.
