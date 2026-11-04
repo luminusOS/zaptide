@@ -9,6 +9,7 @@ use gstreamer as gst;
 use gstreamer::prelude::*;
 
 pub mod audio;
+mod camera_portal;
 pub mod ringtone;
 pub mod video;
 
@@ -18,6 +19,13 @@ pub enum MediaError {
     NoMicrophone,
     NoSpeaker,
     NoCamera,
+    /// The camera portal refused access, or the person declined or dismissed
+    /// its prompt; the portal reports those the same way.
+    CameraDenied,
+    /// Nobody answered the camera portal's prompt in time.
+    CameraTimedOut,
+    /// The camera portal is missing or failed.
+    CameraPortal,
     NoVideoEncoder,
     NoVideoDecoder,
     /// The cause is dropped on purpose: GStreamer messages can name devices.
@@ -31,6 +39,13 @@ impl std::fmt::Display for MediaError {
             Self::NoMicrophone => formatter.write_str(&gettext("No microphone is available")),
             Self::NoSpeaker => formatter.write_str(&gettext("No audio output is available")),
             Self::NoCamera => formatter.write_str(&gettext("No camera is available")),
+            Self::CameraDenied => formatter.write_str(&gettext("Camera access was denied")),
+            Self::CameraTimedOut => {
+                formatter.write_str(&gettext("Camera access was not answered in time"))
+            }
+            Self::CameraPortal => {
+                formatter.write_str(&gettext("The system camera portal is not available"))
+            }
             Self::NoVideoEncoder => formatter.write_str(&gettext(
                 "Video calls need an H.264 encoder (the GStreamer x264 or OpenH264 plugin)",
             )),
@@ -109,6 +124,19 @@ pub(crate) fn gst_ready(elements: &[&str]) -> bool {
     );
     eprintln!("skipped: GStreamer elements missing: {missing:?}");
     false
+}
+
+/// How many of this process's open descriptors lead to `path`. Counting one
+/// file keeps parallel tests from disturbing a leak check.
+#[cfg(test)]
+pub(crate) fn open_descriptors_of(path: &std::path::Path) -> usize {
+    let path = path.canonicalize().expect("the file exists");
+    std::fs::read_dir("/proc/self/fd")
+        .expect("procfs lists the descriptors")
+        .filter_map(Result::ok)
+        .filter_map(|entry| std::fs::read_link(entry.path()).ok())
+        .filter(|target| *target == path)
+        .count()
 }
 
 /// Waits for an item without blocking forever.
@@ -259,18 +287,46 @@ pub struct VideoPlan {
 
 impl VideoPlan {
     /// Opens the camera, or gives `None` when `need` allows going without it.
-    /// Blocks while the device starts.
+    /// Blocks while the device starts, and up to a minute more when the camera
+    /// portal is waiting for the person to allow it.
     pub fn open_camera(&self, need: CameraNeed) -> Result<Option<video::Camera>, MediaError> {
-        match video::Camera::start(
-            self.encoder,
-            "autovideosrc",
-            self.slots.clone(),
-            self.faults.clone(),
-        ) {
+        match self.start_camera() {
             Ok(camera) => Ok(Some(camera)),
             Err(_) if need == CameraNeed::Optional => Ok(None),
             Err(error) => Err(error),
         }
+    }
+
+    fn start_camera(&self) -> Result<video::Camera, MediaError> {
+        match camera_portal::route(camera_portal::sandboxed()) {
+            camera_portal::Route::Portal => self.start_through_portal(),
+            camera_portal::Route::DirectThenPortal => match self.start_directly() {
+                Err(MediaError::NoCamera) => self
+                    .start_through_portal()
+                    .map_err(camera_portal::fallback_error),
+                result => result,
+            },
+        }
+    }
+
+    fn start_directly(&self) -> Result<video::Camera, MediaError> {
+        video::Camera::start(
+            self.encoder,
+            "autovideosrc",
+            self.slots.clone(),
+            self.faults.clone(),
+        )
+    }
+
+    /// May wait for the person to answer the portal's prompt.
+    fn start_through_portal(&self) -> Result<video::Camera, MediaError> {
+        let remote = camera_portal::open(camera_portal::PROMPT_TIMEOUT)?;
+        video::Camera::start_remote(
+            self.encoder,
+            remote,
+            self.slots.clone(),
+            self.faults.clone(),
+        )
     }
 
     pub fn open_decoder(&self) -> Result<video::RemoteDecoder, MediaError> {
@@ -405,6 +461,27 @@ mod tests {
             height: 1,
             data: vec![0; width as usize * 4],
         }
+    }
+
+    #[test]
+    fn each_camera_failure_has_its_own_message() {
+        let messages: Vec<String> = [
+            MediaError::NoCamera,
+            MediaError::CameraDenied,
+            MediaError::CameraTimedOut,
+            MediaError::CameraPortal,
+        ]
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+        for (index, message) in messages.iter().enumerate() {
+            assert!(!message.is_empty());
+            assert!(!messages[..index].contains(message), "{message}");
+        }
+        assert_eq!(
+            MediaError::CameraDenied.to_string(),
+            "Camera access was denied"
+        );
     }
 
     #[test]

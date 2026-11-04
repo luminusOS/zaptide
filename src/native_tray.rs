@@ -32,16 +32,14 @@ pub fn unread_label(count: usize) -> Option<String> {
 
 mod imp {
     use super::{TrayAction, TrayState, unread_label};
-    use gtk::{gio, glib, prelude::*};
+    use ashpd::desktop::settings::{ColorScheme, Settings};
+    use futures_util::StreamExt;
+    use gtk::glib;
     use gtk4 as gtk;
     use ksni::blocking::TrayMethods;
     use ksni::menu::{CheckmarkItem, StandardItem};
     use ksni::{MenuItem, OfflineReason, ToolTip};
-    use std::{
-        cell::{Cell, RefCell},
-        collections::HashMap,
-        rc::Rc,
-    };
+    use std::rc::Rc;
 
     struct Tray {
         state: TrayState,
@@ -194,100 +192,70 @@ mod imp {
         render().into_iter().collect()
     }
 
-    const APPEARANCE: &str = "org.freedesktop.appearance";
-    const COLOR_SCHEME: &str = "color-scheme";
-    const PORTAL: &str = "org.freedesktop.portal.Desktop";
-    const PORTAL_PATH: &str = "/org/freedesktop/portal/desktop";
-    const SETTINGS: &str = "org.freedesktop.portal.Settings";
-
-    pub(super) fn light_theme_from_setting(
-        namespace: &str,
-        key: &str,
-        value: &glib::Variant,
-    ) -> Option<bool> {
-        if namespace != APPEARANCE || key != COLOR_SCHEME {
-            return None;
-        }
-        value.get::<u32>().map(|scheme| scheme != 1)
+    pub(super) fn light_theme(scheme: ColorScheme) -> bool {
+        scheme != ColorScheme::PreferDark
     }
 
-    fn watch_desktop_theme(
-        handle: Rc<ksni::blocking::Handle<Tray>>,
-    ) -> Rc<RefCell<Option<gio::SignalSubscription>>> {
-        let subscription = Rc::new(RefCell::new(None));
-        let weak = Rc::downgrade(&subscription);
-        glib::spawn_future_local(async move {
-            let connection = match gio::bus_get_future(gio::BusType::Session).await {
-                Ok(connection) => connection,
-                Err(error) => {
-                    log::debug!("desktop color scheme unavailable: {error}");
-                    return;
-                }
-            };
-            let Some(subscription) = weak.upgrade() else {
+    pub(super) async fn forward_color_scheme(
+        light_themes: tokio::sync::mpsc::UnboundedSender<bool>,
+    ) {
+        let settings = match Settings::new().await {
+            Ok(settings) => settings,
+            Err(error) => {
+                log::debug!("desktop color scheme unavailable: {error}");
                 return;
-            };
-            let changed = Rc::new(Cell::new(false));
-            let signal_changed = changed.clone();
-            let signal_handle = handle.clone();
-            *subscription.borrow_mut() = Some(connection.subscribe_to_signal(
-                Some(PORTAL),
-                Some(SETTINGS),
-                Some("SettingChanged"),
-                Some(PORTAL_PATH),
-                Some(APPEARANCE),
-                gio::DBusSignalFlags::NONE,
-                move |signal| {
-                    let Some((namespace, key, value)) =
-                        signal.parameters.get::<(String, String, glib::Variant)>()
-                    else {
-                        return;
-                    };
-                    if let Some(light_theme) = light_theme_from_setting(&namespace, &key, &value) {
-                        signal_changed.set(true);
-                        signal_handle.update(move |tray| tray.light_theme = light_theme);
+            }
+        };
+        // Subscribed before the first read, so a change that lands while the
+        // read is in flight is delivered after it and wins.
+        let mut changes = match settings.receive_color_scheme_changed().await {
+            Ok(changes) => Box::pin(changes),
+            Err(error) => {
+                log::debug!("desktop color scheme unavailable: {error}");
+                return;
+            }
+        };
+        match settings.color_scheme().await {
+            Ok(scheme) => {
+                let _ = light_themes.send(light_theme(scheme));
+            }
+            Err(error) => log::debug!("desktop color scheme unavailable: {error}"),
+        }
+        loop {
+            tokio::select! {
+                () = light_themes.closed() => return,
+                change = changes.next() => match change {
+                    Some(scheme) => {
+                        let _ = light_themes.send(light_theme(scheme));
                     }
+                    None => return,
                 },
-            ));
-            drop(subscription);
-            let result = connection
-                .call_future(
-                    Some(PORTAL),
-                    PORTAL_PATH,
-                    SETTINGS,
-                    "ReadAll",
-                    Some(&(vec![APPEARANCE],).to_variant()),
-                    None,
-                    gio::DBusCallFlags::NONE,
-                    5_000,
-                )
-                .await;
-            // A live change is newer than the initial snapshot, even if the reply arrives last.
-            if changed.get() || weak.upgrade().is_none() {
-                return;
             }
-            match result {
-                Ok(reply) => {
-                    type SettingsMap = HashMap<String, HashMap<String, glib::Variant>>;
-                    if let Some((settings,)) = reply.get::<(SettingsMap,)>()
-                        && let Some(value) = settings
-                            .get(APPEARANCE)
-                            .and_then(|values| values.get(COLOR_SCHEME))
-                        && let Some(light_theme) =
-                            light_theme_from_setting(APPEARANCE, COLOR_SCHEME, value)
-                    {
-                        handle.update(move |tray| tray.light_theme = light_theme);
-                    }
-                }
-                Err(error) => log::debug!("desktop color scheme unavailable: {error}"),
+        }
+    }
+
+    fn watch_desktop_theme(handle: Rc<ksni::blocking::Handle<Tray>>) -> DesktopTheme {
+        let (light_themes, mut changes) = tokio::sync::mpsc::unbounded_channel();
+        crate::portal::spawn(forward_color_scheme(light_themes));
+        DesktopTheme(glib::spawn_future_local(async move {
+            while let Some(light_theme) = changes.recv().await {
+                handle.update(move |tray| tray.light_theme = light_theme);
             }
-        });
-        subscription
+        }))
+    }
+
+    /// Follows the desktop's color scheme until dropped.
+    pub struct DesktopTheme(glib::JoinHandle<()>);
+
+    impl Drop for DesktopTheme {
+        fn drop(&mut self) {
+            self.0.abort();
+        }
     }
 
     pub struct TrayHandle {
         handle: Rc<ksni::blocking::Handle<Tray>>,
-        _desktop_theme: Rc<RefCell<Option<gio::SignalSubscription>>>,
+        _desktop_theme: DesktopTheme,
     }
 
     impl TrayHandle {
@@ -370,37 +338,36 @@ pub use imp::TrayHandle;
 
 #[cfg(test)]
 mod tests {
-    use gtk4::glib::variant::ToVariant;
+    use ashpd::desktop::settings::ColorScheme;
+    use ashpd::zvariant::{OwnedValue, Value};
 
     #[test]
     fn desktop_color_scheme_controls_tray_contrast() {
         for (scheme, light) in [(0_u32, true), (1, false), (2, true), (99, true)] {
-            assert_eq!(
-                super::imp::light_theme_from_setting(
-                    "org.freedesktop.appearance",
-                    "color-scheme",
-                    &scheme.to_variant(),
-                ),
-                Some(light),
-            );
+            let value = OwnedValue::try_from(Value::from(scheme)).expect("a plain value");
+            let scheme = ColorScheme::try_from(value).expect("a known or unknown scheme");
+            assert_eq!(super::imp::light_theme(scheme), light);
         }
     }
 
     #[test]
-    fn unrelated_or_malformed_settings_do_not_change_tray_contrast() {
-        for (namespace, key, value) in [
-            ("org.freedesktop.appearance", "contrast", 1_u32.to_variant()),
-            ("other", "color-scheme", 1_u32.to_variant()),
-            (
-                "org.freedesktop.appearance",
-                "color-scheme",
-                "dark".to_variant(),
-            ),
-        ] {
-            assert_eq!(
-                super::imp::light_theme_from_setting(namespace, key, &value),
-                None
-            );
+    fn a_malformed_color_scheme_does_not_change_tray_contrast() {
+        let value = OwnedValue::try_from(Value::from("dark")).expect("a plain value");
+        assert!(ColorScheme::try_from(value).is_err());
+    }
+
+    #[test]
+    #[ignore = "talks to the session's settings portal"]
+    fn the_session_portal_delivers_the_current_color_scheme() {
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        crate::portal::spawn(super::imp::forward_color_scheme(sender));
+        let first = crate::portal::run(async move {
+            tokio::time::timeout(std::time::Duration::from_secs(5), receiver.recv()).await
+        })
+        .expect("the portal runtime finishes");
+        match first {
+            Ok(Some(light)) => eprintln!("the portal delivered a scheme: light={light}"),
+            Ok(None) | Err(_) => eprintln!("skipped: the session has no settings portal"),
         }
     }
 

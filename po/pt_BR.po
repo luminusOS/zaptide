@@ -1226,33 +1226,45 @@ msgstr "Não foi possível fazer a chamada"
 msgid "Video could not be started"
 msgstr "Não foi possível iniciar o vídeo"
 
-#: src/calls/mod.rs:31
+#: src/calls/mod.rs:39
 msgid "No microphone is available"
 msgstr "Nenhum microfone disponível"
 
-#: src/calls/mod.rs:32
+#: src/calls/mod.rs:40
 msgid "No audio output is available"
 msgstr "Nenhuma saída de áudio disponível"
 
-#: src/calls/mod.rs:33
+#: src/calls/mod.rs:41
 msgid "No camera is available"
 msgstr "Nenhuma câmera disponível"
 
-#: src/calls/mod.rs:35
+#: src/calls/mod.rs:42
+msgid "Camera access was denied"
+msgstr "O acesso à câmera foi negado"
+
+#: src/calls/mod.rs:44
+msgid "Camera access was not answered in time"
+msgstr "O pedido de acesso à câmera não foi respondido a tempo"
+
+#: src/calls/mod.rs:47
+msgid "The system camera portal is not available"
+msgstr "O portal de câmera do sistema não está disponível"
+
+#: src/calls/mod.rs:50
 msgid ""
 "Video calls need an H.264 encoder (the GStreamer x264 or OpenH264 plugin)"
 msgstr ""
 "As chamadas de vídeo precisam de um codificador H.264 (o plugin x264 ou "
 "OpenH264 do GStreamer)"
 
-#: src/calls/mod.rs:38
+#: src/calls/mod.rs:53
 msgid ""
 "Video calls need an H.264 decoder (the GStreamer libav or OpenH264 plugin)"
 msgstr ""
 "As chamadas de vídeo precisam de um decodificador H.264 (o plugin libav ou "
 "OpenH264 do GStreamer)"
 
-#: src/calls/mod.rs:40
+#: src/calls/mod.rs:55
 msgid "Call audio is unavailable"
 msgstr "O áudio da chamada não está disponível"
 

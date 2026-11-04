@@ -1,5 +1,6 @@
 //! H.264 camera capture for the outgoing picture and decoding for the incoming one.
 
+use std::os::fd::OwnedFd;
 use std::sync::Arc;
 
 use gstreamer as gst;
@@ -8,7 +9,9 @@ use gstreamer_video as gst_video;
 use gstreamer_video::prelude::*;
 use whatsapp_rust::voip::VideoFrame;
 
-use super::{Fault, FaultHandler, MediaError, RgbaFrame, VideoSlots, pipeline_from, watch};
+use super::{
+    Fault, FaultHandler, MediaError, RgbaFrame, VideoSlots, camera_portal, pipeline_from, watch,
+};
 
 /// The outgoing picture is 15 frames per second, the cadence the VoIP runtime
 /// assumes for a plain channel source.
@@ -130,12 +133,37 @@ fn auto_source_fell_back(pipeline: &gst::Pipeline) -> bool {
 pub struct Camera {
     pipeline: gst::Pipeline,
     frames: async_channel::Receiver<Vec<u8>>,
+    /// Declared after the pipeline so it closes once the pipeline has let go
+    /// of its own copy.
+    _remote: Option<OwnedFd>,
 }
 
 impl Camera {
     pub(super) fn start(
         encoder: H264Encoder,
         source: &str,
+        slots: Arc<VideoSlots>,
+        faults: FaultHandler,
+    ) -> Result<Self, MediaError> {
+        Self::launch(encoder, source, None, slots, faults)
+    }
+
+    /// Reads the camera through the PipeWire connection the portal gave, which
+    /// the returned camera keeps open until it is dropped.
+    pub(super) fn start_remote(
+        encoder: H264Encoder,
+        remote: camera_portal::Remote,
+        slots: Arc<VideoSlots>,
+        faults: FaultHandler,
+    ) -> Result<Self, MediaError> {
+        let source = remote.source();
+        Self::launch(encoder, &source, Some(remote.into_fd()), slots, faults)
+    }
+
+    fn launch(
+        encoder: H264Encoder,
+        source: &str,
+        remote: Option<OwnedFd>,
         slots: Arc<VideoSlots>,
         faults: FaultHandler,
     ) -> Result<Self, MediaError> {
@@ -192,7 +220,11 @@ impl Camera {
             let _ = pipeline.set_state(gst::State::Null);
             return Err(MediaError::NoCamera);
         }
-        Ok(Self { pipeline, frames })
+        Ok(Self {
+            pipeline,
+            frames,
+            _remote: remote,
+        })
     }
 
     pub fn frames(&self) -> async_channel::Receiver<Vec<u8>> {
@@ -332,8 +364,68 @@ mod tests {
         }
         // No source accepts these caps, so autovideosrc takes its fallback
         // without opening any device, as it does on a machine with no camera.
+        // pipewiresrc takes any caps, so it is left out of the choice.
+        if let Some(pipewire) = gst::ElementFactory::find("pipewiresrc") {
+            pipewire.set_rank(gst::Rank::NONE);
+        }
         let started = start_with("autovideosrc filter-caps=video/x-nonexistent");
         assert_eq!(started.err(), Some(MediaError::NoCamera));
+    }
+
+    #[test]
+    fn the_remote_descriptor_lives_and_dies_with_the_camera() {
+        let Some(encoder) = available_encoder() else {
+            eprintln!("skipped: no H.264 encoder is installed");
+            return;
+        };
+        let elements = [
+            "videotestsrc",
+            "videoconvert",
+            "videoflip",
+            "videorate",
+            encoder.element(),
+        ];
+        if !crate::calls::gst_ready(&elements) {
+            return;
+        }
+        let marker = tempfile::NamedTempFile::new().expect("a marker file");
+        let copy = || OwnedFd::from(marker.as_file().try_clone().expect("a copy"));
+        let held = || crate::calls::open_descriptors_of(marker.path());
+        assert_eq!(held(), 1);
+        for _ in 0..20 {
+            let slots = Arc::new(VideoSlots::new(|| {}));
+            let camera = Camera::launch(
+                encoder,
+                "videotestsrc is-live=true",
+                Some(copy()),
+                slots,
+                crate::calls::ignore_faults(),
+            )
+            .expect("the test camera starts");
+            assert_eq!(held(), 2, "the camera keeps the connection open");
+            drop(camera);
+            assert_eq!(held(), 1, "dropping the camera closes it");
+        }
+    }
+
+    #[test]
+    fn a_camera_that_fails_to_start_closes_the_remote_descriptor() {
+        let Some(encoder) = available_encoder() else {
+            eprintln!("skipped: no H.264 encoder is installed");
+            return;
+        };
+        let marker = tempfile::NamedTempFile::new().expect("a marker file");
+        let copy = OwnedFd::from(marker.as_file().try_clone().expect("a copy"));
+        let slots = Arc::new(VideoSlots::new(|| {}));
+        let started = Camera::launch(
+            encoder,
+            "no-such-element-zaptide",
+            Some(copy),
+            slots,
+            crate::calls::ignore_faults(),
+        );
+        assert!(started.is_err());
+        assert_eq!(crate::calls::open_descriptors_of(marker.path()), 1);
     }
 
     #[test]
