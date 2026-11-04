@@ -6108,6 +6108,7 @@ dependencies = [
  "async-channel",
  "directories",
  "env_logger",
+ "futures-util",
  "getrandom 0.4.3",
  "gettext-rs",
  "glycin",
