@@ -9,6 +9,9 @@ use std::collections::{HashMap, VecDeque};
 use relm4::gtk;
 use relm4::gtk::prelude::*;
 
+#[cfg(target_os = "linux")]
+mod portal;
+
 const OPEN_CHAT_ACTION: &str = "open-chat";
 const CALL_ANSWER_ACTION: &str = "call-answer";
 const CALL_DECLINE_ACTION: &str = "call-decline";
@@ -37,6 +40,7 @@ pub enum CallBanner {
     /// A call that came in during another: decline it or end the first and answer.
     Waiting,
 }
+use crate::notification_sound::SoundRequest;
 
 #[derive(Default)]
 pub struct ActivationTokens {
@@ -122,6 +126,9 @@ pub struct NativeNotifications {
     application: gtk::Application,
     tokens: std::rc::Rc<std::cell::RefCell<ActivationTokens>>,
     calls: std::rc::Rc<std::cell::RefCell<ActivationTokens>>,
+    /// Present in a Flatpak, where the portal can carry a sound.
+    #[cfg(target_os = "linux")]
+    portal: Option<portal::Support>,
 }
 
 impl NativeNotifications {
@@ -173,11 +180,14 @@ impl NativeNotifications {
             application: application.clone(),
             tokens,
             calls,
+            #[cfg(target_os = "linux")]
+            portal: portal::sandboxed().then(Default::default),
         }
     }
 
     /// Shows or replaces the chat's notification; the chat ID stays in the
-    /// in-memory token map.
+    /// in-memory token map. `sound` is passed on only where the desktop can
+    /// take it with the notification, and ignored elsewhere.
     pub fn show(
         &self,
         account: AccountId,
@@ -185,6 +195,7 @@ impl NativeNotifications {
         title: &str,
         body: &str,
         icon: Option<&std::path::Path>,
+        sound: SoundRequest,
     ) -> Result<(), getrandom::Error> {
         use gtk::gio::prelude::*;
 
@@ -213,11 +224,43 @@ impl NativeNotifications {
             self.application.withdraw_notification(&evicted);
         }
 
-        let notification = notification(title, body, icon);
-        notification.set_default_action_and_target_value(
-            &format!("app.{OPEN_CHAT_ACTION}"),
-            Some(&token.to_variant()),
-        );
+        let bytes = icon_bytes(title, icon);
+        let notification = notification(title, body, bytes.as_ref());
+        let default_action = format!("app.{OPEN_CHAT_ACTION}");
+        notification
+            .set_default_action_and_target_value(&default_action, Some(&token.to_variant()));
+
+        #[cfg(target_os = "linux")]
+        if let Some(support) = &self.portal {
+            support.probe();
+            if support.supports_sound() {
+                let fallback = (
+                    self.application.clone(),
+                    notification.clone(),
+                    token.clone(),
+                );
+                portal::add_notification(
+                    portal::Request {
+                        id: token.clone(),
+                        title: title.to_owned(),
+                        body: body.to_owned(),
+                        icon: bytes.as_deref().map(<[u8]>::to_vec),
+                        default_action: default_action.clone(),
+                        default_action_target: token.clone(),
+                        sound,
+                    },
+                    move |reason| {
+                        log::debug!("the notification portal refused a notification: {reason}");
+                        let (application, notification, token) = fallback;
+                        application.send_notification(Some(&token), &notification);
+                    },
+                );
+                return Ok(());
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = sound;
+
         self.application
             .send_notification(Some(&token), &notification);
         Ok(())
@@ -247,7 +290,7 @@ impl NativeNotifications {
         };
         self.calls.borrow_mut().insert(token.clone(), target);
 
-        let notification = notification(title, body, icon);
+        let notification = notification(title, body, icon_bytes(title, icon).as_ref());
         let value = token.to_variant();
         notification
             .set_default_action_and_target_value(&format!("app.{CALL_FOCUS_ACTION}"), Some(&value));
@@ -295,18 +338,25 @@ impl NativeNotifications {
     }
 }
 
-fn notification(title: &str, body: &str, icon: Option<&std::path::Path>) -> gtk::gio::Notification {
-    let notification = gtk::gio::Notification::new(title);
-    notification.set_body(Some(body));
-    // The notification portal drops file icons, so a Flatpak build sends the bytes.
-    // Without a picture, draw the same coloured initials the chat list shows.
-    let bytes = icon
-        .and_then(round_icon)
+/// The picture to send with a notification. The notification portal drops file
+/// icons, so a Flatpak build sends the bytes. Without a picture, draw the same
+/// coloured initials the chat list shows.
+fn icon_bytes(title: &str, icon: Option<&std::path::Path>) -> Option<gtk::glib::Bytes> {
+    icon.and_then(round_icon)
         .and_then(|path| std::fs::read(path).ok())
         .map(gtk::glib::Bytes::from_owned)
-        .or_else(|| initials_icon(title));
-    if let Some(bytes) = bytes {
-        notification.set_icon(&gtk::gio::BytesIcon::new(&bytes));
+        .or_else(|| initials_icon(title))
+}
+
+fn notification(
+    title: &str,
+    body: &str,
+    icon: Option<&gtk::glib::Bytes>,
+) -> gtk::gio::Notification {
+    let notification = gtk::gio::Notification::new(title);
+    notification.set_body(Some(body));
+    if let Some(bytes) = icon {
+        notification.set_icon(&gtk::gio::BytesIcon::new(bytes));
     }
     notification
 }

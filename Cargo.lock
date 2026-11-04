@@ -6121,6 +6121,7 @@ dependencies = [
  "keyring-core",
  "ksni",
  "libadwaita",
+ "libc",
  "log",
  "mime_guess2",
  "notify",
