@@ -10,6 +10,26 @@ use serde::{Deserialize, Serialize};
 pub mod call;
 pub use call::CallOutcome;
 
+use crate::i18n::gettext;
+
+/// Labels kept in `Content::Unsupported`. Archives written by earlier
+/// versions already hold these exact strings, so they stay stable and the
+/// text people read is derived from them in `Content::summary`.
+pub mod unsupported {
+    pub const ANIMATED_STICKER: &str = "animated sticker";
+    pub const CALL: &str = "call";
+    pub const EVENT: &str = "event";
+    pub const GENERIC: &str = "message";
+    pub const GROUP_INVITE: &str = "group invite";
+    pub const INTERACTIVE: &str = "interactive message";
+    pub const LIST: &str = "list";
+    pub const PAYMENT: &str = "payment";
+    pub const PRODUCT: &str = "product";
+    pub const STICKER_PACK: &str = "sticker pack";
+    pub const UNDECRYPTED: &str = "Waiting for this message. Open WhatsApp on your phone";
+    pub const UNREADABLE: &str = "unreadable";
+}
+
 /// Chat JID string: `<phone>@s.whatsapp.net`, `<id>@g.us`, or `<id>@lid`.
 pub type ChatId = String;
 
@@ -418,12 +438,19 @@ impl Content {
         }
     }
 
+    /// One line for the chat list, notifications and reply quotes. Every
+    /// variant is listed so a new one cannot reach those places unnamed.
     pub fn summary(&self) -> String {
         match self {
             Self::Text { text, .. } => text.lines().next().unwrap_or_default().to_owned(),
-            Self::Image { caption, .. } => with_caption("Photo", caption),
+            Self::Image { caption, .. } => with_caption(&gettext("Photo"), caption),
             Self::Video { caption, gif, .. } => {
-                with_caption(if *gif { "GIF" } else { "Video" }, caption)
+                let label = if *gif {
+                    gettext("GIF")
+                } else {
+                    gettext("Video")
+                };
+                with_caption(&label, caption)
             }
             Self::Audio {
                 voice_note,
@@ -431,46 +458,56 @@ impl Content {
                 ..
             } => {
                 let label = if *voice_note {
-                    "Voice message"
+                    gettext("Voice message")
                 } else {
-                    "Audio"
+                    gettext("Audio")
                 };
                 match seconds {
                     Some(seconds) => format!("{label} ({})", crate::util::duration(*seconds)),
-                    None => label.to_owned(),
+                    None => label,
                 }
             }
-            Self::Document { file_name, .. } => format!("Document: {file_name}"),
-            Self::Sticker { .. } => "Sticker".to_owned(),
+            Self::Document { file_name, .. } => {
+                gettext("Document: {name}").replace("{name}", file_name)
+            }
+            Self::Sticker { .. } => gettext("Sticker"),
             Self::Location { name, .. } => match name {
-                Some(name) => format!("Location: {name}"),
-                None => "Location".to_owned(),
+                Some(name) => gettext("Location: {name}").replace("{name}", name),
+                None => gettext("Location"),
             },
-            Self::Contact { display_name, .. } => format!("Contact: {display_name}"),
-            Self::Poll { question, .. } => format!("Poll: {question}"),
+            Self::Contact { display_name, .. } => {
+                gettext("Contact: {name}").replace("{name}", display_name)
+            }
+            Self::Poll { question, .. } => {
+                gettext("Poll: {question}").replace("{question}", question)
+            }
             Self::Buttons { text, buttons, .. } => first_line(text)
                 .or_else(|| buttons.first().map(|button| button.label.as_str()))
-                .unwrap_or("Buttons")
-                .to_owned(),
+                .map_or_else(|| gettext("Buttons"), str::to_owned),
             Self::List {
                 title, description, ..
             } => match first_line(title).or_else(|| description.as_deref().and_then(first_line)) {
-                Some(line) => format!("List: {line}"),
-                None => "List".to_owned(),
+                Some(line) => gettext("List: {title}").replace("{title}", line),
+                None => gettext("List"),
             },
             Self::Template { text, links, .. } => first_line(text)
                 .or_else(|| links.first().map(|link| link.label.as_str()))
-                .unwrap_or("Message")
-                .to_owned(),
+                .map_or_else(Self::generic_summary, str::to_owned),
             Self::Call {
                 video,
                 outgoing,
                 outcome,
                 seconds,
             } => call::call_summary(*video, *outgoing, *outcome, *seconds),
-            Self::Revoked => "This message was deleted".to_owned(),
-            Self::Unsupported { what } => format!("Unsupported message ({what})"),
+            Self::Revoked => gettext("This message was deleted"),
+            Self::Unsupported { what } => unsupported_summary(what),
         }
+    }
+
+    /// Stands in where a message has no content of its own to describe, such
+    /// as a quote whose original was not delivered.
+    pub fn generic_summary() -> String {
+        gettext("Message")
     }
 
     pub fn answer(&self) -> Option<&str> {
@@ -583,6 +620,24 @@ impl Content {
             | Self::Sticker { media, .. } => Some(media),
             _ => None,
         }
+    }
+}
+
+fn unsupported_summary(what: &str) -> String {
+    match what {
+        unsupported::ANIMATED_STICKER => gettext("Animated sticker"),
+        unsupported::CALL => gettext("Call"),
+        unsupported::EVENT => gettext("Event"),
+        unsupported::GROUP_INVITE => gettext("Group invitation"),
+        unsupported::INTERACTIVE => gettext("Interactive message"),
+        unsupported::LIST => gettext("List message"),
+        unsupported::PAYMENT => gettext("Payment"),
+        unsupported::PRODUCT => gettext("Product"),
+        unsupported::STICKER_PACK => gettext("Sticker pack"),
+        unsupported::UNDECRYPTED => {
+            gettext("Waiting for this message. Open WhatsApp on your phone")
+        }
+        _ => gettext("Unsupported message"),
     }
 }
 
@@ -751,6 +806,135 @@ mod tests {
             path: None,
             state: MediaState::Idle,
         }
+    }
+
+    #[test]
+    fn every_displayable_kind_has_its_own_summary() {
+        let supported = [
+            (Content::text("hello"), "hello"),
+            (
+                Content::Image {
+                    caption: None,
+                    media: media(),
+                },
+                "Photo",
+            ),
+            (
+                Content::Video {
+                    caption: None,
+                    media: media(),
+                    seconds: None,
+                    gif: true,
+                },
+                "GIF",
+            ),
+            (
+                Content::Audio {
+                    media: media(),
+                    seconds: None,
+                    voice_note: false,
+                    waveform: Vec::new(),
+                },
+                "Audio",
+            ),
+            (
+                Content::Document {
+                    media: media(),
+                    file_name: "notes.pdf".into(),
+                    caption: None,
+                    pages: None,
+                },
+                "Document: notes.pdf",
+            ),
+            (
+                Content::Sticker {
+                    media: media(),
+                    animated: true,
+                },
+                "Sticker",
+            ),
+            (
+                Content::Location {
+                    latitude: 1.0,
+                    longitude: 2.0,
+                    name: None,
+                    address: None,
+                },
+                "Location",
+            ),
+            (
+                Content::Contact {
+                    display_name: "Ada".into(),
+                    vcard: String::new(),
+                },
+                "Contact: Ada",
+            ),
+            (
+                Content::Poll {
+                    question: "Lunch?".into(),
+                    options: Vec::new(),
+                    state: PollState::default(),
+                },
+                "Poll: Lunch?",
+            ),
+            (
+                Content::Buttons {
+                    text: String::new(),
+                    footer: None,
+                    buttons: Vec::new(),
+                    answered: None,
+                },
+                "Buttons",
+            ),
+            (
+                Content::List {
+                    title: String::new(),
+                    description: None,
+                    button: String::new(),
+                    footer: None,
+                    sections: Vec::new(),
+                    answered: None,
+                },
+                "List",
+            ),
+            (
+                Content::Template {
+                    text: String::new(),
+                    footer: None,
+                    links: Vec::new(),
+                },
+                "Message",
+            ),
+            (Content::Revoked, "This message was deleted"),
+        ];
+        for (content, expected) in supported {
+            assert_eq!(content.summary(), expected);
+            assert!(!content.summary().contains("Unsupported"));
+        }
+    }
+
+    #[test]
+    fn unsupported_content_names_its_kind_when_it_is_known() {
+        let summary = |what: &str| Content::Unsupported { what: what.into() }.summary();
+        assert_eq!(summary(unsupported::ANIMATED_STICKER), "Animated sticker");
+        assert_eq!(summary(unsupported::CALL), "Call");
+        assert_eq!(summary(unsupported::EVENT), "Event");
+        assert_eq!(summary(unsupported::GROUP_INVITE), "Group invitation");
+        assert_eq!(summary(unsupported::INTERACTIVE), "Interactive message");
+        assert_eq!(summary(unsupported::LIST), "List message");
+        assert_eq!(summary(unsupported::PAYMENT), "Payment");
+        assert_eq!(summary(unsupported::PRODUCT), "Product");
+        assert_eq!(summary(unsupported::STICKER_PACK), "Sticker pack");
+        assert_eq!(
+            summary(unsupported::UNDECRYPTED),
+            "Waiting for this message. Open WhatsApp on your phone"
+        );
+        assert_eq!(summary(unsupported::GENERIC), "Unsupported message");
+        assert_eq!(summary(unsupported::UNREADABLE), "Unsupported message");
+        assert_eq!(
+            summary("a label from a newer version"),
+            "Unsupported message"
+        );
     }
 
     #[test]

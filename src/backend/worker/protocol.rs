@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 
 use super::{Content, LinkPreview, first_link, media, non_empty};
+use crate::model::unsupported as label;
 use whatsapp_rust::prelude::{MessageExt, wa};
 
 /// Most buttons, list rows and characters per string kept from a sender, so
@@ -11,8 +12,33 @@ pub(super) const MAX_INTERACTIVE_ITEMS: usize = 100;
 pub(super) const MAX_INTERACTIVE_BUTTONS: usize = 10;
 pub(super) const MAX_INTERACTIVE_CHARS: usize = 1_000;
 
+/// Wrappers nested deeper than this are left in place and read as unsupported,
+/// so a crafted chain cannot make the peeling loop long.
+pub(super) const MAX_WRAPPER_DEPTH: usize = 4;
+
+/// The message a person sees. `get_base_message` removes the transport
+/// wrappers; the ones peeled here carry a normal message that it leaves alone.
+pub(super) fn base_message(message: &wa::Message) -> &wa::Message {
+    let mut current = message.get_base_message();
+    for _ in 0..MAX_WRAPPER_DEPTH {
+        let inner = [
+            &current.group_mentioned_message,
+            &current.associated_child_message,
+            &current.spoiler_message,
+        ]
+        .into_iter()
+        .find_map(|wrapper| wrapper.as_option()?.message.as_option());
+        let Some(inner) = inner else {
+            break;
+        };
+        current = inner.get_base_message();
+    }
+    current
+}
+
 /// Converts a protocol message to visible content, or `None` for internal traffic.
-pub(super) fn classify(base: &wa::Message) -> Option<Content> {
+pub(super) fn classify(message: &wa::Message) -> Option<Content> {
+    let base = base_message(message);
     if let Some(text) = base.text_content() {
         let preview = base.extended_text_message.as_option().and_then(|extended| {
             let title = non_empty(&extended.title);
@@ -157,10 +183,10 @@ pub(super) fn classify(base: &wa::Message) -> Option<Content> {
         })
     };
     if let Some(buttons) = base.buttons_message.as_option() {
-        return buttons_content(buttons).or_else(|| unsupported("interactive message"));
+        return buttons_content(buttons).or_else(|| unsupported(label::INTERACTIVE));
     }
     if let Some(list) = base.list_message.as_option() {
-        return list_content(list).or_else(|| unsupported("list"));
+        return list_content(list).or_else(|| unsupported(label::LIST));
     }
     if let Some(response) = base.buttons_response_message.as_option() {
         use wa::__buffa::oneof::message::buttons_response_message::Response;
@@ -182,35 +208,35 @@ pub(super) fn classify(base: &wa::Message) -> Option<Content> {
         return None;
     }
     if base.group_invite_message.is_set() {
-        return unsupported("group invite");
+        return unsupported(label::GROUP_INVITE);
     }
     if base.event_message.is_set() {
-        return unsupported("event");
+        return unsupported(label::EVENT);
     }
     if base.sticker_pack_message.is_set() {
-        return unsupported("sticker pack");
+        return unsupported(label::STICKER_PACK);
     }
     if base.template_message.is_set() || base.interactive_message.is_set() {
-        return template_content(base).or_else(|| unsupported("interactive message"));
+        return template_content(base).or_else(|| unsupported(label::INTERACTIVE));
     }
     if base.interactive_response_message.is_set() || base.template_button_reply_message.is_set() {
-        return unsupported("interactive message");
+        return unsupported(label::INTERACTIVE);
     }
     if base.product_message.is_set() || base.order_message.is_set() {
-        return unsupported("product");
+        return unsupported(label::PRODUCT);
     }
     if base.send_payment_message.is_set()
         || base.request_payment_message.is_set()
         || base.payment_invite_message.is_set()
         || base.invoice_message.is_set()
     {
-        return unsupported("payment");
+        return unsupported(label::PAYMENT);
     }
     if base.call_log_messsage.is_set() || base.scheduled_call_creation_message.is_set() {
-        return unsupported("call");
+        return unsupported(label::CALL);
     }
     if base.lottie_sticker_message.is_set() {
-        return unsupported("animated sticker");
+        return unsupported(label::ANIMATED_STICKER);
     }
     if base.poll_update_message.is_set()
         || base.enc_reaction_message.is_set()
@@ -236,7 +262,7 @@ pub(super) fn classify(base: &wa::Message) -> Option<Content> {
     if *base == wa::Message::default() {
         return None;
     }
-    unsupported("message")
+    unsupported(label::GENERIC)
 }
 
 fn interactive_text(text: &Option<String>) -> Option<String> {

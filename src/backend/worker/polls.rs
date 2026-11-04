@@ -14,7 +14,7 @@ pub(super) fn definition(message: &wa::Message) -> Option<&wa::message::PollCrea
 }
 
 fn secret(message: &wa::Message) -> Option<&[u8]> {
-    let base = message.get_base_message();
+    let base = base_message(message);
     message
         .message_context_info
         .as_option()
@@ -245,10 +245,7 @@ impl Worker {
         let Content::Poll { options, state, .. } = &mut row.content else {
             return;
         };
-        if let Some(poll) = raw
-            .as_ref()
-            .and_then(|raw| definition(raw.get_base_message()))
-        {
+        if let Some(poll) = raw.as_ref().and_then(|raw| definition(base_message(raw))) {
             state.selectable = poll.selectable_options_count.unwrap_or(0) as usize;
         }
         state.selectable = if state.selectable == 0 {

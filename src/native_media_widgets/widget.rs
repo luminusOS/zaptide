@@ -361,10 +361,11 @@ pub fn build_media_widget_with_action(
             ("", "")
         }
         NativeMediaContent::VideoPlaceholder => ("Video", "Video preview unavailable"),
-        NativeMediaContent::UnsupportedPlaceholder => (
-            "Unsupported message",
-            "This message type cannot be displayed",
-        ),
+        NativeMediaContent::UnsupportedPlaceholder => {
+            add_label(&root, &message.summary());
+            add_label(&root, &gettext("This message type cannot be displayed"));
+            ("", "")
+        }
         NativeMediaContent::Other => match &message.content {
             Content::Image { .. } if message.thumbnail.is_some() => ("", ""),
             Content::Image { .. } => ("Photo", "Image attachment"),
