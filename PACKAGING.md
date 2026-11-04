@@ -101,13 +101,17 @@ appimageupdatetool zaptide.AppImage
 |------------|--------|-------|
 | GTK 4.14+, libadwaita 1.10+ | `gtk4-devel libadwaita-devel` | GNOME 51 |
 | ALSA | `alsa-lib-devel` | Audio |
-| GStreamer | `gstreamer1-devel`, `gstreamer1-plugins-base-devel` | Playback; base and good plugins at runtime |
+| GStreamer 1.20+ | `gstreamer1-devel`, `gstreamer1-plugins-base-devel` | Playback and calls; base and good plugins at runtime. Video calls also need an H.264 encoder (`gstreamer1-plugin-openh264` or x264) and `gst-libav` |
 | cmake | `cmake` | Builds libopus via opusic-sys |
 | libseccomp, fontconfig | `libseccomp-devel fontconfig-devel` | glycin; needs `glycin-loaders` and `bubblewrap` at runtime |
 | Perl | `perl` | Bundled OpenSSL |
 
 SQLCipher, OpenSSL and libopus are compiled from source by their `-sys` crates.
 
+Calls add the `rtc-*` crates (DTLS, SCTP and data channels), which are still 0.21 beta releases, and `rkyv`. Their licences are MIT or Apache-2.0. The AppImage does not yet check for the H.264 encoder, `v4l2src` or the autodetect source and sink plugins that calls use.
+
 ## Flatpak limitations
+
+- **Calls**: voice calls use the PulseAudio socket. Video calls are not supported: the manifest grants no camera access (`--device=all` or the camera portal through PipeWire) and no H.264 codec extension (`org.freedesktop.Platform.openh264`). Neither was added because they widen the sandbox and nothing here can test them.
 
 - **Tray icon**: GNOME shows StatusNotifierItem only with an extension such as AppIndicator.

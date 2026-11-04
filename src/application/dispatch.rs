@@ -262,6 +262,7 @@ impl NativeApplication {
             }
             Input::OpenChatId(chat) => {
                 self.window.present();
+                self.calls.tab = false;
                 let archived = self
                     .chat_snapshots
                     .iter()
@@ -295,6 +296,17 @@ impl NativeApplication {
                 self.chat_projection.set_filters(self.chat_filters);
                 self.sync_chat_projection();
             }
+            Input::ShowCalls(on) => self.show_calls_tab(on),
+            Input::SelectCall(index) => self.select_call(index),
+            Input::OpenCallChat => {
+                if let Some(chat) = self.selected_call_chat() {
+                    self.handle_input(Input::OpenChatId(chat), sender);
+                }
+            }
+            Input::CallBack => self.call_back(),
+            Input::StartCall { video } => self.start_call(video),
+            Input::CallAction(action) => self.call_action(action, &sender),
+            Input::CallTick => self.call_tick(),
             Input::SetMutedFilter(enabled) => {
                 self.chat_filters.muted = if enabled {
                     crate::native_chat_list::MutedFilter::Only

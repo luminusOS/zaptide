@@ -6,6 +6,7 @@ mod actions;
 mod albums;
 mod audio;
 mod bubbles;
+mod calls;
 mod chats;
 mod components;
 mod composer;
@@ -30,6 +31,7 @@ use crate::i18n::gettext;
 use actions::*;
 use albums::{AlbumRole, album_roles};
 use bubbles::*;
+use calls::CallAction;
 use composer::{
     ComposerState, ComposerView, ComposerViewInit, ComposerViewInput, ComposerViewOutput,
 };
@@ -243,6 +245,13 @@ enum NativeEvent {
         ids: Vec<String>,
     },
     StarredList(Vec<crate::archive::StarredMessage>),
+    Call(crate::model::call::CallSession),
+    CallVideo(std::sync::Arc<crate::calls::VideoSlots>),
+    CallFrames,
+    Calls {
+        entries: Vec<crate::model::call::CallEntry>,
+        seen_at: i64,
+    },
     MessageDeleted {
         chat: String,
         id: String,
@@ -562,6 +571,7 @@ pub struct NativeApplication {
     preferences: Option<crate::native_preferences::NativePreferencesDialog>,
     profile_dialog: Option<profile_dialog::ProfileDialog>,
     sidebar: relm4::Controller<Sidebar>,
+    calls: calls::CallsUi,
     sidebar_visible: bool,
     split_view: Option<adw::NavigationSplitView>,
     phone_linking: bool,
@@ -602,6 +612,15 @@ pub enum Input {
     SetChatKindFilter(crate::native_chat_list::ChatKindFilter),
     SetArchivedFilter(bool),
     SetMutedFilter(bool),
+    ShowCalls(bool),
+    SelectCall(usize),
+    OpenCallChat,
+    CallBack,
+    StartCall {
+        video: bool,
+    },
+    CallAction(CallAction),
+    CallTick,
     Reconnect,
     /// The computer woke from suspend: the connection may be dead.
     Resumed,
@@ -806,7 +825,11 @@ impl SimpleComponent for NativeApplication {
                         set_content = &adw::NavigationPage {
                             set_title: &gettext("Chat"),
                             #[wrap(Some)]
-                            set_child = &adw::ToolbarView {
+                            set_child = &gtk::Stack {
+                            #[watch]
+                            set_visible_child_name: if model.calls.tab { "calls" } else { "chat" },
+                            add_named[Some("calls")] = model.calls_details(),
+                            add_named[Some("chat")] = &adw::ToolbarView {
                             add_top_bar = &adw::HeaderBar {
                                 // The title opens the chat's details, as in GNOME's
                                 // chat apps.
@@ -834,6 +857,26 @@ impl SimpleComponent for NativeApplication {
                                     #[watch]
                                     set_visible: model.active_chat.is_some(),
                                     set_menu_model: Some(&model.chat_menu),
+                                },
+                                pack_end = &gtk::Button {
+                                    set_icon_name: "camera-video-symbolic",
+                                    set_tooltip_text: Some(&gettext("Start video call")),
+                                    update_property: &[gtk::accessible::Property::Label(&gettext("Start video call"))],
+                                    #[watch]
+                                    set_visible: model.can_offer_call(),
+                                    #[watch]
+                                    set_sensitive: model.can_call(),
+                                    connect_clicked => Input::StartCall { video: true },
+                                },
+                                pack_end = &gtk::Button {
+                                    set_icon_name: "call-start-symbolic",
+                                    set_tooltip_text: Some(&gettext("Start voice call")),
+                                    update_property: &[gtk::accessible::Property::Label(&gettext("Start voice call"))],
+                                    #[watch]
+                                    set_visible: model.can_offer_call(),
+                                    #[watch]
+                                    set_sensitive: model.can_call(),
+                                    connect_clicked => Input::StartCall { video: false },
                                 },
                             },
                             add_top_bar = &adw::Banner {
@@ -957,6 +1000,7 @@ impl SimpleComponent for NativeApplication {
                                         },
                                     },
                                 },
+                            },
                             },
                         },
                     },
@@ -1161,11 +1205,20 @@ impl SimpleComponent for NativeApplication {
             move || add_sender.input(Input::AddAccount),
             move || profile_sender.input(Input::ShowProfile),
         );
+        let calls = {
+            let (select, open, call_back) = (sender.clone(), sender.clone(), sender.clone());
+            calls::CallsUi::new(
+                move |index| select.input(Input::SelectCall(index)),
+                move || open.input(Input::OpenCallChat),
+                move || call_back.input(Input::CallBack),
+            )
+        };
         let sidebar = Sidebar::builder()
             .launch(SidebarInit {
                 account_button: account_switcher.button.clone(),
                 state: SidebarState::default(),
                 chat_view: chats.view.clone(),
+                calls_view: calls.list.clone(),
                 chat_targets: chat_targets.clone(),
                 menu: primary_menu.clone(),
             })
@@ -1176,6 +1229,7 @@ impl SimpleComponent for NativeApplication {
                 SidebarOutput::SetChatKindFilter(kind) => Input::SetChatKindFilter(kind),
                 SidebarOutput::SetArchivedFilter(active) => Input::SetArchivedFilter(active),
                 SidebarOutput::SetMutedFilter(active) => Input::SetMutedFilter(active),
+                SidebarOutput::ShowCalls(active) => Input::ShowCalls(active),
                 SidebarOutput::SelectChat(account, chat) => Input::SelectChat(account, chat),
                 SidebarOutput::NewChat => Input::ShowNewChat,
             });
@@ -1333,6 +1387,7 @@ impl SimpleComponent for NativeApplication {
             preferences: None,
             profile_dialog: None,
             sidebar,
+            calls,
             sidebar_visible: true,
             split_view: None,
             phone_linking: false,

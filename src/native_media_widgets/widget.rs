@@ -125,6 +125,7 @@ pub fn build_media_widget_with_action(
         NativeMediaContent::Template { .. }
             | NativeMediaContent::Buttons { .. }
             | NativeMediaContent::List { .. }
+            | NativeMediaContent::Call { .. }
     ) {
         root.add_css_class("card");
         root.add_css_class("zaptide-media-card");
@@ -346,6 +347,17 @@ pub fn build_media_widget_with_action(
                 });
                 root.append(&button);
             }
+            ("", "")
+        }
+        NativeMediaContent::Call { icon, text } => {
+            let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            line.add_css_class("zaptide-call-event");
+            line.append(&gtk::Image::from_icon_name(icon));
+            let label = gtk::Label::new(Some(text));
+            label.set_xalign(0.0);
+            label.set_wrap(true);
+            line.append(&label);
+            root.append(&line);
             ("", "")
         }
         NativeMediaContent::VideoPlaceholder => ("Video", "Video preview unavailable"),

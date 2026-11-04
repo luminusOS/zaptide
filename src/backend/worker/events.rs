@@ -71,6 +71,7 @@ impl Worker {
                 self.refresh_legacy_preferences();
                 self.retry_avatars();
                 self.pump_read_sync();
+                self.emit_calls();
                 self.poll_history.reconnect(Instant::now());
                 let _ = self.archive.retry_poll_votes();
                 self.pump_poll_votes();
@@ -345,7 +346,14 @@ impl Worker {
                 self.emit_profile();
                 self.renew_presence();
             }
-            E::OfflineSyncCompleted(_) => self.emit_chats(),
+            E::OfflineSyncCompleted(_) => {
+                self.emit_chats();
+                self.flush_call_history();
+            }
+            E::IncomingCall(call) => self.on_call_signal(call),
+            E::MissedCall(missed) => self.on_missed_call(missed),
+            E::CallEndedElsewhere(ended) => self.on_call_elsewhere(ended),
+            E::CallLogSync(sync) => self.on_call_log(sync),
             _ => {}
         }
     }

@@ -22,6 +22,7 @@ without a browser engine. Messages stay in a local, encrypted archive.
 ## Features
 
 - Text, voice notes, polls, stickers and attachments.
+- Voice and video calls with one contact, with a call history.
 - Multiple accounts with separate history and settings.
 - Chat search, starred messages and link previews.
 - Desktop notifications and synced read status.
@@ -80,6 +81,33 @@ to the input. Escape dismisses selection, edits or replies before closing the ch
 GIFs play silently while their rows are shown. Leaving the conversation or hiding
 the window releases their playback resources; showing them again restarts playback.
 
+## Calls
+
+> [!WARNING]
+> Calls are new and have only been tested without a real call: no voice or video
+> call has been placed against a phone yet, so audio quality and video
+> interoperability are unverified. Expect rough edges.
+
+Open a direct chat and use the phone or camera button in its header to call.
+Incoming calls open a call window and send a desktop notification (there is no
+ringtone). Decline, answer, mute, and turn the camera on or off from that window.
+Calls are listed under the Calls tab beside Chats and Archived, and each one also
+appears in its chat as an event such as "Missed voice call". Calls placed from
+your phone show up in the history after syncing.
+
+Calls connect to WhatsApp's relay servers over UDP and use the default
+microphone and speaker. Video needs a camera, an H.264 encoder (the GStreamer
+`openh264` or `x264` plugin) and a decoder (`libav` or `openh264`). Without them
+a voice call still works and a video call tells you what is missing.
+
+- **Flatpak:** video calls are not supported yet. The sandbox has no camera
+  access and no H.264 codec extension, so only voice calls can work.
+- **AppImage:** the bundle carries an H.264 decoder, but whether it carries an
+  encoder and the camera plugins has not been checked; voice calls are the
+  supported path.
+- Only one call runs at a time, group calls do not ring, and a call ends when
+  the app quits.
+
 ## Your data
 
 > [!IMPORTANT]
@@ -99,7 +127,7 @@ locked chats stay locked until those settings arrive.
 
 ## Limitations
 
-- Calls, status posts, communities and group administration are not supported.
+- Group calls, status posts, communities and group administration are not supported.
   Newsletter channels are read-only.
 - Messages with disappearing timers remain in the local archive after they
   expire on your phone.

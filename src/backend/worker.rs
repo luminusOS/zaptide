@@ -36,6 +36,7 @@ use whatsapp_rust::wacore_binary::jid::JidExt;
 use whatsapp_rust::waproto::buffa::Message as _;
 use whatsapp_rust::{MediaRetryResult, MediaReuploadRequest};
 
+mod calls;
 mod commands;
 mod contacts;
 mod device_store;
@@ -558,6 +559,7 @@ pub async fn run(
         next_revoke_attempt: 0,
         poll_sending: HashSet::new(),
         presence_wish: tokio::sync::watch::Sender::new(Default::default()),
+        calls: Default::default(),
     };
     worker.load_state();
     worker.recover_interrupted_answers();
@@ -608,6 +610,7 @@ pub async fn run(
             }
         }
     }
+    worker.end_call_for_shutdown().await;
     let _ = worker.stop_bot().await;
 }
 
@@ -705,6 +708,7 @@ struct Worker {
     poll_sending: HashSet<(ChatId, String)>,
     /// What the window wants announced as this account's presence.
     presence_wish: tokio::sync::watch::Sender<presence::PresenceWish>,
+    calls: calls::Calls,
     dirs: AppDirs,
     events: std::sync::mpsc::Sender<Event>,
     commands: mpsc::UnboundedSender<Command>,
@@ -803,6 +807,7 @@ impl Worker {
                     | Event::Incoming { .. }
                     | Event::Contacts(_)
                     | Event::Typing { .. }
+                    | Event::Calls { .. }
             )
         {
             return;
@@ -1712,6 +1717,7 @@ impl Worker {
         self.read_sync = ReadSync::default();
         self.poll_decrypting = 0;
         self.poll_sending.clear();
+        self.abandon_call();
         self.poll_history = Default::default();
         self.pending_avatars.clear();
         self.avatar_generations.clear();
@@ -2847,6 +2853,7 @@ impl Worker {
             source.content,
             Content::Revoked
                 | Content::Unsupported { .. }
+                | Content::Call { .. }
                 | Content::Poll { .. }
                 | Content::Buttons { .. }
                 | Content::List { .. }
