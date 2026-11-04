@@ -59,6 +59,8 @@ mod sticker;
 mod video_stream;
 mod viewer;
 mod widget;
+mod zoom;
+mod zoom_canvas;
 
 #[cfg(test)]
 mod call_tests;

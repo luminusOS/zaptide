@@ -6,6 +6,8 @@ use std::{
 use super::{
     photo::{decode_photo, show_in_folder},
     video_stream::VideoStream,
+    zoom::{self, Bounds, Level},
+    zoom_canvas::ZoomCanvas,
     *,
 };
 use crate::i18n::gettext;
@@ -14,9 +16,11 @@ const AVATAR_SIZE: i32 = 28;
 const UNLIMITED_DIALOG_SIZE: i32 = 10_000;
 const MIN_VIEWER: (i32, i32) = (320, 240);
 const NARROW_VIEWER: &str = "max-width: 480px";
-/// Largest side the viewer decodes for fitting to the window; a bigger photo
-/// is decoded at its real size only for 100% zoom and for copying.
+/// Largest side the viewer decodes to show a photo fitted to the window; more
+/// of it is decoded as the zoom needs it.
 const FIT_EDGE: u32 = 3840;
+/// Most pixels the viewer holds for one photo, whatever its real size.
+const NATIVE_PIXELS: f64 = 64e6;
 const SEEK_STEP: f64 = 5_000_000.0;
 const SEEK_PAGE: f64 = 10_000_000.0;
 
@@ -73,11 +77,6 @@ impl ViewerDetails {
             metadata,
             dimensions,
         }
-    }
-
-    fn exceeds_fit_edge(&self) -> bool {
-        self.dimensions
-            .is_some_and(|(width, height)| exceeds_fit_edge(width, height))
     }
 }
 
@@ -162,10 +161,6 @@ fn counter_text(index: usize, total: usize) -> Option<String> {
     (total > 1).then(|| of_text(&(index + 1).to_string(), &total.to_string()))
 }
 
-fn exceeds_fit_edge(width: u32, height: u32) -> bool {
-    width > FIT_EDGE || height > FIT_EDGE
-}
-
 fn step_target(current: usize, delta: isize, len: usize) -> Option<usize> {
     let target = current.checked_add_signed(delta)?;
     (delta != 0 && target < len && target != current).then_some(target)
@@ -216,29 +211,6 @@ fn volume_icon(volume: f64, muted: bool) -> &'static str {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-enum Zoom {
-    #[default]
-    Fit,
-    Actual,
-}
-
-impl Zoom {
-    fn label(self) -> String {
-        match self {
-            Self::Fit => gettext("Fit"),
-            Self::Actual => "100%".to_owned(),
-        }
-    }
-
-    fn toggled(self) -> Self {
-        match self {
-            Self::Fit => Self::Actual,
-            Self::Actual => Self::Fit,
-        }
-    }
-}
-
 fn header_button(icon: &str, label: &str) -> gtk::Button {
     let button = gtk::Button::builder()
         .icon_name(icon)
@@ -250,27 +222,47 @@ fn header_button(icon: &str, label: &str) -> gtk::Button {
     button
 }
 
+/// What the zoom pill shows.
+struct ZoomView {
+    percent: u32,
+    at_fit: bool,
+    can_shrink: bool,
+    can_grow: bool,
+    ready: bool,
+}
+
 #[derive(Clone)]
 struct ZoomPill {
     root: gtk::Box,
     shrink: gtk::Button,
     level: gtk::Button,
+    percent: gtk::Label,
     grow: gtk::Button,
 }
 
 struct ZoomPillWeak {
     shrink: glib::WeakRef<gtk::Button>,
     level: glib::WeakRef<gtk::Button>,
+    percent: glib::WeakRef<gtk::Label>,
     grow: glib::WeakRef<gtk::Button>,
+}
+
+fn zoom_level_text(percent: u32) -> String {
+    gettext("Zoom level {percent} percent").replace("{percent}", &percent.to_string())
 }
 
 impl ZoomPill {
     fn new() -> Self {
         let shrink = header_button("zoom-out-symbolic", &gettext("Zoom Out"));
         let grow = header_button("zoom-in-symbolic", &gettext("Zoom In"));
+        let percent = gtk::Label::builder()
+            .width_chars(4)
+            .css_classes(["numeric"])
+            .build();
         let level = gtk::Button::builder()
+            .child(&percent)
             .valign(gtk::Align::Center)
-            .css_classes(["flat", "numeric"])
+            .css_classes(["flat"])
             .build();
         let root = gtk::Box::builder()
             .valign(gtk::Align::Center)
@@ -283,9 +275,16 @@ impl ZoomPill {
             root,
             shrink,
             level,
+            percent,
             grow,
         };
-        pill.downgrade().show(Zoom::Fit, false);
+        pill.downgrade().show(&ZoomView {
+            percent: 100,
+            at_fit: true,
+            can_shrink: false,
+            can_grow: false,
+            ready: false,
+        });
         pill
     }
 
@@ -293,6 +292,7 @@ impl ZoomPill {
         ZoomPillWeak {
             shrink: self.shrink.downgrade(),
             level: self.level.downgrade(),
+            percent: self.percent.downgrade(),
             grow: self.grow.downgrade(),
         }
     }
@@ -300,33 +300,46 @@ impl ZoomPill {
     fn connect(&self, photo: &Rc<PhotoState>) {
         self.shrink.connect_clicked({
             let photo = photo.clone();
-            move |_| photo.request(Zoom::Fit)
+            move |_| photo.zoom_by(false)
         });
         self.grow.connect_clicked({
             let photo = photo.clone();
-            move |_| photo.request(Zoom::Actual)
+            move |_| photo.zoom_by(true)
         });
         self.level.connect_clicked({
             let photo = photo.clone();
-            move |_| photo.request(photo.zoom.get().toggled())
+            move |_| photo.toggle_fit(None)
         });
     }
 }
 
 impl ZoomPillWeak {
-    fn show(&self, zoom: Zoom, ready: bool) {
-        if let (Some(shrink), Some(level), Some(grow)) = (
+    fn show(&self, view: &ZoomView) {
+        if let (Some(shrink), Some(level), Some(percent), Some(grow)) = (
             self.shrink.upgrade(),
             self.level.upgrade(),
+            self.percent.upgrade(),
             self.grow.upgrade(),
         ) {
-            let label = zoom.label();
-            level.set_label(&label);
-            level.set_tooltip_text(Some(&label));
-            level.update_property(&[gtk::accessible::Property::Label(&label)]);
-            level.set_sensitive(ready);
-            shrink.set_sensitive(ready && zoom == Zoom::Actual);
-            grow.set_sensitive(ready && zoom == Zoom::Fit);
+            let text = format!("{}%", view.percent);
+            if percent.label().as_str() != text {
+                percent.set_label(&text);
+                level.update_property(&[gtk::accessible::Property::Label(&zoom_level_text(
+                    view.percent,
+                ))]);
+            }
+            let action = if view.at_fit {
+                gettext("Actual Size")
+            } else {
+                gettext("Fit to Window")
+            };
+            if level.tooltip_text().as_deref() != Some(action.as_str()) {
+                level.set_tooltip_text(Some(&action));
+                level.update_property(&[gtk::accessible::Property::Description(&action)]);
+            }
+            level.set_sensitive(view.ready);
+            shrink.set_sensitive(view.ready && view.can_shrink);
+            grow.set_sensitive(view.ready && view.can_grow);
         }
     }
 }
@@ -389,7 +402,8 @@ fn label_with(classes: &[&str]) -> gtk::Label {
 /// A dark, near-full-window dialog around `content`: the sender, an optional
 /// zoom pill and the `actions` (left to right, before a close button) in a
 /// 56 px header, and the caption with the file summary in a bar below. Below
-/// 480 px the time and the counter give way so the header still fits.
+/// 480 px the time, the counter and the pill's zoom steps give way so the
+/// header still fits; the percentage stays.
 fn media_viewer(
     parent: &impl IsA<gtk::Widget>,
     details: &ViewerDetails,
@@ -455,6 +469,10 @@ fn media_viewer(
         let hidden = false.to_value();
         narrow.add_setter(&time, "visible", Some(&hidden));
         narrow.add_setter(&counter_slot, "visible", Some(&hidden));
+        if let Some(zoom) = zoom {
+            narrow.add_setter(&zoom.shrink, "visible", Some(&hidden));
+            narrow.add_setter(&zoom.grow, "visible", Some(&hidden));
+        }
         dialog.add_breakpoint(narrow);
     }
 
@@ -518,25 +536,76 @@ fn step_button(icon: &str, tooltip: &str, side: gtk::Align) -> gtk::Button {
     button
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ZoomKey {
+    In,
+    Out,
+    Fit,
+    Actual,
+}
+
+fn zoom_key(key: gdk::Key, state: gdk::ModifierType) -> Option<ZoomKey> {
+    let held =
+        gdk::ModifierType::ALT_MASK | gdk::ModifierType::SUPER_MASK | gdk::ModifierType::META_MASK;
+    if state.intersects(held) {
+        return None;
+    }
+    match key {
+        gdk::Key::plus | gdk::Key::equal | gdk::Key::KP_Add => Some(ZoomKey::In),
+        gdk::Key::minus | gdk::Key::KP_Subtract => Some(ZoomKey::Out),
+        gdk::Key::_0 | gdk::Key::KP_0 => Some(ZoomKey::Fit),
+        gdk::Key::_1 | gdk::Key::KP_1 => Some(ZoomKey::Actual),
+        _ => None,
+    }
+}
+
+fn pan_key(key: gdk::Key, state: gdk::ModifierType) -> Option<(f64, f64)> {
+    let held = gdk::ModifierType::SHIFT_MASK
+        | gdk::ModifierType::CONTROL_MASK
+        | gdk::ModifierType::ALT_MASK
+        | gdk::ModifierType::SUPER_MASK
+        | gdk::ModifierType::META_MASK;
+    if state.intersects(held) {
+        return None;
+    }
+    match key {
+        gdk::Key::Left => Some((-1.0, 0.0)),
+        gdk::Key::Right => Some((1.0, 0.0)),
+        gdk::Key::Up => Some((0.0, -1.0)),
+        gdk::Key::Down => Some((0.0, 1.0)),
+        _ => None,
+    }
+}
+
+fn can_scroll(adjustment: &gtk::Adjustment) -> bool {
+    adjustment.upper() - adjustment.page_size() > 0.5
+}
+
+type WaitingCopy = Box<dyn FnOnce(&gdk::Texture)>;
+
 /// What the photo viewer is showing. Widgets that own a handler for it are
 /// held weakly, so it never keeps the dialog alive.
 struct PhotoState {
     items: Rc<Vec<PhotoItem>>,
     current: Cell<usize>,
-    picture: gtk::Picture,
+    canvas: ZoomCanvas,
     scroller: glib::WeakRef<gtk::ScrolledWindow>,
     pill: ZoomPillWeak,
     copy: glib::WeakRef<gtk::Button>,
     previous: glib::WeakRef<gtk::Button>,
     next: glib::WeakRef<gtk::Button>,
     parts: ViewerParts,
-    zoom: Cell<Zoom>,
-    /// The fitted photo has loaded: zoom and copy wait for it, so neither
-    /// acts on the sender's tiny thumbnail.
+    /// Size of the first decode: what the viewer needs to show the photo
+    /// fitted, not the photo itself.
+    first_decode: (u32, u32),
+    /// A photo has loaded: zoom and copy wait for it, so neither acts on the
+    /// sender's tiny thumbnail.
     ready: Cell<bool>,
-    /// `texture` holds the photo at its real size.
-    native: Cell<bool>,
     texture: RefCell<Option<gdk::Texture>>,
+    /// Smallest density a decode in flight will reach, if one is.
+    loading: Cell<Option<f64>>,
+    /// Copies waiting for the photo at its real size.
+    waiting: RefCell<Vec<WaitingCopy>>,
     token: DecodeToken,
 }
 
@@ -545,48 +614,102 @@ impl PhotoState {
         &self.items[self.current.get()]
     }
 
+    fn view_size(&self) -> (f64, f64) {
+        self.scroller.upgrade().map_or((0.0, 0.0), |scroller| {
+            (
+                scroller.hadjustment().page_size(),
+                scroller.vadjustment().page_size(),
+            )
+        })
+    }
+
+    fn bounds(&self) -> Bounds {
+        Bounds::new(self.canvas.picture(), self.view_size())
+    }
+
+    fn pannable(&self) -> (bool, bool) {
+        if self.canvas.level() == Level::Fit {
+            return (false, false);
+        }
+        self.scroller.upgrade().map_or((false, false), |scroller| {
+            (
+                can_scroll(&scroller.hadjustment()),
+                can_scroll(&scroller.vadjustment()),
+            )
+        })
+    }
+
     fn sync_controls(&self) {
         let ready = self.ready.get();
-        self.pill.show(self.zoom.get(), ready);
+        let bounds = self.bounds();
+        let scale = self.canvas.scale();
+        self.pill.show(&ZoomView {
+            percent: zoom::percent(scale),
+            at_fit: self.canvas.level() == Level::Fit,
+            can_shrink: bounds.can_shrink(scale),
+            can_grow: bounds.can_grow(scale),
+            ready,
+        });
         if let Some(copy) = self.copy.upgrade() {
             copy.set_sensitive(ready);
         }
+        if let Some(scroller) = self.scroller.upgrade() {
+            let (across, down) = self.pannable();
+            scroller.set_cursor_from_name((across || down).then_some("grab"));
+        }
     }
 
-    fn apply(&self, level: Zoom) {
-        self.zoom.set(level);
-        self.sync_controls();
-        let actual = level == Zoom::Actual;
-        self.picture.set_can_shrink(!actual);
-        if let Some(scroller) = self.scroller.upgrade() {
-            let policy = if actual {
-                gtk::PolicyType::Automatic
-            } else {
-                gtk::PolicyType::Never
-            };
-            scroller.set_policy(policy, policy);
-        }
+    fn texture_size(&self) -> (u32, u32) {
+        self.texture.borrow().as_ref().map_or((0, 0), |texture| {
+            (
+                u32::try_from(texture.width()).unwrap_or(0),
+                u32::try_from(texture.height()).unwrap_or(0),
+            )
+        })
+    }
+
+    fn real_size(&self) -> (u32, u32) {
+        zoom::decode_size(self.canvas.picture(), 1.0, NATIVE_PIXELS)
+    }
+
+    fn has_real_size(&self) -> bool {
+        let (have, real) = (self.texture_size(), self.real_size());
+        have.0 + 1 >= real.0 && have.1 + 1 >= real.1
     }
 
     fn show(self: &Rc<Self>, index: usize) {
         self.current.set(index);
         self.ready.set(false);
-        self.native.set(false);
+        self.loading.set(None);
+        self.waiting.take();
         self.texture.take();
-        self.apply(Zoom::Fit);
         let item = &self.items[index];
-        self.picture
+        let thumbnail = item
+            .details
+            .thumbnail
+            .as_deref()
+            .and_then(|bytes| gdk::Texture::from_bytes(&glib::Bytes::from(bytes)).ok());
+        let picture = thumbnail.as_ref().map_or((1.0, 1.0), |texture| {
+            zoom::logical_size(
+                (
+                    u32::try_from(texture.width()).unwrap_or(1),
+                    u32::try_from(texture.height()).unwrap_or(1),
+                ),
+                item.details.dimensions,
+            )
+        });
+        self.canvas.set_level(Level::Fit);
+        self.canvas.set_picture(thumbnail, picture);
+        if let Some(scroller) = self.scroller.upgrade() {
+            scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Never);
+            scroller.hadjustment().set_value(0.0);
+            scroller.vadjustment().set_value(0.0);
+        }
+        self.sync_controls();
+        self.canvas
             .update_property(&[gtk::accessible::Property::Label(&photo_label(
                 &item.details.title,
             ))]);
-        // The sender's thumbnail shows at once, until the file loads.
-        self.picture.set_paintable(
-            item.details
-                .thumbnail
-                .as_deref()
-                .and_then(|bytes| gdk::Texture::from_bytes(&glib::Bytes::from(bytes)).ok())
-                .as_ref(),
-        );
         self.parts
             .show(&item.details, Some((index, self.items.len())));
         if let Some(previous) = self.previous.upgrade() {
@@ -595,19 +718,24 @@ impl PhotoState {
         if let Some(next) = self.next.upgrade() {
             next.set_sensitive(index + 1 < self.items.len());
         }
-        let fits = !item.details.exceeds_fit_edge();
+        let declared = item.details.dimensions;
         let state = self.clone();
         decode_photo(
             item.path.clone(),
-            FIT_EDGE,
-            FIT_EDGE,
+            self.first_decode.0,
+            self.first_decode.1,
             &self.token,
             move |texture| {
-                state.picture.set_paintable(Some(&texture));
-                state.native.set(fits);
+                let size = (
+                    u32::try_from(texture.width()).unwrap_or(1),
+                    u32::try_from(texture.height()).unwrap_or(1),
+                );
+                let picture = zoom::logical_size(size, declared);
+                state.canvas.set_picture(Some(texture.clone()), picture);
                 state.texture.replace(Some(texture));
                 state.ready.set(true);
                 state.sync_controls();
+                state.refine();
             },
         );
     }
@@ -618,48 +746,164 @@ impl PhotoState {
         }
     }
 
-    fn request(self: &Rc<Self>, level: Zoom) {
-        if !self.ready.get() || level == self.zoom.get() {
+    /// Zooms to `level`, keeping the point of the photo under `anchor` (a
+    /// position in the view, by default its middle) where it is.
+    fn set_level(self: &Rc<Self>, level: Level, anchor: Option<(f64, f64)>) {
+        let Some(scroller) = self.scroller.upgrade().filter(|_| self.ready.get()) else {
+            return;
+        };
+        let view = self.view_size();
+        let picture = self.canvas.picture();
+        let bounds = Bounds::new(picture, view);
+        let level = match level {
+            Level::Fit => Level::Fit,
+            Level::Scale(scale) => bounds.level(scale),
+        };
+        if level == self.canvas.level() {
             return;
         }
-        if level == Zoom::Actual {
-            let state = self.clone();
-            self.with_native(move |_| state.apply(Zoom::Actual));
+        let from = self.canvas.scale();
+        let to = match level {
+            Level::Fit => bounds.fit,
+            Level::Scale(scale) => scale,
+        };
+        let (across, down) = (scroller.hadjustment(), scroller.vadjustment());
+        let anchor = anchor.unwrap_or((view.0 / 2.0, view.1 / 2.0));
+        let offsets = (
+            zoom::anchored_offset(picture.0, view.0, from, to, across.value(), anchor.0),
+            zoom::anchored_offset(picture.1, view.1, from, to, down.value(), anchor.1),
+        );
+        self.canvas.set_level(level);
+        let policy = if level == Level::Fit {
+            gtk::PolicyType::Never
         } else {
-            self.apply(level);
+            gtk::PolicyType::Automatic
+        };
+        scroller.set_policy(policy, policy);
+        if level == Level::Fit {
+            across.set_value(0.0);
+            down.set_value(0.0);
+        } else {
+            across.set_upper(zoom::content_len(picture.0, view.0, to));
+            down.set_upper(zoom::content_len(picture.1, view.1, to));
+            across.set_value(offsets.0);
+            down.set_value(offsets.1);
+        }
+        self.sync_controls();
+        self.refine();
+    }
+
+    fn zoom_by(self: &Rc<Self>, zoom_in: bool) {
+        let level = self.bounds().stepped(self.canvas.scale(), zoom_in);
+        self.set_level(level, None);
+    }
+
+    fn toggle_fit(self: &Rc<Self>, anchor: Option<(f64, f64)>) {
+        self.set_level(self.canvas.level().toggled(), anchor);
+    }
+
+    /// Holding Ctrl, the wheel zooms about the pointer; otherwise it is left
+    /// to the scrolled window.
+    fn on_scroll(
+        self: &Rc<Self>,
+        state: gdk::ModifierType,
+        delta: f64,
+        anchor: Option<(f64, f64)>,
+    ) -> glib::Propagation {
+        if !state.contains(gdk::ModifierType::CONTROL_MASK) || !self.ready.get() {
+            return glib::Propagation::Proceed;
+        }
+        let scale = self.bounds().wheeled(self.canvas.scale(), delta);
+        self.set_level(Level::Scale(scale), anchor);
+        glib::Propagation::Stop
+    }
+
+    /// Moves the view by one key press's worth, if the photo is larger than
+    /// the view that way; true when it did.
+    fn pan(&self, (across, down): (f64, f64)) -> bool {
+        let Some(scroller) = self.scroller.upgrade() else {
+            return false;
+        };
+        let (wide, tall) = self.pannable();
+        let mut moved = false;
+        for (adjustment, direction, scrolls) in [
+            (scroller.hadjustment(), across, wide),
+            (scroller.vadjustment(), down, tall),
+        ] {
+            if direction != 0.0 && scrolls {
+                adjustment.set_value(adjustment.value() + direction * adjustment.step_increment());
+                moved = true;
+            }
+        }
+        moved
+    }
+
+    fn layout_changed(self: &Rc<Self>) {
+        self.sync_controls();
+        self.refine();
+    }
+
+    /// Loads more of the photo when what is on screen has become soft.
+    fn refine(self: &Rc<Self>) {
+        if !self.ready.get() {
+            return;
+        }
+        let factor = self.canvas.scale_factor();
+        let scale = self.canvas.scale();
+        let density = zoom::density(self.texture_size(), self.canvas.picture());
+        if zoom::needs_sharper(density, scale, factor) {
+            self.load(zoom::next_density(scale, factor));
         }
     }
 
-    fn with_native(self: &Rc<Self>, then: impl FnOnce(&gdk::Texture) + 'static) {
-        if self.native.get() {
-            if let Some(texture) = self.texture.borrow().clone() {
-                then(&texture);
-            }
+    fn load(self: &Rc<Self>, density: f64) {
+        if self.loading.get().is_some_and(|loading| loading >= density) {
             return;
         }
-        let item = self.item();
-        let Some((width, height)) = item.details.dimensions else {
+        let size = zoom::decode_size(self.canvas.picture(), density, NATIVE_PIXELS);
+        let have = self.texture_size();
+        if size.0 <= have.0 && size.1 <= have.1 {
             return;
-        };
+        }
+        self.loading.set(Some(density));
         let state = self.clone();
         decode_photo(
-            item.path.clone(),
-            width,
-            height,
+            self.item().path.clone(),
+            size.0,
+            size.1,
             &self.token,
             move |texture| {
-                state.picture.set_paintable(Some(&texture));
-                state.native.set(true);
+                state.loading.set(None);
+                state
+                    .canvas
+                    .set_picture(Some(texture.clone()), state.canvas.picture());
                 state.texture.replace(Some(texture.clone()));
-                then(&texture);
+                if state.has_real_size() {
+                    for then in state.waiting.take() {
+                        then(&texture);
+                    }
+                }
+                state.refine();
             },
         );
+    }
+
+    fn with_real_size(self: &Rc<Self>, then: impl FnOnce(&gdk::Texture) + 'static) {
+        let texture = self.texture.borrow().clone();
+        match texture {
+            Some(texture) if self.has_real_size() => then(&texture),
+            Some(_) => {
+                self.waiting.borrow_mut().push(Box::new(then));
+                self.load(1.0);
+            }
+            None => {}
+        }
     }
 }
 
 /// Opens the photos in the viewer, starting at `start`: fitted to the window,
-/// or at 100% with the zoom pill or a double-click, and dragged around when
-/// larger.
+/// then zoomed freely with the pill, the keyboard, Ctrl and the scroll wheel
+/// or a pinch, and dragged around when larger than the window.
 pub(super) fn show_photo(
     parent: &impl IsA<gtk::Widget>,
     items: Rc<Vec<PhotoItem>>,
@@ -670,14 +914,9 @@ pub(super) fn show_photo(
         return;
     }
     let start = start.min(items.len() - 1);
-    let picture = gtk::Picture::builder()
-        .content_fit(gtk::ContentFit::Contain)
-        .can_shrink(true)
-        .hexpand(true)
-        .vexpand(true)
-        .build();
+    let canvas = ZoomCanvas::new();
     let scroller = gtk::ScrolledWindow::builder()
-        .child(&picture)
+        .child(&canvas)
         .hscrollbar_policy(gtk::PolicyType::Never)
         .vscrollbar_policy(gtk::PolicyType::Never)
         .build();
@@ -717,26 +956,35 @@ pub(super) fn show_photo(
     let photo = Rc::new(PhotoState {
         items,
         current: Cell::new(start),
-        picture,
+        canvas: canvas.clone(),
         scroller: scroller.downgrade(),
         pill: pill.downgrade(),
         copy: copy.downgrade(),
         previous: previous.downgrade(),
         next: next.downgrade(),
         parts: viewer.parts,
-        zoom: Cell::new(Zoom::Fit),
+        first_decode: zoom::decode_box(viewer_size(parent), parent.scale_factor(), FIT_EDGE),
         ready: Cell::new(false),
-        native: Cell::new(false),
         texture: RefCell::default(),
+        loading: Cell::new(None),
+        waiting: RefCell::default(),
         token: DecodeToken::default(),
     });
     pill.connect(&photo);
+    canvas.connect_layout_changed({
+        let photo = Rc::downgrade(&photo);
+        move |_| {
+            if let Some(photo) = photo.upgrade() {
+                photo.layout_changed();
+            }
+        }
+    });
 
     copy.connect_clicked({
         let photo = photo.clone();
         move |button| {
             let clipboard = button.clipboard();
-            photo.with_native(move |texture| clipboard.set_texture(texture));
+            photo.with_real_size(move |texture| clipboard.set_texture(texture));
         }
     });
     folder.connect_clicked({
@@ -757,12 +1005,51 @@ pub(super) fn show_photo(
         button.connect_clicked(move |_| photo.step(delta));
     }
 
+    let pointer: Rc<Cell<Option<(f64, f64)>>> = Rc::default();
+    let motion = gtk::EventControllerMotion::new();
+    motion.connect_motion({
+        let pointer = pointer.clone();
+        move |_, x, y| pointer.set(Some((x, y)))
+    });
+    motion.connect_leave({
+        let pointer = pointer.clone();
+        move |_| pointer.set(None)
+    });
+    scroller.add_controller(motion);
+
+    let wheel = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
+    wheel.set_propagation_phase(gtk::PropagationPhase::Capture);
+    wheel.connect_scroll({
+        let (photo, pointer) = (photo.clone(), pointer.clone());
+        move |controller, _, delta| {
+            photo.on_scroll(controller.current_event_state(), delta, pointer.get())
+        }
+    });
+    scroller.add_controller(wheel);
+
+    let pinch = gtk::GestureZoom::new();
+    let pinched_from = Rc::new(Cell::new(1.0));
+    pinch.connect_begin({
+        let (photo, pinched_from) = (photo.clone(), pinched_from.clone());
+        move |_, _| pinched_from.set(photo.canvas.scale())
+    });
+    pinch.connect_scale_changed({
+        let photo = photo.clone();
+        move |gesture, factor| {
+            photo.set_level(
+                Level::Scale(pinched_from.get() * factor),
+                gesture.bounding_box_center(),
+            );
+        }
+    });
+    scroller.add_controller(pinch);
+
     let double_click = gtk::GestureClick::new();
     double_click.connect_pressed({
         let photo = photo.clone();
-        move |_, presses, _, _| {
+        move |_, presses, x, y| {
             if presses == 2 {
-                photo.request(photo.zoom.get().toggled());
+                photo.toggle_fit(Some((x, y)));
             }
         }
     });
@@ -776,6 +1063,9 @@ pub(super) fn show_photo(
                 scroller.hadjustment().value(),
                 scroller.vadjustment().value(),
             ));
+            if scroller.cursor().is_some() {
+                scroller.set_cursor_from_name(Some("grabbing"));
+            }
         });
     }
     {
@@ -786,6 +1076,10 @@ pub(super) fn show_photo(
             scroller.vadjustment().set_value(v - y);
         });
     }
+    {
+        let photo = photo.clone();
+        pan.connect_drag_end(move |_, _, _| photo.sync_controls());
+    }
     scroller.add_controller(pan);
 
     let keys = gtk::EventControllerKey::new();
@@ -793,9 +1087,23 @@ pub(super) fn show_photo(
     keys.connect_key_pressed({
         let photo = photo.clone();
         move |controller, key, _, modifiers| {
-            // At 100% the arrows scroll the photo instead.
-            if photo.zoom.get() == Zoom::Actual {
-                return glib::Propagation::Proceed;
+            if let Some(command) = zoom_key(key, modifiers) {
+                if !photo.ready.get() {
+                    return glib::Propagation::Proceed;
+                }
+                match command {
+                    ZoomKey::In => photo.zoom_by(true),
+                    ZoomKey::Out => photo.zoom_by(false),
+                    ZoomKey::Fit => photo.set_level(Level::Fit, None),
+                    ZoomKey::Actual => photo.set_level(Level::Scale(zoom::ACTUAL), None),
+                }
+                return glib::Propagation::Stop;
+            }
+            // A photo larger than the view is scrolled by the arrows instead.
+            if let Some(direction) = pan_key(key, modifiers)
+                && photo.pan(direction)
+            {
+                return glib::Propagation::Stop;
             }
             let rtl = controller
                 .widget()
@@ -810,8 +1118,15 @@ pub(super) fn show_photo(
         }
     });
     dialog.add_controller(keys);
+    #[cfg(test)]
+    OPEN_PHOTO.with(|open| open.replace(Some(photo.clone())));
     photo.show(start);
     dialog.present(Some(parent));
+}
+
+#[cfg(test)]
+thread_local! {
+    static OPEN_PHOTO: RefCell<Option<Rc<PhotoState>>> = const { RefCell::new(None) };
 }
 
 struct VideoControls {
@@ -1315,11 +1630,45 @@ mod tests {
     }
 
     #[test]
-    fn zoom_labels_and_toggle() {
-        assert_eq!(Zoom::Fit.label(), "Fit");
-        assert_eq!(Zoom::Actual.label(), "100%");
-        assert_eq!(Zoom::Fit.toggled(), Zoom::Actual);
-        assert_eq!(Zoom::Actual.toggled(), Zoom::Fit);
+    fn zoom_keys_ignore_other_chords() {
+        let none = gdk::ModifierType::empty();
+        let ctrl = gdk::ModifierType::CONTROL_MASK;
+        for (key, state, command) in [
+            (gdk::Key::plus, ctrl, ZoomKey::In),
+            (gdk::Key::equal, ctrl, ZoomKey::In),
+            (gdk::Key::KP_Add, none, ZoomKey::In),
+            (
+                gdk::Key::plus,
+                ctrl | gdk::ModifierType::SHIFT_MASK,
+                ZoomKey::In,
+            ),
+            (gdk::Key::minus, ctrl, ZoomKey::Out),
+            (gdk::Key::KP_Subtract, ctrl, ZoomKey::Out),
+            (gdk::Key::_0, ctrl, ZoomKey::Fit),
+            (gdk::Key::KP_0, none, ZoomKey::Fit),
+            (gdk::Key::_1, none, ZoomKey::Actual),
+            (gdk::Key::_1, ctrl, ZoomKey::Actual),
+        ] {
+            assert_eq!(zoom_key(key, state), Some(command), "{key:?}");
+        }
+        assert_eq!(zoom_key(gdk::Key::_1, gdk::ModifierType::ALT_MASK), None);
+        assert_eq!(zoom_key(gdk::Key::Left, ctrl), None);
+        assert_eq!(zoom_key(gdk::Key::c, ctrl), None);
+    }
+
+    #[test]
+    fn arrows_pan_only_when_bare() {
+        let none = gdk::ModifierType::empty();
+        assert_eq!(pan_key(gdk::Key::Left, none), Some((-1.0, 0.0)));
+        assert_eq!(pan_key(gdk::Key::Down, none), Some((0.0, 1.0)));
+        assert_eq!(pan_key(gdk::Key::Right, gdk::ModifierType::ALT_MASK), None);
+        assert_eq!(pan_key(gdk::Key::Up, gdk::ModifierType::CONTROL_MASK), None);
+        assert_eq!(pan_key(gdk::Key::a, none), None);
+    }
+
+    #[test]
+    fn the_zoom_level_has_an_accessible_name() {
+        assert_eq!(zoom_level_text(120), "Zoom level 120 percent");
     }
 
     #[test]
@@ -1363,6 +1712,22 @@ mod tests {
                 .downcast::<gtk::Button>()
                 .is_ok_and(|button| button.tooltip_text().as_deref() == Some(tooltip))
         })
+    }
+
+    fn zoom_percent(window: &gtk::Window) -> String {
+        tree(window)
+            .into_iter()
+            .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
+            .filter(|button| {
+                matches!(
+                    button.tooltip_text().as_deref(),
+                    Some("Actual Size" | "Fit to Window")
+                )
+            })
+            .find_map(|button| button.child().and_downcast::<gtk::Label>())
+            .expect("zoom level")
+            .label()
+            .to_string()
     }
 
     fn label(window: &gtk::Window, class: &str) -> gtk::Label {
@@ -1449,6 +1814,30 @@ mod tests {
         );
         adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceDark);
         runtime
+    }
+
+    fn photo_item(message: &Message) -> PhotoItem {
+        PhotoItem {
+            path: match attachment_action(message) {
+                Some(NativeMediaAction::Open(path)) => path,
+                _ => panic!("fixture is on disk"),
+            },
+            details: ViewerDetails::of(message),
+        }
+    }
+
+    fn open_photo_state() -> Rc<PhotoState> {
+        OPEN_PHOTO.with(|open| open.borrow().clone().expect("a photo viewer was opened"))
+    }
+
+    fn controller<T: IsA<gtk::EventController> + IsA<glib::Object>>(
+        widget: &impl IsA<gtk::Widget>,
+    ) -> T {
+        let controllers = widget.observe_controllers();
+        (0..controllers.n_items())
+            .filter_map(|index| controllers.item(index))
+            .find_map(|controller| controller.downcast::<T>().ok())
+            .expect("controller")
     }
 
     struct Opening {
@@ -1669,6 +2058,232 @@ mod tests {
         wait_until("quiet", || true);
     }
 
+    /// Needs a display and glycin's loaders:
+    /// `cargo test --lib photos_zoom_freely -- --ignored`. Setting
+    /// `ZAPTIDE_VIEWER_SHOTS` also saves screenshots of each state.
+    #[test]
+    #[ignore = "needs a display and glycin loaders"]
+    fn photos_zoom_freely_about_the_pointer() {
+        use super::super::playback_tests::{drain, wait_until};
+        let none = gdk::ModifierType::empty();
+        let ctrl = gdk::ModifierType::CONTROL_MASK;
+        let runtime = init_display();
+        let _runtime = runtime.enter();
+        let directory = tempfile::tempdir().unwrap();
+        let first = fixture_message(directory.path(), "one.png", 3000, 2000);
+        let second = fixture_message(directory.path(), "two.png", 800, 600);
+        let window = adw::Window::builder()
+            .default_width(1100)
+            .default_height(760)
+            .content(&gtk::Box::new(gtk::Orientation::Vertical, 0))
+            .build();
+        window.present();
+        drain();
+        let window_ref = window.upcast_ref::<gtk::Window>();
+        let on_action: Rc<dyn Fn(NativeMediaAction)> = Rc::new(|_| {});
+        let album = Rc::new(vec![photo_item(&first), photo_item(&second)]);
+
+        show_photo(&window, album, 0, on_action);
+        let photo = open_photo_state();
+        wait_until("photo did not load", || photo.ready.get());
+        drain();
+        let scroller = photo.scroller.upgrade().unwrap();
+        let view = photo.view_size();
+        let fit = (view.0 / 3000.0).min(view.1 / 2000.0);
+        assert!((photo.canvas.scale() - fit).abs() < 1e-6);
+        assert_eq!(zoom_percent(window_ref), format!("{}%", zoom::percent(fit)));
+        assert_eq!(photo.canvas.level(), Level::Fit);
+        assert!(
+            photo.texture_size().0 < 3000,
+            "the first decode fits the view"
+        );
+        assert!(button(window_ref, "Zoom Out").is_sensitive());
+        assert!(button(window_ref, "Zoom In").is_sensitive());
+        screenshot(window_ref, "zoom-fit");
+
+        let pointer = (view.0 * 0.55, view.1 * 0.45);
+        let on_screen = |photo: &PhotoState, point: (f64, f64)| {
+            let scale = photo.canvas.scale();
+            let view = photo.view_size();
+            let picture = photo.canvas.picture();
+            let (across, down) = (
+                photo.scroller.upgrade().unwrap().hadjustment().value(),
+                photo.scroller.upgrade().unwrap().vadjustment().value(),
+            );
+            (
+                point.0 * scale + zoom::origin(picture.0, view.0, scale) - across,
+                point.1 * scale + zoom::origin(picture.1, view.1, scale) - down,
+            )
+        };
+        let under_pointer = |photo: &PhotoState| {
+            let scale = photo.canvas.scale();
+            let view = photo.view_size();
+            let picture = photo.canvas.picture();
+            let scroller = photo.scroller.upgrade().unwrap();
+            (
+                (scroller.hadjustment().value() + pointer.0
+                    - zoom::origin(picture.0, view.0, scale))
+                    / scale,
+                (scroller.vadjustment().value() + pointer.1
+                    - zoom::origin(picture.1, view.1, scale))
+                    / scale,
+            )
+        };
+        let anchored = |photo: &PhotoState, point: (f64, f64)| {
+            let shown = on_screen(photo, point);
+            (shown.0 - pointer.0).abs() < 1.5 && (shown.1 - pointer.1).abs() < 1.5
+        };
+
+        assert_eq!(
+            photo.on_scroll(none, -1.0, Some(pointer)),
+            glib::Propagation::Proceed,
+            "the wheel alone is left to the scrolled window"
+        );
+        assert_eq!(photo.canvas.level(), Level::Fit);
+        assert_eq!(
+            photo.on_scroll(ctrl, -1.0, Some(pointer)),
+            glib::Propagation::Stop
+        );
+        drain();
+        assert!((photo.canvas.scale() - fit * 1.1).abs() < 1e-6);
+        assert_eq!(
+            zoom_percent(window_ref),
+            format!("{}%", zoom::percent(fit * 1.1))
+        );
+        for step in 0..6 {
+            let point = under_pointer(&photo);
+            photo.on_scroll(ctrl, -1.0, Some(pointer));
+            drain();
+            assert!(
+                anchored(&photo, point),
+                "the point under the pointer moved on step {step}"
+            );
+        }
+
+        for _ in 0..80 {
+            photo.on_scroll(ctrl, -1.0, Some(pointer));
+        }
+        drain();
+        assert_eq!(photo.canvas.scale(), 8.0);
+        assert_eq!(zoom_percent(window_ref), "800%");
+        assert!(!button(window_ref, "Zoom In").is_sensitive());
+        assert!(button(window_ref, "Zoom Out").is_sensitive());
+        wait_until("the full photo did not load for the zoom", || {
+            photo.texture_size().0 == 3000
+        });
+        screenshot(window_ref, "zoom-800");
+        let before = (
+            scroller.hadjustment().value(),
+            scroller.vadjustment().value(),
+        );
+        let drag: gtk::GestureDrag = controller(&scroller);
+        drag.emit_by_name::<()>("drag-begin", &[&10.0f64, &10.0f64]);
+        drag.emit_by_name::<()>("drag-update", &[&-120.0f64, &-60.0f64]);
+        drag.emit_by_name::<()>("drag-end", &[&-120.0f64, &-60.0f64]);
+        assert!((scroller.hadjustment().value() - before.0 - 120.0).abs() < 1.0);
+        assert!((scroller.vadjustment().value() - before.1 - 60.0).abs() < 1.0);
+
+        for _ in 0..400 {
+            photo.on_scroll(ctrl, 1.0, Some(pointer));
+        }
+        drain();
+        let smallest = fit / 4.0;
+        assert!((photo.canvas.scale() - smallest).abs() < 1e-6);
+        assert!(!button(window_ref, "Zoom Out").is_sensitive());
+        assert!(button(window_ref, "Zoom In").is_sensitive());
+        screenshot(window_ref, "zoom-out-past-fit");
+
+        press(window_ref, gdk::Key::_1, ctrl);
+        assert_eq!(zoom_percent(window_ref), "100%");
+        press(window_ref, gdk::Key::minus, ctrl);
+        assert_eq!(zoom_percent(window_ref), "80%");
+        press(
+            window_ref,
+            gdk::Key::plus,
+            ctrl | gdk::ModifierType::SHIFT_MASK,
+        );
+        press(window_ref, gdk::Key::equal, ctrl);
+        assert_eq!(zoom_percent(window_ref), "125%");
+        button(window_ref, "Zoom Out").emit_clicked();
+        assert_eq!(zoom_percent(window_ref), "100%");
+        press(window_ref, gdk::Key::_0, ctrl);
+        assert_eq!(photo.canvas.level(), Level::Fit);
+        assert!(has_button(window_ref, "Actual Size"));
+        button(window_ref, "Actual Size").emit_clicked();
+        assert_eq!(zoom_percent(window_ref), "100%");
+        button(window_ref, "Fit to Window").emit_clicked();
+        assert_eq!(photo.canvas.level(), Level::Fit);
+
+        let click: gtk::GestureClick = controller(&scroller);
+        let point = under_pointer(&photo);
+        click.emit_by_name::<()>("pressed", &[&2i32, &pointer.0, &pointer.1]);
+        drain();
+        assert_eq!(photo.canvas.level(), Level::Scale(1.0));
+        assert!(
+            anchored(&photo, point),
+            "double click did not keep the anchor"
+        );
+        click.emit_by_name::<()>("pressed", &[&2i32, &pointer.0, &pointer.1]);
+        assert_eq!(photo.canvas.level(), Level::Fit);
+
+        press(window_ref, gdk::Key::plus, ctrl);
+        assert_ne!(photo.canvas.level(), Level::Fit);
+        button(window_ref, "Next Photo").emit_clicked();
+        assert_eq!(
+            photo.canvas.level(),
+            Level::Fit,
+            "zoom resets for the next photo"
+        );
+        assert!(!button(window_ref, "Zoom In").is_sensitive());
+        wait_until("second photo did not load", || photo.ready.get());
+        drain();
+        assert!(button(window_ref, "Zoom In").is_sensitive());
+
+        let narrow = adw::Window::builder()
+            .default_width(360)
+            .default_height(700)
+            .content(&gtk::Box::new(gtk::Orientation::Vertical, 0))
+            .build();
+        narrow.present();
+        drain();
+        let narrow_ref = narrow.upcast_ref::<gtk::Window>();
+        show_photo(
+            &narrow,
+            Rc::new(vec![photo_item(&first), photo_item(&second)]),
+            0,
+            Rc::new(|_| {}),
+        );
+        let narrow_photo = open_photo_state();
+        wait_until("narrow photo did not load", || narrow_photo.ready.get());
+        drain();
+        screenshot(narrow_ref, "zoom-narrow");
+        let header = tree(narrow_ref)
+            .into_iter()
+            .find_map(|widget| widget.downcast::<adw::HeaderBar>().ok())
+            .expect("header");
+        assert!(
+            header.measure(gtk::Orientation::Horizontal, -1).0 <= narrow_ref.width(),
+            "the header fits a narrow window"
+        );
+        let level = button(narrow_ref, "Actual Size");
+        let close = button(narrow_ref, "Close");
+        for widget in [level.upcast_ref::<gtk::Widget>(), close.upcast_ref()] {
+            let bounds = widget
+                .compute_bounds(narrow_ref)
+                .expect("bounds in the window");
+            assert!(
+                bounds.x() >= 0.0 && bounds.x() + bounds.width() <= narrow_ref.width() as f32,
+                "{} is inside the narrow window",
+                widget.type_().name()
+            );
+        }
+        button(narrow_ref, "Close").emit_clicked();
+        narrow.destroy();
+        OPEN_PHOTO.with(|open| open.take());
+        window.destroy();
+        drain();
+    }
+
     /// Needs a display and GStreamer's VP8 plugins:
     /// `cargo test --lib videos_open_in -- --ignored`.
     #[test]
@@ -1751,13 +2366,6 @@ mod tests {
         drain();
         window.destroy();
         drain();
-    }
-
-    #[test]
-    fn photos_past_the_fit_edge_need_their_real_size() {
-        assert!(!exceeds_fit_edge(3840, 2160));
-        assert!(exceeds_fit_edge(3841, 100));
-        assert!(exceeds_fit_edge(100, 8000));
     }
 
     #[test]
@@ -1921,14 +2529,14 @@ mod tests {
             label(window_ref, "zaptide-viewer-metadata").label(),
             "PNG · 1600 × 1000 · 184 KB"
         );
-        assert!(!button(window_ref, "Zoom Out").is_sensitive());
+        assert!(button(window_ref, "Zoom Out").is_sensitive());
         assert!(button(window_ref, "Zoom In").is_sensitive());
+        assert!(has_button(window_ref, "Actual Size"));
         assert!(!button(window_ref, "Previous Photo").is_sensitive());
         screenshot(window_ref, "13-view-image");
-        button(window_ref, "Zoom In").emit_clicked();
-        assert!(button(window_ref, "Zoom Out").is_sensitive());
-        assert!(!button(window_ref, "Zoom In").is_sensitive());
-        assert!(has_button(window_ref, "100%"));
+        press(window_ref, gdk::Key::_1, gdk::ModifierType::empty());
+        assert_eq!(zoom_percent(window_ref), "100%");
+        assert!(has_button(window_ref, "Fit to Window"));
         drain();
         screenshot(window_ref, "14-image-original-size");
         press(window_ref, gdk::Key::Right, gdk::ModifierType::empty());
@@ -1937,13 +2545,14 @@ mod tests {
             "1 of 2",
             "arrows scroll a photo at 100%"
         );
-        button(window_ref, "Zoom Out").emit_clicked();
+        press(window_ref, gdk::Key::_0, gdk::ModifierType::CONTROL_MASK);
+        assert!(has_button(window_ref, "Actual Size"));
         press(window_ref, gdk::Key::Right, gdk::ModifierType::ALT_MASK);
         assert_eq!(label(window_ref, "zaptide-viewer-pill").label(), "1 of 2");
         press(window_ref, gdk::Key::Right, gdk::ModifierType::empty());
         assert_eq!(label(window_ref, "zaptide-viewer-pill").label(), "2 of 2");
         assert!(
-            has_button(window_ref, "Fit"),
+            has_button(window_ref, "Actual Size"),
             "zoom resets for the next photo"
         );
         assert!(!button(window_ref, "Next Photo").is_sensitive());

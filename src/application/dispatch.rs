@@ -131,6 +131,17 @@ impl NativeApplication {
                             (gettext("Copy selected text"), "<Control>c"),
                         ],
                     ),
+                    (
+                        gettext("Media viewer"),
+                        vec![
+                            (gettext("Previous photo"), "Left"),
+                            (gettext("Next photo"), "Right"),
+                            (gettext("Zoom in"), "<Control>plus"),
+                            (gettext("Zoom out"), "<Control>minus"),
+                            (gettext("Fit to window"), "<Control>0"),
+                            (gettext("Actual size"), "<Control>1"),
+                        ],
+                    ),
                 ] {
                     let section = adw::ShortcutsSection::new(Some(&title));
                     for (item, accelerator) in &items {
