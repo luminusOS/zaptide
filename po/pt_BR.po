@@ -6,7 +6,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: zaptide\n"
 "Report-Msgid-Bugs-To: https://github.com/luminusOS/zaptide/issues\n"
-"POT-Creation-Date: 2026-11-04 09:06-0300\n"
+"POT-Creation-Date: 2026-11-04 09:35-0300\n"
 "PO-Revision-Date: 2026-10-13 17:25-0300\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -73,125 +73,121 @@ msgstr "Favorita"
 msgid "More Reactions"
 msgstr "Mais reações"
 
-#: src/application/calls.rs:96
-msgid "Back to chat"
-msgstr "Voltar à conversa"
-
-#: src/application/calls.rs:105 src/application/calls.rs:943
-msgid "Incoming video call"
-msgstr "Chamada de vídeo recebida"
-
-#: src/application/calls.rs:107 src/application/calls.rs:945
-msgid "Incoming voice call"
-msgstr "Chamada de voz recebida"
-
-#: src/application/calls.rs:112
-msgid "Decline"
-msgstr "Recusar"
-
-#: src/application/calls.rs:118
-msgid "Answer"
-msgstr "Atender"
-
-#: src/application/calls.rs:124
-msgid "Calling…"
-msgstr "Chamando…"
-
-#: src/application/calls.rs:124
-msgid "Cancel call"
-msgstr "Cancelar chamada"
-
-#: src/application/calls.rs:125
-msgid "Connecting…"
-msgstr "Conectando…"
-
-#: src/application/calls.rs:125 src/application/calls.rs:186
-msgid "End call"
-msgstr "Encerrar chamada"
-
-#: src/application/calls.rs:129
-msgid "Microphone muted"
-msgstr "Microfone silenciado"
-
-#: src/application/calls.rs:131
-msgid "Connected"
-msgstr "Conectado"
-
-#: src/application/calls.rs:135
-msgid "%1$s wants to switch to video"
-msgstr "%1$s quer mudar para vídeo"
-
-#: src/application/calls.rs:139
-msgid "Accept video"
-msgstr "Aceitar vídeo"
-
-#: src/application/calls.rs:149
-msgid "Unmute"
-msgstr "Ativar microfone"
-
-#: src/application/calls.rs:156
-msgid "Mute"
-msgstr "Silenciar"
-
-#: src/application/calls.rs:165
-msgid "Turn camera off"
-msgstr "Desligar câmera"
-
-#: src/application/calls.rs:172
-msgid "Turn camera on"
-msgstr "Ligar câmera"
-
-#: src/application/calls.rs:179
-msgid "Start video"
-msgstr "Iniciar vídeo"
-
-#: src/application/calls.rs:199
-msgid "Couldn't connect the call"
-msgstr "Não foi possível conectar a chamada"
-
-#: src/application/calls.rs:203
-msgid "Try again"
-msgstr "Tentar novamente"
-
-#: src/application/calls.rs:220
-msgid "Missed"
-msgstr "Perdida"
-
-#: src/application/calls.rs:221
-msgid "Outgoing"
-msgstr "Realizada"
-
-#: src/application/calls.rs:222
-msgid "Incoming"
-msgstr "Recebida"
-
-#: src/application/calls.rs:272
-msgid "Call"
-msgstr "Chamada"
-
-#: src/application/calls.rs:485
+#: src/application/calls.rs:130
 msgid "No Call Selected"
 msgstr "Nenhuma chamada selecionada"
 
-#: src/application/calls.rs:486
+#: src/application/calls.rs:131
 msgid "Pick a call to see its details"
 msgstr "Escolha uma chamada para ver os detalhes"
 
-#: src/application/calls.rs:496
+#: src/application/calls.rs:141
 msgid "Open chat"
 msgstr "Abrir conversa"
 
-#: src/application/calls.rs:498
+#: src/application/calls.rs:143
 msgid "Call back"
 msgstr "Retornar chamada"
 
-#: src/application/calls.rs:526
+#: src/application/calls.rs:171
 msgid "Call details"
 msgstr "Detalhes da chamada"
 
-#: src/application/calls.rs:1375 src/application/sidebar.rs:343
-msgid "Recent calls"
-msgstr "Chamadas recentes"
+#: src/application/calls/screen.rs:79
+msgid "Incoming video call"
+msgstr "Chamada de vídeo recebida"
+
+#: src/application/calls/screen.rs:81
+msgid "Incoming voice call"
+msgstr "Chamada de voz recebida"
+
+#: src/application/calls/screen.rs:105
+msgid "Back to chat"
+msgstr "Voltar à conversa"
+
+#: src/application/calls/screen.rs:114
+msgid "Calling…"
+msgstr "Chamando…"
+
+#: src/application/calls/screen.rs:114
+msgid "Cancel call"
+msgstr "Cancelar chamada"
+
+#: src/application/calls/screen.rs:116
+msgid "Connecting…"
+msgstr "Conectando…"
+
+#: src/application/calls/screen.rs:116 src/application/calls/screen.rs:220
+msgid "End call"
+msgstr "Encerrar chamada"
+
+#: src/application/calls/screen.rs:129
+msgid "Couldn't connect the call"
+msgstr "Não foi possível conectar a chamada"
+
+#: src/application/calls/screen.rs:133
+msgid "Try again"
+msgstr "Tentar novamente"
+
+#: src/application/calls/screen.rs:149
+msgid "Decline"
+msgstr "Recusar"
+
+#: src/application/calls/screen.rs:155
+msgid "Answer"
+msgstr "Atender"
+
+#: src/application/calls/screen.rs:167
+msgid "Unmute"
+msgstr "Ativar microfone"
+
+#: src/application/calls/screen.rs:174
+msgid "Mute"
+msgstr "Silenciar"
+
+#: src/application/calls/screen.rs:183
+msgid "Turn camera off"
+msgstr "Desligar câmera"
+
+#: src/application/calls/screen.rs:185
+msgid "Turn camera on"
+msgstr "Ligar câmera"
+
+#: src/application/calls/screen.rs:187
+msgid "Start video"
+msgstr "Iniciar vídeo"
+
+#: src/application/calls/screen.rs:198
+msgid "Microphone muted"
+msgstr "Microfone silenciado"
+
+#: src/application/calls/screen.rs:200
+msgid "Connected"
+msgstr "Conectado"
+
+#: src/application/calls/screen.rs:205
+msgid "%1$s wants to switch to video"
+msgstr "%1$s quer mudar para vídeo"
+
+#: src/application/calls/screen.rs:209
+msgid "Accept video"
+msgstr "Aceitar vídeo"
+
+#: src/application/calls/screen.rs:230
+msgid "Missed"
+msgstr "Perdida"
+
+#: src/application/calls/screen.rs:231
+msgid "Outgoing"
+msgstr "Realizada"
+
+#: src/application/calls/screen.rs:232
+msgid "Incoming"
+msgstr "Recebida"
+
+#: src/application/calls/window.rs:24
+msgid "Call"
+msgstr "Chamada"
 
 #: src/application/chats.rs:133
 msgid "Loading messages"
@@ -1074,6 +1070,10 @@ msgstr "Arquivadas"
 msgid "Calls"
 msgstr "Chamadas"
 
+#: src/application/sidebar.rs:343
+msgid "Recent calls"
+msgstr "Chamadas recentes"
+
 #: src/application/sidebar.rs:364
 msgid "No Calls Yet"
 msgstr "Nenhuma chamada ainda"
@@ -1119,61 +1119,62 @@ msgstr "Ir para as novas mensagens"
 msgid "New messages"
 msgstr "Novas mensagens"
 
-#: src/backend/worker/calls.rs:393
-msgid "The call could not be placed"
-msgstr "Não foi possível fazer a chamada"
-
-#: src/backend/worker/calls.rs:435 src/backend/worker/calls.rs:876
-msgid "The call could not be answered"
-msgstr "Não foi possível atender a chamada"
-
-#: src/backend/worker/calls.rs:835
+#: src/backend/worker/calls.rs:285
 msgid "Connect to WhatsApp to place a call"
 msgstr "Conecte-se ao WhatsApp para fazer uma chamada"
 
-#: src/backend/worker/calls.rs:839
+#: src/backend/worker/calls.rs:289
 msgid "You are already in a call"
 msgstr "Você já está em uma chamada"
 
-#: src/backend/worker/calls.rs:846
+#: src/backend/worker/calls.rs:296
 msgid "Calls are only available in one-to-one chats"
 msgstr "As chamadas só estão disponíveis em conversas individuais"
 
-#: src/backend/worker/calls.rs:1033
+#: src/backend/worker/calls.rs:326 src/backend/worker/calls/runtime.rs:347
+msgid "The call could not be answered"
+msgstr "Não foi possível atender a chamada"
+
+#: src/backend/worker/calls.rs:483
 msgid "The camera stopped working"
 msgstr "A câmera parou de funcionar"
 
-#: src/backend/worker/calls.rs:1113 src/backend/worker/calls.rs:1146
+#: src/backend/worker/calls/runtime.rs:346
+msgid "The call could not be placed"
+msgstr "Não foi possível fazer a chamada"
+
+#: src/backend/worker/calls/runtime.rs:435
+#: src/backend/worker/calls/runtime.rs:469
 msgid "Video could not be started"
 msgstr "Não foi possível iniciar o vídeo"
 
-#: src/calls/mod.rs:29
+#: src/calls/mod.rs:30
 msgid "No microphone is available"
 msgstr "Nenhum microfone disponível"
 
-#: src/calls/mod.rs:30
+#: src/calls/mod.rs:31
 msgid "No audio output is available"
 msgstr "Nenhuma saída de áudio disponível"
 
-#: src/calls/mod.rs:31
+#: src/calls/mod.rs:32
 msgid "No camera is available"
 msgstr "Nenhuma câmera disponível"
 
-#: src/calls/mod.rs:33
+#: src/calls/mod.rs:34
 msgid ""
 "Video calls need an H.264 encoder (the GStreamer x264 or OpenH264 plugin)"
 msgstr ""
 "As chamadas de vídeo precisam de um codificador H.264 (o plugin x264 ou "
 "OpenH264 do GStreamer)"
 
-#: src/calls/mod.rs:36
+#: src/calls/mod.rs:37
 msgid ""
 "Video calls need an H.264 decoder (the GStreamer libav or OpenH264 plugin)"
 msgstr ""
 "As chamadas de vídeo precisam de um decodificador H.264 (o plugin libav ou "
 "OpenH264 do GStreamer)"
 
-#: src/calls/mod.rs:38
+#: src/calls/mod.rs:39
 msgid "Call audio is unavailable"
 msgstr "O áudio da chamada não está disponível"
 

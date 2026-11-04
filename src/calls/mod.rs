@@ -19,7 +19,8 @@ pub enum MediaError {
     NoCamera,
     NoVideoEncoder,
     NoVideoDecoder,
-    Unavailable(String),
+    /// The cause is dropped on purpose: GStreamer messages can name devices.
+    Unavailable,
 }
 
 impl std::fmt::Display for MediaError {
@@ -35,12 +36,21 @@ impl std::fmt::Display for MediaError {
             Self::NoVideoDecoder => formatter.write_str(&gettext(
                 "Video calls need an H.264 decoder (the GStreamer libav or OpenH264 plugin)",
             )),
-            Self::Unavailable(_) => formatter.write_str(&gettext("Call audio is unavailable")),
+            Self::Unavailable => formatter.write_str(&gettext("Call audio is unavailable")),
         }
     }
 }
 
 impl std::error::Error for MediaError {}
+
+/// Builds a pipeline from a `gst-launch` description.
+pub(crate) fn pipeline_from(description: &str) -> Result<gst::Pipeline, MediaError> {
+    gst::init().map_err(|_| MediaError::Unavailable)?;
+    gst::parse::launch(description)
+        .map_err(|_| MediaError::Unavailable)?
+        .downcast::<gst::Pipeline>()
+        .map_err(|_| MediaError::Unavailable)
+}
 
 /// A media pipeline that stopped working.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -208,7 +218,6 @@ pub struct CallMedia {
     playout: audio::Playout,
     slots: Arc<VideoSlots>,
     faults: FaultHandler,
-    encoder: Option<video::H264Encoder>,
     camera: Option<video::Camera>,
     camera_pipeline: Arc<Mutex<Option<gst::Pipeline>>>,
     decoder: Option<video::RemoteDecoder>,
@@ -218,6 +227,20 @@ pub struct CallMedia {
 pub struct VideoEndpoints {
     pub source: async_channel::Receiver<Vec<u8>>,
     pub sink: async_channel::Sender<whatsapp_rust::voip::VideoFrame>,
+    /// Whether `source` carries a camera picture.
+    pub camera: bool,
+}
+
+/// Whether a call can go ahead without a camera.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CameraNeed {
+    Required,
+    Optional,
+}
+
+/// A source that never yields, for a video channel with no camera behind it.
+pub fn no_camera() -> async_channel::Receiver<Vec<u8>> {
+    async_channel::bounded(1).1
 }
 
 /// What opening the camera or the decoder needs, so it can be done without
@@ -230,14 +253,19 @@ pub struct VideoPlan {
 }
 
 impl VideoPlan {
-    /// Opens the camera. Blocks while the device starts.
-    pub fn open_camera(&self) -> Result<video::Camera, MediaError> {
-        video::Camera::start(
+    /// Opens the camera, or gives `None` when `need` allows going without it.
+    /// Blocks while the device starts.
+    pub fn open_camera(&self, need: CameraNeed) -> Result<Option<video::Camera>, MediaError> {
+        match video::Camera::start(
             self.encoder,
             "autovideosrc",
             self.slots.clone(),
             self.faults.clone(),
-        )
+        ) {
+            Ok(camera) => Ok(Some(camera)),
+            Err(_) if need == CameraNeed::Optional => Ok(None),
+            Err(error) => Err(error),
+        }
     }
 
     pub fn open_decoder(&self) -> Result<video::RemoteDecoder, MediaError> {
@@ -290,7 +318,6 @@ impl CallMedia {
             playout,
             slots,
             faults,
-            encoder: None,
             camera: None,
             camera_pipeline: Arc::default(),
             decoder: None,
@@ -323,14 +350,12 @@ impl CallMedia {
         video::available_encoder().ok_or(MediaError::NoVideoEncoder)
     }
 
-    pub fn plan_video(&mut self) -> Result<VideoPlan, MediaError> {
-        let encoder = Self::check_video()?;
-        self.encoder = Some(encoder);
-        Ok(VideoPlan {
+    pub fn plan_video(&self, encoder: video::H264Encoder) -> VideoPlan {
+        VideoPlan {
             encoder,
             slots: self.slots.clone(),
             faults: self.faults.clone(),
-        })
+        }
     }
 
     pub fn decoder_sender(&self) -> Option<async_channel::Sender<whatsapp_rust::voip::VideoFrame>> {
@@ -353,34 +378,11 @@ impl CallMedia {
         frames
     }
 
-    /// Starts the remote decoder, and the camera when `camera` is set.
-    /// Blocks while the camera opens.
-    pub fn start_video(&mut self, camera: bool) -> Result<VideoEndpoints, MediaError> {
-        let plan = self.plan_video()?;
-        let sink = match self.decoder_sender() {
-            Some(sink) => sink,
-            None => {
-                let decoder = plan.open_decoder()?;
-                self.attach_decoder(decoder)
-            }
-        };
-        let source = if camera {
-            self.attach_camera(plan.open_camera()?)
-        } else {
-            async_channel::bounded(1).1
-        };
-        Ok(VideoEndpoints { source, sink })
-    }
-
     /// Releases the camera so its light goes out.
     pub fn stop_camera(&mut self) {
         *lock(&self.camera_pipeline) = None;
         self.camera = None;
         self.slots.clear_local();
-    }
-
-    pub fn camera_running(&self) -> bool {
-        self.camera.is_some()
     }
 }
 

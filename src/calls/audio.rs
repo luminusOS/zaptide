@@ -4,10 +4,10 @@ use gst::prelude::*;
 use gstreamer as gst;
 use gstreamer_app as gst_app;
 
-use super::{Fault, FaultHandler, MediaError, watch};
+use super::{Fault, FaultHandler, MediaError, pipeline_from, watch};
 
 /// Samples in one 60 ms frame at 16 kHz.
-pub const FRAME_SAMPLES: usize = 960;
+const FRAME_SAMPLES: usize = 960;
 const FRAMES_QUEUED: usize = 8;
 
 /// Cuts a byte stream of little-endian 16-bit samples into whole frames.
@@ -37,14 +37,6 @@ impl Framer {
             emit(std::mem::replace(&mut self.pending, rest));
         }
     }
-}
-
-fn pipeline_from(description: &str) -> Result<gst::Pipeline, MediaError> {
-    gst::init().map_err(|error| MediaError::Unavailable(error.to_string()))?;
-    gst::parse::launch(description)
-        .map_err(|error| MediaError::Unavailable(error.to_string()))?
-        .downcast::<gst::Pipeline>()
-        .map_err(|_| MediaError::Unavailable("not a pipeline".to_owned()))
 }
 
 fn settle(pipeline: &gst::Pipeline, missing: MediaError) -> Result<(), MediaError> {
@@ -165,7 +157,7 @@ impl Playout {
                     }
                 }
             })
-            .map_err(|error| MediaError::Unavailable(error.to_string()))?;
+            .map_err(|_| MediaError::Unavailable)?;
         Ok(Self { pipeline, frames })
     }
 

@@ -8,7 +8,7 @@ use gstreamer_video as gst_video;
 use gstreamer_video::prelude::*;
 use whatsapp_rust::voip::VideoFrame;
 
-use super::{Fault, FaultHandler, MediaError, RgbaFrame, VideoSlots, watch};
+use super::{Fault, FaultHandler, MediaError, RgbaFrame, VideoSlots, pipeline_from, watch};
 
 /// The outgoing picture is 15 frames per second, the cadence the VoIP runtime
 /// assumes for a plain channel source.
@@ -68,19 +68,11 @@ pub fn decoder_available() -> bool {
         && has_element("h264parse")
 }
 
-fn pipeline_from(description: &str) -> Result<gst::Pipeline, MediaError> {
-    gst::init().map_err(|error| MediaError::Unavailable(error.to_string()))?;
-    gst::parse::launch(description)
-        .map_err(|error| MediaError::Unavailable(error.to_string()))?
-        .downcast::<gst::Pipeline>()
-        .map_err(|_| MediaError::Unavailable("not a pipeline".to_owned()))
-}
-
 fn app_sink(pipeline: &gst::Pipeline, name: &str) -> Result<gst_app::AppSink, MediaError> {
     pipeline
         .by_name(name)
         .and_then(|element| element.downcast::<gst_app::AppSink>().ok())
-        .ok_or_else(|| MediaError::Unavailable(format!("missing {name}")))
+        .ok_or(MediaError::Unavailable)
 }
 
 fn rgba_of(sample: &gst::Sample) -> Option<RgbaFrame> {
@@ -243,7 +235,7 @@ impl RemoteDecoder {
                     }
                 }
             })
-            .map_err(|error| MediaError::Unavailable(error.to_string()))?;
+            .map_err(|_| MediaError::Unavailable)?;
         Ok(Self { pipeline, frames })
     }
 
