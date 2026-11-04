@@ -1274,6 +1274,7 @@ pub(super) fn show_starred_dialog(
             .icon_name("starred-symbolic")
             .title(gettext("No Starred Messages"))
             .description(gettext("Star a message from its menu to find it here."))
+            .css_classes(["zaptide-starred-empty"])
             .vexpand(true)
             .build()
             .upcast()
@@ -1293,13 +1294,18 @@ pub(super) fn show_starred_dialog(
                 .subtitle_lines(2)
                 .activatable(true)
                 .build();
-            row.add_suffix(
+            let when = gtk::Box::builder()
+                .spacing(4)
+                .valign(gtk::Align::Center)
+                .build();
+            when.append(&decorative_star(STAR_ICON_SIZE));
+            when.append(
                 &gtk::Label::builder()
                     .label(&entry.when)
-                    .valign(gtk::Align::Center)
                     .css_classes(["caption", "dim-label"])
                     .build(),
             );
+            row.add_suffix(&when);
             let (on_action, dialog, chat, id) =
                 (on_action.clone(), dialog.clone(), entry.chat, entry.id);
             row.connect_activated(move |_| {
@@ -1317,8 +1323,20 @@ pub(super) fn show_starred_dialog(
             .build()
             .upcast()
     };
+    let heading = gtk::Box::builder()
+        .spacing(6)
+        .halign(gtk::Align::Center)
+        .build();
+    heading.append(&decorative_star(-1));
+    heading.append(
+        &gtk::Label::builder()
+            .label(gettext("Starred Messages"))
+            .css_classes(["title"])
+            .build(),
+    );
+    let header = adw::HeaderBar::builder().title_widget(&heading).build();
     let toolbar = adw::ToolbarView::new();
-    toolbar.add_top_bar(&adw::HeaderBar::new());
+    toolbar.add_top_bar(&header);
     toolbar.set_content(Some(&content));
     dialog.set_child(Some(&toolbar));
     dialog.present(Some(parent));

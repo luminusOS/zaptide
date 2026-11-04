@@ -637,6 +637,140 @@ fn clipboard_texture_channels_become_straight_alpha_rgba() {
     assert_eq!(&pixels[4..], &[0, 0, 0, 0]);
 }
 
+#[test]
+fn footer_notes_name_forwarded_and_edited_messages_only() {
+    let mut message = grouping_message("m", "ana", false, 0);
+    assert_eq!(footer_notes(&message), "");
+    message.forwarded = true;
+    assert_eq!(footer_notes(&message), "Forwarded ·");
+    message.edited = true;
+    assert_eq!(footer_notes(&message), "Forwarded · Edited ·");
+    message.forwarded = false;
+    assert_eq!(footer_notes(&message), "Edited ·");
+}
+
+fn star_of(row: &gtk::Box) -> gtk::Image {
+    let mut child = row.first_child();
+    while let Some(widget) = child {
+        if let Ok(image) = widget.clone().downcast::<gtk::Image>() {
+            return image;
+        }
+        child = widget.next_sibling();
+    }
+    panic!("footer has no star");
+}
+
+fn plain_row(message: crate::model::Message, starred: bool) -> MessageRow<()> {
+    MessageRow {
+        id: message.id.clone(),
+        separator: String::new(),
+        unread_divider: false,
+        sender: "ana".into(),
+        sender_class: "zaptide-sender-blue",
+        avatar: None,
+        quote: String::new(),
+        body: String::new(),
+        mentions: Vec::new(),
+        notes: String::new(),
+        clock: "11:13".into(),
+        starred,
+        accessible_label: String::new(),
+        show_sender: true,
+        show_timestamp: true,
+        pointer_sender: (),
+        message,
+        album: Vec::new(),
+        collapsed: false,
+        audio: None,
+        audio_registry: Default::default(),
+        selected: None,
+    }
+}
+
+#[test]
+fn a_row_redraws_when_only_its_star_changes() {
+    let plain = plain_row(grouping_message("a", "ana", false, 0), false);
+    let starred = plain_row(grouping_message("a", "ana", false, 0), true);
+    assert!(plain.renders_like(&plain_row(grouping_message("a", "ana", false, 0), false)));
+    assert!(!plain.renders_like(&starred));
+    assert!(!starred.renders_like(&plain));
+}
+
+#[test]
+fn starring_one_message_rebinds_only_its_row() {
+    let before = [
+        plain_row(grouping_message("a", "ana", false, 0), false),
+        plain_row(grouping_message("b", "ana", false, 1), false),
+        plain_row(grouping_message("c", "ana", false, 2), false),
+    ];
+    let after = [
+        plain_row(grouping_message("a", "ana", false, 0), false),
+        plain_row(grouping_message("b", "ana", false, 1), true),
+        plain_row(grouping_message("c", "ana", false, 2), false),
+    ];
+    let span = changed_span(before.len(), &after, |position, row| {
+        before[position].renders_like(row)
+    });
+    assert_eq!(span, (1, 1, 1));
+    let unchanged = changed_span(before.len(), &before, |position, row| {
+        before[position].renders_like(row)
+    });
+    assert_eq!(unchanged, (3, 0, 0));
+}
+
+#[test]
+fn accessible_label_announces_the_star_before_the_delivery_state() {
+    assert_eq!(
+        accessible_label("", "Ana", "hi", "11:13", None, " · Read"),
+        "Ana: hi · 11:13 · Read"
+    );
+    assert_eq!(
+        accessible_label("", "Ana", "hi", "11:13", Some("Starred"), " · Read"),
+        "Ana: hi · 11:13 · Starred · Read"
+    );
+}
+
+#[test]
+fn only_a_star_the_user_just_added_is_confirmed_with_a_toast() {
+    assert!(stars::confirms_starring(true, true, true));
+    assert!(
+        !stars::confirms_starring(true, true, false),
+        "synced from the phone"
+    );
+    assert!(!stars::confirms_starring(true, false, true), "unstarring");
+    assert!(
+        !stars::confirms_starring(false, true, true),
+        "already starred"
+    );
+}
+
+/// Run under a display: `cargo test starred_indicator -- --ignored`.
+#[test]
+#[ignore = "needs a display"]
+fn starred_indicator_sits_before_the_time_and_follows_the_star() {
+    gtk::init().expect("display");
+    let footer = FooterLabels::new();
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    footer.append_to(&row);
+    let star = star_of(&row);
+
+    footer.set("", "11:13", false);
+    assert!(!star.is_visible());
+    footer.set("", "11:13", true);
+    assert!(star.is_visible());
+    assert_eq!(star.icon_name().as_deref(), Some("starred-symbolic"));
+    assert_eq!(star.tooltip_text().as_deref(), Some("Starred"));
+    assert_eq!(
+        star.next_sibling()
+            .and_downcast::<gtk::Label>()
+            .map(|clock| clock.label().to_string())
+            .as_deref(),
+        Some("11:13")
+    );
+    footer.set("Edited ·", "11:13", false);
+    assert!(!star.is_visible());
+}
+
 /// Appends a row to a real list view and samples its opacity frame by frame.
 /// Run under a display: `xvfb-run -a cargo test arriving_row -- --ignored --nocapture`.
 #[test]

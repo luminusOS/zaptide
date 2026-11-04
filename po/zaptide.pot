@@ -454,6 +454,14 @@ msgstr ""
 msgid "Star a message from its menu to find it here."
 msgstr ""
 
+#: src/application/bubbles.rs
+msgid "Starred"
+msgstr ""
+
+#: src/application/stars.rs
+msgid "Message starred"
+msgstr ""
+
 #: src/application/stars.rs
 msgid "You"
 msgstr ""

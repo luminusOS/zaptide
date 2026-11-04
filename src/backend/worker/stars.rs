@@ -20,6 +20,7 @@ impl Worker {
                 chat: chat.clone(),
                 id: id.clone(),
                 starred,
+                local: true,
             });
         }
         // The phone names the sender of a group message from someone else;

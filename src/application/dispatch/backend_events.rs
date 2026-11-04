@@ -73,9 +73,17 @@ pub(super) fn drain_and_convert(
                 events.push(NativeEvent::LinkPreviewsChanged(enabled))
             }
             Event::Info(message) => events.push(NativeEvent::Info(message)),
-            Event::StarChanged { chat, id, starred } => {
-                events.push(NativeEvent::StarChanged { chat, id, starred })
-            }
+            Event::StarChanged {
+                chat,
+                id,
+                starred,
+                local,
+            } => events.push(NativeEvent::StarChanged {
+                chat,
+                id,
+                starred,
+                local,
+            }),
             Event::StarredIds { chat, ids } => events.push(NativeEvent::StarredIds { chat, ids }),
             Event::StarredList(list) => events.push(NativeEvent::StarredList(list)),
             Event::MessageDeleted { chat, id } => {
@@ -266,7 +274,12 @@ pub(super) fn handle_backend_ready(
                 message,
                 result,
             } => app.media_completed(&chat, &message, result),
-            NativeEvent::StarChanged { chat, id, starred } => app.star_changed(&chat, id, starred),
+            NativeEvent::StarChanged {
+                chat,
+                id,
+                starred,
+                local,
+            } => app.star_changed(&chat, id, starred, local),
             NativeEvent::StarredIds { chat, ids } => app.starred_ids_loaded(&chat, ids),
             NativeEvent::StarredList(list) => app.starred_list_loaded(list, &sender),
             NativeEvent::MessageDeleted { chat, id } => app.message_deleted(&chat, &id),

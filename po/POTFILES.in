@@ -15,6 +15,7 @@ src/application/profile_dialog.rs
 src/application/rows.rs
 src/application.rs
 src/application/sidebar.rs
+src/application/stars.rs
 src/application/transcript_view.rs
 src/native_emoji.rs
 src/native_media_widgets/audio.rs

@@ -49,6 +49,95 @@ pub(super) fn set_delivery_ticks(area: &gtk::DrawingArea, glyph: &str) {
     area.queue_draw();
 }
 
+/// The marks that precede the time in a bubble's footer, each followed by a
+/// separator, or nothing for a plain message.
+pub(super) fn footer_notes(message: &crate::model::Message) -> String {
+    let mut notes = Vec::new();
+    if message.forwarded {
+        notes.push("Forwarded");
+    }
+    if message.edited {
+        notes.push("Edited");
+    }
+    if notes.is_empty() {
+        String::new()
+    } else {
+        format!("{} ·", notes.join(" · "))
+    }
+}
+
+pub(super) const STAR_ICON_SIZE: i32 = 13;
+
+/// A grey star that only decorates: its row or heading already says what it is.
+pub(super) fn decorative_star(size: i32) -> gtk::Image {
+    gtk::Image::builder()
+        .icon_name("starred-symbolic")
+        .pixel_size(size)
+        .accessible_role(gtk::AccessibleRole::Presentation)
+        .css_classes(["zaptide-starred-indicator"])
+        .build()
+}
+
+/// What a screen reader announces for a bubble: the content, then the time,
+/// the starred mark when there is one, and the delivery state.
+pub(super) fn accessible_label(
+    prefix: &str,
+    sender: &str,
+    content: &str,
+    clock: &str,
+    starred: Option<&str>,
+    delivery: &str,
+) -> String {
+    let starred = starred.map_or_else(String::new, |words| format!(" · {words}"));
+    format!("{prefix}{sender}: {content} · {clock}{starred}{delivery}")
+}
+
+/// The text and star in front of a bubble's delivery mark: marks such as
+/// "Forwarded", the starred indicator, then the time.
+pub(super) struct FooterLabels {
+    notes: gtk::Label,
+    star: gtk::Image,
+    clock: gtk::Label,
+}
+
+impl FooterLabels {
+    pub(super) fn new() -> Self {
+        let notes = gtk::Label::builder()
+            .xalign(1.0)
+            .wrap(true)
+            .max_width_chars(52)
+            .css_classes(["dim-label", "caption"])
+            .build();
+        let star = gtk::Image::builder()
+            .icon_name("starred-symbolic")
+            .pixel_size(STAR_ICON_SIZE)
+            .visible(false)
+            .tooltip_text(gettext("Starred"))
+            .css_classes(["zaptide-starred-indicator"])
+            .build();
+        star.update_property(&[gtk::accessible::Property::Label(&gettext("Starred"))]);
+        let clock = gtk::Label::builder()
+            .xalign(1.0)
+            .css_classes(["dim-label", "caption"])
+            .build();
+        Self { notes, star, clock }
+    }
+
+    pub(super) fn append_to(&self, row: &gtk::Box) {
+        row.append(&self.notes);
+        row.append(&self.star);
+        row.append(&self.clock);
+    }
+
+    pub(super) fn set(&self, notes: &str, clock: &str, starred: bool) {
+        self.notes.set_label(notes);
+        self.notes.set_visible(!notes.is_empty());
+        self.star.set_visible(starred);
+        self.clock.set_label(clock);
+        self.clock.set_visible(!clock.is_empty());
+    }
+}
+
 /// How a message sits among its neighbours and what marks it.
 pub(super) struct RowFlags {
     pub show_sender: bool,
@@ -114,21 +203,11 @@ pub(super) fn message_row(
         .unwrap_or_default();
     let clock = crate::util::clock(message.timestamp);
     let delivery = delivery_label(message.status);
-    let mut footer = Vec::new();
-    if message.forwarded {
-        footer.push("Forwarded".to_owned());
-    }
-    if message.edited {
-        footer.push("Edited".to_owned());
-    }
-    if starred {
-        footer.push("★".to_owned());
-    }
+    let notes = footer_notes(&message);
     let reactions = reaction_summary(&message.reactions);
-    footer.push(clock.clone());
     let mentions = mention_labels(&message, contacts);
-    let accessible_label = format!(
-        "{prefix}{sender}: {}{}{} · {clock}{delivery}",
+    let content = format!(
+        "{}{}{}",
         crate::safety::display_mentions(&transcript_text(&message), &mentions),
         if quote.is_empty() {
             String::new()
@@ -136,6 +215,14 @@ pub(super) fn message_row(
             format!("\n↪ {quote}")
         },
         reactions,
+    );
+    let accessible_label = accessible_label(
+        prefix,
+        &sender,
+        &content,
+        &clock,
+        starred.then(|| gettext("Starred")).as_deref(),
+        delivery,
     );
     MessageRow {
         id: message.id.clone(),
@@ -148,7 +235,9 @@ pub(super) fn message_row(
         quote,
         body,
         mentions,
-        footer: footer.join(" · "),
+        notes,
+        clock,
+        starred,
         accessible_label,
         show_sender,
         show_timestamp,

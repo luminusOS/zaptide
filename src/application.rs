@@ -236,6 +236,7 @@ enum NativeEvent {
         chat: String,
         id: String,
         starred: bool,
+        local: bool,
     },
     StarredIds {
         chat: String,
@@ -307,7 +308,9 @@ impl PendingSend {
     }
 }
 
-struct MessageRow {
+/// Generic over the sender only so tests can build rows without a running
+/// component.
+struct MessageRow<S = ComponentSender<NativeApplication>> {
     id: String,
     /// Day and unread separators shown above the row.
     separator: String,
@@ -321,11 +324,14 @@ struct MessageRow {
     body: String,
     /// People mentioned in `body`, shown by name.
     mentions: Vec<crate::safety::MentionLabel>,
-    footer: String,
+    /// Marks such as "Forwarded" shown before the time.
+    notes: String,
+    clock: String,
+    starred: bool,
     accessible_label: String,
     show_sender: bool,
     show_timestamp: bool,
-    pointer_sender: ComponentSender<NativeApplication>,
+    pointer_sender: S,
     message: crate::model::Message,
     /// Photos sent together, drawn as one grid by the first of them. Empty
     /// for any other row.
@@ -338,10 +344,11 @@ struct MessageRow {
     selected: Option<bool>,
 }
 
-impl MessageRow {
+impl<S> MessageRow<S> {
     /// Whether rebinding `other` would draw exactly this row.
     fn renders_like(&self, other: &Self) -> bool {
         self.message == other.message
+            && self.starred == other.starred
             && self.album == other.album
             && self.collapsed == other.collapsed
             && self.audio == other.audio
@@ -355,21 +362,21 @@ impl MessageRow {
     }
 }
 
-impl PartialEq for MessageRow {
+impl<S> PartialEq for MessageRow<S> {
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
     }
 }
 
-impl Eq for MessageRow {}
+impl<S> Eq for MessageRow<S> {}
 
-impl PartialOrd for MessageRow {
+impl<S> PartialOrd for MessageRow<S> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for MessageRow {
+impl<S> Ord for MessageRow<S> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.id.cmp(&other.id)
     }
@@ -2717,10 +2724,14 @@ impl NativeApplication {
     }
 
     fn toast(&self, text: &str) {
+        self.add_toast(adw::Toast::builder().title(text).use_markup(false).build());
+    }
+
+    fn add_toast(&self, toast: adw::Toast) {
         if let Some(child) = gtk::prelude::GtkWindowExt::child(&self.window)
             && let Ok(overlay) = child.downcast::<adw::ToastOverlay>()
         {
-            overlay.add_toast(adw::Toast::builder().title(text).use_markup(false).build());
+            overlay.add_toast(toast);
         }
     }
 }

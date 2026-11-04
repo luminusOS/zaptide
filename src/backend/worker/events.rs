@@ -227,6 +227,7 @@ impl Worker {
                         chat,
                         id: update.message_id.clone(),
                         starred,
+                        local: false,
                     });
                 }
             }

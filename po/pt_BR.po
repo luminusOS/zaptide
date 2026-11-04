@@ -460,6 +460,14 @@ msgstr "Nenhuma mensagem favorita"
 msgid "Star a message from its menu to find it here."
 msgstr "Favorite uma mensagem pelo menu dela para encontrá-la aqui."
 
+#: src/application/bubbles.rs
+msgid "Starred"
+msgstr "Favorita"
+
+#: src/application/stars.rs
+msgid "Message starred"
+msgstr "Mensagem favoritada"
+
 #: src/application/stars.rs
 msgid "You"
 msgstr "Você"
