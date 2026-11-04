@@ -1,0 +1,1711 @@
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
+
+use super::{
+    photo::{decode_photo, show_in_folder},
+    video_stream::VideoStream,
+    *,
+};
+use crate::i18n::gettext;
+
+const AVATAR_SIZE: i32 = 28;
+const UNLIMITED_DIALOG_SIZE: i32 = 10_000;
+const MIN_VIEWER: (i32, i32) = (320, 240);
+const NARROW_VIEWER: &str = "max-width: 480px";
+/// Largest side the viewer decodes for fitting to the window; a bigger photo
+/// is decoded at its real size only for 100% zoom and for copying.
+const FIT_EDGE: u32 = 3840;
+const SEEK_STEP: f64 = 5_000_000.0;
+const SEEK_PAGE: f64 = 10_000_000.0;
+
+/// Who sent a photo or video, when, its caption, and a one-line summary of
+/// the file, for the viewer.
+#[derive(Clone)]
+pub(super) struct ViewerDetails {
+    title: String,
+    subtitle: String,
+    caption: Option<String>,
+    thumbnail: Option<Vec<u8>>,
+    metadata: String,
+    dimensions: Option<(u32, u32)>,
+}
+
+impl ViewerDetails {
+    pub(super) fn of(message: &Message) -> Self {
+        let title = if message.from_me {
+            gettext("You")
+        } else {
+            message
+                .sender_name
+                .clone()
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| {
+                    crate::model::phone_of(&message.sender)
+                        .map(crate::util::phone)
+                        .unwrap_or_default()
+                })
+        };
+        let (caption, metadata, dimensions) = match &message.content {
+            Content::Image { caption, media } => (
+                caption.clone(),
+                metadata_line(&media.mime, media.width, media.height, None, media.size),
+                media.width.zip(media.height),
+            ),
+            Content::Video {
+                caption,
+                media,
+                seconds,
+                ..
+            } => (
+                caption.clone(),
+                metadata_line(&media.mime, media.width, media.height, *seconds, media.size),
+                None,
+            ),
+            _ => (None, String::new(), None),
+        };
+        Self {
+            title,
+            subtitle: crate::util::clock(message.timestamp),
+            caption: caption.filter(|caption| !caption.is_empty()),
+            thumbnail: message.thumbnail.clone(),
+            metadata,
+            dimensions,
+        }
+    }
+
+    fn exceeds_fit_edge(&self) -> bool {
+        self.dimensions
+            .is_some_and(|(width, height)| exceeds_fit_edge(width, height))
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct PhotoItem {
+    pub(super) path: std::path::PathBuf,
+    pub(super) details: ViewerDetails,
+}
+
+fn format_name(mime: &str) -> Option<String> {
+    let subtype = mime.split_once('/')?.1;
+    let subtype = subtype.split([';', '+']).next()?.trim();
+    let subtype = subtype.strip_prefix("x-").unwrap_or(subtype);
+    let name = match subtype {
+        "" => return None,
+        "quicktime" => "MOV",
+        "matroska" => "MKV",
+        other => return Some(other.to_ascii_uppercase()),
+    };
+    Some(name.to_owned())
+}
+
+fn dimensions_text(width: Option<u32>, height: Option<u32>) -> Option<String> {
+    match (width, height) {
+        (Some(width), Some(height)) if width > 0 && height > 0 => {
+            Some(format!("{width} × {height}"))
+        }
+        _ => None,
+    }
+}
+
+fn file_size_text(size: u64) -> Option<String> {
+    const UNITS: [&str; 3] = ["KB", "MB", "GB"];
+    if size == 0 {
+        return None;
+    }
+    if size < 1024 {
+        return Some(format!("{size} B"));
+    }
+    let mut value = size as f64 / 1024.0;
+    let mut unit = 0;
+    loop {
+        let precision = usize::from(unit > 0);
+        let rounded = format!("{value:.precision$}");
+        let overflows = rounded
+            .parse::<f64>()
+            .is_ok_and(|rounded| rounded >= 1024.0);
+        if !overflows || unit + 1 == UNITS.len() {
+            return Some(format!("{rounded} {}", UNITS[unit]));
+        }
+        value /= 1024.0;
+        unit += 1;
+    }
+}
+
+fn metadata_line(
+    mime: &str,
+    width: Option<u32>,
+    height: Option<u32>,
+    seconds: Option<u32>,
+    size: u64,
+) -> String {
+    [
+        format_name(mime),
+        dimensions_text(width, height),
+        seconds.map(crate::util::duration),
+        file_size_text(size),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" · ")
+}
+
+fn of_text(current: &str, total: &str) -> String {
+    gettext("{current} of {total}")
+        .replace("{current}", current)
+        .replace("{total}", total)
+}
+
+fn counter_text(index: usize, total: usize) -> Option<String> {
+    (total > 1).then(|| of_text(&(index + 1).to_string(), &total.to_string()))
+}
+
+fn exceeds_fit_edge(width: u32, height: u32) -> bool {
+    width > FIT_EDGE || height > FIT_EDGE
+}
+
+fn step_target(current: usize, delta: isize, len: usize) -> Option<usize> {
+    let target = current.checked_add_signed(delta)?;
+    (delta != 0 && target < len && target != current).then_some(target)
+}
+
+fn key_step(key: gdk::Key, state: gdk::ModifierType, rtl: bool) -> Option<isize> {
+    let held = gdk::ModifierType::SHIFT_MASK
+        | gdk::ModifierType::CONTROL_MASK
+        | gdk::ModifierType::ALT_MASK
+        | gdk::ModifierType::SUPER_MASK
+        | gdk::ModifierType::META_MASK;
+    if state.intersects(held) {
+        return None;
+    }
+    let delta = match key {
+        gdk::Key::Left => -1,
+        gdk::Key::Right => 1,
+        _ => return None,
+    };
+    Some(if rtl { -delta } else { delta })
+}
+
+fn seek_target(value: f64, duration: i64) -> i64 {
+    (value.max(0.0) as i64).min(duration.max(0))
+}
+
+fn photo_label(name: &str) -> String {
+    gettext("Photo from {name}").replace("{name}", name)
+}
+
+fn video_label(name: &str) -> String {
+    gettext("Video from {name}").replace("{name}", name)
+}
+
+fn clock_text(micros: i64) -> String {
+    crate::util::duration(u32::try_from(micros.max(0) / 1_000_000).unwrap_or(u32::MAX))
+}
+
+fn volume_icon(volume: f64, muted: bool) -> &'static str {
+    if muted || volume <= 0.0 {
+        "audio-volume-muted-symbolic"
+    } else if volume < 0.34 {
+        "audio-volume-low-symbolic"
+    } else if volume < 0.67 {
+        "audio-volume-medium-symbolic"
+    } else {
+        "audio-volume-high-symbolic"
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum Zoom {
+    #[default]
+    Fit,
+    Actual,
+}
+
+impl Zoom {
+    fn label(self) -> String {
+        match self {
+            Self::Fit => gettext("Fit"),
+            Self::Actual => "100%".to_owned(),
+        }
+    }
+
+    fn toggled(self) -> Self {
+        match self {
+            Self::Fit => Self::Actual,
+            Self::Actual => Self::Fit,
+        }
+    }
+}
+
+fn header_button(icon: &str, label: &str) -> gtk::Button {
+    let button = gtk::Button::builder()
+        .icon_name(icon)
+        .tooltip_text(label)
+        .valign(gtk::Align::Center)
+        .css_classes(["flat"])
+        .build();
+    button.update_property(&[gtk::accessible::Property::Label(label)]);
+    button
+}
+
+#[derive(Clone)]
+struct ZoomPill {
+    root: gtk::Box,
+    shrink: gtk::Button,
+    level: gtk::Button,
+    grow: gtk::Button,
+}
+
+struct ZoomPillWeak {
+    shrink: glib::WeakRef<gtk::Button>,
+    level: glib::WeakRef<gtk::Button>,
+    grow: glib::WeakRef<gtk::Button>,
+}
+
+impl ZoomPill {
+    fn new() -> Self {
+        let shrink = header_button("zoom-out-symbolic", &gettext("Zoom Out"));
+        let grow = header_button("zoom-in-symbolic", &gettext("Zoom In"));
+        let level = gtk::Button::builder()
+            .valign(gtk::Align::Center)
+            .css_classes(["flat", "numeric"])
+            .build();
+        let root = gtk::Box::builder()
+            .valign(gtk::Align::Center)
+            .css_classes(["zaptide-viewer-zoom"])
+            .build();
+        root.append(&shrink);
+        root.append(&level);
+        root.append(&grow);
+        let pill = Self {
+            root,
+            shrink,
+            level,
+            grow,
+        };
+        pill.downgrade().show(Zoom::Fit, false);
+        pill
+    }
+
+    fn downgrade(&self) -> ZoomPillWeak {
+        ZoomPillWeak {
+            shrink: self.shrink.downgrade(),
+            level: self.level.downgrade(),
+            grow: self.grow.downgrade(),
+        }
+    }
+
+    fn connect(&self, photo: &Rc<PhotoState>) {
+        self.shrink.connect_clicked({
+            let photo = photo.clone();
+            move |_| photo.request(Zoom::Fit)
+        });
+        self.grow.connect_clicked({
+            let photo = photo.clone();
+            move |_| photo.request(Zoom::Actual)
+        });
+        self.level.connect_clicked({
+            let photo = photo.clone();
+            move |_| photo.request(photo.zoom.get().toggled())
+        });
+    }
+}
+
+impl ZoomPillWeak {
+    fn show(&self, zoom: Zoom, ready: bool) {
+        if let (Some(shrink), Some(level), Some(grow)) = (
+            self.shrink.upgrade(),
+            self.level.upgrade(),
+            self.grow.upgrade(),
+        ) {
+            let label = zoom.label();
+            level.set_label(&label);
+            level.set_tooltip_text(Some(&label));
+            level.update_property(&[gtk::accessible::Property::Label(&label)]);
+            level.set_sensitive(ready);
+            shrink.set_sensitive(ready && zoom == Zoom::Actual);
+            grow.set_sensitive(ready && zoom == Zoom::Fit);
+        }
+    }
+}
+
+#[derive(Clone)]
+struct ViewerParts {
+    dialog: glib::WeakRef<adw::Dialog>,
+    avatar: adw::Avatar,
+    name: gtk::Label,
+    time: gtk::Label,
+    counter: gtk::Label,
+    caption: gtk::Label,
+    metadata: gtk::Label,
+}
+
+impl ViewerParts {
+    fn show(&self, details: &ViewerDetails, position: Option<(usize, usize)>) {
+        if let Some(dialog) = self.dialog.upgrade() {
+            dialog.set_title(&details.title);
+        }
+        self.avatar.set_text(Some(&details.title));
+        self.name.set_label(&details.title);
+        self.time.set_label(&details.subtitle);
+        let counter = position.and_then(|(index, total)| counter_text(index, total));
+        self.counter.set_visible(counter.is_some());
+        self.counter
+            .set_label(counter.as_deref().unwrap_or_default());
+        self.caption
+            .set_label(details.caption.as_deref().unwrap_or_default());
+        self.metadata.set_label(&details.metadata);
+    }
+}
+
+struct Viewer {
+    dialog: adw::Dialog,
+    view: adw::ToolbarView,
+    parts: ViewerParts,
+}
+
+fn viewer_size(parent: &impl IsA<gtk::Widget>) -> (i32, i32) {
+    let (width, height) = parent
+        .as_ref()
+        .root()
+        .map_or((900, 700), |root| (root.width(), root.height()));
+    ((width * 9 / 10).max(360), (height * 9 / 10).max(360))
+}
+
+fn label_with(classes: &[&str]) -> gtk::Label {
+    let label = gtk::Label::builder().valign(gtk::Align::Center).build();
+    label.set_css_classes(classes);
+    label
+}
+
+/// A dark, near-full-window dialog around `content`: the sender, an optional
+/// zoom pill and the `actions` (left to right, before a close button) in a
+/// 56 px header, and the caption with the file summary in a bar below. Below
+/// 480 px the time and the counter give way so the header still fits.
+fn media_viewer(
+    parent: &impl IsA<gtk::Widget>,
+    details: &ViewerDetails,
+    content: &impl IsA<gtk::Widget>,
+    zoom: Option<&ZoomPill>,
+    actions: &[gtk::Widget],
+) -> Viewer {
+    let (width, height) = viewer_size(parent);
+    let dialog = adw::Dialog::builder()
+        .title(&details.title)
+        .content_width(width)
+        .content_height(height)
+        .width_request(MIN_VIEWER.0)
+        .height_request(MIN_VIEWER.1)
+        .build();
+
+    let avatar = adw::Avatar::new(AVATAR_SIZE, Some(&details.title), true);
+    avatar.set_valign(gtk::Align::Center);
+    let name = label_with(&["heading", "zaptide-viewer-name"]);
+    name.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    name.set_max_width_chars(24);
+    let time = label_with(&["caption", "dim-label", "zaptide-viewer-time"]);
+    let identity = gtk::Box::builder().spacing(8).margin_start(6).build();
+    identity.append(&avatar);
+    identity.append(&name);
+    identity.append(&time);
+
+    let counter = label_with(&["caption", "zaptide-viewer-pill"]);
+    let counter_slot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    counter_slot.append(&counter);
+    let centre = gtk::Box::builder()
+        .spacing(8)
+        .halign(gtk::Align::Center)
+        .build();
+    centre.append(&counter_slot);
+    if let Some(zoom) = zoom {
+        centre.append(&zoom.root);
+    }
+
+    let header = adw::HeaderBar::builder()
+        .show_start_title_buttons(false)
+        .show_end_title_buttons(false)
+        .title_widget(&centre)
+        .build();
+    header.pack_start(&identity);
+    let close = header_button("window-close-symbolic", &gettext("Close"));
+    close.set_margin_end(6);
+    close.connect_clicked({
+        let dialog = dialog.downgrade();
+        move |_| {
+            if let Some(dialog) = dialog.upgrade() {
+                dialog.close();
+            }
+        }
+    });
+    header.pack_end(&close);
+    for action in actions.iter().rev() {
+        header.pack_end(action);
+    }
+
+    if let Ok(condition) = adw::BreakpointCondition::parse(NARROW_VIEWER) {
+        let narrow = adw::Breakpoint::new(condition);
+        let hidden = false.to_value();
+        narrow.add_setter(&time, "visible", Some(&hidden));
+        narrow.add_setter(&counter_slot, "visible", Some(&hidden));
+        dialog.add_breakpoint(narrow);
+    }
+
+    let caption = gtk::Label::builder()
+        .hexpand(true)
+        .xalign(0.0)
+        .valign(gtk::Align::Center)
+        .wrap(true)
+        .wrap_mode(gtk::pango::WrapMode::WordChar)
+        .ellipsize(gtk::pango::EllipsizeMode::End)
+        .lines(2)
+        .selectable(true)
+        .build();
+    let metadata = label_with(&["caption", "dim-label", "numeric", "zaptide-viewer-metadata"]);
+    metadata.set_halign(gtk::Align::End);
+    let bar = gtk::Box::builder()
+        .spacing(16)
+        .css_classes(["zaptide-viewer-caption"])
+        .build();
+    bar.append(&caption);
+    bar.append(&metadata);
+
+    let view = adw::ToolbarView::builder()
+        .content(content)
+        .top_bar_style(adw::ToolbarStyle::Flat)
+        .bottom_bar_style(adw::ToolbarStyle::Flat)
+        .css_classes(["zaptide-viewer"])
+        .build();
+    view.add_top_bar(&header);
+    view.add_bottom_bar(&bar);
+    dialog.set_child(Some(&view));
+
+    let parts = ViewerParts {
+        dialog: dialog.downgrade(),
+        avatar,
+        name,
+        time,
+        counter,
+        caption,
+        metadata,
+    };
+    parts.show(details, None);
+    Viewer {
+        dialog,
+        view,
+        parts,
+    }
+}
+
+fn step_button(icon: &str, tooltip: &str, side: gtk::Align) -> gtk::Button {
+    let button = gtk::Button::builder()
+        .icon_name(icon)
+        .tooltip_text(tooltip)
+        .halign(side)
+        .valign(gtk::Align::Center)
+        .margin_start(12)
+        .margin_end(12)
+        .css_classes(["circular", "zaptide-viewer-nav"])
+        .build();
+    button.update_property(&[gtk::accessible::Property::Label(tooltip)]);
+    button
+}
+
+/// What the photo viewer is showing. Widgets that own a handler for it are
+/// held weakly, so it never keeps the dialog alive.
+struct PhotoState {
+    items: Rc<Vec<PhotoItem>>,
+    current: Cell<usize>,
+    picture: gtk::Picture,
+    scroller: glib::WeakRef<gtk::ScrolledWindow>,
+    pill: ZoomPillWeak,
+    copy: glib::WeakRef<gtk::Button>,
+    previous: glib::WeakRef<gtk::Button>,
+    next: glib::WeakRef<gtk::Button>,
+    parts: ViewerParts,
+    zoom: Cell<Zoom>,
+    /// The fitted photo has loaded: zoom and copy wait for it, so neither
+    /// acts on the sender's tiny thumbnail.
+    ready: Cell<bool>,
+    /// `texture` holds the photo at its real size.
+    native: Cell<bool>,
+    texture: RefCell<Option<gdk::Texture>>,
+    token: DecodeToken,
+}
+
+impl PhotoState {
+    fn item(&self) -> &PhotoItem {
+        &self.items[self.current.get()]
+    }
+
+    fn sync_controls(&self) {
+        let ready = self.ready.get();
+        self.pill.show(self.zoom.get(), ready);
+        if let Some(copy) = self.copy.upgrade() {
+            copy.set_sensitive(ready);
+        }
+    }
+
+    fn apply(&self, level: Zoom) {
+        self.zoom.set(level);
+        self.sync_controls();
+        let actual = level == Zoom::Actual;
+        self.picture.set_can_shrink(!actual);
+        if let Some(scroller) = self.scroller.upgrade() {
+            let policy = if actual {
+                gtk::PolicyType::Automatic
+            } else {
+                gtk::PolicyType::Never
+            };
+            scroller.set_policy(policy, policy);
+        }
+    }
+
+    fn show(self: &Rc<Self>, index: usize) {
+        self.current.set(index);
+        self.ready.set(false);
+        self.native.set(false);
+        self.texture.take();
+        self.apply(Zoom::Fit);
+        let item = &self.items[index];
+        self.picture
+            .update_property(&[gtk::accessible::Property::Label(&photo_label(
+                &item.details.title,
+            ))]);
+        // The sender's thumbnail shows at once, until the file loads.
+        self.picture.set_paintable(
+            item.details
+                .thumbnail
+                .as_deref()
+                .and_then(|bytes| gdk::Texture::from_bytes(&glib::Bytes::from(bytes)).ok())
+                .as_ref(),
+        );
+        self.parts
+            .show(&item.details, Some((index, self.items.len())));
+        if let Some(previous) = self.previous.upgrade() {
+            previous.set_sensitive(index > 0);
+        }
+        if let Some(next) = self.next.upgrade() {
+            next.set_sensitive(index + 1 < self.items.len());
+        }
+        let fits = !item.details.exceeds_fit_edge();
+        let state = self.clone();
+        decode_photo(
+            item.path.clone(),
+            FIT_EDGE,
+            FIT_EDGE,
+            &self.token,
+            move |texture| {
+                state.picture.set_paintable(Some(&texture));
+                state.native.set(fits);
+                state.texture.replace(Some(texture));
+                state.ready.set(true);
+                state.sync_controls();
+            },
+        );
+    }
+
+    fn step(self: &Rc<Self>, delta: isize) {
+        if let Some(target) = step_target(self.current.get(), delta, self.items.len()) {
+            self.show(target);
+        }
+    }
+
+    fn request(self: &Rc<Self>, level: Zoom) {
+        if !self.ready.get() || level == self.zoom.get() {
+            return;
+        }
+        if level == Zoom::Actual {
+            let state = self.clone();
+            self.with_native(move |_| state.apply(Zoom::Actual));
+        } else {
+            self.apply(level);
+        }
+    }
+
+    fn with_native(self: &Rc<Self>, then: impl FnOnce(&gdk::Texture) + 'static) {
+        if self.native.get() {
+            if let Some(texture) = self.texture.borrow().clone() {
+                then(&texture);
+            }
+            return;
+        }
+        let item = self.item();
+        let Some((width, height)) = item.details.dimensions else {
+            return;
+        };
+        let state = self.clone();
+        decode_photo(
+            item.path.clone(),
+            width,
+            height,
+            &self.token,
+            move |texture| {
+                state.picture.set_paintable(Some(&texture));
+                state.native.set(true);
+                state.texture.replace(Some(texture.clone()));
+                then(&texture);
+            },
+        );
+    }
+}
+
+/// Opens the photos in the viewer, starting at `start`: fitted to the window,
+/// or at 100% with the zoom pill or a double-click, and dragged around when
+/// larger.
+pub(super) fn show_photo(
+    parent: &impl IsA<gtk::Widget>,
+    items: Rc<Vec<PhotoItem>>,
+    start: usize,
+    on_action: Rc<dyn Fn(NativeMediaAction)>,
+) {
+    if items.is_empty() {
+        return;
+    }
+    let start = start.min(items.len() - 1);
+    let picture = gtk::Picture::builder()
+        .content_fit(gtk::ContentFit::Contain)
+        .can_shrink(true)
+        .hexpand(true)
+        .vexpand(true)
+        .build();
+    let scroller = gtk::ScrolledWindow::builder()
+        .child(&picture)
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vscrollbar_policy(gtk::PolicyType::Never)
+        .build();
+
+    let pill = ZoomPill::new();
+    let copy = header_button("edit-copy-symbolic", &gettext("Copy Image"));
+    copy.set_sensitive(false);
+    let folder = header_button("folder-open-symbolic", &gettext("Show in Folder"));
+    let open = header_button(
+        "adw-external-link-symbolic",
+        &gettext("Open With Another App"),
+    );
+    let previous = step_button(
+        "go-previous-symbolic",
+        &gettext("Previous Photo"),
+        gtk::Align::Start,
+    );
+    let next = step_button("go-next-symbolic", &gettext("Next Photo"), gtk::Align::End);
+    let overlay = gtk::Overlay::builder().child(&scroller).build();
+    if items.len() > 1 {
+        overlay.add_overlay(&previous);
+        overlay.add_overlay(&next);
+    }
+    let viewer = media_viewer(
+        parent,
+        &items[start].details,
+        &overlay,
+        Some(&pill),
+        &[
+            copy.clone().upcast(),
+            folder.clone().upcast(),
+            open.clone().upcast(),
+        ],
+    );
+    let dialog = viewer.dialog.clone();
+    let photo = Rc::new(PhotoState {
+        items,
+        current: Cell::new(start),
+        picture,
+        scroller: scroller.downgrade(),
+        pill: pill.downgrade(),
+        copy: copy.downgrade(),
+        previous: previous.downgrade(),
+        next: next.downgrade(),
+        parts: viewer.parts,
+        zoom: Cell::new(Zoom::Fit),
+        ready: Cell::new(false),
+        native: Cell::new(false),
+        texture: RefCell::default(),
+        token: DecodeToken::default(),
+    });
+    pill.connect(&photo);
+
+    copy.connect_clicked({
+        let photo = photo.clone();
+        move |button| {
+            let clipboard = button.clipboard();
+            photo.with_native(move |texture| clipboard.set_texture(texture));
+        }
+    });
+    folder.connect_clicked({
+        let photo = photo.clone();
+        move |button| show_in_folder(button, &photo.item().path)
+    });
+    open.connect_clicked({
+        let (photo, dialog) = (photo.clone(), dialog.downgrade());
+        move |_| {
+            on_action(NativeMediaAction::Open(photo.item().path.clone()));
+            if let Some(dialog) = dialog.upgrade() {
+                dialog.close();
+            }
+        }
+    });
+    for (button, delta) in [(&previous, -1), (&next, 1)] {
+        let photo = photo.clone();
+        button.connect_clicked(move |_| photo.step(delta));
+    }
+
+    let double_click = gtk::GestureClick::new();
+    double_click.connect_pressed({
+        let photo = photo.clone();
+        move |_, presses, _, _| {
+            if presses == 2 {
+                photo.request(photo.zoom.get().toggled());
+            }
+        }
+    });
+    scroller.add_controller(double_click);
+    let pan = gtk::GestureDrag::new();
+    let origin = Rc::new(Cell::new((0.0, 0.0)));
+    {
+        let (scroller, origin) = (scroller.clone(), origin.clone());
+        pan.connect_drag_begin(move |_, _, _| {
+            origin.set((
+                scroller.hadjustment().value(),
+                scroller.vadjustment().value(),
+            ));
+        });
+    }
+    {
+        let scroller = scroller.clone();
+        pan.connect_drag_update(move |_, x, y| {
+            let (h, v) = origin.get();
+            scroller.hadjustment().set_value(h - x);
+            scroller.vadjustment().set_value(v - y);
+        });
+    }
+    scroller.add_controller(pan);
+
+    let keys = gtk::EventControllerKey::new();
+    keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+    keys.connect_key_pressed({
+        let photo = photo.clone();
+        move |controller, key, _, modifiers| {
+            // At 100% the arrows scroll the photo instead.
+            if photo.zoom.get() == Zoom::Actual {
+                return glib::Propagation::Proceed;
+            }
+            let rtl = controller
+                .widget()
+                .is_some_and(|widget| widget.direction() == gtk::TextDirection::Rtl);
+            match key_step(key, modifiers, rtl) {
+                Some(delta) => {
+                    photo.step(delta);
+                    glib::Propagation::Stop
+                }
+                None => glib::Propagation::Proceed,
+            }
+        }
+    });
+    dialog.add_controller(keys);
+    photo.show(start);
+    dialog.present(Some(parent));
+}
+
+struct VideoControls {
+    bar: adw::Clamp,
+    big_play: gtk::Button,
+}
+
+/// The floating play, progress, volume and fullscreen controls of `clip`,
+/// and the large play button shown while it is paused. The widgets hold the
+/// stream weakly, so the picture showing it stays its only owner.
+///
+/// Fullscreen belongs to the window that hosts the viewer: it is remembered
+/// when entered and left again when the dialog closes, whatever the order of
+/// the dialog's teardown.
+fn video_controls(
+    clip: &VideoStream,
+    dialog: &adw::Dialog,
+    parent: &impl IsA<gtk::Widget>,
+) -> VideoControls {
+    let window = parent.as_ref().root().and_downcast::<gtk::Window>();
+    let size = viewer_size(parent);
+    let play = header_button("media-playback-start-symbolic", &gettext("Play"));
+    let position = label_with(&["caption", "numeric"]);
+    let length = label_with(&["caption", "dim-label", "numeric"]);
+    let seek = gtk::Scale::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .adjustment(&gtk::Adjustment::new(
+            0.0, 0.0, 1.0, SEEK_STEP, SEEK_PAGE, 0.0,
+        ))
+        .draw_value(false)
+        .hexpand(true)
+        .valign(gtk::Align::Center)
+        .css_classes(["zaptide-video-seek"])
+        .build();
+    seek.update_property(&[gtk::accessible::Property::Label(&gettext("Seek"))]);
+
+    let volume_scale = gtk::Scale::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .adjustment(&gtk::Adjustment::new(
+            clip.volume(),
+            0.0,
+            1.0,
+            0.05,
+            0.1,
+            0.0,
+        ))
+        .draw_value(false)
+        .inverted(true)
+        .height_request(120)
+        .build();
+    volume_scale.update_property(&[gtk::accessible::Property::Label(&gettext("Volume"))]);
+    let volume = gtk::MenuButton::builder()
+        .icon_name(volume_icon(clip.volume(), clip.is_muted()))
+        .tooltip_text(gettext("Volume"))
+        .direction(gtk::ArrowType::Up)
+        .valign(gtk::Align::Center)
+        .popover(&gtk::Popover::builder().child(&volume_scale).build())
+        .css_classes(["flat"])
+        .build();
+    volume.update_property(&[gtk::accessible::Property::Label(&gettext("Volume"))]);
+    let fullscreen = header_button("view-fullscreen-symbolic", &gettext("Fullscreen"));
+    let set_fullscreen_look = |button: &gtk::Button, on: bool| {
+        let (icon, label) = if on {
+            ("view-restore-symbolic", gettext("Exit Fullscreen"))
+        } else {
+            ("view-fullscreen-symbolic", gettext("Fullscreen"))
+        };
+        button.set_icon_name(icon);
+        button.set_tooltip_text(Some(&label));
+        button.update_property(&[gtk::accessible::Property::Label(&label)]);
+    };
+    if window.as_ref().is_some_and(|window| window.is_fullscreen()) {
+        set_fullscreen_look(&fullscreen, true);
+    }
+
+    let row = gtk::Box::builder()
+        .spacing(10)
+        .css_classes(["zaptide-video-controls"])
+        .build();
+    for widget in [
+        play.upcast_ref::<gtk::Widget>(),
+        position.upcast_ref(),
+        seek.upcast_ref(),
+        length.upcast_ref(),
+        volume.upcast_ref(),
+        fullscreen.upcast_ref(),
+    ] {
+        row.append(widget);
+    }
+    let bar = adw::Clamp::builder()
+        .maximum_size(640)
+        .tightening_threshold(480)
+        .child(&row)
+        .valign(gtk::Align::End)
+        .margin_start(16)
+        .margin_end(16)
+        .margin_bottom(16)
+        .visible(false)
+        .build();
+
+    let big_play = gtk::Button::builder()
+        .icon_name("media-playback-start-symbolic")
+        .tooltip_text(gettext("Play"))
+        .halign(gtk::Align::Center)
+        .valign(gtk::Align::Center)
+        .css_classes(["circular", "zaptide-play", "zaptide-video-play"])
+        .visible(false)
+        .build();
+    big_play.update_property(&[gtk::accessible::Property::Label(&gettext("Play"))]);
+
+    play.connect_clicked({
+        let clip = clip.downgrade();
+        move |_| {
+            if let Some(clip) = clip.upgrade() {
+                if clip.is_playing() {
+                    clip.pause();
+                } else {
+                    clip.play();
+                }
+            }
+        }
+    });
+    big_play.connect_clicked({
+        let clip = clip.downgrade();
+        move |_| {
+            if let Some(clip) = clip.upgrade() {
+                clip.play();
+            }
+        }
+    });
+
+    // A drag moves the handle and the time only; the video seeks once, where
+    // the handle is let go. Keys and the wheel seek at once.
+    let dragging = Rc::new(Cell::new(false));
+    let finish_drag: Rc<dyn Fn()> = Rc::new({
+        let (clip, seek, dragging) = (clip.downgrade(), seek.downgrade(), dragging.clone());
+        move || {
+            if !dragging.replace(false) {
+                return;
+            }
+            if let (Some(clip), Some(seek)) = (clip.upgrade(), seek.upgrade())
+                && clip.is_seekable()
+            {
+                clip.seek(seek_target(seek.value(), clip.duration()));
+            }
+        }
+    });
+    let drag = gtk::GestureDrag::new();
+    drag.set_propagation_phase(gtk::PropagationPhase::Capture);
+    drag.connect_drag_begin({
+        let dragging = dragging.clone();
+        move |_, _, _| dragging.set(true)
+    });
+    drag.connect_drag_end({
+        let finish_drag = finish_drag.clone();
+        move |_, _, _| finish_drag()
+    });
+    drag.connect_cancel(move |_, _| finish_drag());
+    seek.add_controller(drag);
+    seek.connect_change_value({
+        let (clip, position, dragging) = (clip.downgrade(), position.downgrade(), dragging.clone());
+        move |_, _, value| {
+            if let Some(clip) = clip.upgrade() {
+                let target = seek_target(value, clip.duration());
+                if dragging.get() {
+                    if let Some(position) = position.upgrade() {
+                        position.set_label(&clock_text(target));
+                    }
+                } else if clip.is_seekable() {
+                    clip.seek(target);
+                }
+            }
+            glib::Propagation::Proceed
+        }
+    });
+    volume_scale.connect_value_changed({
+        let clip = clip.downgrade();
+        move |scale| {
+            if let Some(clip) = clip.upgrade() {
+                clip.set_muted(false);
+                clip.set_volume(scale.value());
+            }
+        }
+    });
+
+    let entered = Rc::new(Cell::new(false));
+    fullscreen.connect_clicked({
+        let (entered, dialog, window) = (
+            entered.clone(),
+            dialog.downgrade(),
+            window.as_ref().map(ObjectExt::downgrade),
+        );
+        move |button| {
+            let (Some(window), Some(dialog)) = (
+                window.as_ref().and_then(glib::WeakRef::upgrade),
+                dialog.upgrade(),
+            ) else {
+                return;
+            };
+            let enter = !window.is_fullscreen();
+            window.set_fullscreened(enter);
+            entered.set(enter);
+            let (width, height) = if enter {
+                (UNLIMITED_DIALOG_SIZE, UNLIMITED_DIALOG_SIZE)
+            } else {
+                size
+            };
+            dialog.set_content_width(width);
+            dialog.set_content_height(height);
+            set_fullscreen_look(button, enter);
+        }
+    });
+    dialog.connect_closed({
+        let window = window.as_ref().map(ObjectExt::downgrade);
+        move |_| {
+            if entered.replace(false)
+                && let Some(window) = window.as_ref().and_then(glib::WeakRef::upgrade)
+            {
+                window.set_fullscreened(false);
+            }
+        }
+    });
+
+    let refresh = Rc::new(glib::clone!(
+        #[weak]
+        play,
+        #[weak]
+        position,
+        #[weak]
+        length,
+        #[weak]
+        seek,
+        #[weak]
+        volume,
+        #[weak]
+        bar,
+        #[weak]
+        big_play,
+        move |clip: &VideoStream| {
+            let ready = clip.is_prepared();
+            let playing = clip.is_playing();
+            if bar.is_visible() != ready {
+                bar.set_visible(ready);
+            }
+            let show_big = ready && !playing;
+            if big_play.is_visible() != show_big {
+                big_play.set_visible(show_big);
+            }
+            let (icon, label) = if playing {
+                ("media-playback-pause-symbolic", gettext("Pause"))
+            } else {
+                ("media-playback-start-symbolic", gettext("Play"))
+            };
+            if play.icon_name().as_deref() != Some(icon) {
+                play.set_icon_name(icon);
+                play.set_tooltip_text(Some(&label));
+                play.update_property(&[gtk::accessible::Property::Label(&label)]);
+            }
+            let upper = clip.duration().max(1) as f64;
+            let adjustment = seek.adjustment();
+            if adjustment.upper() != upper {
+                adjustment.set_upper(upper);
+            }
+            let seekable = clip.is_seekable();
+            if seek.is_sensitive() != seekable {
+                seek.set_sensitive(seekable);
+            }
+            if !dragging.get() {
+                seek.set_value(clip.timestamp() as f64);
+                let elapsed = clock_text(clip.timestamp());
+                let total = clock_text(clip.duration());
+                if position.label().as_str() != elapsed || length.label().as_str() != total {
+                    position.set_label(&elapsed);
+                    length.set_label(&total);
+                    seek.update_property(&[gtk::accessible::Property::ValueText(&of_text(
+                        &elapsed, &total,
+                    ))]);
+                }
+            }
+            volume.set_icon_name(volume_icon(clip.volume(), clip.is_muted()));
+        }
+    ));
+    clip.connect_notify_local(None, {
+        let refresh = refresh.clone();
+        move |clip, _| refresh(clip)
+    });
+    refresh(clip);
+    VideoControls { bar, big_play }
+}
+
+/// Plays `path` in the viewer with sound; stops when the viewer closes and
+/// offers another app when GStreamer cannot play it.
+pub(super) fn show_video(
+    parent: &impl IsA<gtk::Widget>,
+    path: &std::path::Path,
+    details: &ViewerDetails,
+    on_action: Rc<dyn Fn(NativeMediaAction)>,
+) {
+    let Ok(clip) = VideoStream::open(path, 1920, 1080) else {
+        on_action(NativeMediaAction::Open(path.to_path_buf()));
+        return;
+    };
+    let picture = gtk::Picture::builder()
+        .paintable(&clip)
+        .content_fit(gtk::ContentFit::Contain)
+        .can_shrink(true)
+        .hexpand(true)
+        .vexpand(true)
+        .build();
+    picture.update_property(&[gtk::accessible::Property::Label(&video_label(
+        &details.title,
+    ))]);
+    let failed = adw::StatusPage::builder()
+        .icon_name("video-x-generic-symbolic")
+        .title(gettext("Can't Play This Video"))
+        .description(gettext("Open it with another app instead"))
+        .build();
+    let another = gtk::Button::builder()
+        .label(gettext("Open in Another App"))
+        .halign(gtk::Align::Center)
+        .css_classes(["pill", "suggested-action"])
+        .build();
+    failed.set_child(Some(&another));
+
+    let folder = header_button("folder-open-symbolic", &gettext("Show in Folder"));
+    folder.connect_clicked({
+        let target = path.to_path_buf();
+        move |button| show_in_folder(button, &target)
+    });
+    let open = header_button(
+        "adw-external-link-symbolic",
+        &gettext("Open With Another App"),
+    );
+    let viewer = media_viewer(
+        parent,
+        details,
+        &gtk::Box::new(gtk::Orientation::Vertical, 0),
+        None,
+        &[folder.upcast(), open.clone().upcast()],
+    );
+    let dialog = viewer.dialog.clone();
+    open.connect_clicked(open_and_close(path, &on_action, &dialog));
+    another.connect_clicked(open_and_close(path, &on_action, &dialog));
+
+    let controls = video_controls(&clip, &dialog, parent);
+    let overlay = gtk::Overlay::builder().child(&picture).build();
+    overlay.add_overlay(&controls.big_play);
+    overlay.add_overlay(&controls.bar);
+    let stack = gtk::Stack::new();
+    stack.add_named(&overlay, Some("video"));
+    stack.add_named(&failed, Some("failed"));
+    viewer.view.set_content(Some(&stack));
+
+    clip.connect_error_notify(glib::clone!(
+        #[weak]
+        stack,
+        move |stream| {
+            if let Some(error) = stream.error() {
+                log::warn!("video could not be played: {error}");
+                stack.set_visible_child_name("failed");
+            }
+        }
+    ));
+    if clip.is_prepared() {
+        clip.play();
+    } else {
+        clip.connect_prepared_notify(|clip| {
+            if clip.is_prepared() {
+                clip.play();
+            }
+        });
+    }
+    // Held by the dialog, not looked up through the picture, which the
+    // dialog may already have let go of by the time it reports closing.
+    dialog.connect_closed(move |_| clip.close());
+    dialog.present(Some(parent));
+}
+
+fn open_and_close(
+    path: &std::path::Path,
+    on_action: &Rc<dyn Fn(NativeMediaAction)>,
+    dialog: &adw::Dialog,
+) -> impl Fn(&gtk::Button) + 'static {
+    let (path, on_action, dialog) = (path.to_path_buf(), on_action.clone(), dialog.downgrade());
+    move |_| {
+        on_action(NativeMediaAction::Open(path.clone()));
+        if let Some(dialog) = dialog.upgrade() {
+            dialog.close();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn metadata_matches_the_prototype() {
+        assert_eq!(
+            metadata_line("image/png", Some(1600), Some(1000), None, 184 * 1024),
+            "PNG · 1600 × 1000 · 184 KB"
+        );
+        assert_eq!(
+            metadata_line("video/mp4", Some(1280), Some(720), Some(3), 1_258_291),
+            "MP4 · 1280 × 720 · 0:03 · 1.2 MB"
+        );
+    }
+
+    #[test]
+    fn metadata_skips_what_is_unknown() {
+        assert_eq!(metadata_line("image/jpeg", None, Some(10), None, 0), "JPEG");
+        assert_eq!(metadata_line("", Some(0), Some(0), None, 12), "12 B");
+        assert_eq!(metadata_line("garbage", None, None, None, 0), "");
+    }
+
+    #[test]
+    fn format_names_follow_the_extension_people_know() {
+        for (mime, name) in [
+            ("image/jpeg", "JPEG"),
+            ("image/svg+xml", "SVG"),
+            ("video/quicktime", "MOV"),
+            ("video/x-matroska", "MKV"),
+            ("video/webm; codecs=vp8", "WEBM"),
+        ] {
+            assert_eq!(format_name(mime).as_deref(), Some(name), "{mime}");
+        }
+        assert_eq!(format_name("image/"), None);
+    }
+
+    #[test]
+    fn file_sizes_round_to_the_nearest_unit() {
+        assert_eq!(file_size_text(0), None);
+        assert_eq!(file_size_text(1023).as_deref(), Some("1023 B"));
+        assert_eq!(file_size_text(1024).as_deref(), Some("1 KB"));
+        assert_eq!(file_size_text(1024 * 1024 - 1).as_deref(), Some("1.0 MB"));
+        assert_eq!(file_size_text(5 * 1024 * 1024).as_deref(), Some("5.0 MB"));
+        assert_eq!(file_size_text(3 << 30).as_deref(), Some("3.0 GB"));
+    }
+
+    #[test]
+    fn the_counter_shows_only_for_several_items() {
+        assert_eq!(counter_text(0, 1), None);
+        assert_eq!(counter_text(0, 0), None);
+        assert_eq!(counter_text(0, 2).as_deref(), Some("1 of 2"));
+        assert_eq!(counter_text(11, 12).as_deref(), Some("12 of 12"));
+    }
+
+    #[test]
+    fn zoom_labels_and_toggle() {
+        assert_eq!(Zoom::Fit.label(), "Fit");
+        assert_eq!(Zoom::Actual.label(), "100%");
+        assert_eq!(Zoom::Fit.toggled(), Zoom::Actual);
+        assert_eq!(Zoom::Actual.toggled(), Zoom::Fit);
+    }
+
+    #[test]
+    fn video_clock_and_volume_icons() {
+        assert_eq!(clock_text(-5), "0:00");
+        assert_eq!(clock_text(3_400_000), "0:03");
+        assert_eq!(clock_text(125_000_000), "2:05");
+        assert_eq!(volume_icon(0.0, false), "audio-volume-muted-symbolic");
+        assert_eq!(volume_icon(1.0, true), "audio-volume-muted-symbolic");
+        assert_eq!(volume_icon(0.2, false), "audio-volume-low-symbolic");
+        assert_eq!(volume_icon(0.5, false), "audio-volume-medium-symbolic");
+        assert_eq!(volume_icon(1.0, false), "audio-volume-high-symbolic");
+    }
+
+    fn descendants(root: &gtk::Widget, found: &mut Vec<gtk::Widget>) {
+        let mut child = root.first_child();
+        while let Some(widget) = child {
+            found.push(widget.clone());
+            descendants(&widget, found);
+            child = widget.next_sibling();
+        }
+    }
+
+    fn tree(window: &gtk::Window) -> Vec<gtk::Widget> {
+        let mut found = Vec::new();
+        descendants(window.upcast_ref(), &mut found);
+        found
+    }
+
+    fn button(window: &gtk::Window, tooltip: &str) -> gtk::Button {
+        tree(window)
+            .into_iter()
+            .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
+            .find(|button| button.tooltip_text().as_deref() == Some(tooltip))
+            .unwrap_or_else(|| panic!("no button {tooltip}"))
+    }
+
+    fn has_button(window: &gtk::Window, tooltip: &str) -> bool {
+        tree(window).into_iter().any(|widget| {
+            widget
+                .downcast::<gtk::Button>()
+                .is_ok_and(|button| button.tooltip_text().as_deref() == Some(tooltip))
+        })
+    }
+
+    fn label(window: &gtk::Window, class: &str) -> gtk::Label {
+        tree(window)
+            .into_iter()
+            .filter_map(|widget| widget.downcast::<gtk::Label>().ok())
+            .find(|label| label.has_css_class(class))
+            .unwrap_or_else(|| panic!("no label {class}"))
+    }
+
+    fn screenshot(window: &impl IsA<gtk::Widget>, name: &str) {
+        let Some(directory) = std::env::var_os("ZAPTIDE_VIEWER_SHOTS") else {
+            return;
+        };
+        super::super::playback_tests::drain();
+        let paintable = gtk::WidgetPaintable::new(Some(window));
+        let snapshot = gtk::Snapshot::new();
+        paintable.snapshot(
+            snapshot.upcast_ref::<gdk::Snapshot>(),
+            f64::from(window.width()),
+            f64::from(window.height()),
+        );
+        let node = snapshot.to_node().expect("render node");
+        let texture = window
+            .native()
+            .and_then(|native| native.renderer())
+            .expect("renderer")
+            .render_texture(&node, None);
+        let path = std::path::Path::new(&directory).join(format!("{name}.png"));
+        texture.save_to_png(path).expect("screenshot");
+    }
+
+    fn fixture_message(
+        directory: &std::path::Path,
+        name: &str,
+        width: u32,
+        height: u32,
+    ) -> crate::model::Message {
+        let path = directory.join(name);
+        image::RgbaImage::from_fn(width, height, |x, y| {
+            image::Rgba([(x * 255 / width) as u8, (y * 255 / height) as u8, 160, 255])
+        })
+        .save(&path)
+        .unwrap();
+        let mut thumbnail = Vec::new();
+        image::RgbaImage::from_fn(64, 40, |x, y| {
+            image::Rgba([(x * 4) as u8, (y * 6) as u8, 160, 255])
+        })
+        .write_to(
+            &mut std::io::Cursor::new(&mut thumbnail),
+            image::ImageFormat::Png,
+        )
+        .unwrap();
+        let mut message = crate::native_media_widgets::tests::message(Content::Image {
+            caption: Some("Quarterly roadmap".into()),
+            media: crate::model::Media {
+                mime: "image/png".into(),
+                size: 184 * 1024,
+                width: Some(width),
+                height: Some(height),
+                path: Some(path),
+                state: crate::model::MediaState::Idle,
+            },
+        });
+        message.sender_name = Some("Marina Costa".into());
+        message.thumbnail = Some(thumbnail);
+        message
+    }
+
+    #[test]
+    fn photos_past_the_fit_edge_need_their_real_size() {
+        assert!(!exceeds_fit_edge(3840, 2160));
+        assert!(exceeds_fit_edge(3841, 100));
+        assert!(exceeds_fit_edge(100, 8000));
+    }
+
+    #[test]
+    fn stepping_stays_within_the_items() {
+        assert_eq!(step_target(0, 1, 3), Some(1));
+        assert_eq!(step_target(2, 1, 3), None);
+        assert_eq!(step_target(0, -1, 3), None);
+        assert_eq!(step_target(1, -1, 3), Some(0));
+        assert_eq!(step_target(1, 0, 3), None);
+        assert_eq!(step_target(0, 1, 0), None);
+    }
+
+    #[test]
+    fn arrow_keys_step_unless_a_modifier_is_held() {
+        let none = gdk::ModifierType::empty();
+        assert_eq!(key_step(gdk::Key::Left, none, false), Some(-1));
+        assert_eq!(key_step(gdk::Key::Right, none, false), Some(1));
+        assert_eq!(key_step(gdk::Key::Left, none, true), Some(1));
+        assert_eq!(key_step(gdk::Key::Right, none, true), Some(-1));
+        assert_eq!(key_step(gdk::Key::Up, none, false), None);
+        for held in [
+            gdk::ModifierType::ALT_MASK,
+            gdk::ModifierType::CONTROL_MASK,
+            gdk::ModifierType::SHIFT_MASK,
+        ] {
+            assert_eq!(key_step(gdk::Key::Right, held, false), None);
+        }
+        let locks = gdk::ModifierType::LOCK_MASK;
+        assert_eq!(key_step(gdk::Key::Right, locks, false), Some(1));
+    }
+
+    #[test]
+    fn seeks_stay_within_the_video() {
+        assert_eq!(seek_target(-4.0, 30_000_000), 0);
+        assert_eq!(seek_target(12_000_000.0, 30_000_000), 12_000_000);
+        assert_eq!(seek_target(99_000_000.0, 30_000_000), 30_000_000);
+        assert_eq!(seek_target(5.0, 0), 0);
+    }
+
+    #[test]
+    fn accessible_names_say_whose_media_it_is() {
+        assert_eq!(photo_label("Marina"), "Photo from Marina");
+        assert_eq!(video_label("Marina"), "Video from Marina");
+        assert_eq!(of_text("0:12", "0:30"), "0:12 of 0:30");
+    }
+
+    fn dialog_keys(window: &gtk::Window) -> gtk::EventControllerKey {
+        let dialog = tree(window)
+            .into_iter()
+            .find_map(|widget| widget.downcast::<adw::Dialog>().ok())
+            .expect("viewer dialog");
+        let controllers = dialog.observe_controllers();
+        (0..controllers.n_items())
+            .filter_map(|index| controllers.item(index))
+            .find_map(|controller| controller.downcast::<gtk::EventControllerKey>().ok())
+            .expect("viewer key controller")
+    }
+
+    fn press(window: &gtk::Window, key: gdk::Key, modifiers: gdk::ModifierType) {
+        use gtk::glib::translate::IntoGlib;
+        dialog_keys(window)
+            .emit_by_name::<bool>("key-pressed", &[&key.into_glib(), &0u32, &modifiers]);
+    }
+
+    fn playing_clip(window: &gtk::Window) -> Option<VideoStream> {
+        tree(window).into_iter().find_map(|widget| {
+            widget
+                .downcast::<gtk::Picture>()
+                .ok()?
+                .paintable()
+                .and_downcast::<VideoStream>()
+        })
+    }
+
+    fn failure_button(window: &gtk::Window) -> Option<gtk::Button> {
+        tree(window)
+            .into_iter()
+            .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
+            .find(|button| button.label().as_deref() == Some("Open in Another App"))
+    }
+
+    /// Needs a display, and runs alone because GTK initialises on one thread:
+    /// `cargo test --lib viewer_steps -- --ignored`. Setting
+    /// `ZAPTIDE_VIEWER_SHOTS=/tmp/opencode/shots` also saves screenshots of
+    /// each state.
+    #[test]
+    #[ignore = "needs a display and GStreamer VP8 plugins"]
+    fn viewer_steps_zooms_and_controls_video() {
+        use super::super::playback_tests::{drain, wait_until};
+        gtk::init().expect("display");
+        adw::init().expect("libadwaita");
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let _runtime = runtime.enter();
+        let provider = gtk::CssProvider::new();
+        provider.load_from_string(include_str!("../../data/style.css"));
+        gtk::style_context_add_provider_for_display(
+            &gdk::Display::default().unwrap(),
+            &provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+        adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceDark);
+        let directory = tempfile::tempdir().unwrap();
+        let first = fixture_message(directory.path(), "one.png", 1600, 1000);
+        let second = fixture_message(directory.path(), "two.png", 800, 600);
+        let window = adw::Window::builder()
+            .default_width(1100)
+            .default_height(760)
+            .content(&gtk::Box::new(gtk::Orientation::Vertical, 0))
+            .build();
+        window.present();
+        drain();
+        let opened = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let on_action: Rc<dyn Fn(NativeMediaAction)> = {
+            let opened = opened.clone();
+            Rc::new(move |action| {
+                if let NativeMediaAction::Open(path) = action {
+                    opened.borrow_mut().push(path);
+                }
+            })
+        };
+        let item = |message: &Message| PhotoItem {
+            path: match attachment_action(message) {
+                Some(NativeMediaAction::Open(path)) => path,
+                _ => panic!("fixture is on disk"),
+            },
+            details: ViewerDetails::of(message),
+        };
+        let album = Rc::new(vec![item(&first), item(&second)]);
+        let window_ref = window.upcast_ref::<gtk::Window>();
+
+        show_photo(&window, album.clone(), 0, on_action.clone());
+        assert!(
+            !button(window_ref, "Copy Image").is_sensitive(),
+            "copy waits for the full photo"
+        );
+        assert!(
+            !button(window_ref, "Zoom In").is_sensitive(),
+            "zoom waits for the full photo"
+        );
+        wait_until("photo did not load", || {
+            button(window_ref, "Copy Image").is_sensitive()
+        });
+        drain();
+        assert_eq!(label(window_ref, "zaptide-viewer-pill").label(), "1 of 2");
+        assert!(label(window_ref, "zaptide-viewer-time").is_visible());
+        assert_eq!(
+            label(window_ref, "zaptide-viewer-name").label(),
+            "Marina Costa"
+        );
+        assert_eq!(
+            label(window_ref, "zaptide-viewer-metadata").label(),
+            "PNG · 1600 × 1000 · 184 KB"
+        );
+        assert!(!button(window_ref, "Zoom Out").is_sensitive());
+        assert!(button(window_ref, "Zoom In").is_sensitive());
+        assert!(!button(window_ref, "Previous Photo").is_sensitive());
+        screenshot(window_ref, "13-view-image");
+        button(window_ref, "Zoom In").emit_clicked();
+        assert!(button(window_ref, "Zoom Out").is_sensitive());
+        assert!(!button(window_ref, "Zoom In").is_sensitive());
+        assert!(has_button(window_ref, "100%"));
+        drain();
+        screenshot(window_ref, "14-image-original-size");
+        press(window_ref, gdk::Key::Right, gdk::ModifierType::empty());
+        assert_eq!(
+            label(window_ref, "zaptide-viewer-pill").label(),
+            "1 of 2",
+            "arrows scroll a photo at 100%"
+        );
+        button(window_ref, "Zoom Out").emit_clicked();
+        press(window_ref, gdk::Key::Right, gdk::ModifierType::ALT_MASK);
+        assert_eq!(label(window_ref, "zaptide-viewer-pill").label(), "1 of 2");
+        press(window_ref, gdk::Key::Right, gdk::ModifierType::empty());
+        assert_eq!(label(window_ref, "zaptide-viewer-pill").label(), "2 of 2");
+        assert!(
+            has_button(window_ref, "Fit"),
+            "zoom resets for the next photo"
+        );
+        assert!(!button(window_ref, "Next Photo").is_sensitive());
+        assert!(
+            !button(window_ref, "Copy Image").is_sensitive(),
+            "copy waits for the next photo"
+        );
+        wait_until("second photo did not load", || {
+            button(window_ref, "Copy Image").is_sensitive()
+        });
+        press(window_ref, gdk::Key::Left, gdk::ModifierType::empty());
+        assert_eq!(label(window_ref, "zaptide-viewer-pill").label(), "1 of 2");
+        button(window_ref, "Next Photo").emit_clicked();
+        button(window_ref, "Open With Another App").emit_clicked();
+        assert_eq!(opened.borrow().len(), 1);
+        drain();
+        assert!(!has_button(window_ref, "Next Photo"), "viewer closed");
+
+        let video = directory.path().join("clip.webm");
+        let status = std::process::Command::new("gst-launch-1.0")
+            .args("-q videotestsrc num-buffers=90 ! video/x-raw,width=640,height=360,framerate=30/1 ! vp8enc deadline=1 ! queue ! mux. audiotestsrc wave=silence num-buffers=140 ! audioconvert ! vorbisenc ! queue ! mux. webmmux name=mux ! filesink".split_whitespace())
+            .arg(format!("location={}", video.display()))
+            .status()
+            .expect("GStreamer fixture generator");
+        assert!(status.success());
+        let mut message = first.clone();
+        message.content = Content::Video {
+            caption: None,
+            media: crate::model::Media {
+                mime: "video/mp4".into(),
+                size: 1_258_291,
+                width: Some(1280),
+                height: Some(720),
+                path: Some(video.clone()),
+                state: crate::model::MediaState::Idle,
+            },
+            seconds: Some(3),
+            gif: false,
+        };
+        let details = ViewerDetails::of(&message);
+        show_video(&window, &video, &details, on_action.clone());
+        wait_until("video controls did not appear", || {
+            has_button(window_ref, "Pause")
+        });
+        assert!(!has_button(window_ref, "Copy Image"));
+        assert!(!has_button(window_ref, "Zoom In"));
+        assert_eq!(
+            label(window_ref, "zaptide-viewer-metadata").label(),
+            "MP4 · 1280 × 720 · 0:03 · 1.2 MB"
+        );
+        let clip = playing_clip(window_ref).expect("video stream");
+        let released = clip.downgrade();
+        let seek = tree(window_ref)
+            .into_iter()
+            .find_map(|widget| widget.downcast::<gtk::Scale>().ok())
+            .filter(|scale| scale.has_css_class("zaptide-video-seek"))
+            .expect("seek bar");
+        assert!(seek.adjustment().step_increment() > 0.0);
+        assert!(seek.adjustment().page_increment() > seek.adjustment().step_increment());
+        screenshot(window_ref, "15-play-video");
+        button(window_ref, "Pause").emit_clicked();
+        wait_until("video did not pause", || has_button(window_ref, "Play"));
+        drain();
+        screenshot(window_ref, "16-video-paused");
+        button(window_ref, "Fullscreen").emit_clicked();
+        wait_until("window did not enter fullscreen", || window.is_fullscreen());
+        assert!(has_button(window_ref, "Exit Fullscreen"));
+        button(window_ref, "Close").emit_clicked();
+        wait_until("closing the viewer left the window fullscreen", || {
+            !window.is_fullscreen()
+        });
+        drain();
+        assert!(!has_button(window_ref, "Close"), "viewer closed");
+        assert!(!clip.is_prepared(), "closing releases the playback");
+        drop(clip);
+        wait_until("closed viewer kept its video stream", || {
+            released.upgrade().is_none()
+        });
+
+        let broken = directory.path().join("broken.webm");
+        std::fs::write(&broken, b"synthetic invalid video").unwrap();
+        show_video(&window, &broken, &details, on_action.clone());
+        wait_until("failure page did not show", || {
+            failure_button(window_ref).is_some()
+        });
+        drain();
+        screenshot(window_ref, "48-video-unavailable");
+        let failed = playing_clip(window_ref).expect("failed stream").downgrade();
+        let before = opened.borrow().len();
+        failure_button(window_ref).unwrap().emit_clicked();
+        assert_eq!(opened.borrow().len(), before + 1);
+        wait_until("failed viewer kept its video stream", || {
+            failed.upgrade().is_none()
+        });
+
+        adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceLight);
+        show_video(&window, &broken, &details, on_action.clone());
+        wait_until("light failure page did not show", || {
+            failure_button(window_ref).is_some()
+        });
+        drain();
+        screenshot(window_ref, "48-video-unavailable-light");
+        button(window_ref, "Close").emit_clicked();
+        drain();
+        show_video(&window, &video, &details, on_action.clone());
+        wait_until("light video controls did not appear", || {
+            has_button(window_ref, "Pause")
+        });
+        let volume = tree(window_ref)
+            .into_iter()
+            .find_map(|widget| widget.downcast::<gtk::MenuButton>().ok())
+            .expect("volume button");
+        volume.popup();
+        drain();
+        screenshot(
+            &volume.popover().expect("volume popover"),
+            "15-volume-popover-light",
+        );
+        button(window_ref, "Close").emit_clicked();
+        drain();
+        adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceDark);
+
+        let narrow = adw::Window::builder()
+            .default_width(400)
+            .default_height(700)
+            .content(&gtk::Box::new(gtk::Orientation::Vertical, 0))
+            .build();
+        narrow.present();
+        drain();
+        let narrow_ref = narrow.upcast_ref::<gtk::Window>();
+        show_photo(&narrow, album, 0, on_action.clone());
+        wait_until("narrow photo did not load", || {
+            button(narrow_ref, "Copy Image").is_sensitive()
+        });
+        drain();
+        assert!(!label(narrow_ref, "zaptide-viewer-time").is_visible());
+        screenshot(narrow_ref, "narrow-album");
+        button(narrow_ref, "Close").emit_clicked();
+        drain();
+        show_video(&narrow, &video, &details, on_action.clone());
+        wait_until("narrow video controls did not appear", || {
+            has_button(narrow_ref, "Pause")
+        });
+        for _ in 0..4 {
+            drain();
+        }
+        screenshot(narrow_ref, "narrow-video");
+        button(narrow_ref, "Close").emit_clicked();
+        drain();
+        narrow.destroy();
+        window.destroy();
+        drain();
+    }
+}

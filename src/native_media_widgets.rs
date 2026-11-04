@@ -57,6 +57,7 @@ mod contacts;
 mod photo;
 mod sticker;
 mod video_stream;
+mod viewer;
 mod widget;
 
 #[cfg(test)]
