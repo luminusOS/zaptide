@@ -323,6 +323,7 @@ mod tests {
         let timeout = || ureq::unversioned::transport::NextTimeout {
             after: TIMEOUT.into(),
             reason: ureq::Timeout::Global,
+            ..Default::default()
         };
         let addresses = resolver.resolve(&uri, &config, timeout()).unwrap();
         assert_eq!(addresses.len(), 1);
