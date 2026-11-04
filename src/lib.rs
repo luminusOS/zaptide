@@ -16,6 +16,7 @@ pub mod event_drain;
 pub mod glib_notifier;
 pub mod i18n;
 pub mod link_preview;
+pub mod media_retention;
 pub mod message_window;
 pub mod model;
 pub mod native_actions;

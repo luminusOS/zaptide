@@ -108,6 +108,8 @@ impl Worker {
             } => self.send_text(chat, text, quoting, mentions, link_preview),
             Command::SetLinkPreviews(enabled) => self.set_link_previews(enabled),
             Command::SetOnline(online) => self.set_online(online),
+            Command::SetMediaRetention(days) => self.set_media_retention(days),
+            Command::MediaSwept(swept) => self.media_swept(swept),
             Command::SendContact {
                 chat,
                 contact,

@@ -36,6 +36,34 @@ impl Archive {
         rows.collect()
     }
 
+    /// Downloaded files that may be deleted to free space: not stickers, which
+    /// the picker reuses, and only messages that can fetch the file again. A
+    /// pending or failed send has no raw message, and its file is the only copy.
+    pub fn expirable_media(&self) -> Result<Vec<(String, String, std::path::PathBuf)>> {
+        let mut statement = self.connection.prepare(
+            "SELECT chat, id, json_extract(content, '$.media.path') AS path
+             FROM messages
+             WHERE path IS NOT NULL
+               AND raw IS NOT NULL
+               AND status NOT IN (?1, ?2)
+               AND json_extract(content, '$.kind') <> 'sticker'",
+        )?;
+        let rows = statement.query_map(
+            params![
+                status_rank(Delivery::Pending),
+                status_rank(Delivery::Failed)
+            ],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    std::path::PathBuf::from(row.get::<_, String>(2)?),
+                ))
+            },
+        )?;
+        rows.collect()
+    }
+
     pub fn recent_stickers(&self, limit: usize) -> Result<Vec<ArchivedSticker>> {
         let mut statement = self.connection.prepare(
             "SELECT json_extract(content, '$.media.path') AS path, MAX(timestamp), raw

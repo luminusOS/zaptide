@@ -49,6 +49,7 @@ mod presence;
 mod profile;
 mod protocol;
 mod reactions;
+mod retention;
 mod stars;
 use stars::STARRED_LIMIT;
 
@@ -560,6 +561,7 @@ pub async fn run(
         poll_sending: HashSet::new(),
         presence_wish: tokio::sync::watch::Sender::new(Default::default()),
         calls: Default::default(),
+        retention: Default::default(),
     };
     worker.load_state();
     worker.recover_interrupted_answers();
@@ -607,6 +609,7 @@ pub async fn run(
                 worker.pump_read_sync();
                 worker.pump_poll_votes();
                 worker.pump_poll_history();
+                worker.pump_media_retention();
             }
         }
     }
@@ -709,6 +712,7 @@ struct Worker {
     /// What the window wants announced as this account's presence.
     presence_wish: tokio::sync::watch::Sender<presence::PresenceWish>,
     calls: calls::Calls,
+    retention: retention::Retention,
     dirs: AppDirs,
     events: std::sync::mpsc::Sender<Event>,
     commands: mpsc::UnboundedSender<Command>,

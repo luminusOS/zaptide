@@ -138,7 +138,15 @@ impl NativeApplication {
         {
             backend.send(crate::backend::Command::SetLinkPreviews(enabled));
         }
+        let retention_changed = matches!(
+            change.settings_field(),
+            crate::native_preferences::SettingsField::MediaRetention
+                | crate::native_preferences::SettingsField::MediaRetentionDays
+        );
         if change.apply(&mut self.settings).is_ok() {
+            if retention_changed {
+                self.sync_media_retention();
+            }
             if self.save_settings().is_err() {
                 self.status = gettext("Could not save preferences");
                 self.toast(&gettext("Could not save preferences"));
@@ -148,6 +156,18 @@ impl NativeApplication {
         } else {
             self.status = gettext("Preference value is invalid");
             self.toast(&gettext("Preference value is invalid"));
+        }
+    }
+
+    /// Every account cleans up its own downloads under the one shared setting.
+    pub(super) fn sync_media_retention(&self) {
+        let days = self.settings.active_media_retention();
+        let hidden = self
+            .accounts
+            .values()
+            .filter_map(|session| session.backend.as_ref());
+        for backend in self.backend.iter().chain(hidden) {
+            backend.send(crate::backend::Command::SetMediaRetention(days));
         }
     }
 
@@ -397,6 +417,7 @@ impl NativeApplication {
             let _ = startup.send(());
         }
         self.accounts.insert(id, session);
+        self.sync_media_retention();
         self.pending_account = Some((id, self.active_account));
         self.switch_account(id, sender);
     }

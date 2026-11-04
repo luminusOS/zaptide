@@ -29,6 +29,8 @@ without a browser engine. Messages stay in a local, encrypted archive.
 - Phone notifications while you do not use ZapTide: ZapTide goes offline soon
   after you leave it or stop using it (Preferences, Notifications).
 - Light, dark and custom themes.
+- Optional cleanup of old downloads (Preferences, Storage): attachments saved on
+  this computer are deleted after 30 days to a year, as you choose. Messages stay.
 
 ## Install
 
@@ -134,6 +136,12 @@ a voice call still works and a video call tells you what is missing.
 Device credentials, downloads, saved stickers and settings are unencrypted; use
 full-disk encryption for them and backups. Data and keyring entries are separate
 from ZapFast, FastsApp and FastWhatsApp. Link ZapTide separately.
+
+Downloaded attachments live in the cache folder. When you turn on "Delete old
+downloads", ZapTide removes the ones saved longer ago than the period you pick, a
+little after it starts and every few hours while it runs. Only those files go, never
+messages, stickers or anything outside that folder. A removed file downloads again
+when you open it, if WhatsApp still has it; files WhatsApp no longer keeps are lost.
 
 Previews contact websites directly while composing, without proxies or redirects.
 Private/reserved destinations are blocked. Disable previews per account or remove one.

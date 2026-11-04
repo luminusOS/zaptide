@@ -66,6 +66,10 @@ pub struct Settings {
     pub offline_after_leaving_seconds: u32,
     /// Seconds without input in ZapTide before WhatsApp shows you as offline; 0 is never.
     pub offline_after_inactive_seconds: u32,
+    /// Delete downloaded attachments from this computer once they are older
+    /// than `media_retention_days`.
+    pub media_retention: bool,
+    pub media_retention_days: u32,
     /// Prefer address-book names over public profile names.
     pub names_from_contacts: bool,
     /// Voice and audio playback speed multiplier.
@@ -103,6 +107,8 @@ impl Default for Settings {
             notification_previews: true,
             offline_after_leaving_seconds: 10,
             offline_after_inactive_seconds: 300,
+            media_retention: false,
+            media_retention_days: crate::media_retention::DEFAULT_DAYS,
             names_from_contacts: true,
             save_contacts_to_phone: true,
             voice_speed: 1.0,
@@ -119,6 +125,17 @@ impl Settings {
             .as_ref()
             .and(self.custom_theme_cache.as_ref())
             .map(|theme| theme.palette)
+    }
+
+    /// Days to keep downloads, or `None` while cleanup is off. A hand-edited
+    /// value outside the supported range is brought back into it.
+    pub fn active_media_retention(&self) -> Option<u32> {
+        self.media_retention.then(|| {
+            self.media_retention_days.clamp(
+                crate::media_retention::MIN_DAYS,
+                crate::media_retention::MAX_DAYS,
+            )
+        })
     }
 
     pub fn load(path: &Path) -> Self {
@@ -193,6 +210,29 @@ mod tests {
             serde_json::from_str(r#"{"theme":"light","future_field":1}"#).expect("parses");
         assert_eq!(parsed.theme, ThemeChoice::Light);
         assert!(parsed.enter_sends);
+    }
+
+    #[test]
+    fn media_cleanup_is_off_unless_asked_for() {
+        let old: Settings = serde_json::from_str(r#"{"theme":"light"}"#).unwrap();
+        assert!(!old.media_retention);
+        assert_eq!(old.active_media_retention(), None);
+
+        let on: Settings =
+            serde_json::from_str(r#"{"media_retention":true,"media_retention_days":60}"#).unwrap();
+        assert_eq!(on.active_media_retention(), Some(60));
+    }
+
+    #[test]
+    fn a_hand_edited_retention_period_stays_in_range() {
+        let mut settings = Settings {
+            media_retention: true,
+            media_retention_days: 0,
+            ..Settings::default()
+        };
+        assert_eq!(settings.active_media_retention(), Some(1));
+        settings.media_retention_days = u32::MAX;
+        assert_eq!(settings.active_media_retention(), Some(3650));
     }
 
     #[test]

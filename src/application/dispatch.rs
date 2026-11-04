@@ -160,6 +160,7 @@ impl NativeApplication {
                 self.apply_runtime_settings();
             }
             Input::StartBackend => {
+                self.sync_media_retention();
                 if let Some(startup) = self.backend.as_mut().and_then(Backend::take_startup) {
                     let _ = startup.send(());
                     self.status = gettext("Starting backend");

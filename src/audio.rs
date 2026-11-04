@@ -419,12 +419,14 @@ impl Player {
         let slot: Decoded = Default::default();
         let cancelled = Arc::new(AtomicBool::new(false));
         let path = path.to_owned();
+        let hold = crate::media_retention::hold([path.clone()]);
         let thread_slot = Arc::clone(&slot);
         let thread_cancelled = Arc::clone(&cancelled);
         let spawned = std::thread::Builder::new()
             .name("voice-decode".to_owned())
             .spawn(move || {
                 let _permit = permit;
+                let _hold = hold;
                 let result = decode_file_with_waveform(&path, &thread_cancelled);
                 drop(_permit);
                 if publish_decode(&thread_slot, &thread_cancelled, result) {}
