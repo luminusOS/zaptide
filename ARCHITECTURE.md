@@ -54,6 +54,16 @@ ZapTide is online (`src/application/presence.rs`) and sends `Command::SetOnline`
 (`src/backend/worker/presence.rs`). The bot is built with `PresencePolicy::Manual`. Reverting to Automatic
 announces "available" on every connect and silently breaks phone notifications.
 
+## Download cleanup
+
+With "Delete old downloads" on, the window sends each account's backend the retention period
+(`Command::SetMediaRetention`). `backend/worker/retention.rs` then runs `media_retention::sweep` about 30 seconds
+after the setting arrives and every six hours, on a blocking thread, and nothing is scheduled while it is off.
+The sweep removes only files that an archived message points to (`Archive::expirable_media`), directly inside
+the account's media cache folder, older than the period by modification time, and not held by a viewer or a
+playing clip (`media_retention::hold`). The worker then clears those messages' `media.path`, so they offer the
+download again. Stickers, messages without the keys to fetch the file again, and pending or failed sends are never listed.
+
 ## Styling
 
 Static CSS is in `data/style.css` and `data/theme-defaults.css` and is embedded at build time by

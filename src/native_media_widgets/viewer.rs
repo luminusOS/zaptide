@@ -366,6 +366,12 @@ struct Viewer {
     parts: ViewerParts,
 }
 
+/// The files shown are kept from the downloads cleanup until the dialog closes.
+fn keep_while_open(dialog: &adw::Dialog, paths: impl IntoIterator<Item = std::path::PathBuf>) {
+    let hold = std::cell::RefCell::new(Some(crate::media_retention::hold(paths)));
+    dialog.connect_closed(move |_| drop(hold.take()));
+}
+
 fn viewer_size(parent: &impl IsA<gtk::Widget>) -> (i32, i32) {
     let (width, height) = parent
         .as_ref()
@@ -707,6 +713,7 @@ pub(super) fn show_photo(
         ],
     );
     let dialog = viewer.dialog.clone();
+    keep_while_open(&dialog, items.iter().map(|item| item.path.clone()));
     let photo = Rc::new(PhotoState {
         items,
         current: Cell::new(start),
@@ -1146,6 +1153,7 @@ pub(super) fn show_video(
         &[folder.upcast(), open.clone().upcast()],
     );
     let dialog = viewer.dialog.clone();
+    keep_while_open(&dialog, [path.to_path_buf()]);
     open.connect_clicked(open_and_close(path, &on_action, &dialog));
     another.connect_clicked(open_and_close(path, &on_action, &dialog));
 
@@ -1511,6 +1519,12 @@ mod tests {
 
         show_photo(&window, album.clone(), 0, on_action.clone());
         assert!(
+            album
+                .iter()
+                .all(|item| crate::media_retention::is_held(&item.path)),
+            "photos on screen are kept from the cleanup"
+        );
+        assert!(
             !button(window_ref, "Copy Image").is_sensitive(),
             "copy waits for the full photo"
         );
@@ -1572,6 +1586,12 @@ mod tests {
         assert_eq!(opened.borrow().len(), 1);
         drain();
         assert!(!has_button(window_ref, "Next Photo"), "viewer closed");
+        assert!(
+            album
+                .iter()
+                .all(|item| !crate::media_retention::is_held(&item.path)),
+            "a closed viewer releases its photos"
+        );
 
         let video = directory.path().join("clip.webm");
         let status = std::process::Command::new("gst-launch-1.0")

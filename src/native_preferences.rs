@@ -31,6 +31,8 @@ pub enum SettingsField {
     OfflineAfterInactiveSeconds,
     KeepRunningInBackground,
     VoiceSpeed,
+    MediaRetention,
+    MediaRetentionDays,
 }
 
 impl SettingsField {}
@@ -81,6 +83,8 @@ pub struct NotificationPreferences {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StoragePreferences {
     pub auto_download: bool,
+    pub media_retention: bool,
+    pub media_retention_days: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -122,6 +126,8 @@ impl From<&Settings> for NativePreferences {
             },
             storage: StoragePreferences {
                 auto_download: settings.auto_download,
+                media_retention: settings.media_retention,
+                media_retention_days: settings.media_retention_days,
             },
             background: BackgroundPreferences {
                 keep_running: settings.keep_running_in_background,
@@ -158,6 +164,8 @@ pub enum PreferenceChange {
     SetOfflineAfterInactiveSeconds(u32),
     SetKeepRunningInBackground(bool),
     SetVoiceSpeed(f32),
+    SetMediaRetention(bool),
+    SetMediaRetentionDays(u32),
 }
 
 impl std::fmt::Debug for PreferenceChange {
@@ -236,6 +244,14 @@ impl std::fmt::Debug for PreferenceChange {
             Change::SetVoiceSpeed(value) => {
                 formatter.debug_tuple("SetVoiceSpeed").field(value).finish()
             }
+            Change::SetMediaRetention(value) => formatter
+                .debug_tuple("SetMediaRetention")
+                .field(value)
+                .finish(),
+            Change::SetMediaRetentionDays(value) => formatter
+                .debug_tuple("SetMediaRetentionDays")
+                .field(value)
+                .finish(),
         }
     }
 }
@@ -264,6 +280,8 @@ impl PreferenceChange {
             Self::SetOfflineAfterInactiveSeconds(_) => SettingsField::OfflineAfterInactiveSeconds,
             Self::SetKeepRunningInBackground(_) => SettingsField::KeepRunningInBackground,
             Self::SetVoiceSpeed(_) => SettingsField::VoiceSpeed,
+            Self::SetMediaRetention(_) => SettingsField::MediaRetention,
+            Self::SetMediaRetentionDays(_) => SettingsField::MediaRetentionDays,
         }
     }
 }
@@ -499,6 +517,7 @@ impl NativePreferencesDialog {
             change_sink.clone(),
             PreferenceChange::SetAutoDownload,
         );
+        add_media_retention(&storage_page, &preferences.storage, &change_sink);
 
         let background_page = libadwaita::PreferencesPage::new();
         background_page.set_title("Background");
@@ -631,6 +650,9 @@ fn push_change(
         {
             Some(ValidationError::OfflineDelayOutOfRange)
         }
+        PreferenceChange::SetMediaRetentionDays(value) if !retention_days_in_range(*value) => {
+            Some(ValidationError::MediaRetentionOutOfRange)
+        }
         _ => None,
     };
     if let Some(error) = validation {
@@ -639,6 +661,76 @@ fn push_change(
         changes.borrow_mut().push(change);
     }
     on_change();
+}
+
+const RETENTION_CHOICES: [u32; 5] = [30, 60, 90, 180, 365];
+
+fn add_media_retention(
+    page: &libadwaita::PreferencesPage,
+    preferences: &StoragePreferences,
+    change_sink: &PreferenceChangeSink,
+) -> (libadwaita::SwitchRow, libadwaita::ComboRow) {
+    use libadwaita::prelude::*;
+    let group = libadwaita::PreferencesGroup::new();
+    group.set_title(&gettext("Free up space"));
+    group.set_description(Some(&gettext(
+        "Messages stay. A removed file downloads again when you open it, if WhatsApp still has it. Files you can't download again from WhatsApp are lost.",
+    )));
+    page.add(&group);
+
+    let switch = libadwaita::SwitchRow::new();
+    switch.set_title(&gettext("Delete old downloads"));
+    switch.set_subtitle(&gettext(
+        "Remove photos, videos, audio and files from this computer after a while",
+    ));
+    switch.set_active(preferences.media_retention);
+    let sink = change_sink.clone();
+    switch.connect_active_notify(move |row| {
+        sink.push(PreferenceChange::SetMediaRetention(row.is_active()))
+    });
+    group.add(&switch);
+
+    let row = libadwaita::ComboRow::new();
+    row.set_title(&gettext("Keep downloads for"));
+    let (labels, values, selected) = retention_choices(preferences.media_retention_days);
+    let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+    row.set_model(Some(&gtk4::StringList::new(&labels)));
+    row.set_selected(selected as u32);
+    switch
+        .bind_property("active", &row, "sensitive")
+        .sync_create()
+        .build();
+    group.add(&row);
+    let sink = change_sink.clone();
+    row.connect_selected_notify(move |row| {
+        if let Some(days) = values.get(row.selected() as usize) {
+            sink.push(PreferenceChange::SetMediaRetentionDays(*days));
+        }
+    });
+    (switch, row)
+}
+
+/// Labels, values and the selected index. A period that is not a preset, such
+/// as one from a hand-edited file, stays in force, so it is listed first.
+fn retention_choices(current: u32) -> (Vec<String>, Vec<u32>, usize) {
+    let preset = |days: u32| match days {
+        30 => gettext("30 days"),
+        60 => gettext("60 days"),
+        90 => gettext("90 days"),
+        180 => gettext("180 days"),
+        _ => gettext("1 year"),
+    };
+    let mut labels: Vec<String> = RETENTION_CHOICES.iter().map(|days| preset(*days)).collect();
+    let mut values = RETENTION_CHOICES.to_vec();
+    let selected = values.iter().position(|days| *days == current);
+    if selected.is_none() {
+        labels.insert(
+            0,
+            gettext("Custom ({} days)").replace("{}", &current.to_string()),
+        );
+        values.insert(0, current);
+    }
+    (labels, values, selected.unwrap_or(0))
 }
 
 fn add_online_status(
@@ -826,6 +918,7 @@ pub enum ValidationError {
     InvalidCustomThemeFilename,
     UnsupportedVoiceSpeed,
     OfflineDelayOutOfRange,
+    MediaRetentionOutOfRange,
 }
 
 impl std::fmt::Display for ValidationError {
@@ -835,6 +928,7 @@ impl std::fmt::Display for ValidationError {
             Self::InvalidCustomThemeFilename => "custom theme must be a local filename",
             Self::UnsupportedVoiceSpeed => "voice speed must be 1.0, 1.5, or 2.0",
             Self::OfflineDelayOutOfRange => "offline delay must be at most 24 hours",
+            Self::MediaRetentionOutOfRange => "download retention must be 1 to 3650 days",
         };
         formatter.write_str(message)
     }
@@ -843,6 +937,10 @@ impl std::fmt::Display for ValidationError {
 impl std::error::Error for ValidationError {}
 
 const MAX_OFFLINE_SECONDS: u32 = 24 * 60 * 60;
+
+fn retention_days_in_range(days: u32) -> bool {
+    (crate::media_retention::MIN_DAYS..=crate::media_retention::MAX_DAYS).contains(&days)
+}
 
 fn checked_offline_delay(seconds: u32) -> Result<u32, ValidationError> {
     if seconds > MAX_OFFLINE_SECONDS {
@@ -901,6 +999,13 @@ impl PreferenceChange {
                 }
                 settings.voice_speed = value;
             }
+            Self::SetMediaRetention(value) => settings.media_retention = value,
+            Self::SetMediaRetentionDays(value) => {
+                if !retention_days_in_range(value) {
+                    return Err(ValidationError::MediaRetentionOutOfRange);
+                }
+                settings.media_retention_days = value;
+            }
         }
         Ok(())
     }
@@ -930,6 +1035,43 @@ mod tests {
         assert_eq!(labels[selected], "Custom (30 s)");
         assert_eq!(values, [30, 10, 0]);
         assert_eq!(selected, 0);
+    }
+
+    #[test]
+    fn a_custom_retention_period_stays_selectable_and_in_force() {
+        let (labels, values, selected) = retention_choices(90);
+        assert_eq!((labels.len(), values[selected]), (5, 90));
+        let (labels, values, selected) = retention_choices(45);
+        assert_eq!(labels[selected], "Custom (45 days)");
+        assert_eq!((values[selected], values.len()), (45, 6));
+    }
+
+    #[test]
+    fn retention_periods_outside_the_supported_range_are_rejected() {
+        let mut settings = Settings::default();
+        let before = settings.clone();
+        for days in [0, 3651, u32::MAX] {
+            assert_eq!(
+                PreferenceChange::SetMediaRetentionDays(days).apply(&mut settings),
+                Err(ValidationError::MediaRetentionOutOfRange)
+            );
+        }
+        assert_eq!(settings, before);
+        PreferenceChange::SetMediaRetentionDays(60)
+            .apply(&mut settings)
+            .unwrap();
+        PreferenceChange::SetMediaRetention(true)
+            .apply(&mut settings)
+            .unwrap();
+        assert_eq!(settings.active_media_retention(), Some(60));
+        assert_eq!(
+            NativePreferences::from(&settings).storage,
+            StoragePreferences {
+                auto_download: true,
+                media_retention: true,
+                media_retention_days: 60,
+            }
+        );
     }
 
     #[test]
@@ -1026,6 +1168,45 @@ mod tests {
         assert_eq!(
             secret_value_for_response("save", "private").as_deref(),
             Some("private")
+        );
+    }
+
+    #[test]
+    #[ignore = "requires a display; run with GSETTINGS_BACKEND=memory cargo test --lib native_preferences::tests::retention_rows_follow_the_switch_and_report_edits -- --ignored"]
+    fn retention_rows_follow_the_switch_and_report_edits() {
+        use gtk4::prelude::*;
+        use libadwaita::prelude::*;
+
+        gtk4::init().expect("GTK display");
+        libadwaita::init().expect("libadwaita");
+        let changes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let errors = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let sink = PreferenceChangeSink {
+            changes: changes.clone(),
+            errors,
+            on_change: std::rc::Rc::new(|| {}),
+        };
+        let page = libadwaita::PreferencesPage::new();
+        let storage = StoragePreferences {
+            auto_download: true,
+            media_retention: false,
+            media_retention_days: 90,
+        };
+
+        let (switch, days) = add_media_retention(&page, &storage, &sink);
+
+        assert!(!switch.is_active());
+        assert!(!days.is_sensitive());
+        assert_eq!(days.selected(), 2);
+        switch.set_active(true);
+        assert!(days.is_sensitive());
+        days.set_selected(0);
+        assert_eq!(
+            *changes.borrow(),
+            [
+                PreferenceChange::SetMediaRetention(true),
+                PreferenceChange::SetMediaRetentionDays(30)
+            ]
         );
     }
 

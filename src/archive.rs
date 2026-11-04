@@ -1263,4 +1263,49 @@ mod media_path_tests {
             .expect("cleared");
         assert!(archive.media_paths().expect("lists").is_empty());
     }
+
+    fn filed(archive: &Archive, message: Message, raw: Option<&[u8]>) -> String {
+        let id = message.id.clone();
+        archive.insert_message(&message, raw).expect("inserted");
+        archive
+            .set_media_path("a@s.whatsapp.net", &id, Path::new("/synthetic/file"))
+            .expect("filed");
+        id
+    }
+
+    #[test]
+    fn only_files_that_can_be_fetched_again_may_expire() {
+        let archive = Archive::in_memory().expect("opens");
+        archive.ensure_chat("a@s.whatsapp.net", "A").expect("chat");
+        let fetchable = filed(&archive, picture("fetchable"), Some(b"raw"));
+        filed(&archive, picture("without-keys"), None);
+
+        let mut sticker = picture("sticker");
+        let Content::Image { media, .. } = picture("sticker").content else {
+            unreachable!()
+        };
+        sticker.content = Content::Sticker {
+            media,
+            animated: false,
+        };
+        filed(&archive, sticker, Some(b"raw"));
+
+        for (id, status) in [("pending", Delivery::Pending), ("failed", Delivery::Failed)] {
+            let mut sent = picture(id);
+            sent.from_me = true;
+            sent.status = status;
+            archive
+                .insert_message(&sent, Some(b"raw"))
+                .expect("inserted");
+            archive
+                .set_media_path("a@s.whatsapp.net", id, Path::new("/synthetic/file"))
+                .expect("filed");
+        }
+
+        let listed = archive.expirable_media().expect("lists");
+        assert_eq!(
+            listed.iter().map(|row| row.1.as_str()).collect::<Vec<_>>(),
+            [fetchable.as_str()]
+        );
+    }
 }

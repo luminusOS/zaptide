@@ -6,7 +6,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: zaptide\n"
 "Report-Msgid-Bugs-To: https://github.com/luminusOS/zaptide/issues\n"
-"POT-Creation-Date: 2026-11-04 10:02-0300\n"
+"POT-Creation-Date: 2026-11-04 11:45-0300\n"
 "PO-Revision-Date: 2026-10-13 17:25-0300\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -16,18 +16,18 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n > 1);\n"
 
-#: src/application/accounts.rs:143 src/application/accounts.rs:144
+#: src/application/accounts.rs:151 src/application/accounts.rs:152
 #: src/application/dispatch/backend_events.rs:425
 #: src/application/dispatch.rs:147 src/application/dispatch.rs:148
-#: src/application/dispatch.rs:461 src/application.rs:2740
+#: src/application/dispatch.rs:462 src/application.rs:2740
 msgid "Could not save preferences"
 msgstr "Não foi possível salvar as preferências"
 
-#: src/application/accounts.rs:146
+#: src/application/accounts.rs:154
 msgid "Preferences saved"
 msgstr "Preferências salvas"
 
-#: src/application/accounts.rs:149 src/application/accounts.rs:150
+#: src/application/accounts.rs:157 src/application/accounts.rs:158
 #: src/application/dispatch.rs:152 src/application/dispatch.rs:153
 msgid "Preference value is invalid"
 msgstr "O valor da preferência é inválido"
@@ -232,9 +232,9 @@ msgstr "Enviar mensagem de voz"
 #: src/application/composer.rs:235 src/application/contact_sharing.rs:439
 #: src/application/dialogs.rs:52 src/application/dialogs.rs:77
 #: src/application/dialogs.rs:224 src/application/dialogs.rs:401
-#: src/application/dispatch.rs:957 src/application/link_page.rs:85
+#: src/application/dispatch.rs:958 src/application/link_page.rs:85
 #: src/application/profile_dialog.rs:115 src/application.rs:960
-#: src/application.rs:2780 src/native_preferences.rs:771
+#: src/application.rs:2780 src/native_preferences.rs:863
 msgid "Cancel"
 msgstr "Cancelar"
 
@@ -318,10 +318,10 @@ msgstr "Contato não enviado: a conversa ou a conta vinculada mudou"
 msgid "Sending contact"
 msgstr "Enviando contato"
 
-#: src/application/contact_sharing.rs:76 src/application/dispatch.rs:234
-#: src/application/dispatch.rs:406 src/application/dispatch.rs:525
-#: src/application/dispatch.rs:550 src/application/dispatch.rs:850
-#: src/application/dispatch.rs:857
+#: src/application/contact_sharing.rs:76 src/application/dispatch.rs:235
+#: src/application/dispatch.rs:407 src/application/dispatch.rs:526
+#: src/application/dispatch.rs:551 src/application/dispatch.rs:851
+#: src/application/dispatch.rs:858
 msgid "Backend unavailable"
 msgstr "Serviço indisponível"
 
@@ -622,68 +622,68 @@ msgstr "Sem conexão com o WhatsApp"
 msgid "Could not open themes folder"
 msgstr "Não foi possível abrir a pasta de temas"
 
-#: src/application/dispatch.rs:165
+#: src/application/dispatch.rs:166
 msgid "Starting backend"
 msgstr "Iniciando o serviço"
 
-#: src/application/dispatch.rs:366
+#: src/application/dispatch.rs:367
 msgid "Reconnecting to WhatsApp"
 msgstr "Reconectando ao WhatsApp"
 
-#: src/application/dispatch.rs:385
+#: src/application/dispatch.rs:386
 msgid "Refreshing messages"
 msgstr "Atualizando mensagens"
 
-#: src/application/dispatch.rs:404
+#: src/application/dispatch.rs:405
 msgid "Unlinking this computer"
 msgstr "Desvinculando este computador"
 
-#: src/application/dispatch.rs:501 src/application/dispatch.rs:509
+#: src/application/dispatch.rs:502 src/application/dispatch.rs:510
 msgid "Code copied"
 msgstr "Código copiado"
 
-#: src/application/dispatch.rs:517 src/application/dispatch.rs:518
-#: src/application/dispatch.rs:530 src/application/dispatch.rs:531
+#: src/application/dispatch.rs:518 src/application/dispatch.rs:519
+#: src/application/dispatch.rs:531 src/application/dispatch.rs:532
 msgid "Enter valid phone number with country code"
 msgstr "Informe um número de telefone válido, com o código do país"
 
-#: src/application/dispatch.rs:523
+#: src/application/dispatch.rs:524
 msgid "Requesting a pairing code from WhatsApp"
 msgstr "Pedindo um código de pareamento ao WhatsApp"
 
-#: src/application/dispatch.rs:548
+#: src/application/dispatch.rs:549
 msgid "Checking contact on WhatsApp"
 msgstr "Verificando o contato no WhatsApp"
 
-#: src/application/dispatch.rs:654
+#: src/application/dispatch.rs:655
 msgid "Contact opened"
 msgstr "Contato aberto"
 
-#: src/application/dispatch.rs:785
+#: src/application/dispatch.rs:786
 msgid "Could not save attachment"
 msgstr "Não foi possível salvar o anexo"
 
-#: src/application/dispatch.rs:790
+#: src/application/dispatch.rs:791
 msgid "Clipboard or portal action failed"
 msgstr "A área de transferência ou o portal falhou"
 
-#: src/application/dispatch.rs:809
+#: src/application/dispatch.rs:810
 msgid "Copied"
 msgstr "Copiado"
 
-#: src/application/dispatch.rs:825
+#: src/application/dispatch.rs:826
 msgid "Phone number copied"
 msgstr "Número de telefone copiado"
 
-#: src/application/dispatch.rs:950
+#: src/application/dispatch.rs:951
 msgid "Delete message?"
 msgstr "Apagar mensagem?"
 
-#: src/application/dispatch.rs:958
+#: src/application/dispatch.rs:959
 msgid "Delete"
 msgstr "Apagar"
 
-#: src/application/dispatch.rs:994
+#: src/application/dispatch.rs:995
 msgid "Shutdown complete"
 msgstr "Encerramento concluído"
 
@@ -804,7 +804,7 @@ msgstr "Recado"
 msgid "Your name and About text are visible to your contacts."
 msgstr "Seu nome e seu recado ficam visíveis para seus contatos."
 
-#: src/application/profile_dialog.rs:218 src/native_preferences.rs:772
+#: src/application/profile_dialog.rs:218 src/native_preferences.rs:864
 msgid "Save"
 msgstr "Salvar"
 
@@ -885,8 +885,8 @@ msgid "Could not save theme preference"
 msgstr "Não foi possível salvar a preferência de tema"
 
 #: src/application.rs:1874 src/native_media_widgets/photo.rs:439
-#: src/native_media_widgets/viewer.rs:682
-#: src/native_media_widgets/viewer.rs:1132
+#: src/native_media_widgets/viewer.rs:688
+#: src/native_media_widgets/viewer.rs:1139
 msgid "Show in Folder"
 msgstr "Mostrar na pasta"
 
@@ -1106,32 +1106,32 @@ msgstr "Mensagem favoritada"
 msgid "You"
 msgstr "Você"
 
-#: src/application/transcript_view.rs:60
+#: src/application/transcript_view.rs:87
 msgid "No Conversation Selected"
 msgstr "Nenhuma conversa selecionada"
 
-#: src/application/transcript_view.rs:72
+#: src/application/transcript_view.rs:100
 msgid "Show earlier messages from the archive or your phone"
 msgstr "Mostrar mensagens anteriores do arquivo ou do celular"
 
-#: src/application/transcript_view.rs:96
+#: src/application/transcript_view.rs:133
 msgid "Load older messages"
 msgstr "Carregar mensagens mais antigas"
 
-#: src/application/transcript_view.rs:108
+#: src/application/transcript_view.rs:145
 msgid "Loading older messages…"
 msgstr "Carregando mensagens mais antigas…"
 
-#: src/application/transcript_view.rs:136
-#: src/application/transcript_view.rs:137
+#: src/application/transcript_view.rs:173
+#: src/application/transcript_view.rs:174
 msgid "Go to latest message"
 msgstr "Ir para a última mensagem"
 
-#: src/application/transcript_view.rs:151
+#: src/application/transcript_view.rs:188
 msgid "Go to new messages"
 msgstr "Ir para as novas mensagens"
 
-#: src/application/transcript_view.rs:164
+#: src/application/transcript_view.rs:201
 msgid "New messages"
 msgstr "Novas mensagens"
 
@@ -1313,61 +1313,61 @@ msgstr "Diminuir zoom"
 msgid "Zoom In"
 msgstr "Aumentar zoom"
 
-#: src/native_media_widgets/viewer.rs:432
+#: src/native_media_widgets/viewer.rs:438
 msgid "Close"
 msgstr "Fechar"
 
-#: src/native_media_widgets/viewer.rs:680
+#: src/native_media_widgets/viewer.rs:686
 msgid "Copy Image"
 msgstr "Copiar imagem"
 
-#: src/native_media_widgets/viewer.rs:685
-#: src/native_media_widgets/viewer.rs:1139
+#: src/native_media_widgets/viewer.rs:691
+#: src/native_media_widgets/viewer.rs:1146
 msgid "Open With Another App"
 msgstr "Abrir com outro aplicativo"
 
-#: src/native_media_widgets/viewer.rs:689
+#: src/native_media_widgets/viewer.rs:695
 msgid "Previous Photo"
 msgstr "Foto anterior"
 
-#: src/native_media_widgets/viewer.rs:692
+#: src/native_media_widgets/viewer.rs:698
 msgid "Next Photo"
 msgstr "Próxima foto"
 
-#: src/native_media_widgets/viewer.rs:829
-#: src/native_media_widgets/viewer.rs:910
-#: src/native_media_widgets/viewer.rs:916
+#: src/native_media_widgets/viewer.rs:836
+#: src/native_media_widgets/viewer.rs:917
+#: src/native_media_widgets/viewer.rs:923
 msgid "Play"
 msgstr "Reproduzir"
 
-#: src/native_media_widgets/viewer.rs:842
+#: src/native_media_widgets/viewer.rs:849
 msgid "Seek"
 msgstr "Posição"
 
-#: src/native_media_widgets/viewer.rs:858
-#: src/native_media_widgets/viewer.rs:861
-#: src/native_media_widgets/viewer.rs:867
+#: src/native_media_widgets/viewer.rs:865
+#: src/native_media_widgets/viewer.rs:868
+#: src/native_media_widgets/viewer.rs:874
 msgid "Volume"
 msgstr "Volume"
 
-#: src/native_media_widgets/viewer.rs:868
-#: src/native_media_widgets/viewer.rs:873
+#: src/native_media_widgets/viewer.rs:875
+#: src/native_media_widgets/viewer.rs:880
 msgid "Fullscreen"
 msgstr "Tela cheia"
 
-#: src/native_media_widgets/viewer.rs:871
+#: src/native_media_widgets/viewer.rs:878
 msgid "Exit Fullscreen"
 msgstr "Sair da tela cheia"
 
-#: src/native_media_widgets/viewer.rs:1122
+#: src/native_media_widgets/viewer.rs:1129
 msgid "Can't Play This Video"
 msgstr "Não é possível reproduzir este vídeo"
 
-#: src/native_media_widgets/viewer.rs:1123
+#: src/native_media_widgets/viewer.rs:1130
 msgid "Open it with another app instead"
 msgstr "Abra com outro aplicativo"
 
-#: src/native_media_widgets/viewer.rs:1126
+#: src/native_media_widgets/viewer.rs:1133
 msgid "Open in Another App"
 msgstr "Abrir em outro aplicativo"
 
@@ -1379,18 +1379,69 @@ msgstr "Pré-visualização da imagem"
 msgid "Open or download attachment"
 msgstr "Abrir ou baixar o anexo"
 
-#: src/native_preferences.rs:386
+#: src/native_preferences.rs:404
 msgid "Open Themes Folder"
 msgstr "Abrir pasta de temas"
 
+#: src/native_preferences.rs:675
+msgid "Free up space"
+msgstr "Liberar espaço"
+
+#: src/native_preferences.rs:677
+msgid ""
+"Messages stay. A removed file downloads again when you open it, if WhatsApp "
+"still has it. Files you can't download again from WhatsApp are lost."
+msgstr ""
+"As mensagens ficam. Um arquivo removido é baixado de novo quando você o "
+"abre, se o WhatsApp ainda o tiver. Arquivos que não podem ser baixados de "
+"novo do WhatsApp são perdidos."
+
+#: src/native_preferences.rs:682
+msgid "Delete old downloads"
+msgstr "Apagar downloads antigos"
+
+#: src/native_preferences.rs:684
+msgid "Remove photos, videos, audio and files from this computer after a while"
+msgstr ""
+"Remove fotos, vídeos, áudios e arquivos deste computador depois de um tempo"
+
+#: src/native_preferences.rs:694
+msgid "Keep downloads for"
+msgstr "Manter downloads por"
+
+#: src/native_preferences.rs:717
+msgid "30 days"
+msgstr "30 dias"
+
+#: src/native_preferences.rs:718
+msgid "60 days"
+msgstr "60 dias"
+
+#: src/native_preferences.rs:719
+msgid "90 days"
+msgstr "90 dias"
+
+#: src/native_preferences.rs:720
+msgid "180 days"
+msgstr "180 dias"
+
+#: src/native_preferences.rs:721
+msgid "1 year"
+msgstr "1 ano"
+
+#: src/native_preferences.rs:729
+#, rust-format
+msgid "Custom ({} days)"
+msgstr "Personalizado ({} dias)"
+
 #~ msgid "Photo"
 #~ msgstr "Foto"
-
-#~ msgid "Actual Size"
-#~ msgstr "Tamanho real"
 
 #~ msgid "Pause"
 #~ msgstr "Pausar"
 
 #~ msgid "Video"
 #~ msgstr "Vídeo"
+
+#~ msgid "Actual Size"
+#~ msgstr "Tamanho real"

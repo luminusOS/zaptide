@@ -175,8 +175,24 @@ pub struct ProfileEdit {
     pub picture: PictureEdit,
 }
 
+/// What a cleanup run removed. The archive forgets those files afterwards.
+#[derive(Clone, Debug)]
+pub struct MediaSwept {
+    pub session_generation: u64,
+    pub cleared: Vec<(ChatId, String, PathBuf)>,
+    pub bytes: u64,
+    pub failed: usize,
+    /// More files were due than one run removes.
+    pub more: bool,
+}
+
 #[derive(Clone, Debug)]
 pub enum Command {
+    /// Deletes downloaded attachments older than this many days; `None`
+    /// keeps them.
+    SetMediaRetention(Option<u32>),
+    /// Internal result of a cleanup run.
+    MediaSwept(MediaSwept),
     /// Turns link previews on or off for this account, synced with the phone.
     SetLinkPreviews(bool),
     /// Shows this account as online or offline. WhatsApp holds the phone's
