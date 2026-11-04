@@ -522,7 +522,7 @@ mod tests {
     fn pill_buttons_follow_the_recent_reactions_and_mark_ours() {
         gtk::init().expect("display");
         let list = gtk::ListView::new(None::<gtk::SelectionModel>, None::<gtk::ListItemFactory>);
-        let _window = gtk::Window::builder().child(&list).build();
+        let window = gtk::Window::builder().child(&list).build();
         let drawer = Rc::new(Drawer::default());
         let popover = drawer.popover_in(list.upcast_ref());
         assert!(!popover.can_focus());
@@ -558,6 +558,19 @@ mod tests {
 
         refresh_buttons(&popover, &quick, None);
         assert!(!buttons[0].has_css_class("chosen"));
+
+        let provider = gtk::CssProvider::new();
+        provider.load_from_string(include_str!("../../data/style.css"));
+        gtk::style_context_add_provider_for_display(
+            &list.display(),
+            &provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+        window.present();
+        popover.popup();
+        let (_, size) = popover.preferred_size();
+        assert!(size.width() < 600, "pill is {} px wide", size.width());
+        assert!(size.height() < 200, "pill is {} px tall", size.height());
     }
 
     #[test]
