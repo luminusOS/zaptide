@@ -4,6 +4,24 @@ use super::dialogs::{StarredEntry, show_starred_dialog};
 use super::presentation::sender_label;
 use super::*;
 
+/// Only a star this user just added is confirmed; one the phone synced, or a
+/// removal, changes the bubble silently.
+pub(super) fn confirms_starring(changed: bool, starred: bool, local: bool) -> bool {
+    changed && starred && local
+}
+
+fn starred_toast() -> adw::Toast {
+    let text = gettext("Message starred");
+    let title = gtk::Box::builder().spacing(8).build();
+    title.append(&decorative_star(-1));
+    title.append(&gtk::Label::new(Some(&text)));
+    adw::Toast::builder()
+        .title(text)
+        .use_markup(false)
+        .custom_title(&title)
+        .build()
+}
+
 impl NativeApplication {
     pub(super) fn toggle_selected_star(&mut self) {
         let Some((chat, id)) = self.active_chat.clone().zip(self.selected_message_id()) else {
@@ -15,7 +33,7 @@ impl NativeApplication {
         }
     }
 
-    pub(super) fn star_changed(&mut self, chat: &str, id: String, starred: bool) {
+    pub(super) fn star_changed(&mut self, chat: &str, id: String, starred: bool, local: bool) {
         if self.active_chat.as_deref() != Some(chat) {
             return;
         }
@@ -24,6 +42,9 @@ impl NativeApplication {
         } else {
             self.starred.remove(&id)
         };
+        if confirms_starring(changed, starred, local) {
+            self.add_toast(starred_toast());
+        }
         if changed {
             self.refresh_message_row(&id);
         }

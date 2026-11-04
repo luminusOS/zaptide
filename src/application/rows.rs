@@ -155,7 +155,7 @@ pub(super) struct MessageRowWidgets {
     name: gtk::Label,
     quote: gtk::Label,
     body: gtk::Label,
-    footer: gtk::Label,
+    footer: FooterLabels,
     reactions: gtk::Box,
     status: gtk::DrawingArea,
     status_icon: gtk::Image,
@@ -257,19 +257,14 @@ impl RelmListItem for MessageRow {
         bubble.append(&media);
         let audio = gtk::Box::new(gtk::Orientation::Vertical, 0);
         bubble.append(&audio);
-        let footer = gtk::Label::builder()
-            .xalign(1.0)
-            .wrap(true)
-            .max_width_chars(52)
-            .css_classes(["dim-label", "caption"])
-            .build();
+        let footer = FooterLabels::new();
         let status = delivery_ticks();
         let status_icon = gtk::Image::builder().pixel_size(12).build();
         let footer_row = gtk::Box::builder()
             .spacing(4)
             .halign(gtk::Align::End)
             .build();
-        footer_row.append(&footer);
+        footer.append_to(&footer_row);
         footer_row.append(&status);
         footer_row.append(&status_icon);
         bubble.append(&footer_row);
@@ -513,8 +508,7 @@ impl RelmListItem for MessageRow {
             .body
             .update_property(&[gtk::accessible::Property::Label(&self.accessible_label)]);
         *widgets.menu_target.borrow_mut() = Some((self.id.clone(), self.pointer_sender.clone()));
-        widgets.footer.set_label(&self.footer);
-        widgets.footer.set_visible(!self.footer.is_empty());
+        widgets.footer.set(&self.notes, &self.clock, self.starred);
         while let Some(child) = widgets.reactions.first_child() {
             widgets.reactions.remove(&child);
         }

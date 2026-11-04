@@ -4021,10 +4021,12 @@ mod stars {
             .build()
     }
 
-    fn changes(events: &std::sync::mpsc::Receiver<Event>) -> Vec<bool> {
+    fn changes(events: &std::sync::mpsc::Receiver<Event>) -> Vec<(bool, bool)> {
         std::iter::from_fn(|| events.try_recv().ok())
             .filter_map(|event| match event {
-                Event::StarChanged { id, starred, .. } if id == "STAR" => Some(starred),
+                Event::StarChanged {
+                    id, starred, local, ..
+                } if id == "STAR" => Some((starred, local)),
                 _ => None,
             })
             .collect()
@@ -4040,7 +4042,7 @@ mod stars {
                 ))))
                 .await;
         }
-        assert_eq!(changes(&events), [true, false]);
+        assert_eq!(changes(&events), [(true, false), (false, false)]);
         assert!(worker.archive.starred_ids(PEER).unwrap().is_empty());
     }
 
@@ -4051,7 +4053,7 @@ mod stars {
         let message = crate::archive::tests::message(PEER, "STAR", 10, false);
         worker.archive.insert_message(&message, None).unwrap();
         worker.set_starred(PEER.to_owned(), "STAR".to_owned(), true);
-        assert_eq!(changes(&events), [true]);
+        assert_eq!(changes(&events), [(true, true)]);
         assert_eq!(worker.archive.starred_ids(PEER).unwrap(), ["STAR"]);
         worker.set_starred(PEER.to_owned(), "UNKNOWN".to_owned(), true);
         assert!(changes(&events).is_empty());

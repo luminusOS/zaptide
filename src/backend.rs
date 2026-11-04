@@ -650,6 +650,9 @@ pub enum Event {
         chat: ChatId,
         id: String,
         starred: bool,
+        /// Whether this device's user asked for the change, as opposed to the
+        /// phone syncing it.
+        local: bool,
     },
     /// The starred messages of a chat that was just opened.
     StarredIds {
