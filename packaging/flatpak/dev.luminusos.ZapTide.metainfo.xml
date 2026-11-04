@@ -38,11 +38,13 @@
   <releases>
     <release version="0.8.0" date="2026-11-04">
       <description>
-        <p>One-to-one voice and video calls, with a Calls tab and answer and
-        decline buttons on incoming call notifications. Hovering a message
+        <p>One-to-one voice and video calls, with a Calls tab, redesigned call
+        screens and answer and decline buttons on incoming call notifications.
+        The Flatpak asks the camera portal for a camera. Hovering a message
         shows quick reactions, and starred messages show a star. The photo
-        and video viewer has a new design. ZapTide goes offline when idle so
-        the phone gets notifications, and an opt-in setting deletes old
+        and video viewer has a new design, opens without freezing and zooms
+        freely with Ctrl and the mouse wheel. ZapTide goes offline when idle
+        so the phone gets notifications, and an opt-in setting deletes old
         downloaded media. Ctrl+Q quits and Ctrl+W closes the window.</p>
       </description>
     </release>
