@@ -31,4 +31,5 @@ src/native_media_widgets/photo.rs
 src/native_media_widgets/sticker.rs
 src/native_media_widgets/viewer.rs
 src/native_media_widgets/widget.rs
+src/native_notifications.rs
 src/native_preferences.rs

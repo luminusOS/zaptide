@@ -620,6 +620,12 @@ pub enum Input {
         video: bool,
     },
     CallAction(CallAction),
+    /// A button of a call's notification, for the account that owns the call.
+    CallChoice(
+        crate::account::AccountId,
+        String,
+        crate::native_notifications::CallChoice,
+    ),
     CallTick,
     Reconnect,
     /// The computer woke from suspend: the connection may be dead.
@@ -1043,10 +1049,14 @@ impl SimpleComponent for NativeApplication {
             move || input.input(Input::BackendReady(active_account)),
         );
         let notification_sender = sender.clone();
+        let call_sender = sender.clone();
         let application: gtk::Application = relm4::main_application().upcast();
         let notifications = crate::native_notifications::NativeNotifications::new(
             &application,
             move |account, chat| notification_sender.input(Input::OpenAccountChat(account, chat)),
+            move |account, call, choice| {
+                call_sender.input(Input::CallChoice(account, call, choice))
+            },
         );
         let chats: TypedListView<ChatRow, gtk::SingleSelection> = TypedListView::new();
         let chat_targets = std::rc::Rc::new(std::cell::RefCell::new(chats::ChatTargets::default()));

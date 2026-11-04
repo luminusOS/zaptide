@@ -306,6 +306,7 @@ impl NativeApplication {
             Input::CallBack => self.call_back(),
             Input::StartCall { video } => self.start_call(video),
             Input::CallAction(action) => self.call_action(action, &sender),
+            Input::CallChoice(account, call, choice) => self.call_choice(account, &call, choice),
             Input::CallTick => self.call_tick(),
             Input::SetMutedFilter(enabled) => {
                 self.chat_filters.muted = if enabled {

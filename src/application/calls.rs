@@ -8,6 +8,7 @@ use crate::i18n::gettext;
 use crate::model::call::{
     CallEntry, CallKind, CallPhase, CallSession, call_summary, unseen_missed, with_detail,
 };
+use crate::native_notifications::{CallBanner, CallChoice};
 use std::sync::Arc;
 
 #[cfg(test)]
@@ -330,6 +331,17 @@ fn ring_for(session: &CallSession, incoming_allowed: impl FnOnce() -> bool) -> O
     }
 }
 
+/// What a notification button does to a call in `phase`: answering or
+/// declining only makes sense while it rings.
+fn choice_command(choice: CallChoice, phase: CallPhase) -> Option<crate::backend::Command> {
+    use crate::backend::Command;
+    match (choice, phase) {
+        (CallChoice::Answer, CallPhase::Ringing) => Some(Command::AnswerCall),
+        (CallChoice::Decline, CallPhase::Ringing) => Some(Command::DeclineCall),
+        _ => None,
+    }
+}
+
 /// Whether the desktop is set not to show banners, its do-not-disturb switch.
 fn banners_hidden() -> bool {
     use gtk::gio::prelude::*;
@@ -519,6 +531,9 @@ impl NativeApplication {
         session: CallSession,
         sender: &ComponentSender<Self>,
     ) {
+        if session.phase != CallPhase::Ringing {
+            self.notifications.clear_call(account, &session.id);
+        }
         self.apply_call_change(account, session, sender);
         self.sync_ring();
     }
@@ -578,8 +593,6 @@ impl NativeApplication {
         }
         if session.phase == CallPhase::Ringing && !same {
             self.notify_ringing(account, &session, &name, avatar_path.as_deref());
-        } else if session.phase != CallPhase::Ringing {
-            self.notifications.clear_chat(account, &session.chat);
         }
         if matches!(
             session.phase,
@@ -655,11 +668,37 @@ impl NativeApplication {
             return;
         }
         let body = incoming_label(session.video);
-        if let Err(error) = self
-            .notifications
-            .show(account, &session.chat, name, &body, avatar)
-        {
+        if let Err(error) = self.notifications.show_call(
+            account,
+            &session.id,
+            CallBanner::Ringing,
+            name,
+            &body,
+            avatar,
+        ) {
             log::warn!("could not show a notification: {error}");
+        }
+    }
+
+    /// A button or the body of a call's notification was used. A notification
+    /// left over from a call that is no longer ringing does nothing.
+    pub(super) fn call_choice(&mut self, account: AccountId, call_id: &str, choice: CallChoice) {
+        let Some(live) = self
+            .calls
+            .live
+            .as_ref()
+            .filter(|live| live.account == account && live.session.id == call_id)
+        else {
+            return;
+        };
+        if choice == CallChoice::Show {
+            live.window.window.present();
+            return;
+        }
+        if let Some(command) = choice_command(choice, live.session.phase)
+            && let Some(backend) = self.call_backend(account)
+        {
+            backend.send(command);
         }
     }
 

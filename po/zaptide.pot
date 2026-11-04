@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: zaptide\n"
 "Report-Msgid-Bugs-To: https://github.com/luminusOS/zaptide/issues\n"
-"POT-Creation-Date: 2026-11-04 09:35-0300\n"
+"POT-Creation-Date: 2026-11-04 09:59-0300\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -20,7 +20,7 @@ msgstr ""
 #: src/application/accounts.rs:143 src/application/accounts.rs:144
 #: src/application/dispatch/backend_events.rs:424
 #: src/application/dispatch.rs:147 src/application/dispatch.rs:148
-#: src/application/dispatch.rs:460 src/application.rs:2728
+#: src/application/dispatch.rs:461 src/application.rs:2739
 msgid "Could not save preferences"
 msgstr ""
 
@@ -74,23 +74,23 @@ msgstr ""
 msgid "More Reactions"
 msgstr ""
 
-#: src/application/calls.rs:130
+#: src/application/calls.rs:133
 msgid "No Call Selected"
 msgstr ""
 
-#: src/application/calls.rs:131
+#: src/application/calls.rs:134
 msgid "Pick a call to see its details"
 msgstr ""
 
-#: src/application/calls.rs:141
+#: src/application/calls.rs:144
 msgid "Open chat"
 msgstr ""
 
-#: src/application/calls.rs:143
+#: src/application/calls.rs:146
 msgid "Call back"
 msgstr ""
 
-#: src/application/calls.rs:171
+#: src/application/calls.rs:174
 msgid "Call details"
 msgstr ""
 
@@ -130,11 +130,11 @@ msgstr ""
 msgid "Try again"
 msgstr ""
 
-#: src/application/calls/screen.rs:149
+#: src/application/calls/screen.rs:149 src/native_notifications.rs:255
 msgid "Decline"
 msgstr ""
 
-#: src/application/calls/screen.rs:155
+#: src/application/calls/screen.rs:155 src/native_notifications.rs:260
 msgid "Answer"
 msgstr ""
 
@@ -217,9 +217,9 @@ msgstr ""
 #: src/application/composer.rs:235 src/application/contact_sharing.rs:439
 #: src/application/dialogs.rs:52 src/application/dialogs.rs:77
 #: src/application/dialogs.rs:224 src/application/dialogs.rs:401
-#: src/application/dispatch.rs:956 src/application/link_page.rs:85
-#: src/application/profile_dialog.rs:115 src/application.rs:953
-#: src/application.rs:2768 src/native_preferences.rs:771
+#: src/application/dispatch.rs:957 src/application/link_page.rs:85
+#: src/application/profile_dialog.rs:115 src/application.rs:959
+#: src/application.rs:2779 src/native_preferences.rs:771
 msgid "Cancel"
 msgstr ""
 
@@ -300,9 +300,9 @@ msgid "Sending contact"
 msgstr ""
 
 #: src/application/contact_sharing.rs:76 src/application/dispatch.rs:234
-#: src/application/dispatch.rs:405 src/application/dispatch.rs:524
-#: src/application/dispatch.rs:549 src/application/dispatch.rs:849
-#: src/application/dispatch.rs:856
+#: src/application/dispatch.rs:406 src/application/dispatch.rs:525
+#: src/application/dispatch.rs:550 src/application/dispatch.rs:850
+#: src/application/dispatch.rs:857
 msgid "Backend unavailable"
 msgstr ""
 
@@ -525,7 +525,7 @@ msgstr ""
 msgid "Forwarding"
 msgstr ""
 
-#: src/application/dialogs.rs:661 src/application.rs:970
+#: src/application/dialogs.rs:661 src/application.rs:976
 msgid "Forward"
 msgstr ""
 
@@ -572,7 +572,7 @@ msgstr ""
 msgid "Clear the staged clipboard image before adding files"
 msgstr ""
 
-#: src/application/dispatch/attachments.rs:53 src/application.rs:2061
+#: src/application/dispatch/attachments.rs:53 src/application.rs:2071
 msgid "Finish the active portal action first"
 msgstr ""
 
@@ -597,9 +597,9 @@ msgid "Not connected to WhatsApp"
 msgstr ""
 
 #: src/application/dispatch.rs:55 src/application/dispatch.rs:56
-#: src/application/dispatch.rs:66 src/application.rs:2190
-#: src/application.rs:2191 src/application.rs:2205 src/application.rs:2206
-#: src/application.rs:2230 src/application.rs:2231
+#: src/application/dispatch.rs:66 src/application.rs:2200
+#: src/application.rs:2201 src/application.rs:2215 src/application.rs:2216
+#: src/application.rs:2240 src/application.rs:2241
 msgid "Could not open themes folder"
 msgstr ""
 
@@ -607,64 +607,64 @@ msgstr ""
 msgid "Starting backend"
 msgstr ""
 
-#: src/application/dispatch.rs:365
+#: src/application/dispatch.rs:366
 msgid "Reconnecting to WhatsApp"
 msgstr ""
 
-#: src/application/dispatch.rs:384
+#: src/application/dispatch.rs:385
 msgid "Refreshing messages"
 msgstr ""
 
-#: src/application/dispatch.rs:403
+#: src/application/dispatch.rs:404
 msgid "Unlinking this computer"
 msgstr ""
 
-#: src/application/dispatch.rs:500 src/application/dispatch.rs:508
+#: src/application/dispatch.rs:501 src/application/dispatch.rs:509
 msgid "Code copied"
 msgstr ""
 
-#: src/application/dispatch.rs:516 src/application/dispatch.rs:517
-#: src/application/dispatch.rs:529 src/application/dispatch.rs:530
+#: src/application/dispatch.rs:517 src/application/dispatch.rs:518
+#: src/application/dispatch.rs:530 src/application/dispatch.rs:531
 msgid "Enter valid phone number with country code"
 msgstr ""
 
-#: src/application/dispatch.rs:522
+#: src/application/dispatch.rs:523
 msgid "Requesting a pairing code from WhatsApp"
 msgstr ""
 
-#: src/application/dispatch.rs:547
+#: src/application/dispatch.rs:548
 msgid "Checking contact on WhatsApp"
 msgstr ""
 
-#: src/application/dispatch.rs:653
+#: src/application/dispatch.rs:654
 msgid "Contact opened"
 msgstr ""
 
-#: src/application/dispatch.rs:784
+#: src/application/dispatch.rs:785
 msgid "Could not save attachment"
 msgstr ""
 
-#: src/application/dispatch.rs:789
+#: src/application/dispatch.rs:790
 msgid "Clipboard or portal action failed"
 msgstr ""
 
-#: src/application/dispatch.rs:808
+#: src/application/dispatch.rs:809
 msgid "Copied"
 msgstr ""
 
-#: src/application/dispatch.rs:824
+#: src/application/dispatch.rs:825
 msgid "Phone number copied"
 msgstr ""
 
-#: src/application/dispatch.rs:949
+#: src/application/dispatch.rs:950
 msgid "Delete message?"
 msgstr ""
 
-#: src/application/dispatch.rs:957
+#: src/application/dispatch.rs:958
 msgid "Delete"
 msgstr ""
 
-#: src/application/dispatch.rs:993
+#: src/application/dispatch.rs:994
 msgid "Shutdown complete"
 msgstr ""
 
@@ -805,209 +805,209 @@ msgstr ""
 msgid "Unread messages"
 msgstr ""
 
-#: src/application.rs:826
+#: src/application.rs:832
 msgid "Chat"
 msgstr ""
 
-#: src/application.rs:839
+#: src/application.rs:845
 msgid "Chat details"
 msgstr ""
 
-#: src/application.rs:856
+#: src/application.rs:862
 msgid "Chat menu"
 msgstr ""
 
-#: src/application.rs:863 src/application.rs:864
+#: src/application.rs:869 src/application.rs:870
 msgid "Start video call"
 msgstr ""
 
-#: src/application.rs:873 src/application.rs:874
+#: src/application.rs:879 src/application.rs:880
 msgid "Start voice call"
 msgstr ""
 
-#: src/application.rs:883
+#: src/application.rs:889
 msgid "Connection lost"
 msgstr ""
 
-#: src/application.rs:966
+#: src/application.rs:972
 msgid "Forward selected messages"
 msgstr ""
 
-#: src/application.rs:996
+#: src/application.rs:1002
 msgid "Drop Files to Attach"
 msgstr ""
 
-#: src/application.rs:1157 src/application.rs:1193
+#: src/application.rs:1167 src/application.rs:1203
 msgid "_Remove Account…"
 msgstr ""
 
-#: src/application.rs:1158 src/application.rs:1196
+#: src/application.rs:1168 src/application.rs:1206
 msgid "_Preferences"
 msgstr ""
 
-#: src/application.rs:1159 src/application.rs:1198
+#: src/application.rs:1169 src/application.rs:1208
 msgid "_About ZapTide"
 msgstr ""
 
-#: src/application.rs:1160 src/application.rs:1199
+#: src/application.rs:1170 src/application.rs:1209
 msgid "_Quit"
 msgstr ""
 
-#: src/application.rs:1192
+#: src/application.rs:1202
 msgid "_New Chat"
 msgstr ""
 
-#: src/application.rs:1197
+#: src/application.rs:1207
 msgid "_Keyboard Shortcuts"
 msgstr ""
 
-#: src/application.rs:1707
+#: src/application.rs:1717
 msgid "Could not save theme preference"
 msgstr ""
 
-#: src/application.rs:1863 src/native_media_widgets/photo.rs:439
+#: src/application.rs:1873 src/native_media_widgets/photo.rs:439
 #: src/native_media_widgets/viewer.rs:682
 #: src/native_media_widgets/viewer.rs:1132
 msgid "Show in Folder"
 msgstr ""
 
-#: src/application.rs:1864
+#: src/application.rs:1874
 msgid "Save Attachment…"
 msgstr ""
 
-#: src/application.rs:1874
+#: src/application.rs:1884
 msgid "Open Link"
 msgstr ""
 
-#: src/application.rs:1878
+#: src/application.rs:1888
 msgid "Go to Quoted Message"
 msgstr ""
 
-#: src/application.rs:1888
+#: src/application.rs:1898
 msgid "Copy Text"
 msgstr ""
 
-#: src/application.rs:1890
+#: src/application.rs:1900
 msgid "Reply"
 msgstr ""
 
-#: src/application.rs:1892
+#: src/application.rs:1902
 msgid "Edit"
 msgstr ""
 
-#: src/application.rs:1894
+#: src/application.rs:1904
 msgid "Forward…"
 msgstr ""
 
-#: src/application.rs:1896
+#: src/application.rs:1906
 msgid "Unstar"
 msgstr ""
 
-#: src/application.rs:1898
+#: src/application.rs:1908
 msgid "Star"
 msgstr ""
 
-#: src/application.rs:1901
+#: src/application.rs:1911
 msgid "Select"
 msgstr ""
 
-#: src/application.rs:1919
+#: src/application.rs:1929
 msgid "Delete for Me"
 msgstr ""
 
-#: src/application.rs:1922
+#: src/application.rs:1932
 msgid "Delete for Everyone"
 msgstr ""
 
-#: src/application.rs:2037
+#: src/application.rs:2047
 msgid "Downloading attachment"
 msgstr ""
 
-#: src/application.rs:2049
+#: src/application.rs:2059
 msgid "Could not open attachment"
 msgstr ""
 
-#: src/application.rs:2065
+#: src/application.rs:2075
 msgid "Clipboard is unavailable"
 msgstr ""
 
-#: src/application.rs:2123
+#: src/application.rs:2133
 msgid "Reading clipboard image"
 msgstr ""
 
-#: src/application.rs:2125
+#: src/application.rs:2135
 msgid "Could not read clipboard image"
 msgstr ""
 
-#: src/application.rs:2131
+#: src/application.rs:2141
 msgid "Choose an available conversation before pasting an image"
 msgstr ""
 
-#: src/application.rs:2145
+#: src/application.rs:2155
 msgid "Send or clear the staged attachment before pasting an image"
 msgstr ""
 
-#: src/application.rs:2149
+#: src/application.rs:2159
 msgid "Clipboard image ready"
 msgstr ""
 
-#: src/application.rs:2182
+#: src/application.rs:2192
 msgid "Opening link"
 msgstr ""
 
-#: src/application.rs:2184
+#: src/application.rs:2194
 msgid "Link is not supported"
 msgstr ""
 
-#: src/application.rs:2200
+#: src/application.rs:2210
 msgid "Preparing themes folder"
 msgstr ""
 
-#: src/application.rs:2227
+#: src/application.rs:2237
 msgid "Opening themes folder"
 msgstr ""
 
-#: src/application.rs:2268
+#: src/application.rs:2278
 msgid "Choose save location"
 msgstr ""
 
-#: src/application.rs:2270
+#: src/application.rs:2280
 msgid "Could not open save dialog"
 msgstr ""
 
-#: src/application.rs:2359
+#: src/application.rs:2369
 msgid "Choose another available conversation"
 msgstr ""
 
-#: src/application.rs:2418
+#: src/application.rs:2428
 msgid "Deleting message for everyone"
 msgstr ""
 
-#: src/application.rs:2422
+#: src/application.rs:2432
 msgid "Deleting message"
 msgstr ""
 
-#: src/application.rs:2465
+#: src/application.rs:2475
 msgid "Enter a question and two different poll options"
 msgstr ""
 
-#: src/application.rs:2473
+#: src/application.rs:2483
 msgid "Creating poll"
 msgstr ""
 
-#: src/application.rs:2639
+#: src/application.rs:2649
 msgid "Message deleted"
 msgstr ""
 
-#: src/application.rs:2646
+#: src/application.rs:2656
 msgid "This chat is no longer available."
 msgstr ""
 
-#: src/application.rs:2730
+#: src/application.rs:2741
 msgid "Shutdown requested"
 msgstr ""
 
-#: src/application.rs:2769
+#: src/application.rs:2780
 msgid "Quit"
 msgstr ""
 
@@ -1116,58 +1116,58 @@ msgstr ""
 msgid "New messages"
 msgstr ""
 
-#: src/backend/worker/calls.rs:285
+#: src/backend/worker/calls.rs:292
 msgid "Connect to WhatsApp to place a call"
 msgstr ""
 
-#: src/backend/worker/calls.rs:289
+#: src/backend/worker/calls.rs:296
 msgid "You are already in a call"
 msgstr ""
 
-#: src/backend/worker/calls.rs:296
+#: src/backend/worker/calls.rs:303
 msgid "Calls are only available in one-to-one chats"
 msgstr ""
 
-#: src/backend/worker/calls.rs:326 src/backend/worker/calls/runtime.rs:347
+#: src/backend/worker/calls.rs:333 src/backend/worker/calls/runtime.rs:350
 msgid "The call could not be answered"
 msgstr ""
 
-#: src/backend/worker/calls.rs:483
+#: src/backend/worker/calls.rs:490
 msgid "The camera stopped working"
 msgstr ""
 
-#: src/backend/worker/calls/runtime.rs:346
+#: src/backend/worker/calls/runtime.rs:349
 msgid "The call could not be placed"
 msgstr ""
 
-#: src/backend/worker/calls/runtime.rs:435
-#: src/backend/worker/calls/runtime.rs:469
+#: src/backend/worker/calls/runtime.rs:438
+#: src/backend/worker/calls/runtime.rs:472
 msgid "Video could not be started"
 msgstr ""
 
-#: src/calls/mod.rs:30
+#: src/calls/mod.rs:31
 msgid "No microphone is available"
 msgstr ""
 
-#: src/calls/mod.rs:31
+#: src/calls/mod.rs:32
 msgid "No audio output is available"
 msgstr ""
 
-#: src/calls/mod.rs:32
+#: src/calls/mod.rs:33
 msgid "No camera is available"
 msgstr ""
 
-#: src/calls/mod.rs:34
+#: src/calls/mod.rs:35
 msgid ""
 "Video calls need an H.264 encoder (the GStreamer x264 or OpenH264 plugin)"
 msgstr ""
 
-#: src/calls/mod.rs:37
+#: src/calls/mod.rs:38
 msgid ""
 "Video calls need an H.264 decoder (the GStreamer libav or OpenH264 plugin)"
 msgstr ""
 
-#: src/calls/mod.rs:39
+#: src/calls/mod.rs:40
 msgid "Call audio is unavailable"
 msgstr ""
 
@@ -1354,6 +1354,10 @@ msgstr ""
 
 #: src/native_media_widgets/widget.rs:400
 msgid "Open or download attachment"
+msgstr ""
+
+#: src/native_notifications.rs:261
+msgid "End and answer"
 msgstr ""
 
 #: src/native_preferences.rs:386

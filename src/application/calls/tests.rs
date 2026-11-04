@@ -195,3 +195,22 @@ fn the_ring_stops_once_the_call_is_answered_or_over() {
     failed.apply(CallSignal::MediaFailed, 100);
     assert_eq!(ring_for(&failed, never), None);
 }
+
+#[test]
+fn notification_buttons_act_only_on_a_ringing_call() {
+    use crate::backend::Command;
+    assert!(matches!(
+        choice_command(CallChoice::Answer, CallPhase::Ringing),
+        Some(Command::AnswerCall)
+    ));
+    assert!(matches!(
+        choice_command(CallChoice::Decline, CallPhase::Ringing),
+        Some(Command::DeclineCall)
+    ));
+    let mut answered = session(CallDirection::Incoming, true);
+    answered.apply(CallSignal::LocalAnswered, 100);
+    for choice in [CallChoice::Answer, CallChoice::Decline, CallChoice::Show] {
+        assert!(choice_command(choice, answered.phase).is_none());
+    }
+    assert!(choice_command(CallChoice::Show, CallPhase::Ringing).is_none());
+}
