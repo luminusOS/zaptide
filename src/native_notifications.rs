@@ -248,6 +248,7 @@ impl NativeNotifications {
         self.calls.borrow_mut().insert(token.clone(), target);
 
         let notification = notification(title, body, icon);
+        notification.set_priority(gtk::gio::NotificationPriority::Urgent);
         let value = token.to_variant();
         notification
             .set_default_action_and_target_value(&format!("app.{CALL_FOCUS_ACTION}"), Some(&value));
