@@ -99,6 +99,33 @@ fn rgba_of(sample: &gst::Sample) -> Option<RgbaFrame> {
     })
 }
 
+/// Whether a source factory draws a picture instead of capturing one.
+fn is_test_source(factory: &str) -> bool {
+    matches!(factory, "videotestsrc" | "gltestsrc")
+}
+
+fn factory_name(element: &gst::Element) -> Option<String> {
+    element.factory().map(|factory| factory.name().to_string())
+}
+
+/// Whether an `autovideosrc` in `pipeline` settled on a test pattern. It does
+/// so without an error when no camera can be opened, so the call would send
+/// colour bars as if they were the user's picture.
+fn auto_source_fell_back(pipeline: &gst::Pipeline) -> bool {
+    pipeline
+        .iterate_recurse()
+        .into_iter()
+        .filter_map(Result::ok)
+        .any(|element| {
+            factory_name(&element).is_some_and(|name| is_test_source(&name))
+                && element
+                    .parent()
+                    .and_then(|parent| parent.downcast::<gst::Element>().ok())
+                    .and_then(|parent| factory_name(&parent))
+                    .is_some_and(|name| name == "autovideosrc")
+        })
+}
+
 /// The camera, encoded for the call and mirrored for the local preview.
 pub struct Camera {
     pipeline: gst::Pipeline,
@@ -161,7 +188,7 @@ impl Camera {
         }
         // A camera that has not settled in 3 s is treated as missing.
         let (result, _, _) = pipeline.state(gst::ClockTime::from_seconds(3));
-        if result.is_err() {
+        if result.is_err() || auto_source_fell_back(&pipeline) {
             let _ = pipeline.set_state(gst::State::Null);
             return Err(MediaError::NoCamera);
         }
@@ -263,6 +290,63 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
+
+    fn start_with(source: &str) -> Result<Camera, MediaError> {
+        let encoder = available_encoder().expect("a caller checked for an encoder");
+        let slots = Arc::new(VideoSlots::new(|| {}));
+        Camera::start(encoder, source, slots, crate::calls::ignore_faults())
+    }
+
+    fn camera_test_ready() -> bool {
+        let Some(encoder) = available_encoder() else {
+            eprintln!("skipped: no H.264 encoder is installed");
+            assert!(
+                std::env::var_os("ZAPTIDE_REQUIRE_GST").is_none(),
+                "an H.264 encoder is required"
+            );
+            return false;
+        };
+        crate::calls::gst_ready(&[
+            "autovideosrc",
+            "videotestsrc",
+            "videoconvert",
+            "videoflip",
+            "videorate",
+            encoder.element(),
+        ])
+    }
+
+    #[test]
+    fn only_test_patterns_count_as_test_sources() {
+        assert!(is_test_source("videotestsrc"));
+        assert!(is_test_source("gltestsrc"));
+        for real in ["v4l2src", "pipewiresrc", "libcamerasrc", "fakesrc"] {
+            assert!(!is_test_source(real), "{real}");
+        }
+    }
+
+    #[test]
+    fn auto_source_with_no_candidate_is_refused() {
+        if !camera_test_ready() {
+            return;
+        }
+        // No source accepts these caps, so autovideosrc takes its fallback
+        // without opening any device, as it does on a machine with no camera.
+        let started = start_with("autovideosrc filter-caps=video/x-nonexistent");
+        assert_eq!(started.err(), Some(MediaError::NoCamera));
+    }
+
+    #[test]
+    #[ignore = "opens the real camera when the machine has one"]
+    fn auto_source_is_a_camera_or_nothing() {
+        if !camera_test_ready() {
+            return;
+        }
+        match start_with("autovideosrc") {
+            Ok(camera) => assert!(!auto_source_fell_back(&camera.pipeline())),
+            Err(error) => assert_eq!(error, MediaError::NoCamera),
+        }
+    }
 
     #[test]
     fn camera_output_decodes_back_into_pictures() {
