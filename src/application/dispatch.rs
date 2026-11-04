@@ -103,27 +103,37 @@ impl NativeApplication {
                 let dialog = adw::ShortcutsDialog::new();
                 for (title, items) in [
                     (
-                        "Chat List",
-                        &[
-                            ("Previous chat", "Up"),
-                            ("Next chat", "Down"),
-                            ("Open chat", "Return"),
-                        ][..],
+                        gettext("General"),
+                        vec![
+                            (gettext("Close window"), CLOSE_ACCELERATOR),
+                            (gettext("Quit"), QUIT_ACCELERATOR),
+                        ],
                     ),
                     (
-                        "Composer",
-                        &[("Send message", send), ("New line", newline)][..],
+                        gettext("Chat List"),
+                        vec![
+                            (gettext("Previous chat"), "Up"),
+                            (gettext("Next chat"), "Down"),
+                            (gettext("Open chat"), "Return"),
+                        ],
                     ),
                     (
-                        "Messages",
-                        &[
-                            ("Open message menu", "Menu <Shift>F10"),
-                            ("Copy selected text", "<Control>c"),
-                        ][..],
+                        gettext("Composer"),
+                        vec![
+                            (gettext("Send message"), send),
+                            (gettext("New line"), newline),
+                        ],
+                    ),
+                    (
+                        gettext("Messages"),
+                        vec![
+                            (gettext("Open message menu"), "Menu <Shift>F10"),
+                            (gettext("Copy selected text"), "<Control>c"),
+                        ],
                     ),
                 ] {
-                    let section = adw::ShortcutsSection::new(Some(title));
-                    for (item, accelerator) in items {
+                    let section = adw::ShortcutsSection::new(Some(&title));
+                    for (item, accelerator) in &items {
                         section.add(adw::ShortcutsItem::new(item, accelerator));
                     }
                     dialog.add(section);
