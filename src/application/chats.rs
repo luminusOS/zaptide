@@ -122,6 +122,7 @@ impl NativeApplication {
         self.message_snapshots.clear();
         self.editable_messages.clear();
         self.transcript.clear();
+        self.pending_transcript.clear();
         self.audio.selected_voice = None;
         self.audio.selected_voice_message = None;
         self.page_title = self

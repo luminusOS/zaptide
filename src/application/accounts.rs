@@ -668,6 +668,7 @@ impl NativeApplication {
         self.loading_older = false;
         self.recent_messages_pending = false;
         self.transcript.clear();
+        self.pending_transcript.clear();
         self.message_menu.popdown();
         if let Some((picker, _)) = &self.sticker_picker {
             picker.popdown();

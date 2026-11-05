@@ -1,4 +1,5 @@
 use super::*;
+use crate::application::conversation::{TranscriptChange, sender_in_window};
 use crate::i18n::gettext;
 
 pub(super) fn drain_and_convert(
@@ -38,6 +39,7 @@ pub(super) fn drain_and_convert(
                 recent,
             }),
             Event::MessageUpdated(message) => events.push(NativeEvent::MessageUpdated(message)),
+            Event::MessagesUpdated(messages) => events.push(NativeEvent::MessagesUpdated(messages)),
             Event::Edited { chat, id, success } => {
                 events.push(NativeEvent::Edited { chat, id, success })
             }
@@ -199,21 +201,8 @@ pub(super) fn handle_backend_ready(
                 app.apply_chat_changes(vec![ChatChange::Update(*chat)]);
                 app.read_open_chat();
             }
-            // An empty list clears contacts on logout; otherwise
-            // the backend sends the full set or single updates.
             NativeEvent::Contacts(contacts) => {
-                if contacts.is_empty() {
-                    app.contacts.clear();
-                }
-                app.contacts.extend(
-                    contacts
-                        .into_iter()
-                        .map(|contact| (contact.id.clone(), contact)),
-                );
-                if !app.message_ids.is_empty() {
-                    app.sync_transcript();
-                    app.rebuild_message_rows(false);
-                }
+                app.apply_transcript_change(TranscriptChange::Contacts(contacts))
             }
             NativeEvent::Messages {
                 chat,
@@ -257,7 +246,14 @@ pub(super) fn handle_backend_ready(
                 }
                 app.rebuild_sticker_emojis();
             }
-            NativeEvent::MessageUpdated(message) => app.message_updated(*message),
+            NativeEvent::MessageUpdated(message) => {
+                app.apply_transcript_change(TranscriptChange::Message(message))
+            }
+            NativeEvent::MessagesUpdated(messages) => {
+                for message in messages {
+                    app.apply_transcript_change(TranscriptChange::Message(Box::new(message)));
+                }
+            }
             NativeEvent::Edited { chat, id, success } => app.edited(chat, id, success),
             NativeEvent::Sent { chat, success } => {
                 if app.audio.voice_send_pending {
@@ -310,6 +306,7 @@ pub(super) fn handle_backend_ready(
                         .and_then(|known| known.content.media_mut())
                     {
                         media.state = crate::model::MediaState::Downloading;
+                        app.pending_transcript.mark_rows();
                     }
                 }
                 let known = app.chat_snapshots.iter().find(|known| known.id == chat);
@@ -409,6 +406,9 @@ pub(super) fn handle_backend_ready(
                 }
                 update_avatar_texture_reference(previous, path);
                 app.chats_dirty = true;
+                if sender_in_window(&app.message_ids, &app.message_snapshots, &id) {
+                    app.pending_transcript.mark_rows();
+                }
             }
             NativeEvent::ReceiptsPrivacy { disabled } => app.account_receipts_off = disabled,
             NativeEvent::ProfileSaved { error } => {
@@ -467,6 +467,7 @@ pub(super) fn handle_backend_ready(
             }
         }
     }
+    app.flush_transcript();
     if app.chats_dirty && app.chat_ids.is_empty() {
         app.flush_chats();
     } else if app.chats_dirty && !app.chats_flush_scheduled {

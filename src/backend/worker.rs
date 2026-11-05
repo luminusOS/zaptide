@@ -808,6 +808,7 @@ impl Worker {
                     | Event::ChatUpdated(_)
                     | Event::Messages { .. }
                     | Event::MessageUpdated(_)
+                    | Event::MessagesUpdated(_)
                     | Event::Incoming { .. }
                     | Event::Contacts(_)
                     | Event::Typing { .. }
@@ -870,9 +871,20 @@ impl Worker {
     }
 
     fn emit_message(&self, chat: &str, id: &str) {
-        if let Ok(Some(mut message)) = self.archive.message(chat, id) {
-            self.polish(&mut message);
+        if let Some(message) = self.updated_message(chat, id) {
             self.emit(Event::MessageUpdated(Box::new(message)));
+        }
+    }
+
+    fn updated_message(&self, chat: &str, id: &str) -> Option<Message> {
+        let mut message = self.archive.message(chat, id).ok().flatten()?;
+        self.polish(&mut message);
+        Some(message)
+    }
+
+    fn emit_messages(&self, messages: Vec<Message>) {
+        if !messages.is_empty() {
+            self.emit(Event::MessagesUpdated(messages));
         }
     }
 
@@ -1368,8 +1380,17 @@ impl Worker {
     }
 
     fn remember_push_name(&mut self, id: &str, push_name: &str) {
+        if let Some(contact) = self.learn_push_name(id, push_name) {
+            self.emit(Event::Contacts(vec![contact]));
+            self.refresh_chat_name(id);
+        }
+    }
+
+    /// Saves a changed push name and returns the contact for the caller to
+    /// send, so a history chunk can send all of its names in one event.
+    fn learn_push_name(&mut self, id: &str, push_name: &str) -> Option<Contact> {
         if push_name.is_empty() || id == self.me() {
-            return;
+            return None;
         }
         let contact = self
             .contacts
@@ -1380,15 +1401,14 @@ impl Worker {
                 push_name: None,
             });
         if contact.push_name.as_deref() == Some(push_name) {
-            return;
+            return None;
         }
         contact.push_name = Some(push_name.to_owned());
         let contact = contact.clone();
         if let Err(error) = self.archive.upsert_contact(&contact) {
             log::warn!("could not save a contact: {error}");
         }
-        self.emit(Event::Contacts(vec![contact]));
-        self.refresh_chat_name(id);
+        Some(contact)
     }
 
     /// Replaces a fallback chat name when a better one is known.
@@ -1822,6 +1842,7 @@ impl Worker {
             if self.is_me(&recipient) {
                 return;
             }
+            let mut updated = Vec::new();
             for id in &receipt.message_ids {
                 if !self
                     .archive
@@ -1836,21 +1857,23 @@ impl Worker {
                     .archive
                     .group_receipt(&chat, id, &recipient, status, at)
                 {
-                    Ok(true) => self.emit_message(&chat, id),
+                    Ok(true) => updated.extend(self.updated_message(&chat, id)),
                     Ok(false) => {}
                     Err(error) => log::warn!("could not file a group receipt: {error}"),
                 }
             }
+            self.emit_messages(updated);
             self.emit_chat(&chat);
             return;
         }
         let mut newest = 0;
         let mut changed = 0;
+        let mut updated = Vec::new();
         for id in &receipt.message_ids {
             match self.archive.set_status(&chat, id, status, at) {
                 Ok(true) => {
                     changed += 1;
-                    self.emit_message(&chat, id);
+                    updated.extend(self.updated_message(&chat, id));
                 }
                 Ok(false) => {}
                 Err(_error) => log::warn!("could not file a receipt"),
@@ -1869,9 +1892,10 @@ impl Worker {
             && let Ok(ids) = self.archive.advance_statuses(&chat, newest, status, at)
         {
             for id in ids {
-                self.emit_message(&chat, &id);
+                updated.extend(self.updated_message(&chat, &id));
             }
         }
+        self.emit_messages(updated);
         self.emit_chat(&chat);
     }
 

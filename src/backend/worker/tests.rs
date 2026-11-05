@@ -2851,6 +2851,39 @@ pub(super) mod receipt_tests {
     }
 
     #[test]
+    fn a_receipt_sends_its_changed_rows_in_one_event_before_the_chat() {
+        let (mut worker, events, _inbox, _wa) = worker();
+        worker.archive.ensure_chat(PEER, "Peer").unwrap();
+        for (id, timestamp) in [("first", 100), ("second", 200), ("third", 300)] {
+            worker.store_message(own_message(id, timestamp), None, None);
+        }
+        events.try_iter().for_each(drop);
+
+        worker.on_receipt(&receipt(PEER, &["second", "third"], ReceiptType::Read));
+
+        let emitted = events.try_iter().collect::<Vec<_>>();
+        assert!(
+            !emitted
+                .iter()
+                .any(|event| matches!(event, Event::MessageUpdated(_)))
+        );
+        let [Event::MessagesUpdated(updated), Event::ChatUpdated(chat)] = emitted.as_slice() else {
+            panic!("expected one batch of rows, then the chat");
+        };
+        assert_eq!(chat.id, PEER);
+        let ids = updated
+            .iter()
+            .map(|message| message.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, ["second", "third", "first"]);
+        assert!(
+            updated
+                .iter()
+                .all(|message| message.status == Delivery::Read)
+        );
+    }
+
+    #[test]
     fn group_checks_wait_for_every_recipient_and_do_not_read_earlier_messages() {
         let (mut worker, _events, _inbox, _wa) = worker();
         let group = "123-456@g.us";
@@ -3033,6 +3066,61 @@ pub(super) mod receipt_tests {
         assert_eq!(stored.reactions[0].emoji, "🏆");
         assert!(!stored.reactions[0].from_me);
         assert_eq!(stored.reactions[0].sender, reactor);
+    }
+
+    #[test]
+    fn a_history_chunk_sends_its_new_names_in_one_event() {
+        let group = "123-456@g.us";
+        let first = "12025550101@s.whatsapp.net";
+        let second = "12025550102@s.whatsapp.net";
+        let entry = |id: &str, sender: &str| {
+            let mut entry = history_entry(
+                group,
+                id,
+                false,
+                Some(sender),
+                wa::Message::text("hi"),
+                Vec::new(),
+                None,
+            );
+            if let Some(info) = entry.message.as_option_mut() {
+                info.push_name = Some(format!("Pushed {sender}"));
+            }
+            entry
+        };
+        let parsed = parse_conversation(wa::Conversation {
+            id: group.into(),
+            messages: vec![entry("a", first), entry("b", second), entry("c", first)],
+            ..Default::default()
+        });
+        let (mut worker, events, _inbox, _wa) = worker();
+        worker.apply_history(
+            ParsedHistory {
+                chats: vec![parsed],
+                push_names: vec![(PEER.into(), "Peer".into())],
+                lids: Vec::new(),
+                stickers: Vec::new(),
+            },
+            true,
+        );
+        let contacts = events
+            .try_iter()
+            .filter_map(|event| match event {
+                Event::Contacts(contacts) => Some(contacts),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(contacts.len(), 1, "one event for the whole chunk");
+        let mut ids = contacts[0]
+            .iter()
+            .map(|contact| contact.id.as_str())
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        assert_eq!(ids, [first, second, PEER]);
+        assert_eq!(
+            worker.contacts[first].push_name.as_deref(),
+            Some(format!("Pushed {first}").as_str())
+        );
     }
 
     #[test]

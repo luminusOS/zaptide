@@ -353,9 +353,15 @@ impl Worker {
             }
         }
         let mut filed = Vec::new();
+        // Sent together at the end: an event per name made the window
+        // rebuild the open conversation for each one.
+        let mut learned = Vec::new();
         for (id, name) in &parsed.push_names {
             let id = self.canonical_str(id);
-            self.remember_push_name(&id, name);
+            if let Some(contact) = self.learn_push_name(&id, name) {
+                learned.push(contact);
+                self.refresh_chat_name(&id);
+            }
         }
         for chat in parsed.chats {
             let id = self.canonical_str(&chat.id);
@@ -381,7 +387,7 @@ impl Worker {
                             contact.full_name = Some(name.clone());
                             let contact = contact.clone();
                             let _ = self.archive.upsert_contact(&contact);
-                            self.emit(Event::Contacts(vec![contact]));
+                            learned.push(contact);
                         }
                         self.chat_name(&id, None)
                     }
@@ -450,8 +456,10 @@ impl Worker {
                 };
                 if let Some(push_name) = message.push_name.as_deref()
                     && !message.from_me
+                    && let Some(contact) = self.learn_push_name(&sender, push_name)
                 {
-                    self.remember_push_name(&sender, push_name);
+                    learned.push(contact);
+                    self.refresh_chat_name(&sender);
                 }
                 let reactions = message
                     .reactions
@@ -573,6 +581,9 @@ impl Worker {
                 }
             }
             filed.push((id, count, chat.more_on_phone));
+        }
+        if !learned.is_empty() {
+            self.emit(Event::Contacts(learned));
         }
         self.pump_poll_votes();
         self.pump_poll_history();

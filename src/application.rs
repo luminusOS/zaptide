@@ -185,6 +185,7 @@ enum NativeEvent {
         complete: bool,
     },
     MessageUpdated(Box<crate::model::Message>),
+    MessagesUpdated(Vec<crate::model::Message>),
     Edited {
         chat: String,
         id: String,
@@ -519,6 +520,7 @@ pub struct NativeApplication {
     pointer_sender: ComponentSender<NativeApplication>,
     editable_messages: std::collections::HashMap<String, String>,
     transcript: Vec<crate::native_transcript::TranscriptRow>,
+    pending_transcript: conversation::PendingTranscript,
     audio: AudioState,
     /// About row of the open contact-info dialog, filled when the fetch returns.
     info_about: Option<(String, adw::ActionRow)>,
@@ -1343,6 +1345,7 @@ impl SimpleComponent for NativeApplication {
             pointer_sender: sender.clone(),
             editable_messages: std::collections::HashMap::new(),
             transcript: Vec::new(),
+            pending_transcript: Default::default(),
             audio: AudioState {
                 selected_voice: None,
                 selected_voice_message: None,
@@ -2614,6 +2617,8 @@ impl NativeApplication {
         if self.active_chat.as_deref() != Some(chat) {
             return;
         }
+        // Deferred updates land first, so the deletion changes only its row.
+        self.flush_transcript();
         if self.audio.playing_audio.as_deref() == Some(id) {
             self.audio.media.stop_playback();
             self.audio.playing_audio = None;
@@ -2687,6 +2692,7 @@ impl NativeApplication {
         self.message_snapshots.clear();
         self.editable_messages.clear();
         self.transcript.clear();
+        self.pending_transcript.clear();
         self.audio.selected_voice = None;
         self.audio.selected_voice_message = None;
         self.messages.clear();

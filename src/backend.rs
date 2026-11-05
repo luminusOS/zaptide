@@ -672,6 +672,8 @@ pub enum Event {
         complete: bool,
     },
     MessageUpdated(Box<Message>),
+    /// Several rows changed by one protocol event, such as a receipt.
+    MessagesUpdated(Vec<Message>),
     /// Result of an outgoing message edit, without protocol error details.
     Edited {
         chat: ChatId,
