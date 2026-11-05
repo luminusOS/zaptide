@@ -11,11 +11,11 @@
 //! | `waveform_generation_is_64_bars`               | No            | No         | No      |
 //! | `narrowest_audio_permissions_documented`       | No            | No         | No      |
 //! | `player_handles_missing_device_gracefully`     | No (tests absence) | No    | No      |
-//! | `recorder_handles_permission_denied`           | No            | No (tests denial) | No |
+//! | `recorder_handles_source_that_cannot_open`      | No            | No (test source) | No |
 //! | `player_respects_seek_within_bounds`           | Optional      | No         | No      |
-//! | `recorder_level_metering_produces_50ms_windows`| No            | Optional   | No      |
+//! | `recorder_level_metering_produces_50ms_windows`| No            | No (test tone) | No  |
 //! | `playback_reaches_completion_within_budget`    | Yes           | No         | No      |
-//! | `alsa_capture_produces_at_least_one_second_of_audio` | ALSA  | ALSA       | No      |
+//! | `capture_produces_at_least_one_second_of_audio` | No           | Yes        | No      |
 //! | `player_handles_device_unplug_during_playback` | Deferred      | No         | No      |
 //! | `recorder_handles_device_unplug_during_capture`| No            | Deferred   | No      |
 //! | `flatpak_microphone_denial_*`                  | No            | Sandbox    | Yes     |
@@ -135,23 +135,24 @@ fn player_handles_missing_device_gracefully() {
 }
 
 #[test]
-fn recorder_handles_permission_denied() {
-    // In CI without a microphone, Recorder::start() fails gracefully.
-    // With a microphone present, recording proceeds. Either way, no panic.
-    let recorder = Recorder::start();
+fn recorder_handles_source_that_cannot_open() {
+    // A source that exists but cannot open its device stands in for a
+    // microphone the sound server refuses; no real microphone is opened.
+    let recorder = Recorder::with_source("filesrc location=/nonexistent/zaptide-microphone");
     std::thread::sleep(Duration::from_millis(500));
 
-    if let Some(error) = recorder.failure() {
-        assert!(!error.is_empty(), "error message must be non-empty");
-        assert!(
-            error.contains("microphone")
-                || error.contains("Microphone")
-                || error.contains("device")
-                || error.contains("permission")
-                || error.contains("audio"),
-            "error should describe the denial: {error}"
-        );
-    }
+    let error = recorder
+        .failure()
+        .expect("a refused microphone fails recording");
+    assert!(!error.is_empty(), "error message must be non-empty");
+    assert!(
+        error.contains("microphone")
+            || error.contains("Microphone")
+            || error.contains("device")
+            || error.contains("permission")
+            || error.contains("audio"),
+        "error should describe the denial: {error}"
+    );
     // Dropping the recorder stops the capture thread cleanly.
 }
 
@@ -242,14 +243,15 @@ fn player_respects_seek_within_bounds() {
 
 #[test]
 fn recorder_level_metering_produces_50ms_windows() {
-    let recorder = Recorder::start();
+    // A live test tone instead of the microphone, so no real device opens.
+    let recorder = Recorder::with_source("audiotestsrc is-live=true volume=0.3");
     std::thread::sleep(Duration::from_millis(2_000));
 
-    if let Some(error) = recorder.failure() {
-        // No microphone available: clean error, not a panic.
-        assert!(!error.is_empty());
-        return;
-    }
+    assert!(
+        recorder.failure().is_none(),
+        "test tone failed: {:?}",
+        recorder.failure()
+    );
 
     let levels = recorder.levels();
     assert!(
@@ -268,11 +270,11 @@ fn recorder_level_metering_produces_50ms_windows() {
 fn narrowest_audio_permissions_documented() {
     // Playback (voice messages):
     //   PulseAudio/PipeWire-Pulse: socket access (Flatpak: --socket=pulseaudio)
-    //   ALSA fallback: read /dev/snd/pcmC*D*p
+    //   GStreamer ALSA fallback: read /dev/snd/pcmC*D*p
     //
     // Capture (voice recording):
     //   PulseAudio/PipeWire-Pulse: same socket handles both directions
-    //   ALSA fallback: read /dev/snd/pcmC*D*c
+    //   GStreamer ALSA fallback: read /dev/snd/pcmC*D*c
     //
     // Narrowest Flatpak finish-args for full audio:
     //   --socket=pulseaudio
@@ -331,8 +333,8 @@ fn playback_reaches_completion_within_budget() {
 }
 
 #[test]
-#[ignore = "requires ALSA capture device; run with: cargo test --test audio_validation -- --ignored"]
-fn alsa_capture_produces_at_least_one_second_of_audio() {
+#[ignore = "requires a microphone; run with: cargo test --test audio_validation -- --ignored"]
+fn capture_produces_at_least_one_second_of_audio() {
     let recorder = Recorder::start();
     std::thread::sleep(Duration::from_millis(1_100));
 

@@ -13,6 +13,7 @@ use std::time::Duration;
 use crate::voice;
 
 mod decode;
+mod pulled;
 mod recorder;
 
 use decode::{DecodePermit, LONGEST_RECORDING, decode_file_with};

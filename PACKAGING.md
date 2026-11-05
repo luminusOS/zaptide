@@ -100,8 +100,7 @@ appimageupdatetool zaptide.AppImage
 | Dependency | Fedora | Notes |
 |------------|--------|-------|
 | GTK 4.14+, libadwaita 1.10+ | `gtk4-devel libadwaita-devel` | GNOME 51 |
-| ALSA | `alsa-lib-devel` | Audio |
-| GStreamer 1.20+ | `gstreamer1-devel`, `gstreamer1-plugins-base-devel` | Playback and calls; base and good plugins at runtime. Video calls also need an H.264 encoder (`gstreamer1-plugin-openh264` or x264) and `gst-libav` |
+| GStreamer 1.20+ | `gstreamer1-devel`, `gstreamer1-plugins-base-devel` | Voice notes (recording, playback, waveforms) and calls; base and good plugins at runtime. Video calls also need an H.264 encoder (`gstreamer1-plugin-openh264` or x264) and `gst-libav` |
 | cmake | `cmake` | Builds libopus via opusic-sys |
 | libseccomp, fontconfig | `libseccomp-devel fontconfig-devel` | glycin; needs `glycin-loaders` and `bubblewrap` at runtime |
 | Perl | `perl` | Bundled OpenSSL |

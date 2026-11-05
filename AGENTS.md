@@ -106,10 +106,15 @@ protocol. These notes are for coding agents and new contributors.
   `playbin`; `scaletempo` (gst-plugins-good) keeps the pitch at 1.5x and
   2x. Without it a clip still plays at 1x, and other speeds show an error
   in the bubble. Bounded waveform decoding uses `src/audio.rs` on a worker
-  thread. `Recorder` reads the default
-  microphone through rodio's `Microphone` on a thread, keeping a loudness per
-  50 ms for the live bars. Linux needs ALSA and GStreamer headers to build
-  (`alsa-lib` and `gstreamer` on Arch). Audio controls live in each message bubble;
+  thread: Ogg Opus through the `opus` crate, anything else through a
+  GStreamer `decodebin` into an appsink. Waveforms decode without a click,
+  so that `decodebin` skips adaptive, source, video, image and subtitle
+  elements: a received file must never make it open a URL or another file. `Recorder` reads the default
+  microphone (`autoaudiosrc`, as calls do) as mono 48 kHz through an appsink
+  on a thread, refusing its silent fallback source when no sound server or
+  microphone exists, keeping a loudness per 50 ms for the live bars. Linux needs
+  the GStreamer headers to build (`gstreamer` on Arch). Audio controls live
+  in each message bubble;
   `StartRecording/CancelRecording/SendRecording` drive the
   microphone from the composer (the send button is a microphone when there
   is nothing to send); `Command::SendVoice` normalizes

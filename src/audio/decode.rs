@@ -3,7 +3,9 @@
 use std::io::{Read, Seek};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use rodio::Source;
+use gst::prelude::*;
+use gstreamer as gst;
+use gstreamer_app as gst_app;
 
 use crate::voice;
 
@@ -45,7 +47,7 @@ impl Drop for DecodePermit {
 }
 
 /// Decodes a file to mono 48 kHz samples. OGG/Opus uses the voice codec; other
-/// supported formats use rodio.
+/// formats use GStreamer.
 #[cfg(test)]
 pub(super) fn decode_file(path: &std::path::Path) -> Result<Vec<f32>, String> {
     decode_file_with(path, &AtomicBool::new(false))
@@ -74,7 +76,7 @@ pub(super) fn decode_file_with(
     if read == signature.len() && &signature == b"OggS" {
         file.seek(std::io::SeekFrom::Start(0))
             .map_err(|error| format!("Could not read the audio: {error}"))?;
-        match decode_opus(file, cancelled) {
+        match decode_opus(&mut file, cancelled) {
             Ok(samples) => {
                 if is_cancelled(cancelled) {
                     return Err("Audio decoding cancelled".to_owned());
@@ -91,13 +93,152 @@ pub(super) fn decode_file_with(
     if is_cancelled(cancelled) {
         return Err("Audio decoding cancelled".to_owned());
     }
-    let file =
-        std::fs::File::open(path).map_err(|error| format!("Could not read the audio: {error}"))?;
-    let decoder = rodio::Decoder::new(std::io::BufReader::new(file))
-        .map_err(|error| format!("Could not decode the audio: {error}"))?;
-    let channels = decoder.channels().get();
-    let rate = decoder.sample_rate().get();
-    collect_samples(decoder, channels, rate, cancelled)
+    file.seek(std::io::SeekFrom::Start(0))
+        .map_err(|error| format!("Could not read the audio: {error}"))?;
+    decode_with_gstreamer(&file, cancelled)
+}
+
+/// A decode that gets no new samples for this long has stalled.
+const DECODE_STALL: std::time::Duration = std::time::Duration::from_secs(10);
+/// A whole decode may take this long; a clip within the size cap takes a
+/// fraction of it.
+const DECODE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
+const MAX_SOURCE_RATE: u32 = 384_000;
+const MAX_SOURCE_CHANNELS: u16 = 8;
+
+/// Element kinds `decodebin` must not plug for a received file. Waveforms
+/// decode without a click, so a file that is really a streaming manifest,
+/// a playlist or a video must not make the decoder open URLs, read other
+/// files, or run video, image and subtitle parsers.
+fn refused_for_waveforms(klass: &str) -> bool {
+    klass
+        .split('/')
+        .any(|kind| matches!(kind, "Adaptive" | "Source" | "Video" | "Image" | "Subtitle"))
+}
+
+/// Decodes any format GStreamer can play, keeping the stream's own rate and
+/// channels so `collect_samples` downmixes and resamples it exactly as it
+/// does every other decoded clip.
+fn decode_with_gstreamer(file: &std::fs::File, cancelled: &AtomicBool) -> Result<Vec<f32>, String> {
+    let failed = |error: &dyn std::fmt::Display| format!("Could not decode the audio: {error}");
+    gst::init().map_err(|error| failed(&error))?;
+    let make = |factory: &str| {
+        gst::ElementFactory::make(factory)
+            .build()
+            .map_err(|error| failed(&error))
+    };
+    // Reopens the file already opened and size-checked through its
+    // descriptor, so a rename or swap of the path cannot change what is
+    // decoded. fdsrc would read the descriptor directly, but cut Vorbis and
+    // chained Ogg streams short; `file` outlives the pipeline.
+    let source = gst::ElementFactory::make("filesrc")
+        .property(
+            "location",
+            format!("/proc/self/fd/{}", std::os::fd::AsRawFd::as_raw_fd(file)),
+        )
+        .build()
+        .map_err(|error| failed(&error))?;
+    let decoder = make("decodebin")?;
+    let select_result = gst::glib::Type::from_name("GstAutoplugSelectResult")
+        .ok_or_else(|| failed(&"decodebin has no autoplug-select"))?;
+    let select = move |skip: bool| {
+        gst::glib::EnumClass::with_type(select_result)
+            .and_then(|class| class.to_value_by_nick(if skip { "skip" } else { "try" }))
+    };
+    if select(true).is_none() || select(false).is_none() {
+        return Err(failed(&"decodebin has no autoplug-select"));
+    }
+    decoder.connect("autoplug-select", false, move |args| {
+        let skip = args
+            .get(3)
+            .and_then(|factory| factory.get::<gst::ElementFactory>().ok())
+            .is_none_or(|factory| refused_for_waveforms(factory.klass()));
+        select(skip)
+    });
+    let convert = make("audioconvert")?;
+    let sink = gst_app::AppSink::builder()
+        .caps(
+            &gst::Caps::builder("audio/x-raw")
+                .field("format", "F32LE")
+                .field("layout", "interleaved")
+                .build(),
+        )
+        .sync(false)
+        .max_buffers(8)
+        .build();
+    let pipeline = gst::Pipeline::new();
+    pipeline
+        .add_many([&source, &decoder, &convert, sink.upcast_ref()])
+        .map_err(|error| failed(&error))?;
+    source.link(&decoder).map_err(|error| failed(&error))?;
+    convert.link(&sink).map_err(|error| failed(&error))?;
+    let convert_input = convert.downgrade();
+    let implausible = std::sync::Arc::new(AtomicBool::new(false));
+    let seen_implausible = std::sync::Arc::clone(&implausible);
+    decoder.connect_pad_added(move |_, pad| {
+        let Some(input) = convert_input
+            .upgrade()
+            .and_then(|convert| convert.static_pad("sink"))
+        else {
+            return;
+        };
+        let caps = pad.current_caps().unwrap_or_else(|| pad.query_caps(None));
+        let Some(structure) = caps.structure(0) else {
+            return;
+        };
+        if !structure.name().starts_with("audio/") || input.is_linked() {
+            return;
+        }
+        let within = |field: &str, limit: u32| {
+            structure.get::<i32>(field).map_or(true, |value| {
+                u32::try_from(value).is_ok_and(|value| (1..=limit).contains(&value))
+            })
+        };
+        if !within("channels", u32::from(MAX_SOURCE_CHANNELS)) || !within("rate", MAX_SOURCE_RATE) {
+            seen_implausible.store(true, Ordering::Release);
+            return;
+        }
+        let _ = pad.link(&input);
+    });
+    let started = std::time::Instant::now();
+    let mut samples = super::pulled::PulledSamples::start(pipeline, sink, |idle| {
+        if is_cancelled(cancelled) {
+            Ok(false)
+        } else if idle >= DECODE_STALL {
+            Err("the decoder stopped producing audio".to_owned())
+        } else {
+            Ok(true)
+        }
+    })
+    .map_err(|error| failed(&error))?
+    .with_deadline(started + DECODE_DEADLINE, audio_limit_error());
+    let Some((channels, rate)) = samples.format() else {
+        if is_cancelled(cancelled) {
+            return Err("Audio decoding cancelled".to_owned());
+        }
+        if implausible.load(Ordering::Acquire) {
+            return Err(audio_limit_error());
+        }
+        return Err(decode_failure(
+            samples.failure().unwrap_or("no audio stream"),
+        ));
+    };
+    if !(1..=MAX_SOURCE_CHANNELS).contains(&channels) || !(1..=MAX_SOURCE_RATE).contains(&rate) {
+        return Err(audio_limit_error());
+    }
+    let decoded = collect_samples(&mut samples, channels, rate, cancelled)?;
+    match samples.failure() {
+        Some(error) => Err(decode_failure(error)),
+        None => Ok(decoded),
+    }
+}
+
+fn decode_failure(error: &str) -> String {
+    if error == audio_limit_error() {
+        error.to_owned()
+    } else {
+        format!("Could not decode the audio: {error}")
+    }
 }
 
 pub(super) fn is_cancelled(cancelled: &AtomicBool) -> bool {
