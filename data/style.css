@@ -76,7 +76,8 @@ button.zaptide-load-older.zaptide-load-older-away { opacity: 0; }
 .zaptide-reaction.chosen { background-color: color-mix(in srgb, var(--accent-bg-color) 25%, transparent); }
 .zaptide-reaction > label { transition: transform 120ms ease-out; }
 .zaptide-reaction:hover > label { transform: scale(1.25); }
-.zaptide-quick-reactions > contents { padding: 2px 4px; border-radius: 9999px; }
+/* GtkPopover is at least twice its contents radius in each axis, so 9999px here fills the screen. */
+.zaptide-quick-reactions > contents { padding: 2px 4px; border-radius: 19px; }
 .zaptide-quick-reactions .zaptide-reaction { font-size: 1.2em; min-width: 34px; min-height: 34px; }
 .zaptide-reaction-chip { min-height: 0; min-width: 0; padding: 1px 8px; border-radius: 9999px; font-size: 0.9em; background-color: var(--window-bg-color); box-shadow: 0 0 0 1px color-mix(in srgb, currentColor 12%, transparent); }
 .zaptide-reaction-chip:hover { background-color: color-mix(in srgb, currentColor 8%, var(--window-bg-color)); }
