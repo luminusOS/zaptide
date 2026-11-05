@@ -143,11 +143,28 @@ pub(super) fn link_card(
         line(host, 1, &["caption", "dim-label"]);
     }
     card.append(&text);
-    let url = preview.url.clone();
-    clickable_card(&card, &preview.url, move |button| {
-        let window = button.root().and_downcast::<gtk::Window>();
-        gtk::UriLauncher::new(&url).launch(window.as_ref(), gtk::gio::Cancellable::NONE, |_| {});
-    })
+    let url = crate::safety::web_link(&preview.url);
+    let refused = url.is_none();
+    let card = clickable_card(&card, &preview.url, move |button| {
+        if let Some(url) = &url {
+            open_web_link(button, url);
+        }
+    });
+    if refused {
+        refuse_link(&card, &preview.url);
+    }
+    card
+}
+
+/// Opens an http or https link from a message, already checked by
+/// [`crate::safety::web_link`], in the default browser.
+pub(crate) fn open_web_link(widget: &impl IsA<gtk::Widget>, url: &url::Url) {
+    let window = widget.root().and_downcast::<gtk::Window>();
+    gtk::UriLauncher::new(url.as_str()).launch(
+        window.as_ref(),
+        gtk::gio::Cancellable::NONE,
+        |_| {},
+    );
 }
 
 /// A label for sender-written text: WhatsApp formatting and web links apply.
@@ -155,12 +172,11 @@ pub(super) fn link_card(
 pub(super) fn add_formatted_label(parent: &gtk::Box, text: &str) -> gtk::Label {
     let label = add_label(parent, text);
     label.set_markup(&crate::safety::linkify_markup(text));
-    label.connect_activate_link(|_, uri| {
-        if uri.starts_with(crate::safety::CHAT_SCHEME) {
-            gtk::glib::Propagation::Stop
-        } else {
-            gtk::glib::Propagation::Proceed
+    label.connect_activate_link(|label, uri| {
+        if let crate::safety::LinkActivation::Web(url) = crate::safety::link_activation(uri) {
+            open_web_link(label, &url);
         }
+        gtk::glib::Propagation::Stop
     });
     label
 }

@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: zaptide\n"
 "Report-Msgid-Bugs-To: https://github.com/luminusOS/zaptide/issues\n"
-"POT-Creation-Date: 2026-11-04 17:50-0300\n"
+"POT-Creation-Date: 2026-11-05 04:14-0300\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -1602,16 +1602,20 @@ msgstr ""
 msgid "Open in Another App"
 msgstr ""
 
-#: src/native_media_widgets/widget.rs:370
+#: src/native_media_widgets/widget.rs:367
 msgid "This message type cannot be displayed"
 msgstr ""
 
-#: src/native_media_widgets/widget.rs:393
+#: src/native_media_widgets/widget.rs:390
 msgid "Image preview"
 msgstr ""
 
-#: src/native_media_widgets/widget.rs:405
+#: src/native_media_widgets/widget.rs:402
 msgid "Open or download attachment"
+msgstr ""
+
+#: src/native_media_widgets/widget.rs:466
+msgid "This link can't be opened"
 msgstr ""
 
 #: src/native_preferences.rs:404

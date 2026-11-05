@@ -79,7 +79,9 @@ use cards::{
 };
 use photo::{append_photo, append_video, document_card};
 use sticker::append_sticker;
-use widget::playback_projection;
+use widget::{playback_projection, refuse_link};
+
+pub(crate) use cards::open_web_link;
 
 #[cfg(test)]
 mod tests {
@@ -367,6 +369,54 @@ mod tests {
                 .save_to_png(dir.join(format!("{name}.png")))
                 .unwrap();
         }
+    }
+
+    #[test]
+    #[ignore = "needs a display"]
+    fn template_buttons_open_only_web_links() {
+        gtk::init().expect("display");
+        adw::init().expect("libadwaita");
+        let urls = [
+            ("https://example.com/status", true),
+            ("file:///etc/passwd", false),
+            ("smb://server/share", false),
+            ("javascript:alert(1)", false),
+        ];
+        let template = message(Content::Template {
+            text: "Fixture".into(),
+            footer: None,
+            links: urls
+                .iter()
+                .map(|(url, _)| crate::model::TemplateLink {
+                    label: "Open".into(),
+                    url: (*url).into(),
+                })
+                .collect(),
+        });
+        let widget = build_media_widget_with_action(&template, |_| {}).widget;
+        let mut buttons = Vec::new();
+        let mut child = widget.first_child();
+        while let Some(current) = child {
+            if let Some(button) = current.downcast_ref::<gtk::Button>() {
+                buttons.push((
+                    button.tooltip_text().unwrap_or_default().to_string(),
+                    button.is_sensitive(),
+                ));
+            }
+            child = current.next_sibling();
+        }
+        let expected: Vec<(String, bool)> = urls
+            .iter()
+            .map(|(url, enabled)| {
+                let tooltip = if *enabled {
+                    (*url).to_owned()
+                } else {
+                    format!("This link can't be opened\n{url}")
+                };
+                (tooltip, *enabled)
+            })
+            .collect();
+        assert_eq!(buttons, expected);
     }
 
     #[test]

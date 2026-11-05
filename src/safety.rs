@@ -13,6 +13,21 @@ pub fn preview_url(value: &str) -> Option<String> {
     (matches!(url.scheme(), "http" | "https") && url.host_str().is_some()).then(|| url.to_string())
 }
 
+/// A link from message content that may be handed to the desktop: an absolute
+/// http or https URL with a host. This is the click-time half of a two-step
+/// check; [`preview_url`] already filters template and preview URLs when a
+/// message is classified, and this guards whatever stored content says when
+/// it is opened. Unlike [`preview_url`] it never guesses a scheme, and every
+/// other one (`file:`, `smb:`, `javascript:`, `data:`, app schemes) is
+/// refused, since the default handler for it could be anything.
+pub fn web_link(value: &str) -> Option<url::Url> {
+    if value.chars().any(char::is_control) || value.contains('\\') {
+        return None;
+    }
+    let url = url::Url::parse(value.trim()).ok()?;
+    (matches!(url.scheme(), "http" | "https") && url.host_str().is_some()).then_some(url)
+}
+
 /// Scheme of in-app links that open a WhatsApp chat with a phone number.
 pub const CHAT_SCHEME: &str = "zaptide-chat:";
 
@@ -128,6 +143,26 @@ fn link_at(rest: &str) -> Option<(usize, String, Option<&'static str>)> {
         )),
         None => Some((len, url, None)),
     }
+}
+
+/// What activating a link in message text does.
+#[derive(Debug, PartialEq)]
+pub enum LinkActivation<'a> {
+    /// Open or start the chat with this phone number.
+    Chat(&'a str),
+    /// Open this checked web link in the browser.
+    Web(url::Url),
+    /// Do nothing: a mention without a chat, or a link that is not safe to open.
+    Ignore,
+}
+
+/// Decides what a link in a message label does. Labels never let GTK open
+/// the raw href; the caller acts on the result and stops propagation.
+pub fn link_activation(uri: &str) -> LinkActivation<'_> {
+    if let Some(phone) = chat_link_number(uri).filter(|phone| !phone.is_empty()) {
+        return LinkActivation::Chat(phone);
+    }
+    web_link(uri).map_or(LinkActivation::Ignore, LinkActivation::Web)
 }
 
 /// Phone number from an in-app chat link produced by [`linkify_markup`].
@@ -387,7 +422,51 @@ fn render(text: &str, mentions: &[MentionLabel], mut line_start: bool, out: &mut
 
 #[cfg(test)]
 mod tests {
-    use super::{CODE_OPEN, linkify_markup};
+    use super::{CODE_OPEN, LinkActivation, link_activation, linkify_markup, web_link};
+
+    #[test]
+    fn label_links_open_chats_and_checked_web_links_only() {
+        assert_eq!(link_activation("zaptide-chat:1"), LinkActivation::Chat("1"));
+        assert_eq!(link_activation("zaptide-chat:"), LinkActivation::Ignore);
+        assert_eq!(link_activation("zaptide-mention:"), LinkActivation::Ignore);
+        assert_eq!(link_activation("file:///x"), LinkActivation::Ignore);
+        assert_eq!(
+            link_activation("javascript:alert(1)"),
+            LinkActivation::Ignore
+        );
+        assert_eq!(
+            link_activation("https://a.io/"),
+            LinkActivation::Web(url::Url::parse("https://a.io/").unwrap())
+        );
+    }
+
+    #[test]
+    fn only_absolute_web_links_reach_the_desktop() {
+        assert_eq!(
+            web_link("https://example.com/path?q=1").map(String::from),
+            Some("https://example.com/path?q=1".to_owned())
+        );
+        assert_eq!(
+            web_link("HTTPS://Example.COM/Path").map(String::from),
+            Some("https://example.com/Path".to_owned())
+        );
+        assert!(web_link("http://example.com").is_some());
+        for refused in [
+            "file:///etc/passwd",
+            "smb://server/share",
+            "javascript:alert(1)",
+            "data:text/html,<script>alert(1)</script>",
+            "steam://run/1",
+            "zaptide-chat:15555550123",
+            "example.com",
+            "https://",
+            "https://exa\nmple.com",
+            "https://example.com\\evil",
+            "",
+        ] {
+            assert_eq!(web_link(refused), None, "{refused}");
+        }
+    }
 
     #[test]
     fn links_web_addresses_and_escapes_the_rest() {
