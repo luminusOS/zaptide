@@ -227,6 +227,11 @@ impl Archive {
     }
 
     #[cfg(test)]
+    pub(crate) fn open_encrypted_for_test(path: &Path, key: &[u8; 32]) -> anyhow::Result<Self> {
+        Self::open_with_key(path, key)
+    }
+
+    #[cfg(test)]
     pub(crate) fn execute_batch_for_test(&self, sql: &str) -> Result<()> {
         self.connection.execute_batch(sql)
     }

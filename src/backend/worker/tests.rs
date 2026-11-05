@@ -2,6 +2,7 @@ use super::*;
 
 mod previews;
 mod session;
+mod synthetic_archive;
 
 #[tokio::test]
 async fn contact_sharing_rejects_read_only_chats_without_completing_a_composer_send() {
