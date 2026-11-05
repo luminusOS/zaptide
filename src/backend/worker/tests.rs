@@ -142,6 +142,40 @@ fn fallback_names_read_as_phones_or_ids() {
 }
 
 #[test]
+fn attachment_mimes_follow_the_file_extension() {
+    for (name, mime) in [
+        ("photo.jpg", "image/jpeg"),
+        ("photo.JPEG", "image/jpeg"),
+        ("image.png", "image/png"),
+        ("sticker.webp", "image/webp"),
+        ("loop.gif", "image/gif"),
+        ("clip.mp4", "video/mp4"),
+        ("clip.webm", "video/webm"),
+        ("audio.ogg", "audio/ogg"),
+        ("voice.opus", "audio/ogg"),
+        ("song.mp3", "audio/mpeg"),
+        ("memo.m4a", "audio/m4a"),
+        ("report.pdf", "application/pdf"),
+        ("bundle.zip", "application/zip"),
+        (
+            "letter.docx",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ),
+        ("notes.txt", "text/plain"),
+        ("contact.vcf", "text/x-vcard"),
+        ("package.rpm", "application/x-rpm"),
+        ("package.RPM", "application/x-rpm"),
+        ("event.ics", "text/calendar"),
+        ("script.js", "text/javascript"),
+        ("raw.cr2", "image/x-canon-cr2"),
+        ("blob.zaptide-unknown", "application/octet-stream"),
+        ("no-extension", "application/octet-stream"),
+    ] {
+        assert_eq!(outbound::attachment_mime(Path::new(name)), mime, "{name}");
+    }
+}
+
+#[test]
 fn media_paths_keep_document_names_and_map_mimes() {
     let dir = Path::new("/cache");
     assert_eq!(

@@ -444,6 +444,20 @@ pub(super) fn media_path(
     dir.join(format!("{stem}.{extension}"))
 }
 
+pub(super) fn attachment_mime(path: &Path) -> String {
+    let is_rpm = path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("rpm"));
+    if is_rpm {
+        // mime_guess lists RealAudio's plugin type first for .rpm, which would
+        // route a package through the audio message path.
+        return "application/x-rpm".to_owned();
+    }
+    mime_guess::from_path(path)
+        .first_or_octet_stream()
+        .to_string()
+}
+
 /// Keep staging names short and independent for overlapping downloads, even
 /// when both attempts fetch the same message payload. Stay in the destination
 /// directory so promotion can use an atomic rename.
@@ -499,9 +513,7 @@ impl Worker {
                     let bytes = tokio::fs::read(&path)
                         .await
                         .map_err(|error| format!("{}: {error}", path.display()))?;
-                    let mime = mime_guess2::from_path(&path)
-                        .first_or_octet_stream()
-                        .to_string();
+                    let mime = attachment_mime(&path);
                     let file_name = path
                         .file_name()
                         .map(|name| name.to_string_lossy().into_owned());
