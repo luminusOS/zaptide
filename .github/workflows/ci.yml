@@ -47,7 +47,7 @@ jobs:
   check:
     runs-on: ubuntu-24.04
     # libadwaita 1.10 (GNOME 51); Ubuntu does not package it yet.
-    container: registry.fedoraproject.org/fedora:45
+    container: registry.fedoraproject.org/fedora:45@sha256:f5afe36c8ddb2aa5333597e900f53c5ed0267d9ebb27be765dc8ec2633aa1648
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -59,6 +59,7 @@ jobs:
       - name: System dependencies
         run: dnf install -y --setopt=install_weak_deps=False gcc gcc-c++ git gtk4-devel libadwaita-devel alsa-lib-devel gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugins-bad-free gstreamer1-plugin-openh264 xorg-x11-server-Xvfb cmake libseccomp-devel fontconfig-devel perl make tar zstd
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked --all-targets
       - name: GIF playback lifecycle

@@ -80,6 +80,29 @@ and Arch Linux ARM ships libadwaita 1.9. `build.sh` picks the `dnf` path when
 podman run --rm -v "$PWD":/src -w /src -e VERSION=dev registry.fedoraproject.org/fedora:45 ./packaging/appimage/build.sh
 ```
 
+`build.sh` fetches quick-sharun from a fixed commit and stops unless the file
+matches `QUICK_SHARUN_SHA256`, so a bump changes `QUICK_SHARUN_URL` and the hash
+together. The script then downloads sharun, appimagetool, cross-libc-dlopen and
+onelf at the release versions it names; those are pinned by version but not
+hashed. Its self-updater hook, the only part that would fetch the latest
+AppImageUpdate, is not enabled because `build.sh` sets no `ADD_HOOKS`. Tag
+builds restore no CI caches, so a release never reuses build output from
+another branch.
+
+The CI and release workflows name their containers by digest, keeping the tag
+for readers. Dependabot does not update `container:` digests, so re-pin them
+before a release. Each command prints the digest of the multi-architecture
+index, which replaces the `sha256:` part of every reference to that image:
+
+```sh
+skopeo inspect --raw docker://registry.fedoraproject.org/fedora:45 | sha256sum
+skopeo inspect --raw docker://docker.io/library/archlinux:latest | sha256sum
+skopeo inspect --raw docker://ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08 | sha256sum
+```
+
+The Arch image has only an x86_64 manifest and is used only by the x86_64
+AppImage job.
+
 The AppDir follows the AppImage convention: the application lives under `usr/`
 (`usr/bin`, `usr/lib`, `usr/share`). sharun's `AppRun` also looks for those
 directories beside itself, so `build.sh` leaves a link to each one at the top
