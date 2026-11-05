@@ -344,7 +344,7 @@ fn remove_dir_if_present(path: PathBuf) -> std::io::Result<()> {
 fn clear_logged_out_data(dirs: &AppDirs, archive: &Archive) -> anyhow::Result<()> {
     archive.clear()?;
     let session = dirs.session_db();
-    for suffix in ["", "-wal", "-shm", "-journal"] {
+    for suffix in ["", "-wal", "-shm", "-journal", ".encrypting"] {
         let mut path = session.clone().into_os_string();
         path.push(suffix);
         remove_if_present(PathBuf::from(path))?;
@@ -1069,7 +1069,7 @@ impl Worker {
             Ok(store) => store,
             Err(error) => {
                 self.set_status(LinkStatus::Failed(format!(
-                    "Could not open the device store: {error}"
+                    "Could not open the device store: {error:#}"
                 )));
                 return;
             }

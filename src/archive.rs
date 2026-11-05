@@ -12,6 +12,10 @@ use crate::model::{Chat, ChatKind, Content, Delivery, Message};
 mod calls;
 mod contacts;
 mod encryption;
+pub(crate) use encryption::{
+    Database as EncryptedDatabase, device_store_key, key_literal as sqlcipher_key_literal,
+    keyed as open_keyed, open as open_encrypted,
+};
 pub use encryption::{archive_key_identity, copy_archive_key, forget_archive_key};
 mod media;
 mod polls;
@@ -218,7 +222,11 @@ impl Archive {
     }
 
     fn open_with_key(path: &Path, key: &[u8; 32]) -> anyhow::Result<Self> {
-        Ok(Self::prepare(encryption::open(path, key)?)?)
+        Ok(Self::prepare(encryption::open(
+            path,
+            key,
+            encryption::Database::Archive,
+        )?)?)
     }
 
     #[cfg(test)]

@@ -50,6 +50,10 @@ protocol. These notes are for coding agents and new contributors.
   migration checkpoints the old WAL and verifies an encrypted staging file before
   atomic replacement. A locked or missing key stops linking; never fall back to
   a disposable archive. Tests use fixtures and mock credentials only.
+  `backend/worker/device_store.rs` encrypts whatsapp-rust's `session.db` the
+  same way, with an HKDF key derived from the folder's archive key (no second
+  keyring item), applied by a connection hook on every pooled connection. A new
+  key is only created while neither database in the folder is encrypted.
 - `src/model.rs` holds the app's own types. Views never touch a protobuf;
   the worker translates in `classify()` and `parse_conversation()`.
 - Poll creation, voting, and decryption use whatsapp-rust's `Client::polls()`.

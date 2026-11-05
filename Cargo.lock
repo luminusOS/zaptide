@@ -6106,6 +6106,7 @@ dependencies = [
  "anyhow",
  "ashpd",
  "async-channel",
+ "diesel",
  "directories",
  "env_logger",
  "futures-util",

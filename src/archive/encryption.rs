@@ -1,6 +1,11 @@
-//! SQLCipher archive storage and automatic OS-keyring unlock.
+//! SQLCipher storage for the archive and the device store, unlocked with one
+//! OS-keyring key per account folder.
 
-use std::{fs, io::Read, path::Path};
+use std::{
+    fs,
+    io::Read,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result, ensure};
 use keyring_core::api::CredentialStoreApi;
@@ -10,6 +15,25 @@ use zeroize::Zeroizing;
 
 const HEADER: &[u8; 16] = b"SQLite format 3\0";
 const KEYRING_SERVICE: &str = "dev.luminusos.ZapTide";
+const ARCHIVE_FILE: &str = "archive.db";
+const DEVICE_STORE_FILE: &str = "session.db";
+const DEVICE_STORE_KEY_INFO: &[u8] = b"dev.luminusos.ZapTide device store key v1";
+
+/// Which database a message is about, so an error names the right one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Database {
+    Archive,
+    DeviceStore,
+}
+
+impl Database {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Archive => "archive",
+            Self::DeviceStore => "device store",
+        }
+    }
+}
 
 fn plaintext(path: &Path) -> Result<bool> {
     let mut file = match fs::File::open(path) {
@@ -25,6 +49,51 @@ fn plaintext(path: &Path) -> Result<bool> {
     Ok(&header == HEADER)
 }
 
+fn device_store_beside(archive: &Path) -> PathBuf {
+    archive.with_file_name(DEVICE_STORE_FILE)
+}
+
+/// Both databases of a folder use its keyring key, so the key may only be
+/// created while neither of them is encrypted.
+fn ensure_nothing_encrypted(archive: &Path) -> Result<()> {
+    for (path, database) in [
+        (archive.to_owned(), Database::Archive),
+        (device_store_beside(archive), Database::DeviceStore),
+    ] {
+        let what = database.name();
+        ensure!(
+            plaintext(&path)?,
+            "The {what} is encrypted but its OS keyring key is missing. Restore the original keyring, or remove this account and link it again to start over with an empty {what}; the {what} has not been changed"
+        );
+    }
+    Ok(())
+}
+
+fn folder_encrypted(archive: &Path) -> Result<bool> {
+    Ok(!plaintext(archive)? || !plaintext(&device_store_beside(archive))?)
+}
+
+/// The SQLCipher key of the whatsapp-rust device store at `path`.
+///
+/// It is derived from the keyring key of the archive in the same folder
+/// rather than stored as a second keyring item: moving, copying and
+/// forgetting a folder's key then covers both databases, and no second item
+/// can go missing on its own. HKDF keeps the two SQLCipher keys distinct.
+pub(crate) fn device_store_key(path: &Path) -> Result<Zeroizing<[u8; 32]>> {
+    derive_device_store_key(&*key_for(&path.with_file_name(ARCHIVE_FILE))?)
+}
+
+fn derive_device_store_key(folder_key: &[u8; 32]) -> Result<Zeroizing<[u8; 32]>> {
+    let algorithm = ring::hkdf::HKDF_SHA256;
+    let mut key = Zeroizing::new([0; 32]);
+    ring::hkdf::Salt::new(algorithm, &[])
+        .extract(folder_key)
+        .expand(&[DEVICE_STORE_KEY_INFO], algorithm)
+        .and_then(|okm| okm.fill(key.as_mut()))
+        .map_err(|_| anyhow::anyhow!("Could not derive the device store key"))?;
+    Ok(key)
+}
+
 pub(super) fn key_for(path: &Path) -> Result<Zeroizing<[u8; 32]>> {
     let parent = path.parent().context("Archive has no parent directory")?;
     fs::create_dir_all(parent)?;
@@ -35,9 +104,17 @@ pub(super) fn key_for(path: &Path) -> Result<Zeroizing<[u8; 32]>> {
     key_from_entry(path, &entry)
 }
 
+#[cfg(not(test))]
 fn store() -> Result<std::sync::Arc<zbus_secret_service_keyring_store::Store>> {
     zbus_secret_service_keyring_store::Store::new()
         .context("Unlock your OS keyring and restart ZapTide")
+}
+
+/// Tests run on developer machines with a real keyring; a test that reaches
+/// it would create or delete the user's own items, so it fails instead.
+#[cfg(test)]
+fn store() -> Result<std::sync::Arc<zbus_secret_service_keyring_store::Store>> {
+    anyhow::bail!("tests must not use the OS keyring")
 }
 
 /// Separate profiles must not overwrite each other's keys. The credential
@@ -61,7 +138,7 @@ pub fn archive_key_identity(path: &Path) -> Result<String> {
 /// Copies an encrypted archive's key to the identity of `new_archive`'s
 /// folder and reads it back, so the archive can move there.
 pub fn copy_archive_key(old_archive: &Path, new_archive: &Path) -> Result<()> {
-    if plaintext(old_archive)? {
+    if !folder_encrypted(old_archive)? {
         return Ok(());
     }
     copy_archive_key_in(old_archive, new_archive, &*store()?)
@@ -100,10 +177,7 @@ fn copy_archive_key_in(
             key
         }
         Err(keyring_core::Error::NoEntry) => {
-            ensure!(
-                plaintext(old_archive)?,
-                "The archive is encrypted but its OS keyring key is missing. Restore the original keyring; the archive has not been changed"
-            );
+            ensure_nothing_encrypted(old_archive)?;
             return Ok(());
         }
         Err(error) => return Err(error).context("Unlock your OS keyring and restart ZapTide"),
@@ -156,10 +230,7 @@ fn key_from_entry(path: &Path, entry: &keyring_core::Entry) -> Result<Zeroizing<
             Ok(key)
         }
         Err(keyring_core::Error::NoEntry) => {
-            ensure!(
-                plaintext(path)?,
-                "The archive is encrypted but its OS keyring key is missing. Restore the original keyring; the archive has not been changed"
-            );
+            ensure_nothing_encrypted(path)?;
             let mut key = Zeroizing::new([0; 32]);
             getrandom::fill(key.as_mut()).context("Could not generate an archive key")?;
             entry
@@ -181,7 +252,7 @@ fn key_from_entry(path: &Path, entry: &keyring_core::Entry) -> Result<Zeroizing<
     }
 }
 
-fn key_literal(key: &[u8; 32]) -> Zeroizing<String> {
+pub(crate) fn key_literal(key: &[u8; 32]) -> Zeroizing<String> {
     use std::fmt::Write;
     let mut literal = Zeroizing::new(String::with_capacity(67));
     literal.push_str("x'");
@@ -192,22 +263,24 @@ fn key_literal(key: &[u8; 32]) -> Zeroizing<String> {
     literal
 }
 
-fn keyed(path: &Path, key: &[u8; 32]) -> Result<Connection> {
+/// Opens an existing SQLCipher database and proves `key` unlocks it.
+pub(crate) fn keyed(path: &Path, key: &[u8; 32], database: Database) -> Result<Connection> {
+    let what = database.name();
     let connection = Connection::open(path)?;
     connection.pragma_update(None, "key", &*key_literal(key))?;
     let version: String = connection
         .query_row("PRAGMA cipher_version", [], |row| row.get(0))
-        .context("This build does not support encrypted archives")?;
+        .with_context(|| format!("This build cannot open an encrypted {what}"))?;
     ensure!(
         !version.is_empty(),
-        "This build does not support encrypted archives"
+        "This build cannot open an encrypted {what}"
     );
     // PRAGMA key alone does not verify a key. Read a page before any migration.
     connection
         .query_row("SELECT count(*) FROM sqlite_master", [], |row| {
             row.get::<_, i64>(0)
         })
-        .context("The archive could not be unlocked with its OS keyring key")?;
+        .with_context(|| format!("The {what} could not be unlocked with its OS keyring key"))?;
     connection.pragma_update(None, "temp_store", "MEMORY")?;
     Ok(connection)
 }
@@ -223,68 +296,80 @@ fn private_file(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn open(path: &Path, key: &[u8; 32]) -> Result<Connection> {
+/// Opens the SQLCipher database at `path`, first encrypting a plaintext one
+/// in place through a verified staging copy.
+pub(crate) fn open(path: &Path, key: &[u8; 32], database: Database) -> Result<Connection> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
     let staging = path.with_extension("db.encrypting");
     if !path.exists() {
         private_file(path)?;
-    } else if fs::metadata(path)?.len() > 0 && plaintext(path)? {
-        // Keep the original authoritative until the exported copy is complete.
-        // Switching away from WAL folds in committed pages and removes sidecars
-        // before replacing the main file. An interruption leaves the original
-        // usable, with at most an encrypted staging file to discard next time.
-        let source = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
-        let mode: String =
-            source.query_row("PRAGMA journal_mode = DELETE", [], |row| row.get(0))?;
-        ensure!(
-            mode == "delete",
-            "Close other programs using the archive before migrating it"
-        );
-        source.pragma_update(None, "temp_store", "MEMORY")?;
-        if staging.try_exists()? {
-            fs::remove_file(&staging)?;
-        }
-        private_file(&staging)?;
-        source.execute(
-            "ATTACH DATABASE ?1 AS encrypted KEY ?2",
-            rusqlite::params![
-                staging.to_str().context("Archive path is not UTF-8")?,
-                &*key_literal(key)
-            ],
-        )?;
-        source.query_row("SELECT sqlcipher_export('encrypted')", [], |_| Ok(()))?;
-        // sqlcipher_export does not copy SQLite's application/user version.
-        for pragma in ["user_version", "application_id"] {
-            let value: i64 = source.pragma_query_value(None, pragma, |row| row.get(0))?;
-            source.pragma_update(Some("encrypted"), pragma, value)?;
-        }
-        source.execute_batch("DETACH DATABASE encrypted")?;
-        let verified = keyed(&staging, key)?;
-        let integrity: String =
-            verified.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
-        ensure!(
-            integrity == "ok",
-            "The encrypted archive failed its integrity check"
-        );
-        drop(verified);
-        drop(source);
-        fs::OpenOptions::new()
-            .write(true)
-            .open(&staging)?
-            .sync_all()?;
-        fs::rename(&staging, path)
-            .context("Could not replace the archive with its encrypted copy")?;
-        if let Some(parent) = path.parent() {
-            fs::File::open(parent)?.sync_all()?;
-        }
+    } else if fs::metadata(path)?.len() == 0 {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    } else if plaintext(path)? {
+        encrypt_in_place(path, &staging, key, database)
+            .with_context(|| format!("Could not encrypt the {}", database.name()))?;
     }
-    let connection = keyed(path, key)?;
+    let connection = keyed(path, key, database)?;
     if staging.try_exists()? {
         fs::remove_file(staging)?;
     }
     Ok(connection)
+}
+
+fn encrypt_in_place(path: &Path, staging: &Path, key: &[u8; 32], database: Database) -> Result<()> {
+    let what = database.name();
+    // Keep the original authoritative until the exported copy is complete.
+    // Switching away from WAL folds in committed pages and removes sidecars
+    // before replacing the main file. An interruption leaves the original
+    // usable, with at most an encrypted staging file to discard next time.
+    let source = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+    let mode: String = source.query_row("PRAGMA journal_mode = DELETE", [], |row| row.get(0))?;
+    ensure!(
+        mode == "delete",
+        "Close other programs using the {what} before encrypting it"
+    );
+    source.pragma_update(None, "temp_store", "MEMORY")?;
+    if staging.try_exists()? {
+        fs::remove_file(staging)?;
+    }
+    private_file(staging)?;
+    source.execute(
+        "ATTACH DATABASE ?1 AS encrypted KEY ?2",
+        rusqlite::params![
+            staging
+                .to_str()
+                .with_context(|| format!("The {what} path is not UTF-8"))?,
+            &*key_literal(key)
+        ],
+    )?;
+    source.query_row("SELECT sqlcipher_export('encrypted')", [], |_| Ok(()))?;
+    // sqlcipher_export does not copy SQLite's application/user version.
+    for pragma in ["user_version", "application_id"] {
+        let value: i64 = source.pragma_query_value(None, pragma, |row| row.get(0))?;
+        source.pragma_update(Some("encrypted"), pragma, value)?;
+    }
+    source.execute_batch("DETACH DATABASE encrypted")?;
+    let verified = keyed(staging, key, database)?;
+    let integrity: String = verified.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+    ensure!(
+        integrity == "ok",
+        "The encrypted {what} failed its integrity check"
+    );
+    drop(verified);
+    drop(source);
+    fs::OpenOptions::new()
+        .write(true)
+        .open(staging)?
+        .sync_all()?;
+    fs::rename(staging, path)
+        .with_context(|| format!("Could not replace the {what} with its encrypted copy"))?;
+    if let Some(parent) = path.parent() {
+        fs::File::open(parent)?.sync_all()?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -368,6 +453,62 @@ mod tests {
         assert!(error.to_string().contains("missing"));
     }
 
+    #[test]
+    fn the_device_store_key_is_derived_and_distinct() {
+        let first = derive_device_store_key(&[1; 32]).unwrap();
+        assert_eq!(*first, *derive_device_store_key(&[1; 32]).unwrap());
+        assert_ne!(*first, [1; 32]);
+        assert_ne!(*first, *derive_device_store_key(&[2; 32]).unwrap());
+    }
+
+    #[test]
+    fn an_encrypted_device_store_blocks_a_new_key() {
+        let directory = directory();
+        let archive = directory.path().join("archive.db");
+        fs::write(directory.path().join("session.db"), [7u8; 64]).unwrap();
+        let store = keyring_core::mock::Store::new().unwrap();
+        let entry = store.build("zaptide-test", "archive", None).unwrap();
+        assert!(
+            key_from_entry(&archive, &entry)
+                .unwrap_err()
+                .to_string()
+                .contains("device store is encrypted")
+        );
+        assert!(matches!(
+            entry.get_secret(),
+            Err(keyring_core::Error::NoEntry)
+        ));
+        assert!(!archive.exists());
+    }
+
+    #[test]
+    fn the_key_of_a_folder_with_only_an_encrypted_device_store_is_copied() {
+        let directory = directory();
+        let old = directory.path().join("archive.db");
+        let new = directory.path().join("accounts/1/archive.db");
+        fs::write(directory.path().join("session.db"), [7u8; 64]).unwrap();
+        assert!(folder_encrypted(&old).unwrap());
+        let store = keyring_core::mock::Store::new().unwrap();
+        assert!(
+            copy_archive_key_in(&old, &new, &*store)
+                .unwrap_err()
+                .to_string()
+                .contains("missing")
+        );
+        store
+            .build(KEYRING_SERVICE, &archive_key_identity(&old).unwrap(), None)
+            .unwrap()
+            .set_secret(&[9u8; 32])
+            .unwrap();
+        copy_archive_key_in(&old, &new, &*store).unwrap();
+        let copied = store
+            .build(KEYRING_SERVICE, &archive_key_identity(&new).unwrap(), None)
+            .unwrap()
+            .get_secret()
+            .unwrap();
+        assert_eq!(copied, vec![9u8; 32]);
+    }
+
     fn read_secret(connection: &Connection) -> String {
         connection
             .query_row("SELECT value FROM secrets", [], |row| row.get(0))
@@ -382,7 +523,7 @@ mod tests {
         let entry = store.build("zaptide-test", "archive", None).unwrap();
         let key = key_from_entry(&path, &entry).unwrap();
         assert_eq!(*key, *key_from_entry(&path, &entry).unwrap());
-        let connection = open(&path, &key).unwrap();
+        let connection = open(&path, &key, Database::Archive).unwrap();
         connection
             .execute_batch(
                 "CREATE TABLE example(value TEXT); INSERT INTO example VALUES ('fixture');",
@@ -429,7 +570,7 @@ mod tests {
     fn encrypted_database_and_wal_reject_missing_or_wrong_keys() {
         let directory = directory();
         let path = directory.path().join("archive.db");
-        let connection = open(&path, &[7; 32]).unwrap();
+        let connection = open(&path, &[7; 32], Database::Archive).unwrap();
         connection.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE secrets (value TEXT); INSERT INTO secrets VALUES ('private archive marker');").unwrap();
         for file in [&path, &path.with_extension("db-wal")] {
             let bytes = fs::read(file).unwrap();
@@ -440,7 +581,7 @@ mod tests {
             );
         }
         assert!(!plaintext(&path).unwrap());
-        assert!(open(&path, &[8; 32]).is_err());
+        assert!(open(&path, &[8; 32], Database::Archive).is_err());
         assert!(
             Connection::open(&path)
                 .unwrap()
@@ -450,7 +591,7 @@ mod tests {
         );
         drop(connection);
         assert_eq!(
-            read_secret(&open(&path, &[7; 32]).unwrap()),
+            read_secret(&open(&path, &[7; 32], Database::Archive).unwrap()),
             "private archive marker"
         );
     }
@@ -471,7 +612,7 @@ mod tests {
         drop(source);
         assert!(path.with_extension("db-wal").exists());
         fs::write(path.with_extension("db.encrypting"), b"interrupted export").unwrap();
-        let encrypted = open(&path, &[9; 32]).unwrap();
+        let encrypted = open(&path, &[9; 32], Database::Archive).unwrap();
         assert_eq!(read_secret(&encrypted), "from the phone");
         assert_eq!(
             encrypted
@@ -513,10 +654,13 @@ mod tests {
         drop(source);
         // A blocked staging path simulates a filesystem failure before replace.
         fs::create_dir(path.with_extension("db.encrypting")).unwrap();
-        assert!(open(&path, &[9; 32]).is_err());
+        assert!(open(&path, &[9; 32], Database::Archive).is_err());
         assert!(plaintext(&path).unwrap());
         assert_eq!(read_secret(&Connection::open(&path).unwrap()), "keep me");
         fs::remove_dir(path.with_extension("db.encrypting")).unwrap();
-        assert_eq!(read_secret(&open(&path, &[9; 32]).unwrap()), "keep me");
+        assert_eq!(
+            read_secret(&open(&path, &[9; 32], Database::Archive).unwrap()),
+            "keep me"
+        );
     }
 }

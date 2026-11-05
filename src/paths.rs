@@ -257,7 +257,8 @@ impl AppDirs {
         copy_key: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
     ) -> std::io::Result<()> {
         let legacy_archive = self.archive_db();
-        if legacy_archive.exists() {
+        // The device store is keyed from the archive's keyring entry too.
+        if legacy_archive.exists() || self.session_db().exists() {
             copy_key(&legacy_archive, &dest.archive_db()).map_err(|error| {
                 std::io::Error::other(format!(
                     "Could not move the archive's key to the new account folder, so the archive was left where it is: {error}"
@@ -449,6 +450,21 @@ mod tests {
             Ok(())
         })
         .unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn migration_copies_the_key_of_a_device_store_without_an_archive() {
+        let (root, dirs) = legacy("migration-session-key");
+        for name in ["archive.db", "archive.db-wal"] {
+            std::fs::remove_file(dirs.state.join(name)).unwrap();
+        }
+        let error = dirs
+            .adopt_single_account_with(|_, _| Err(std::io::Error::other("locked")))
+            .unwrap_err();
+        assert!(error.to_string().contains("left where it is"));
+        assert_eq!(std::fs::read(dirs.session_db()).unwrap(), b"session");
+        assert!(!first(&dirs).session_db().exists());
         std::fs::remove_dir_all(root).unwrap();
     }
 

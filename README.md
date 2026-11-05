@@ -147,9 +147,14 @@ camera portal, which also reaches cameras that only PipeWire exposes.
 > [!IMPORTANT]
 > Back up the archive with its OS keyring credential: `archive.db` alone cannot
 > be decrypted. Unlock a locked keyring; restore a missing credential instead of
-> replacing the key or deleting the archive.
+> replacing the key or deleting the archive. If the credential is gone for good,
+> remove the account and link it again: that deletes the unreadable files, and
+> only the history the phone sends while linking comes back.
 
-Device credentials, downloads, saved stickers and settings are unencrypted; use
+The device credentials in `session.db` are encrypted with a key derived from the
+same keyring credential, so losing it also means linking the computer again. An
+older ZapTide build cannot open the encrypted `session.db`; going back to one
+requires linking again. Downloads, saved stickers and settings are unencrypted; use
 full-disk encryption for them and backups. Data and keyring entries are separate
 from ZapFast, FastsApp and FastWhatsApp. Link ZapTide separately.
 
