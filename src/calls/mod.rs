@@ -209,11 +209,6 @@ impl VideoSlots {
         self.announce();
     }
 
-    pub fn clear_remote(&self) {
-        *lock(&self.remote) = Some(None);
-        self.announce();
-    }
-
     /// Takes the newest pictures and re-arms the notification. The outer
     /// `Option` says whether a picture changed; the inner one is the picture,
     /// `None` when it was cleared.

@@ -233,7 +233,7 @@ fn prepare_with(
     if registry.accounts.is_empty() && dirs.has_legacy_session() {
         // A first start, or a move that stopped half-way: finish it before
         // trusting the folders, so no database is left behind at the root.
-        if let Err(error) = dirs.adopt_single_account_with(copy_key) {
+        if let Err(error) = dirs.adopt_single_account(copy_key) {
             log::error!("could not move the existing account into its folder: {error}");
             return Prepared {
                 registry,

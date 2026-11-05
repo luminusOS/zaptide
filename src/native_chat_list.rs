@@ -152,6 +152,7 @@ impl ChatListProjection {
         self.selected_id.as_deref()
     }
 
+    #[cfg(test)]
     pub fn selected_chat(&self) -> Option<&Chat> {
         let id = self.selected_id.as_deref()?;
         self.chats.iter().find(|chat| chat.id == id)
