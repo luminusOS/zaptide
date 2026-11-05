@@ -2770,7 +2770,7 @@ impl NativeApplication {
     fn finish_close(&mut self, sender: ComponentSender<Self>) {
         if !self.settings.keep_running_in_background {
             self.request_shutdown(sender);
-        } else if self.tray_shown || crate::native_background::sandboxed() {
+        } else if self.tray_shown || crate::portal::sandboxed() {
             self.window.set_visible(false);
         } else {
             self.present_quit_confirmation_dialog(sender);

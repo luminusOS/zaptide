@@ -17,7 +17,7 @@ pub fn init() {
         .or_else(|| option_env!("ZAPTIDE_LOCALEDIR").map(std::path::PathBuf::from))
         .unwrap_or_else(|| {
             // A Flatpak installs under /app instead of /usr.
-            if std::env::var_os("FLATPAK_ID").is_some() {
+            if crate::portal::sandboxed() {
                 "/app/share/locale".into()
             } else {
                 "/usr/share/locale".into()

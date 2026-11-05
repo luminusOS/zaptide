@@ -177,7 +177,7 @@ impl NativeApplication {
         if let Some(tray) = &self.tray {
             tray.update(state.clone());
         }
-        if crate::native_background::sandboxed() {
+        if crate::portal::sandboxed() {
             crate::native_background::set_status(
                 &crate::native_tray::unread_label(state.unread_chats)
                     .unwrap_or_else(|| "No unread chats".into()),

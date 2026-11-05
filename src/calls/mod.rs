@@ -298,7 +298,7 @@ impl VideoPlan {
     }
 
     fn start_camera(&self) -> Result<video::Camera, MediaError> {
-        match camera_portal::route(camera_portal::sandboxed()) {
+        match camera_portal::route(crate::portal::sandboxed()) {
             camera_portal::Route::Portal => self.start_through_portal(),
             camera_portal::Route::DirectThenPortal => match self.start_directly() {
                 Err(MediaError::NoCamera) => self

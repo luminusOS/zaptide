@@ -296,6 +296,7 @@ fn row(widgets: &std::rc::Rc<Widgets>, account: &SwitcherRow, active: bool) -> a
     let row = adw::ActionRow::builder()
         .title(account.label.as_str())
         .subtitle(account.subtitle())
+        .use_markup(false)
         .title_lines(1)
         .subtitle_lines(1)
         .activatable(!active)

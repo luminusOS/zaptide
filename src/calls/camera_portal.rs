@@ -6,10 +6,8 @@
 //! calls here block, so they run on the threads that already open call devices,
 //! never on the GTK main thread.
 
-use std::ffi::OsStr;
 use std::future::Future;
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
-use std::path::Path;
 use std::time::Duration;
 
 use ashpd::desktop::ResponseError;
@@ -40,17 +38,6 @@ pub(super) fn route(sandboxed: bool) -> Route {
     } else {
         Route::DirectThenPortal
     }
-}
-
-fn is_sandboxed(flatpak_info_exists: bool, flatpak_id: Option<&OsStr>) -> bool {
-    flatpak_info_exists || flatpak_id.is_some_and(|id| !id.is_empty())
-}
-
-pub(super) fn sandboxed() -> bool {
-    is_sandboxed(
-        Path::new("/.flatpak-info").exists(),
-        std::env::var_os("FLATPAK_ID").as_deref(),
-    )
 }
 
 /// A portal that is not there is not worth telling someone who has a camera
@@ -198,24 +185,12 @@ pub(super) fn open(prompt_timeout: Duration) -> Result<Remote, MediaError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::OsString;
 
     fn node(class: &str, serial: u64) -> Node {
         Node {
             class: class.to_owned(),
             serial,
         }
-    }
-
-    #[test]
-    fn a_flatpak_is_sandboxed_by_its_info_file_or_its_id() {
-        assert!(is_sandboxed(true, None));
-        assert!(is_sandboxed(
-            false,
-            Some(OsStr::new("dev.luminusos.ZapTide"))
-        ));
-        assert!(!is_sandboxed(false, None));
-        assert!(!is_sandboxed(false, Some(&OsString::new())));
     }
 
     #[test]

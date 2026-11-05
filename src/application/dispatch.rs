@@ -494,7 +494,7 @@ impl NativeApplication {
                         // unless the portal lists the app under Background Apps.
                         // GNOME turns the tray extension off while the screen is
                         // locked, which must not pull a hidden window back up.
-                        if !shown && !crate::native_background::sandboxed() {
+                        if !shown && !crate::portal::sandboxed() {
                             self.window.present();
                         }
                     }
