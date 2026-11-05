@@ -58,7 +58,10 @@ use history::ParsedHistory;
 #[cfg(test)]
 use history::parse_conversation;
 use history::{HistoryReaction, HistoryReactionBody, parse_history};
-use outbound::{PastedImageRequest, download_staging_path, media_path};
+use outbound::{
+    PastedImageRequest, StagedDownload, download_staging_path, media_path,
+    stream_session_cache_file,
+};
 #[cfg(test)]
 use outbound::{THUMBNAIL_SIDE, consume_attachment_reply, encode_jpeg, thumbnail_jpeg};
 use protocol::{base_message, classify};
@@ -3342,27 +3345,28 @@ impl Worker {
         let session_generation_shared = self.session_generation_shared.clone();
         let session_cache_lock = self.session_cache_lock.clone();
         tokio::spawn(async move {
-            let keep = |bytes: Vec<u8>| {
+            let fetch = |downloadable: Box<dyn Downloadable>| {
+                let client = client.clone();
                 let dir = dir.clone();
                 let path = download_staging_path(&dir);
                 let session_generation_shared = session_generation_shared.clone();
                 let session_cache_lock = session_cache_lock.clone();
                 async move {
-                    write_session_cache_file(
+                    stream_session_cache_file(
                         &dir,
                         &path,
-                        &bytes,
                         session_generation,
                         &session_generation_shared,
-                        None,
                         &session_cache_lock,
+                        |file| async move { client.download_to_writer(&*downloadable, file).await },
                     )
                     .await
                 }
             };
-            let result = match client.download(&*downloadable).await {
-                Ok(bytes) => keep(bytes).await,
-                Err(error) => {
+            let result = match fetch(downloadable).await {
+                Ok(path) => Ok(path),
+                Err(StagedDownload::Local(error)) => Err(error),
+                Err(StagedDownload::Fetch(error)) => {
                     let text = error.to_string();
                     let expired = ["403", "404", "410"].iter().any(|code| text.contains(code));
                     match (&jid, expired && !media_key.is_empty()) {
@@ -3378,10 +3382,9 @@ impl Worker {
                             match client.media_reupload().request(&request).await {
                                 Ok(MediaRetryResult::Success { direct_path }) => {
                                     match refreshed(direct_path) {
-                                        Some(again) => match client.download(&*again).await {
-                                            Ok(bytes) => keep(bytes).await,
-                                            Err(error) => Err(error.to_string()),
-                                        },
+                                        Some(again) => {
+                                            fetch(again).await.map_err(StagedDownload::into_message)
+                                        }
                                         None => Err(text),
                                     }
                                 }

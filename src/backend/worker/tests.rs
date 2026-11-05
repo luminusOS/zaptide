@@ -1,5 +1,6 @@
 use super::*;
 
+mod downloads;
 mod previews;
 mod session;
 

@@ -573,6 +573,101 @@ pub(super) fn download_staging_path(dir: &Path) -> PathBuf {
     dir.join(format!(".download-{token:032x}.tmp"))
 }
 
+/// Why a streamed download produced no staging file.
+#[derive(Debug)]
+pub(super) enum StagedDownload<E> {
+    /// The download itself failed, verification included.
+    Fetch(E),
+    /// The cache could not take the file, or the account changed.
+    Local(String),
+}
+
+impl<E: std::fmt::Display> StagedDownload<E> {
+    pub(super) fn into_message(self) -> String {
+        match self {
+            Self::Fetch(error) => error.to_string(),
+            Self::Local(message) => message,
+        }
+    }
+}
+
+const ACCOUNT_CHANGED: &str = "The linked account changed during the download";
+
+/// Streams a download into a new staging file at `path`. `fetch` receives
+/// the open file and returns it once the media is complete and verified; on
+/// any failure the staging file is removed. The cache lock is held only
+/// while the file is created and while the result is checked, not while the
+/// body streams, so a logout does not wait for a large download; a cleanup
+/// that runs meanwhile bumps the generation and the file is discarded.
+pub(super) async fn stream_session_cache_file<E, F, Fut>(
+    directory: &Path,
+    path: &Path,
+    generation: u64,
+    current_generation: &AtomicU64,
+    cache_lock: &tokio::sync::Mutex<()>,
+    fetch: F,
+) -> Result<PathBuf, StagedDownload<E>>
+where
+    F: FnOnce(std::fs::File) -> Fut,
+    Fut: std::future::Future<Output = Result<std::fs::File, E>>,
+{
+    let active = || current_generation.load(Ordering::Acquire) == generation;
+    let local = |error: std::io::Error| StagedDownload::Local(error.to_string());
+    let file = {
+        let _guard = cache_lock.lock().await;
+        if !active() {
+            return Err(StagedDownload::Local(ACCOUNT_CHANGED.to_owned()));
+        }
+        tokio::fs::create_dir_all(directory).await.map_err(local)?;
+        if !active() {
+            return Err(StagedDownload::Local(ACCOUNT_CHANGED.to_owned()));
+        }
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .map_err(local)?;
+        (RemoveOnDrop(Some(path)), file)
+    };
+    let (staging, file) = file;
+    let fetched = fetch(file).await;
+    let _guard = cache_lock.lock().await;
+    match fetched {
+        Ok(file) => {
+            drop(file);
+            if active() {
+                staging.disarm();
+                Ok(path.to_owned())
+            } else {
+                drop(staging);
+                Err(StagedDownload::Local(ACCOUNT_CHANGED.to_owned()))
+            }
+        }
+        Err(error) => {
+            drop(staging);
+            Err(StagedDownload::Fetch(error))
+        }
+    }
+}
+
+/// Removes a staging file unless the download it holds was kept, so a task
+/// dropped mid-download (a runtime shutting down) leaves no partial file.
+struct RemoveOnDrop<'a>(Option<&'a Path>);
+
+impl RemoveOnDrop<'_> {
+    fn disarm(mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for RemoveOnDrop<'_> {
+    fn drop(&mut self) {
+        if let Some(path) = self.0.take() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
 impl Worker {
     pub(super) fn send_files(
         &mut self,
