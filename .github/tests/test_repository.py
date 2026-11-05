@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 import re
+import tomllib
 import unittest
 
 import yaml
@@ -25,6 +26,28 @@ class RepositoryConfiguration(unittest.TestCase):
                     self.assertRegex(action, r"@[0-9a-f]{40}$", path)
                     if action.startswith("actions/checkout@"):
                         self.assertIs(step.get("with", {}).get("persist-credentials"), False)
+
+    def test_dependency_check_runs_weekly_and_allows_only_known_git_sources(self):
+        workflow = yaml.safe_load((ROOT / ".github/workflows/deny.yml").read_text())
+        events = workflow.get("on", workflow.get(True))
+        self.assertTrue(events["schedule"])
+        for event in ("pull_request", "push"):
+            self.assertTrue({"Cargo.lock", "Cargo.toml", "deny.toml"} <= set(events[event]["paths"]))
+        self.assertEqual(events["push"]["branches"], ["main"])
+        self.assertEqual(workflow["permissions"], {"contents": "read"})
+        step = next(s for s in workflow["jobs"]["cargo-deny"]["steps"]
+                    if s.get("uses", "").startswith("EmbarkStudios/cargo-deny-action@"))
+        checks = step["with"]["command-arguments"].split()
+        self.assertTrue({"advisories", "bans", "sources"} <= set(checks))
+        self.assertNotIn("licenses", checks)
+        deny = tomllib.loads((ROOT / "deny.toml").read_text())
+        lock = tomllib.loads((ROOT / "Cargo.lock").read_text())
+        git = {re.split(r"[?#]", package["source"][len("git+"):])[0]
+               for package in lock["package"]
+               if package.get("source", "").startswith("git+")}
+        self.assertTrue(git)
+        self.assertEqual(set(deny["sources"]["allow-git"]), git)
+        self.assertEqual(deny["sources"]["unknown-git"], "deny")
 
     def test_required_checks_run_on_every_pull_request(self):
         ruleset = json.loads((ROOT / ".github/main-ruleset.json").read_text())
