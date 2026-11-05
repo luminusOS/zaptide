@@ -28,7 +28,6 @@ pub(super) struct AccountSession {
     pub(super) sticker_packs: Vec<crate::model::StickerPack>,
     pub(super) recent_stickers: Vec<std::path::PathBuf>,
     pub(super) favorite_stickers: Vec<std::path::PathBuf>,
-    pub(super) sticker_emojis: std::collections::HashMap<std::path::PathBuf, Vec<String>>,
 }
 
 impl AccountSession {
@@ -62,7 +61,6 @@ impl AccountSession {
             sticker_packs: Vec::new(),
             recent_stickers: Vec::new(),
             favorite_stickers: Vec::new(),
-            sticker_emojis: Default::default(),
         }
     }
 
@@ -558,7 +556,6 @@ impl NativeApplication {
             })
         });
         self.composer = composer_with_drafts(&self.drafts);
-        std::mem::swap(&mut self.sticker_emojis, &mut session.sticker_emojis);
         // `session` now holds the account that left the screen.
         let incoming_settings = std::mem::replace(
             &mut session.settings,
@@ -586,10 +583,6 @@ impl NativeApplication {
         }
         self.apply_runtime_settings();
         self.sync_tray();
-    }
-
-    pub(super) fn rebuild_sticker_emojis(&mut self) {
-        self.sticker_emojis = sticker_emojis(&self.sticker_packs);
     }
 
     /// Clears everything on screen that belongs to the open conversation, so
@@ -702,22 +695,6 @@ fn move_avatar_references<T>(
     for path in outgoing.values() {
         update_avatar_texture_references(cache, references, Some(path.clone()), None);
     }
-}
-
-/// The emoji each sticker of an account's packs answers to.
-fn sticker_emojis(
-    packs: &[crate::model::StickerPack],
-) -> std::collections::HashMap<std::path::PathBuf, Vec<String>> {
-    let mut index = std::collections::HashMap::new();
-    for sticker in packs.iter().flat_map(|pack| &pack.stickers) {
-        if let Ok(bytes) = std::fs::read(sticker) {
-            let emojis = crate::sticker_meta::emojis(&bytes);
-            if !emojis.is_empty() {
-                index.insert(sticker.clone(), emojis);
-            }
-        }
-    }
-    index
 }
 
 /// A suspend kills the socket of every linked account, not only the one on screen.
@@ -851,7 +828,6 @@ pub(super) fn apply_hidden_event(
                 session.sticker_packs.clear();
                 session.recent_stickers.clear();
                 session.favorite_stickers.clear();
-                session.sticker_emojis.clear();
             }
             session.link = link;
         }
@@ -890,9 +866,6 @@ pub(super) fn apply_hidden_event(
             recent,
         } => {
             session.favorite_stickers = saved;
-            if packs != session.sticker_packs {
-                session.sticker_emojis = sticker_emojis(&packs);
-            }
             session.sticker_packs = packs;
             session.recent_stickers = recent;
         }

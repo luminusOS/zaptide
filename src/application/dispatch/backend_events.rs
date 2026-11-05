@@ -245,17 +245,12 @@ pub(super) fn handle_backend_ready(
                 let changed = saved != app.favorite_stickers
                     || packs != app.sticker_packs
                     || recent != app.recent_stickers;
-                let packs_changed = packs != app.sticker_packs;
                 app.favorite_stickers = saved;
                 app.sticker_packs = packs;
                 app.recent_stickers = recent;
                 if changed {
                     app.refresh_sticker_picker(&sender);
                 }
-                if !packs_changed {
-                    continue;
-                }
-                app.rebuild_sticker_emojis();
             }
             NativeEvent::MessageUpdated(message) => app.message_updated(*message),
             NativeEvent::Edited { chat, id, success } => app.edited(chat, id, success),
