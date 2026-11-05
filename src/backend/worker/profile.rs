@@ -26,7 +26,7 @@ impl Worker {
         });
     }
 
-    pub(super) fn profile_saved(
+    pub(super) async fn profile_saved(
         &mut self,
         session_generation: u64,
         edit: ProfileEdit,
@@ -46,7 +46,7 @@ impl Worker {
                 self.me_about = Some(about).filter(|about| !about.is_empty());
             }
             if edit.picture != PictureEdit::Keep {
-                self.refresh_own_avatar();
+                self.refresh_own_avatar().await;
             }
         }
         self.emit(Event::ProfileSaved {
@@ -55,12 +55,15 @@ impl Worker {
     }
 
     /// Drops the cached picture so the next fetch shows the new one.
-    fn refresh_own_avatar(&mut self) {
+    async fn refresh_own_avatar(&mut self) {
         let Some(me) = self.me_pn.clone() else {
             return;
         };
-        for full in [false, true] {
-            let _ = std::fs::remove_file(self.avatar_file(&me, full));
+        {
+            let _cache_guard = self.session_cache_lock.lock().await;
+            for full in [false, true] {
+                self.remove_avatar_files(&me, full);
+            }
         }
         self.fetch_avatar(me.clone(), false);
         self.fetch_avatar(me, true);

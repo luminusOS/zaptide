@@ -455,7 +455,7 @@ impl Worker {
                 session_generation,
                 edit,
                 result,
-            } => self.profile_saved(session_generation, edit, result),
+            } => self.profile_saved(session_generation, edit, result).await,
             Command::ContactAbout { id } => {
                 let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&id)) else {
                     return;

@@ -321,8 +321,9 @@ impl Worker {
                 self.invalidate_avatar_generations(&id);
                 {
                     let _cache_guard = self.session_cache_lock.lock().await;
-                    let _ = std::fs::remove_file(self.avatar_file(&id, false));
-                    let _ = std::fs::remove_file(self.avatar_file(&id, true));
+                    for full in [false, true] {
+                        self.remove_avatar_files(&id, full);
+                    }
                 }
                 if update.removed {
                     self.emit(Event::Avatar {

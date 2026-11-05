@@ -12,10 +12,10 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
 use whatsapp_rust::download::MediaType;
-use whatsapp_rust::features::PresencePolicy;
 use whatsapp_rust::features::message_edit::{
     SecretEncKind, decrypt_secret_encrypted_with_fallback, extract_secret_encrypted,
 };
+use whatsapp_rust::features::{PresencePolicy, ProfilePictureLookup};
 use whatsapp_rust::media::{
     AudioOptions, DocumentOptions, ImageOptions, VideoOptions, audio_message, document_message,
     image_message, video_message,
@@ -78,6 +78,12 @@ use crate::paths::AppDirs;
 const SYNC_QUIET: Duration = Duration::from_secs(20);
 /// Profile-picture cache lifetime.
 const AVATAR_FRESH: Duration = Duration::from_secs(24 * 60 * 60);
+/// Part of that lifetime given up per contact, so pictures fetched together
+/// after linking go stale over half a day instead of all at once.
+const AVATAR_SPREAD: Duration = Duration::from_secs(12 * 60 * 60);
+/// Profile-picture lookups and downloads in flight at once.
+const AVATAR_FETCHES: usize = 4;
+const AVATAR_TIMEOUT: Duration = Duration::from_secs(20);
 /// Phone history-request timeout.
 const PHONE_PATIENCE: Duration = Duration::from_secs(30);
 /// Phone history-request batch size.
@@ -418,6 +424,247 @@ async fn write_session_cache_file(
     Ok(path.to_owned())
 }
 
+/// One agent for every profile-picture download, so connections to the
+/// picture servers are reused and a stalled server cannot hold a thread.
+static AVATAR_AGENT: std::sync::LazyLock<ureq::Agent> = std::sync::LazyLock::new(|| {
+    ureq::Agent::config_builder()
+        .timeout_global(Some(AVATAR_TIMEOUT))
+        .build()
+        .new_agent()
+});
+
+fn avatar_spread(id: &str) -> Duration {
+    // FNV-1a: stable across runs and builds, unlike the std hasher.
+    let hash = id.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+    });
+    Duration::from_secs(hash % AVATAR_SPREAD.as_secs())
+}
+
+fn avatar_is_fresh(id: &str, age: Duration) -> bool {
+    age < AVATAR_FRESH - avatar_spread(id)
+}
+
+/// The picture a cached avatar file came from, and the query that found it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct KnownPicture {
+    jid: String,
+    preview: bool,
+    id: String,
+}
+
+impl KnownPicture {
+    fn sidecar(path: &Path) -> PathBuf {
+        let mut sidecar = path.as_os_str().to_owned();
+        sidecar.push(".id");
+        PathBuf::from(sidecar)
+    }
+
+    fn read(path: &Path) -> Option<Self> {
+        let text = std::fs::read_to_string(Self::sidecar(path)).ok()?;
+        let mut lines = text.lines();
+        let jid = lines.next()?.to_owned();
+        let preview = match lines.next()? {
+            "preview" => true,
+            "image" => false,
+            _ => return None,
+        };
+        let id = lines.next().filter(|id| !id.is_empty())?.to_owned();
+        Some(Self { jid, preview, id })
+    }
+
+    fn encode(&self) -> String {
+        let kind = if self.preview { "preview" } else { "image" };
+        format!("{}\n{kind}\n{}\n", self.jid, self.id)
+    }
+}
+
+enum FetchedPicture {
+    Missing,
+    /// The server confirmed the cached file is still the current picture.
+    Unchanged,
+    Downloaded {
+        bytes: Vec<u8>,
+        picture: Option<KnownPicture>,
+    },
+}
+
+/// The network side of a profile-picture fetch, separate so tests can stand
+/// in for WhatsApp and the picture servers.
+trait PictureSource: Send + Sync + 'static {
+    fn lookup(
+        &self,
+        jid: &Jid,
+        preview: bool,
+        existing_id: Option<&str>,
+    ) -> impl Future<Output = Result<ProfilePictureLookup, String>> + Send;
+
+    fn download(&self, url: String) -> impl Future<Output = Result<Vec<u8>, String>> + Send;
+}
+
+struct ClientPictures(Arc<Client>);
+
+impl PictureSource for ClientPictures {
+    async fn lookup(
+        &self,
+        jid: &Jid,
+        preview: bool,
+        existing_id: Option<&str>,
+    ) -> Result<ProfilePictureLookup, String> {
+        let options = whatsapp_rust::features::ProfilePictureLookupOptions::new(jid)
+            .preview(preview)
+            .existing_id(existing_id)
+            .timeout(Some(AVATAR_TIMEOUT));
+        self.0
+            .contacts()
+            .lookup_profile_picture_with_options(options)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    async fn download(&self, url: String) -> Result<Vec<u8>, String> {
+        tokio::task::spawn_blocking(move || {
+            AVATAR_AGENT
+                .get(&url)
+                .call()
+                .and_then(|mut response| response.body_mut().read_to_vec())
+                .map_err(|error| error.to_string())
+        })
+        .await
+        .map_err(|error| error.to_string())?
+    }
+}
+
+/// Looks the picture up for each candidate id, the requested size first,
+/// and downloads it. At most `AVATAR_FETCHES` run at once per account, so a
+/// chat list full of stale pictures cannot start hundreds of requests and
+/// blocking threads together.
+async fn fetch_picture(
+    source: &impl PictureSource,
+    permits: &tokio::sync::Semaphore,
+    still_wanted: impl Fn() -> bool,
+    candidates: &[Jid],
+    full: bool,
+    known: Option<&KnownPicture>,
+) -> Result<FetchedPicture, String> {
+    let _permit = permits.acquire().await.map_err(|error| error.to_string())?;
+    // A logout or picture update while queued makes the answer useless.
+    if !still_wanted() {
+        return Err("The profile-picture request is no longer current".to_owned());
+    }
+    let mut failed = false;
+    for jid in candidates {
+        let jid_text = jid.to_string();
+        for preview in [!full, false] {
+            let existing = known
+                .filter(|known| known.jid == jid_text && known.preview == preview)
+                .map(|known| known.id.as_str());
+            match source.lookup(jid, preview, existing).await {
+                Ok(ProfilePictureLookup::Found(picture)) => {
+                    let bytes = source.download(picture.url).await?;
+                    let picture = (!picture.id.is_empty()).then_some(KnownPicture {
+                        jid: jid_text,
+                        preview,
+                        id: picture.id,
+                    });
+                    return Ok(FetchedPicture::Downloaded { bytes, picture });
+                }
+                // wacore reads an empty reply to a lookup with an id as
+                // unchanged; a removed picture still arrives as PictureUpdate.
+                Ok(ProfilePictureLookup::Unchanged) if existing.is_some() => {
+                    return Ok(FetchedPicture::Unchanged);
+                }
+                Ok(ProfilePictureLookup::RateOverlimit) => {
+                    log::debug!("picture lookup rate-limited");
+                    failed = true;
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    log::debug!("picture lookup failed: {error}");
+                    failed = true;
+                }
+            }
+        }
+    }
+    if failed {
+        Err("lookup failed".to_owned())
+    } else {
+        Ok(FetchedPicture::Missing)
+    }
+}
+
+/// Writes a downloaded picture and the id it came with, in one locked step
+/// checked against logout and picture updates. The old id goes first, so a
+/// failed write can only cost a download later, never keep an old picture.
+async fn write_avatar_cache(
+    path: &Path,
+    bytes: &[u8],
+    picture: Option<&KnownPicture>,
+    generation: u64,
+    current_generation: &AtomicU64,
+    request_generation: (u64, &AtomicU64),
+    cache_lock: &tokio::sync::Mutex<()>,
+) -> Result<PathBuf, String> {
+    let _guard = cache_lock.lock().await;
+    let (expected, current) = request_generation;
+    let active = || {
+        current_generation.load(Ordering::Acquire) == generation
+            && current.load(Ordering::Acquire) == expected
+    };
+    let stale = || "The linked account or picture changed during the download".to_owned();
+    if !active() {
+        return Err(stale());
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| "Profile-picture cache path is invalid".to_owned())?;
+    let sidecar = KnownPicture::sidecar(path);
+    tokio::fs::create_dir_all(parent)
+        .await
+        .map_err(|error| error.to_string())?;
+    match tokio::fs::remove_file(&sidecar).await {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            return Err(error.to_string());
+        }
+        _ => {}
+    }
+    tokio::fs::write(path, bytes)
+        .await
+        .map_err(|error| error.to_string())?;
+    if let Some(picture) = picture {
+        let _ = tokio::fs::write(&sidecar, picture.encode()).await;
+    }
+    if !active() {
+        let _ = tokio::fs::remove_file(path).await;
+        let _ = tokio::fs::remove_file(&sidecar).await;
+        return Err(stale());
+    }
+    Ok(path.to_owned())
+}
+
+/// Marks a cached picture the server confirmed as fresh again.
+async fn keep_session_cache_file(
+    path: &Path,
+    generation: u64,
+    current_generation: &AtomicU64,
+    request_generation: (u64, &AtomicU64),
+    cache_lock: &tokio::sync::Mutex<()>,
+) -> Result<PathBuf, String> {
+    let _guard = cache_lock.lock().await;
+    let (expected, current) = request_generation;
+    if current_generation.load(Ordering::Acquire) != generation
+        || current.load(Ordering::Acquire) != expected
+    {
+        return Err("The linked account changed during the lookup".to_owned());
+    }
+    std::fs::File::options()
+        .write(true)
+        .open(path)
+        .and_then(|file| file.set_modified(std::time::SystemTime::now()))
+        .map_err(|error| error.to_string())?;
+    Ok(path.to_owned())
+}
+
 pub async fn run(
     dirs: AppDirs,
     events: std::sync::mpsc::Sender<Event>,
@@ -548,6 +795,7 @@ pub async fn run(
         next_older_request_id: 0,
         older_warned: HashSet::new(),
         pending_avatars: HashMap::new(),
+        avatar_permits: Arc::new(tokio::sync::Semaphore::new(AVATAR_FETCHES)),
         sticker_fetches: HashSet::new(),
         sticker_downloads: HashSet::new(),
         deferred_downloads: Vec::new(),
@@ -760,6 +1008,7 @@ struct Worker {
     older_warned: HashSet<ChatId>,
     /// Deferred profile-picture requests and retry counts.
     pending_avatars: HashMap<(String, bool), u32>,
+    avatar_permits: Arc<tokio::sync::Semaphore>,
     /// Active recent-sticker downloads by hash.
     sticker_fetches: HashSet<String>,
     /// Active chat-sticker downloads by chat, message id, and raw fingerprint.
@@ -3611,14 +3860,22 @@ impl Worker {
         self.dirs.avatar_file(id, full)
     }
 
+    /// Removes a cached picture and its id; callers hold `session_cache_lock`.
+    fn remove_avatar_files(&self, id: &str, full: bool) {
+        let path = self.avatar_file(id, full);
+        let _ = std::fs::remove_file(KnownPicture::sidecar(&path));
+        let _ = std::fs::remove_file(path);
+    }
+
     fn fetch_avatar(&mut self, id: String, full: bool) {
         let path = self.avatar_file(&id, full);
-        if let Ok(metadata) = std::fs::metadata(&path)
+        let cached = std::fs::metadata(&path).ok();
+        if let Some(metadata) = &cached
             && metadata
                 .modified()
                 .ok()
                 .and_then(|modified| modified.elapsed().ok())
-                .is_some_and(|age| age < AVATAR_FRESH)
+                .is_some_and(|age| avatar_is_fresh(&id, age))
         {
             let path = (metadata.len() > 0).then_some(path);
             self.emit(Event::Avatar { id, full, path });
@@ -3651,6 +3908,10 @@ impl Worker {
             self.pending_avatars.entry((id, full)).or_insert(0);
             return;
         };
+        let known = cached
+            .filter(|metadata| metadata.len() > 0)
+            .and_then(|_| KnownPicture::read(&path));
+        let permits = self.avatar_permits.clone();
         let commands = self.commands.clone();
         let session_generation = self.session_generation;
         let session_generation_shared = self.session_generation_shared.clone();
@@ -3659,54 +3920,42 @@ impl Worker {
         let session_cache_lock = self.session_cache_lock.clone();
         tokio::spawn(async move {
             let fetched = async {
-                let mut picture = None;
-                let mut failed = false;
-                'lookup: for jid in &candidates {
-                    for preview in [!full, false] {
-                        match client.contacts().get_profile_picture(jid, preview).await {
-                            Ok(Some(found)) => {
-                                picture = Some(found);
-                                break 'lookup;
-                            }
-                            Ok(None) => {}
-                            Err(error) => {
-                                log::debug!("picture lookup failed: {error}");
-                                failed = true;
-                            }
-                        }
-                    }
-                }
-                let Some(picture) = picture else {
-                    return if failed {
-                        Err("lookup failed".to_owned())
-                    } else {
-                        Ok(None)
-                    };
+                let source = ClientPictures(client);
+                let still_wanted = || {
+                    session_generation_shared.load(Ordering::Acquire) == session_generation
+                        && avatar_generation_shared.load(Ordering::Acquire) == avatar_generation
                 };
-                let url = picture.url;
-                let bytes = tokio::task::spawn_blocking(move || {
-                    ureq::get(&url)
-                        .call()
-                        .and_then(|mut response| response.body_mut().read_to_vec())
-                        .map_err(|error| error.to_string())
-                })
-                .await
-                .map_err(|error| error.to_string())??;
-                if session_generation_shared.load(Ordering::Acquire) != session_generation {
-                    return Err(
-                        "The linked account changed during profile-picture lookup".to_owned()
-                    );
-                }
-                let parent = path
-                    .parent()
-                    .ok_or_else(|| "Profile-picture cache path is invalid".to_owned())?;
-                let path = write_session_cache_file(
-                    parent,
+                let fetched = fetch_picture(
+                    &source,
+                    &permits,
+                    still_wanted,
+                    &candidates,
+                    full,
+                    known.as_ref(),
+                )
+                .await?;
+                let (bytes, picture) = match fetched {
+                    FetchedPicture::Missing => return Ok(None),
+                    FetchedPicture::Unchanged => {
+                        return keep_session_cache_file(
+                            &path,
+                            session_generation,
+                            &session_generation_shared,
+                            (avatar_generation, &avatar_generation_shared),
+                            &session_cache_lock,
+                        )
+                        .await
+                        .map(Some);
+                    }
+                    FetchedPicture::Downloaded { bytes, picture } => (bytes, picture),
+                };
+                let path = write_avatar_cache(
                     &path,
                     &bytes,
+                    picture.as_ref(),
                     session_generation,
                     &session_generation_shared,
-                    Some((avatar_generation, &avatar_generation_shared)),
+                    (avatar_generation, &avatar_generation_shared),
                     &session_cache_lock,
                 )
                 .await?;

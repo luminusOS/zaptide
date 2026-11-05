@@ -1,5 +1,6 @@
 use super::*;
 
+mod avatars;
 mod previews;
 mod session;
 
@@ -1860,6 +1861,7 @@ pub(in crate::backend::worker) fn worker() -> (
         next_older_request_id: 0,
         older_warned: HashSet::new(),
         pending_avatars: HashMap::new(),
+        avatar_permits: Arc::new(tokio::sync::Semaphore::new(AVATAR_FETCHES)),
         sticker_fetches: HashSet::new(),
         sticker_downloads: HashSet::new(),
         deferred_downloads: Vec::new(),
