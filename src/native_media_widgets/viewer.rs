@@ -109,27 +109,7 @@ fn dimensions_text(width: Option<u32>, height: Option<u32>) -> Option<String> {
 }
 
 fn file_size_text(size: u64) -> Option<String> {
-    const UNITS: [&str; 3] = ["KB", "MB", "GB"];
-    if size == 0 {
-        return None;
-    }
-    if size < 1024 {
-        return Some(format!("{size} B"));
-    }
-    let mut value = size as f64 / 1024.0;
-    let mut unit = 0;
-    loop {
-        let precision = usize::from(unit > 0);
-        let rounded = format!("{value:.precision$}");
-        let overflows = rounded
-            .parse::<f64>()
-            .is_ok_and(|rounded| rounded >= 1024.0);
-        if !overflows || unit + 1 == UNITS.len() {
-            return Some(format!("{rounded} {}", UNITS[unit]));
-        }
-        value /= 1024.0;
-        unit += 1;
-    }
+    (size > 0).then(|| crate::util::bytes(size))
 }
 
 fn metadata_line(
@@ -1582,18 +1562,18 @@ mod tests {
     fn metadata_matches_the_prototype() {
         assert_eq!(
             metadata_line("image/png", Some(1600), Some(1000), None, 184 * 1024),
-            "PNG · 1600 × 1000 · 184 KB"
+            "PNG · 1600 × 1000 · 188.4\u{a0}kB"
         );
         assert_eq!(
             metadata_line("video/mp4", Some(1280), Some(720), Some(3), 1_258_291),
-            "MP4 · 1280 × 720 · 0:03 · 1.2 MB"
+            "MP4 · 1280 × 720 · 0:03 · 1.3\u{a0}MB"
         );
     }
 
     #[test]
     fn metadata_skips_what_is_unknown() {
         assert_eq!(metadata_line("image/jpeg", None, Some(10), None, 0), "JPEG");
-        assert_eq!(metadata_line("", Some(0), Some(0), None, 12), "12 B");
+        assert_eq!(metadata_line("", Some(0), Some(0), None, 12), "12 bytes");
         assert_eq!(metadata_line("garbage", None, None, None, 0), "");
     }
 
@@ -1614,11 +1594,17 @@ mod tests {
     #[test]
     fn file_sizes_round_to_the_nearest_unit() {
         assert_eq!(file_size_text(0), None);
-        assert_eq!(file_size_text(1023).as_deref(), Some("1023 B"));
-        assert_eq!(file_size_text(1024).as_deref(), Some("1 KB"));
-        assert_eq!(file_size_text(1024 * 1024 - 1).as_deref(), Some("1.0 MB"));
-        assert_eq!(file_size_text(5 * 1024 * 1024).as_deref(), Some("5.0 MB"));
-        assert_eq!(file_size_text(3 << 30).as_deref(), Some("3.0 GB"));
+        assert_eq!(file_size_text(1023).as_deref(), Some("1.0\u{a0}kB"));
+        assert_eq!(file_size_text(1024).as_deref(), Some("1.0\u{a0}kB"));
+        assert_eq!(
+            file_size_text(1024 * 1024 - 1).as_deref(),
+            Some("1.0\u{a0}MB")
+        );
+        assert_eq!(
+            file_size_text(5 * 1024 * 1024).as_deref(),
+            Some("5.2\u{a0}MB")
+        );
+        assert_eq!(file_size_text(3 << 30).as_deref(), Some("3.2\u{a0}GB"));
     }
 
     #[test]
@@ -2527,7 +2513,7 @@ mod tests {
         );
         assert_eq!(
             label(window_ref, "zaptide-viewer-metadata").label(),
-            "PNG · 1600 × 1000 · 184 KB"
+            "PNG · 1600 × 1000 · 188.4\u{a0}kB"
         );
         assert!(button(window_ref, "Zoom Out").is_sensitive());
         assert!(button(window_ref, "Zoom In").is_sensitive());
@@ -2607,7 +2593,7 @@ mod tests {
         assert!(!has_button(window_ref, "Zoom In"));
         assert_eq!(
             label(window_ref, "zaptide-viewer-metadata").label(),
-            "MP4 · 1280 × 720 · 0:03 · 1.2 MB"
+            "MP4 · 1280 × 720 · 0:03 · 1.3\u{a0}MB"
         );
         let clip = playing_clip(window_ref).expect("video stream");
         let released = clip.downgrade();

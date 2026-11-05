@@ -307,7 +307,7 @@ mod tests {
 
         assert_eq!(voice.control, VoiceControl::Download);
         assert_eq!(voice.waveform, vec![20, 40]);
-        assert_eq!(voice.time, "1.0 KB");
+        assert_eq!(voice.time, "1.0\u{a0}kB");
         assert_eq!(voice.error.as_deref(), Some("Unavailable"));
         assert_eq!(voice.speed, None);
         assert_eq!(
