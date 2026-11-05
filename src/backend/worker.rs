@@ -1021,10 +1021,15 @@ impl Worker {
             if matches!(existing.content, Content::Revoked) {
                 continue;
             }
-            if let (Some(new), Some(old)) = (content.media_mut(), existing.content.media()) {
-                new.path = old.path.clone();
-            }
-            let mentions = self.mentions_of(&mentioned_of(base));
+            let mentions = if existing.edited {
+                content = existing.content;
+                existing.mentions
+            } else {
+                if let (Some(new), Some(old)) = (content.media_mut(), existing.content.media()) {
+                    new.path = old.path.clone();
+                }
+                self.mentions_of(&mentioned_of(base))
+            };
             let thumbnail = thumbnail_of(base);
             if self
                 .archive

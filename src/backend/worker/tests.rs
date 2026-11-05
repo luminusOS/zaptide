@@ -4062,3 +4062,100 @@ mod stars {
         assert!(changes(&events).is_empty());
     }
 }
+
+#[test]
+fn backfill_preserves_edited_content_from_before_restart() {
+    const PEER: &str = "fixture@s.whatsapp.net";
+    let (mut worker, _, _, _) = worker();
+    worker.archive.ensure_chat(PEER, "Fixture").unwrap();
+    let raw = wa::Message {
+        conversation: Some("before edit".into()),
+        ..Default::default()
+    };
+    let row = crate::archive::tests::message(PEER, "EDITED", 10, false);
+    worker
+        .archive
+        .insert_message(&row, Some(&raw.encode_to_vec()))
+        .unwrap();
+    worker
+        .archive
+        .set_content(PEER, "EDITED", &Content::text("after edit"), true)
+        .unwrap();
+    worker.archive.set_meta("derived", "3").unwrap();
+    worker.backfill();
+    let result = worker.archive.message(PEER, "EDITED").unwrap().unwrap();
+    assert_eq!(result.content, Content::text("after edit"));
+}
+
+#[test]
+fn backfill_refreshes_edited_image_metadata_without_losing_edit() {
+    const PEER: &str = "fixture@s.whatsapp.net";
+    let (mut worker, _, _, _) = worker();
+    worker.archive.ensure_chat(PEER, "Fixture").unwrap();
+    let raw = wa::Message {
+        image_message: MessageField::some(wa::message::ImageMessage {
+            caption: Some("before edit".into()),
+            jpeg_thumbnail: Some(vec![1, 2, 3]),
+            context_info: MessageField::some(wa::ContextInfo {
+                is_forwarded: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let mut row = crate::archive::tests::message(PEER, "IMAGE", 10, false);
+    row.content = classify(&raw).unwrap();
+    if let Content::Image { caption, .. } = &mut row.content {
+        *caption = Some("after edit".into());
+    }
+    row.edited = true;
+    row.mentions = vec![MentionRef {
+        user: "123".into(),
+        id: "123@s.whatsapp.net".into(),
+        name: None,
+    }];
+    row.thumbnail = Some(vec![9]);
+    worker
+        .archive
+        .insert_message(&row, Some(&raw.encode_to_vec()))
+        .unwrap();
+    worker.archive.set_meta("derived", "3").unwrap();
+    worker.backfill();
+    let result = worker.archive.message(PEER, "IMAGE").unwrap().unwrap();
+    assert_eq!(result.content, row.content);
+    assert_eq!(result.mentions, row.mentions);
+    assert_eq!(result.thumbnail, Some(vec![1, 2, 3]));
+    assert!(result.forwarded);
+}
+
+#[test]
+fn backfill_leaves_revoked_rows_untouched() {
+    const PEER: &str = "fixture@s.whatsapp.net";
+    let (mut worker, _, _, _) = worker();
+    worker.archive.ensure_chat(PEER, "Fixture").unwrap();
+    let raw = wa::Message {
+        image_message: MessageField::some(wa::message::ImageMessage {
+            jpeg_thumbnail: Some(vec![1, 2, 3]),
+            context_info: MessageField::some(wa::ContextInfo {
+                is_forwarded: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let mut row = crate::archive::tests::message(PEER, "REVOKED", 10, false);
+    row.content = Content::Revoked;
+    row.thumbnail = Some(vec![9]);
+    worker
+        .archive
+        .insert_message(&row, Some(&raw.encode_to_vec()))
+        .unwrap();
+    worker.archive.set_meta("derived", "3").unwrap();
+    worker.backfill();
+    assert_eq!(
+        worker.archive.message(PEER, "REVOKED").unwrap().unwrap(),
+        row
+    );
+}
