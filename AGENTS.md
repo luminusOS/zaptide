@@ -1,6 +1,6 @@
 # ZapTide agent guide
 
-ZapTide is a Linux-first native WhatsApp client forked from ZapFast: Rust, GTK4/libadwaita through Relm4, and the
+ZapTide is a Linux-only native WhatsApp client forked from ZapFast: Rust, GTK4/libadwaita through Relm4, and the
 [whatsapp-rust](https://github.com/oxidezap/whatsapp-rust) library for the
 protocol. These notes are for coding agents and new contributors.
 
@@ -158,8 +158,7 @@ protocol. These notes are for coding agents and new contributors.
   `Client::fetch_message_history` → a `HistorySync` chunk with
   `sync_type == ON_DEMAND`); the archive is paged first, the phone only
   when it is exhausted.
-- Platform-specific code belongs behind `cfg` blocks; a change for one
-  platform must keep the other two compiling.
+- ZapTide builds only for Linux; other targets are not supported.
 - `Popup::context_menu` opens on the *response's* right-click, which those
   inner widgets take for themselves; the bubble reads the right-click from
   the input over its own rect and opens `Popup::menu` itself, so the menu
