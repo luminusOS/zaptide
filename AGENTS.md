@@ -72,8 +72,8 @@ protocol. These notes are for coding agents and new contributors.
   self-updater.
 - `src/theme/custom.rs` scans local JSON palettes off the UI thread, caching the
   last usable choice in settings, with shared Spotifast palettes embedded as
-  defaults. On Linux filesystem notifications reload the catalog without a
-  repaint timer. `reload-themes` uses the single-instance channel without
+  defaults. Filesystem notifications reload the catalog without a repaint
+  timer. `reload-themes` uses the single-instance channel without
   opening a window.
 - `src/native_theme.rs` turns a palette into GTK CSS; structural styling lives
   beside `apply_theme` in `src/application.rs`. Use libadwaita style classes and

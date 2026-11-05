@@ -94,7 +94,6 @@ gstreamer-video = "0.25"
 async-channel = "2"
 # Loads photos through GNOME's sandboxed image loaders (glycin-loaders).
 glycin = { version = "4", default-features = false, features = ["gdk4", "tokio"] }
-notify = "8.2"
 zbus-secret-service-keyring-store = { version = "1.0.1", features = ["rt-tokio-crypto-rust"] }
 # XDG desktop portals over the zbus and tokio already in the tree. Only the
 # portals the app uses are enabled; no windowing or PipeWire bindings.
