@@ -317,6 +317,20 @@ impl Worker {
         &mut self,
         parsed: ParsedHistory,
         metadata: bool,
+    ) -> (Vec<(ChatId, usize, Option<bool>)>, bool) {
+        let mut batch = self.begin_batch();
+        let mut filed = batch.file_history(parsed, metadata);
+        let committed = batch.finish();
+        if !committed {
+            filed.clear();
+        }
+        (filed, committed)
+    }
+
+    fn file_history(
+        &mut self,
+        parsed: ParsedHistory,
+        metadata: bool,
     ) -> Vec<(ChatId, usize, Option<bool>)> {
         for (lid, pn) in &parsed.lids {
             if let (Some(lid), Some(pn)) = (Self::jid_of(lid), Self::jid_of(pn)) {

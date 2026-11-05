@@ -13,6 +13,7 @@ pub(super) fn drain_and_convert(
             Event::Syncing(syncing) => events.push(NativeEvent::Syncing(syncing)),
             Event::Chats(rows) => events.push(NativeEvent::Chats(rows)),
             Event::ChatUpdated(chat) => events.push(NativeEvent::ChatUpdated(chat)),
+            Event::RefreshTranscript => events.push(NativeEvent::RefreshTranscript),
             Event::Contacts(contacts) => events.push(NativeEvent::Contacts(contacts)),
             Event::Messages {
                 chat,
@@ -198,6 +199,18 @@ pub(super) fn handle_backend_ready(
             NativeEvent::ChatUpdated(chat) => {
                 app.apply_chat_changes(vec![ChatChange::Update(*chat)]);
                 app.read_open_chat();
+            }
+            NativeEvent::RefreshTranscript => {
+                if let (Some(backend), Some(chat)) = (&app.backend, app.active_chat.clone()) {
+                    app.message_ids.clear();
+                    app.message_snapshots.clear();
+                    app.editable_messages.clear();
+                    app.messages.clear();
+                    app.transcript.clear();
+                    app.loading_older = false;
+                    app.history_complete = false;
+                    backend.send(crate::backend::Command::LoadChat { chat, before: None });
+                }
             }
             // An empty list clears contacts on logout; otherwise
             // the backend sends the full set or single updates.

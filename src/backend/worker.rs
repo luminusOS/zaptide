@@ -552,6 +552,7 @@ pub async fn run(
         sticker_downloads: HashSet::new(),
         deferred_downloads: Vec::new(),
         next_attachment_batch: 0,
+        uncommitted_events: std::sync::Mutex::new(None),
         read_sync: ReadSync::default(),
         poll_decrypting: 0,
         poll_history: Default::default(),
@@ -768,6 +769,65 @@ struct Worker {
     deferred_downloads: Vec<DeferredDownload>,
     /// Correlates selected-file completion events without exposing error details.
     next_attachment_batch: u64,
+    /// Events emitted inside an archive batch, held until it commits so the
+    /// window never shows a row that a rollback took away.
+    uncommitted_events: std::sync::Mutex<Option<Vec<Event>>>,
+}
+
+/// An archive batch begun by `Worker::begin_batch`.
+#[must_use = "finish the batch so it commits"]
+struct Batch<'a> {
+    worker: &'a mut Worker,
+    /// False when an outer batch owns the commit, or when the batch could not
+    /// begin and the writes commit one by one as without a batch.
+    owned: bool,
+}
+
+impl std::ops::Deref for Batch<'_> {
+    type Target = Worker;
+
+    fn deref(&self) -> &Worker {
+        self.worker
+    }
+}
+
+impl std::ops::DerefMut for Batch<'_> {
+    fn deref_mut(&mut self) -> &mut Worker {
+        self.worker
+    }
+}
+
+impl Drop for Batch<'_> {
+    fn drop(&mut self) {
+        if self.owned {
+            self.worker.archive.rollback_batch();
+            self.worker.uncommitted().take();
+        }
+    }
+}
+
+impl Batch<'_> {
+    fn finish(mut self) -> bool {
+        if !self.owned {
+            return true;
+        }
+        let committed = self.worker.archive.commit_batch();
+        let events = self.worker.uncommitted().take().unwrap_or_default();
+        self.owned = false;
+        if let Err(error) = committed {
+            log::warn!("could not save a batch of archive changes: {error}");
+            self.worker.emit_chats();
+            self.worker.emit(Event::RefreshTranscript);
+            return false;
+        }
+        if !events.is_empty() {
+            for event in events {
+                let _ = self.worker.events.send(event);
+            }
+            self.worker.waker.wake();
+        }
+        true
+    }
 }
 
 impl Worker {
@@ -816,8 +876,45 @@ impl Worker {
         {
             return;
         }
+        if let Some(uncommitted) = self.uncommitted().as_mut() {
+            uncommitted.push(event);
+            return;
+        }
         let _ = self.events.send(event);
         self.waker.wake();
+    }
+
+    fn uncommitted(&self) -> std::sync::MutexGuard<'_, Option<Vec<Event>>> {
+        self.uncommitted_events
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Groups archive writes until the batch is finished.
+    /// A row that fails is still skipped alone, as it is without a batch.
+    fn begin_batch(&mut self) -> Batch<'_> {
+        let mut uncommitted = self.uncommitted();
+        if uncommitted.is_some() {
+            drop(uncommitted);
+            return Batch {
+                worker: self,
+                owned: false,
+            };
+        }
+        if let Err(error) = self.archive.begin_batch() {
+            log::warn!("could not begin an archive batch: {error}");
+            drop(uncommitted);
+            return Batch {
+                worker: self,
+                owned: false,
+            };
+        }
+        *uncommitted = Some(Vec::new());
+        drop(uncommitted);
+        Batch {
+            worker: self,
+            owned: true,
+        }
     }
 
     /// Syncs a chat setting to the phone without blocking the worker.
@@ -1001,6 +1098,7 @@ impl Worker {
         let started = Instant::now();
         let mut updated = 0;
         let mut retry_required = false;
+        let batch = self.begin_batch();
         for (chat, id, raw) in rows {
             // Malformed or unsupported raw messages have no derived projection to retry.
             let Ok(message) = wa::Message::decode_from_slice(&raw) else {
@@ -1010,7 +1108,7 @@ impl Worker {
             let Some(mut content) = classify(base) else {
                 continue;
             };
-            let existing = match self.archive.message(&chat, &id) {
+            let existing = match batch.archive.message(&chat, &id) {
                 Ok(Some(existing)) => existing,
                 Ok(None) => continue,
                 Err(_error) => {
@@ -1024,9 +1122,9 @@ impl Worker {
             if let (Some(new), Some(old)) = (content.media_mut(), existing.content.media()) {
                 new.path = old.path.clone();
             }
-            let mentions = self.mentions_of(&mentioned_of(base));
+            let mentions = batch.mentions_of(&mentioned_of(base));
             let thumbnail = thumbnail_of(base);
-            if self
+            if batch
                 .archive
                 .set_derived(
                     &chat,
@@ -1043,6 +1141,7 @@ impl Worker {
                 retry_required = true;
             }
         }
+        retry_required |= !batch.finish();
         if retry_required {
             log::warn!("some archived messages could not be re-derived; will retry later");
             return;
@@ -1774,6 +1873,12 @@ impl Worker {
     }
 
     fn on_receipt(&mut self, receipt: &wa_events::Receipt) {
+        let mut batch = self.begin_batch();
+        batch.file_receipt(receipt);
+        batch.finish();
+    }
+
+    fn file_receipt(&mut self, receipt: &wa_events::Receipt) {
         self.learn_source(&receipt.source);
         let chat = self.canonical(&receipt.source.chat);
         log::debug!(
@@ -2281,8 +2386,8 @@ impl Worker {
                             .sum::<usize>()
                     );
                 }
-                let filed = self.apply_history(parsed, !on_demand);
-                if on_demand {
+                let (filed, committed) = self.apply_history(parsed, !on_demand);
+                if on_demand && committed {
                     self.answer_older(
                         filed,
                         lazy.peer_data_request_session_id().map(str::to_owned),

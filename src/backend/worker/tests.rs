@@ -1864,6 +1864,7 @@ pub(in crate::backend::worker) fn worker() -> (
         sticker_downloads: HashSet::new(),
         deferred_downloads: Vec::new(),
         next_attachment_batch: 0,
+        uncommitted_events: std::sync::Mutex::new(None),
         read_sync: ReadSync::default(),
         poll_decrypting: 0,
         poll_history: Default::default(),
@@ -2029,6 +2030,54 @@ fn multi_chunk_history_waits_for_transfer_completion_before_finishing_request() 
         events.try_recv(),
         Ok(Event::OlderFetched { more: true, .. })
     ));
+}
+
+#[test]
+fn failed_history_commit_keeps_older_request_retryable() {
+    let (mut worker, events, _, _) = worker();
+    let chat = "1@s.whatsapp.net".to_owned();
+    worker.archive.ensure_chat(&chat, "Fixture").unwrap();
+    worker.archive.execute_batch_for_test(
+        "CREATE TRIGGER rollback_history BEFORE UPDATE ON chats BEGIN SELECT RAISE(ROLLBACK, 'synthetic rollback'); END;",
+    ).unwrap();
+    worker.pending_older.insert(
+        chat.clone(),
+        PendingOlder {
+            request_id: 44,
+            asked: Instant::now(),
+            before: (200, "boundary".to_owned()),
+            protocol_id: Some("request".to_owned()),
+            received_count: 0,
+            more_on_phone: None,
+            early_responses: HashMap::new(),
+        },
+    );
+    let mut conversation = parse_conversation(wa::Conversation {
+        id: chat.clone(),
+        ..Default::default()
+    });
+    conversation.ephemeral_expiration = Some(1);
+    conversation.more_on_phone = Some(false);
+    let (filed, committed) = worker.apply_history(
+        ParsedHistory {
+            chats: vec![conversation],
+            push_names: Vec::new(),
+            lids: Vec::new(),
+            stickers: Vec::new(),
+        },
+        false,
+    );
+    assert!(!committed);
+    assert!(filed.is_empty());
+    worker.answer_older(filed, Some("request".to_owned()));
+    let request = worker.pending_older.get(&chat).unwrap();
+    assert_eq!(request.received_count, 0);
+    assert_eq!(request.more_on_phone, None);
+    assert!(
+        !events
+            .try_iter()
+            .any(|event| matches!(event, Event::OlderFetched { .. }))
+    );
 }
 
 #[tokio::test]
@@ -4061,4 +4110,82 @@ mod stars {
         worker.set_starred(PEER.to_owned(), "UNKNOWN".to_owned(), true);
         assert!(changes(&events).is_empty());
     }
+}
+
+#[test]
+fn batch_events_reach_the_window_only_after_their_rows_commit() {
+    let (mut worker, events, _, _) = worker();
+    let chat = "1@s.whatsapp.net";
+    let mut batch = worker.begin_batch();
+    let nested = batch.begin_batch();
+    nested
+        .archive
+        .insert_message(
+            &crate::archive::tests::message(chat, "kept", 1, false),
+            None,
+        )
+        .unwrap();
+    nested.emit(Event::Info("kept".into()));
+    assert!(nested.finish());
+    assert!(
+        events.try_recv().is_err(),
+        "held until the outer batch commits"
+    );
+    assert!(batch.finish());
+    assert!(matches!(events.try_recv(), Ok(Event::Info(text)) if text == "kept"));
+    assert!(worker.archive.message(chat, "kept").unwrap().is_some());
+
+    let batch = worker.begin_batch();
+    batch
+        .archive
+        .insert_message(
+            &crate::archive::tests::message(chat, "lost", 2, false),
+            None,
+        )
+        .unwrap();
+    batch.emit(Event::Info("lost".into()));
+    // As SQLite does after a disk-full or I/O error inside a transaction.
+    batch.archive.execute_batch_for_test("ROLLBACK").unwrap();
+    batch
+        .archive
+        .insert_message(
+            &crate::archive::tests::message(chat, "autocommitted", 3, false),
+            None,
+        )
+        .unwrap();
+    assert!(!batch.finish());
+    assert!(matches!(events.try_recv(), Ok(Event::Chats(_))));
+    assert!(matches!(events.try_recv(), Ok(Event::RefreshTranscript)));
+    assert!(events.try_recv().is_err());
+    assert!(worker.archive.message(chat, "lost").unwrap().is_none());
+    assert!(
+        worker
+            .archive
+            .message(chat, "autocommitted")
+            .unwrap()
+            .is_some()
+    );
+    worker.emit(Event::Info("after".into()));
+    assert!(matches!(events.try_recv(), Ok(Event::Info(text)) if text == "after"));
+}
+
+#[test]
+fn abandoned_batch_rolls_back_and_releases_events() {
+    let (mut worker, events, _, _) = worker();
+    let chat = "1@s.whatsapp.net";
+    {
+        let batch = worker.begin_batch();
+        batch
+            .archive
+            .insert_message(
+                &crate::archive::tests::message(chat, "lost", 1, false),
+                None,
+            )
+            .unwrap();
+        batch.emit(Event::Info("lost".into()));
+    }
+    assert!(worker.archive.message(chat, "lost").unwrap().is_none());
+    assert!(events.try_recv().is_err());
+    worker.emit(Event::Info("after".into()));
+    assert!(matches!(events.try_recv(), Ok(Event::Info(text)) if text == "after"));
 }

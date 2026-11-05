@@ -13,20 +13,21 @@ impl Archive {
         id: &str,
         recipients: &[String],
     ) -> Result<()> {
-        let transaction = self.connection.unchecked_transaction()?;
-        transaction.query_row(
-            "SELECT 1 FROM messages WHERE chat = ?1 AND id = ?2 AND from_me = 1",
-            params![chat, id],
-            |row| row.get::<_, i64>(0),
-        )?;
-        for recipient in recipients {
-            transaction.execute(
-                "INSERT INTO group_receipts (chat, id, recipient, expected) VALUES (?1, ?2, ?3, 1)
-                 ON CONFLICT(chat, id, recipient) DO UPDATE SET expected = 1",
-                params![chat, id, recipient],
+        self.atomic(|| {
+            self.connection.query_row(
+                "SELECT 1 FROM messages WHERE chat = ?1 AND id = ?2 AND from_me = 1",
+                params![chat, id],
+                |row| row.get::<_, i64>(0),
             )?;
-        }
-        transaction.commit()
+            for recipient in recipients {
+                self.connection.execute(
+                    "INSERT INTO group_receipts (chat, id, recipient, expected) VALUES (?1, ?2, ?3, 1)
+                     ON CONFLICT(chat, id, recipient) DO UPDATE SET expected = 1",
+                    params![chat, id, recipient],
+                )?;
+            }
+            Ok(())
+        })
     }
 
     /// Records only the named message: a group member reading a later message
@@ -45,8 +46,18 @@ impl Archive {
         ) {
             return Ok(false);
         }
-        let transaction = self.connection.unchecked_transaction()?;
-        transaction.execute(
+        self.atomic(|| self.file_group_receipt(chat, id, recipient, status, at))
+    }
+
+    fn file_group_receipt(
+        &self,
+        chat: &str,
+        id: &str,
+        recipient: &str,
+        status: Delivery,
+        at: i64,
+    ) -> Result<bool> {
+        self.connection.execute(
             "INSERT INTO group_receipts (chat, id, recipient, status, delivered_at, read_at, played_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(chat, id, recipient) DO UPDATE SET
@@ -63,7 +74,7 @@ impl Archive {
             Option<i64>,
             Option<i64>,
             Option<i64>,
-        ) = transaction.query_row(
+        ) = self.connection.query_row(
             "SELECT MIN(status), MAX(delivered_at), MAX(read_at), MAX(played_at)
              FROM group_receipts WHERE chat = ?1 AND id = ?2 AND expected = 1",
             params![chat, id],
@@ -81,27 +92,28 @@ impl Archive {
         if aggregate >= Delivery::Played {
             changed |= self.set_status(chat, id, Delivery::Played, played_at.unwrap_or(at))?;
         }
-        transaction.commit()?;
         Ok(changed)
     }
 
     /// A privacy id and a phone number identify one person, not two readers.
     pub(super) fn merge_group_recipient(&self, lid: &str, pn: &str) -> Result<()> {
-        let transaction = self.connection.unchecked_transaction()?;
-        transaction.execute(
-            "INSERT INTO group_receipts (chat, id, recipient, expected, status, delivered_at, read_at, played_at)
-             SELECT chat, id, ?2, expected, status, delivered_at, read_at, played_at
-             FROM group_receipts WHERE recipient = ?1
-             ON CONFLICT(chat, id, recipient) DO UPDATE SET
-                expected = MAX(expected, excluded.expected),
-                status = MAX(status, excluded.status),
-                delivered_at = COALESCE(MIN(delivered_at, excluded.delivered_at), delivered_at, excluded.delivered_at),
-                read_at = COALESCE(MIN(read_at, excluded.read_at), read_at, excluded.read_at),
-                played_at = COALESCE(MIN(played_at, excluded.played_at), played_at, excluded.played_at)",
-            params![lid, pn],
-        )?;
-        transaction.execute("DELETE FROM group_receipts WHERE recipient = ?1", [lid])?;
-        transaction.commit()
+        self.atomic(|| {
+            self.connection.execute(
+                "INSERT INTO group_receipts (chat, id, recipient, expected, status, delivered_at, read_at, played_at)
+                 SELECT chat, id, ?2, expected, status, delivered_at, read_at, played_at
+                 FROM group_receipts WHERE recipient = ?1
+                 ON CONFLICT(chat, id, recipient) DO UPDATE SET
+                    expected = MAX(expected, excluded.expected),
+                    status = MAX(status, excluded.status),
+                    delivered_at = COALESCE(MIN(delivered_at, excluded.delivered_at), delivered_at, excluded.delivered_at),
+                    read_at = COALESCE(MIN(read_at, excluded.read_at), read_at, excluded.read_at),
+                    played_at = COALESCE(MIN(played_at, excluded.played_at), played_at, excluded.played_at)",
+                params![lid, pn],
+            )?;
+            self.connection
+                .execute("DELETE FROM group_receipts WHERE recipient = ?1", [lid])?;
+            Ok(())
+        })
     }
 }
 

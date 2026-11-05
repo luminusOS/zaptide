@@ -663,6 +663,8 @@ pub enum Event {
     /// Full chat list, newest first.
     Chats(Vec<Chat>),
     ChatUpdated(Box<Chat>),
+    /// Reload the open transcript after an archive batch could not commit.
+    RefreshTranscript,
     /// Chat messages in ascending order. `older` prepends them; `complete`
     /// means the archive has no earlier rows.
     Messages {

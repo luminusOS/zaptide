@@ -1007,3 +1007,95 @@ fn history_replay_preserves_revocation_and_matching_download_path() {
         None
     );
 }
+
+#[test]
+fn only_an_identical_raw_body_keeps_a_revocation() {
+    let archive = Archive::in_memory().expect("opens");
+    let chat = "1@s.whatsapp.net";
+    let content = |id| archive.message(chat, id).unwrap().unwrap().content;
+    for (id, replayed) in [
+        ("without", None),
+        ("prefix", Some(&b"revoked ra"[..])),
+        ("longer", Some(&b"revoked raw!"[..])),
+    ] {
+        let row = message(chat, id, 100, false);
+        archive.insert_message(&row, Some(b"revoked raw")).unwrap();
+        archive
+            .set_content(chat, id, &Content::Revoked, false)
+            .unwrap();
+        archive.insert_message(&row, replayed).unwrap();
+        assert_eq!(content(id), row.content, "{id}");
+    }
+    assert_eq!(
+        archive.raw(chat, "without").unwrap().as_deref(),
+        Some(&b"revoked raw"[..])
+    );
+}
+
+#[test]
+fn a_batch_commits_together_and_a_failed_row_fails_alone() {
+    let archive = Archive::in_memory().expect("opens");
+    let chat = "1@s.whatsapp.net";
+    archive
+        .execute_batch_for_test(
+            "CREATE TRIGGER reject_bad BEFORE INSERT ON messages WHEN NEW.id = 'bad'
+             BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END;",
+        )
+        .unwrap();
+    archive.begin_batch().unwrap();
+    archive
+        .insert_message(&message(chat, "one", 1, false), None)
+        .unwrap();
+    assert!(
+        archive
+            .insert_message(&message(chat, "bad", 2, false), None)
+            .is_err()
+    );
+    archive
+        .insert_message(&message(chat, "two", 3, false), None)
+        .unwrap();
+    archive.commit_batch().unwrap();
+    let ids = archive
+        .messages(chat, None, 10)
+        .unwrap()
+        .into_iter()
+        .map(|row| row.id)
+        .collect::<Vec<_>>();
+    assert_eq!(ids, ["one", "two"]);
+
+    archive.begin_batch().unwrap();
+    archive
+        .insert_message(&message(chat, "three", 4, false), None)
+        .unwrap();
+    archive.rollback_batch();
+    assert!(archive.message(chat, "three").unwrap().is_none());
+}
+
+#[test]
+fn receipts_keep_their_own_transaction_inside_a_batch() {
+    let archive = Archive::in_memory().expect("opens");
+    let group = "1@g.us";
+    archive.ensure_chat(group, "Group").unwrap();
+    archive
+        .insert_message(&message(group, "m", 1, true), None)
+        .unwrap();
+    archive.begin_batch().unwrap();
+    archive
+        .snapshot_group_recipients(group, "m", &["a@lid".into()])
+        .unwrap();
+    assert!(
+        archive
+            .snapshot_group_recipients(group, "missing", &["a@lid".into()])
+            .is_err()
+    );
+    assert!(
+        archive
+            .group_receipt(group, "m", "a@lid", Delivery::Read, 5)
+            .unwrap()
+    );
+    archive.commit_batch().unwrap();
+    assert_eq!(
+        archive.message(group, "m").unwrap().unwrap().status,
+        Delivery::Read
+    );
+}

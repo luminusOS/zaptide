@@ -48,9 +48,17 @@ struct StoredMessageProjection {
     status: i64,
     content: String,
     edited: bool,
-    raw: Option<Vec<u8>>,
+    same_raw: bool,
     mentions: String,
+    reactions: String,
 }
+
+const BATCH: &str = "archive_batch";
+
+/// Statements prepared once and reused: the hot reads and the history,
+/// receipt and re-derive writes. Keep it at least the number of
+/// `prepare_cached` call sites so none of them is evicted.
+const CACHED_STATEMENTS: usize = 20;
 
 fn preserve_media_path(existing: &Content, incoming: &mut Content) {
     let (existing_media, incoming_media) = match (existing, incoming) {
@@ -64,6 +72,40 @@ fn preserve_media_path(existing: &Content, incoming: &mut Content) {
     if existing_media.path.is_some() {
         incoming_media.path = existing_media.path.clone();
     }
+}
+
+fn needs_stored_answer(content: &Content) -> bool {
+    matches!(content, Content::Buttons { .. } | Content::List { .. }) && content.answer().is_none()
+}
+
+/// A buttons or list message decoded again (history replay, re-derive)
+/// has no record of the answer sent from here; keep the one already stored.
+fn keep_answer<'a>(stored: Option<&str>, content: &'a Content) -> std::borrow::Cow<'a, Content> {
+    if !needs_stored_answer(content) {
+        return std::borrow::Cow::Borrowed(content);
+    }
+    let same_kind =
+        |stored: &Content| std::mem::discriminant(stored) == std::mem::discriminant(content);
+    let stored = stored.and_then(|json| serde_json::from_str::<Content>(json).ok());
+    stored
+        .as_ref()
+        .filter(|stored| same_kind(stored))
+        .and_then(Content::answer)
+        .filter(|answer| content.choice(answer).is_some())
+        .and_then(|answer| content.with_answer(Some(answer.to_owned())))
+        .map_or(std::borrow::Cow::Borrowed(content), std::borrow::Cow::Owned)
+}
+
+/// History rows often omit reactions. Keep any already stored when the
+/// incoming list is empty (wipe protection). A non-empty list is the
+/// current snapshot, so write it unchanged.
+fn merged_reactions(message: &Message, stored: Option<&str>) -> Vec<crate::model::Reaction> {
+    if message.reactions.is_empty()
+        && let Some(stored) = stored
+    {
+        return serde_json::from_str(stored).unwrap_or_default();
+    }
+    message.reactions.clone()
 }
 
 const SCHEMA: &str = "
@@ -258,7 +300,47 @@ impl Archive {
         )?;
         transaction.execute_batch(&calls::schema())?;
         transaction.commit()?;
+        connection.set_prepared_statement_cache_capacity(CACHED_STATEMENTS);
         Ok(Self { connection })
+    }
+
+    /// Starts a batch of writes that commit together. A savepoint, so a batch
+    /// nests in another and in the archive's own multi-statement writes.
+    /// A failed statement inside it still fails alone, as without a batch.
+    pub(crate) fn begin_batch(&self) -> Result<()> {
+        self.connection.execute_batch(&format!("SAVEPOINT {BATCH}"))
+    }
+
+    /// Commits the batch begun last, or rolls it back if that fails. Also
+    /// fails when SQLite already rolled the whole transaction back after an
+    /// I/O or disk-full error.
+    pub(crate) fn commit_batch(&self) -> Result<()> {
+        let released = self.connection.execute_batch(&format!("RELEASE {BATCH}"));
+        if released.is_err() {
+            self.rollback_batch();
+        }
+        released
+    }
+
+    pub(crate) fn rollback_batch(&self) {
+        let _ = self
+            .connection
+            .execute_batch(&format!("ROLLBACK TO {BATCH}; RELEASE {BATCH}"));
+    }
+
+    /// Runs `work` as one unit: all of its writes or none.
+    fn atomic<T>(&self, work: impl FnOnce() -> Result<T>) -> Result<T> {
+        self.begin_batch()?;
+        match work() {
+            Ok(value) => {
+                self.commit_batch()?;
+                Ok(value)
+            }
+            Err(error) => {
+                self.rollback_batch();
+                Err(error)
+            }
+        }
     }
 
     /// Creates a chat or replaces a phone-number title with a better name.
@@ -517,7 +599,7 @@ impl Archive {
     }
 
     pub fn chats(&self) -> Result<Vec<Chat>> {
-        let mut statement = self.connection.prepare(&format!(
+        let mut statement = self.connection.prepare_cached(&format!(
             "SELECT {CHAT_COLUMNS} {CHAT_JOIN} ORDER BY c.last_activity DESC"
         ))?;
         let rows = statement.query_map([], row::chat_from_row)?;
@@ -525,7 +607,7 @@ impl Archive {
     }
 
     pub fn chat(&self, id: &str) -> Result<Option<Chat>> {
-        let mut statement = self.connection.prepare(&format!(
+        let mut statement = self.connection.prepare_cached(&format!(
             "SELECT {CHAT_COLUMNS} {CHAT_JOIN} WHERE c.id = ?1"
         ))?;
         statement
@@ -556,21 +638,23 @@ impl Archive {
     /// Upserts a message, preserves the furthest delivery state, and updates
     /// chat activity. `raw` contains attachment metadata.
     pub fn insert_message(&self, message: &Message, raw: Option<&[u8]>) -> Result<()> {
+        // One read for everything the merge needs; SQLite compares the raw
+        // blobs, so the stored one is never copied out.
         let existing: Option<StoredMessageProjection> = self
             .connection
-            .query_row(
-                "SELECT status, content, edited, raw, mentions FROM messages WHERE chat = ?1 AND id = ?2",
-                params![message.chat, message.id],
-                |row| {
-                    Ok(StoredMessageProjection {
-                        status: row.get(0)?,
-                        content: row.get(1)?,
-                        edited: row.get(2)?,
-                        raw: row.get(3)?,
-                        mentions: row.get(4)?,
-                    })
-                },
-            )
+            .prepare_cached(
+                "SELECT status, content, edited, raw = ?3, mentions, reactions FROM messages WHERE chat = ?1 AND id = ?2",
+            )?
+            .query_row(params![message.chat, message.id, raw], |row| {
+                Ok(StoredMessageProjection {
+                    status: row.get(0)?,
+                    content: row.get(1)?,
+                    edited: row.get(2)?,
+                    same_raw: row.get::<_, Option<bool>>(3)?.unwrap_or(false),
+                    mentions: row.get(4)?,
+                    reactions: row.get(5)?,
+                })
+            })
             .optional()?;
         let status = match existing.as_ref().map(|row| row.status) {
             Some(rank)
@@ -589,20 +673,15 @@ impl Archive {
             }
             _ => status_rank(message.status),
         };
-        let reactions = self.merged_reactions(message)?;
-        let mut content = self
-            .keep_answer(&message.chat, &message.id, &message.content)
-            .into_owned();
+        let reactions = merged_reactions(message, existing.as_ref().map(|row| &*row.reactions));
+        let mut content =
+            keep_answer(existing.as_ref().map(|row| &*row.content), &message.content).into_owned();
         let mut edited = message.edited;
         let mut mentions = serde_json::to_string(&message.mentions).unwrap_or_default();
-        let same_raw = existing
-            .as_ref()
-            .and_then(|row| row.raw.as_deref())
-            .zip(raw)
-            .is_some_and(|(old, new)| old == new);
         if let Some(existing) = existing
             && let Ok(existing_content) = serde_json::from_str::<Content>(&existing.content)
         {
+            let same_raw = existing.same_raw;
             if same_raw
                 && (matches!(&existing_content, Content::Revoked)
                     || existing.edited && !message.edited)
@@ -615,7 +694,7 @@ impl Archive {
                 preserve_media_path(&existing_content, &mut content);
             }
         }
-        self.connection.execute(
+        self.connection.prepare_cached(
             "INSERT INTO messages (chat, id, sender, sender_name, from_me, timestamp, content, status, quoted, reactions, edited, raw, thumbnail, mentions, forwarded, delivered_at, read_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
              ON CONFLICT(chat, id) DO UPDATE SET
@@ -631,83 +710,36 @@ impl Archive {
                 forwarded = excluded.forwarded,
                 delivered_at = COALESCE(delivered_at, excluded.delivered_at),
                 read_at = COALESCE(read_at, excluded.read_at)",
-            params![
-                message.chat,
-                message.id,
-                message.sender,
-                message.sender_name,
-                message.from_me,
-                message.timestamp,
-                serde_json::to_string(&content).unwrap_or_default(),
-                status,
-                message
-                    .quoted
-                    .as_ref()
-                    .map(|quoted| serde_json::to_string(quoted).unwrap_or_default()),
-                serde_json::to_string(&reactions).unwrap_or_default(),
-                edited,
-                raw,
-                message.thumbnail.as_deref(),
-                mentions,
-                message.forwarded,
-                message.delivered_at,
-                message.read_at,
-                edited,
-            ],
-        )?;
-        self.connection.execute(
-            "UPDATE chats SET last_activity = MAX(last_activity, ?2) WHERE id = ?1",
-            params![message.chat, message.timestamp],
-        )?;
+        )?
+        .execute(params![
+            message.chat,
+            message.id,
+            message.sender,
+            message.sender_name,
+            message.from_me,
+            message.timestamp,
+            serde_json::to_string(&content).unwrap_or_default(),
+            status,
+            message
+                .quoted
+                .as_ref()
+                .map(|quoted| serde_json::to_string(quoted).unwrap_or_default()),
+            serde_json::to_string(&reactions).unwrap_or_default(),
+            edited,
+            raw,
+            message.thumbnail.as_deref(),
+            mentions,
+            message.forwarded,
+            message.delivered_at,
+            message.read_at,
+            edited,
+        ])?;
+        self.connection
+            .prepare_cached(
+                "UPDATE chats SET last_activity = MAX(last_activity, ?2) WHERE id = ?1",
+            )?
+            .execute(params![message.chat, message.timestamp])?;
         Ok(())
-    }
-
-    /// A buttons or list message decoded again (history replay, re-derive)
-    /// has no record of the answer sent from here; keep the one already stored.
-    fn keep_answer<'a>(
-        &self,
-        chat: &str,
-        id: &str,
-        content: &'a Content,
-    ) -> std::borrow::Cow<'a, Content> {
-        if !matches!(content, Content::Buttons { .. } | Content::List { .. })
-            || content.answer().is_some()
-        {
-            return std::borrow::Cow::Borrowed(content);
-        }
-        let same_kind =
-            |stored: &Content| std::mem::discriminant(stored) == std::mem::discriminant(content);
-        let stored = self
-            .connection
-            .query_row(
-                "SELECT content FROM messages WHERE chat = ?1 AND id = ?2",
-                params![chat, id],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-            .ok()
-            .flatten()
-            .and_then(|json| serde_json::from_str::<Content>(&json).ok());
-        stored
-            .as_ref()
-            .filter(|stored| same_kind(stored))
-            .and_then(Content::answer)
-            .filter(|answer| content.choice(answer).is_some())
-            .and_then(|answer| content.with_answer(Some(answer.to_owned())))
-            .map_or(std::borrow::Cow::Borrowed(content), std::borrow::Cow::Owned)
-    }
-
-    /// History rows often omit reactions. Keep any already stored when the
-    /// incoming list is empty (wipe protection). A non-empty list is the
-    /// current snapshot, so write it unchanged.
-    fn merged_reactions(&self, message: &Message) -> Result<Vec<crate::model::Reaction>> {
-        let incoming = &message.reactions;
-        if incoming.is_empty()
-            && let Some(existing) = self.message(&message.chat, &message.id)?
-        {
-            return Ok(existing.reactions);
-        }
-        Ok(incoming.clone())
     }
 
     /// Returns up to `limit` messages before an optional timestamp/id boundary,
@@ -718,7 +750,7 @@ impl Archive {
         before: Option<(i64, &str)>,
         limit: usize,
     ) -> Result<Vec<Message>> {
-        let mut statement = self.connection.prepare(&format!(
+        let mut statement = self.connection.prepare_cached(&format!(
             "SELECT {MESSAGE_COLUMNS}
              FROM messages
              WHERE chat = ?1 AND (timestamp < ?2 OR (timestamp = ?2 AND rowid <
@@ -744,7 +776,7 @@ impl Archive {
         before: (i64, &str),
         limit: usize,
     ) -> Result<Vec<Message>> {
-        let mut statement = self.connection.prepare(&format!(
+        let mut statement = self.connection.prepare_cached(&format!(
             "SELECT {MESSAGE_COLUMNS}
              FROM messages
              WHERE chat = ?1 AND timestamp >= ?2 AND (timestamp < ?3 OR (timestamp = ?3 AND rowid <
@@ -863,19 +895,33 @@ impl Archive {
         thumbnail: Option<&[u8]>,
         forwarded: bool,
     ) -> Result<()> {
-        let content = self.keep_answer(chat, id, content);
-        self.connection.execute(
-            "UPDATE messages SET content = ?3, mentions = ?4, thumbnail = COALESCE(?5, thumbnail), forwarded = ?6
-             WHERE chat = ?1 AND id = ?2",
-            params![
+        let stored = if needs_stored_answer(content) {
+            self.connection
+                .prepare_cached("SELECT content FROM messages WHERE chat = ?1 AND id = ?2")
+                .and_then(|mut statement| {
+                    statement
+                        .query_row(params![chat, id], |row| row.get::<_, String>(0))
+                        .optional()
+                })
+                .ok()
+                .flatten()
+        } else {
+            None
+        };
+        let content = keep_answer(stored.as_deref(), content);
+        self.connection
+            .prepare_cached(
+                "UPDATE messages SET content = ?3, mentions = ?4, thumbnail = COALESCE(?5, thumbnail), forwarded = ?6
+                 WHERE chat = ?1 AND id = ?2",
+            )?
+            .execute(params![
                 chat,
                 id,
                 serde_json::to_string(&content).unwrap_or_default(),
                 serde_json::to_string(mentions).unwrap_or_default(),
                 thumbnail,
                 forwarded
-            ],
-        )?;
+            ])?;
         Ok(())
     }
 
@@ -889,11 +935,10 @@ impl Archive {
 
     pub fn message(&self, chat: &str, id: &str) -> Result<Option<Message>> {
         self.connection
-            .query_row(
-                &format!("SELECT {MESSAGE_COLUMNS} FROM messages WHERE chat = ?1 AND id = ?2"),
-                params![chat, id],
-                |row| row::message_from_row(chat, row),
-            )
+            .prepare_cached(&format!(
+                "SELECT {MESSAGE_COLUMNS} FROM messages WHERE chat = ?1 AND id = ?2"
+            ))?
+            .query_row(params![chat, id], |row| row::message_from_row(chat, row))
             .optional()
     }
 
@@ -930,23 +975,22 @@ impl Archive {
     pub fn set_status(&self, chat: &str, id: &str, status: Delivery, at: i64) -> Result<bool> {
         let rank = status_rank(status);
         let changed = if status == Delivery::Failed {
-            self.connection.execute(
-                "UPDATE messages SET status = ?3 WHERE chat = ?1 AND id = ?2",
-                params![chat, id, rank],
-            )?
+            self.connection
+                .prepare_cached("UPDATE messages SET status = ?3 WHERE chat = ?1 AND id = ?2")?
+                .execute(params![chat, id, rank])?
         } else if let Some(column) = stamp_column(status) {
-            self.connection.execute(
-                &format!(
+            self.connection
+                .prepare_cached(&format!(
                     "UPDATE messages SET status = ?3, {column} = COALESCE({column}, ?4)
                      WHERE chat = ?1 AND id = ?2 AND status < ?3"
-                ),
-                params![chat, id, rank, at],
-            )?
+                ))?
+                .execute(params![chat, id, rank, at])?
         } else {
-            self.connection.execute(
-                "UPDATE messages SET status = ?3 WHERE chat = ?1 AND id = ?2 AND status < ?3",
-                params![chat, id, rank],
-            )?
+            self.connection
+                .prepare_cached(
+                    "UPDATE messages SET status = ?3 WHERE chat = ?1 AND id = ?2 AND status < ?3",
+                )?
+                .execute(params![chat, id, rank])?
         };
         Ok(changed > 0)
     }
