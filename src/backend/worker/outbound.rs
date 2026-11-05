@@ -429,6 +429,11 @@ fn sanitize(id: &str) -> String {
         .collect()
 }
 
+/// Keep the cache name well under the 255-byte file name limit once the
+/// parts, the extension and a collision number are joined.
+const MAX_NAME_CHARS: usize = 120;
+const MAX_ID_CHARS: usize = 64;
+
 pub(super) fn media_path(
     dir: &Path,
     chat: &str,
@@ -437,11 +442,127 @@ pub(super) fn media_path(
     file_name: Option<&str>,
 ) -> PathBuf {
     let extension = extension_for(mime, file_name);
+    let capped = |text: &str, limit: usize| {
+        let mut text = sanitize(text);
+        text.truncate(limit);
+        text
+    };
+    let id = capped(id, MAX_ID_CHARS);
     let stem = match file_name.and_then(|name| Path::new(name).file_stem()?.to_str()) {
-        Some(name) => format!("{}-{}", sanitize(id), sanitize(name)),
-        None => format!("{}-{}", sanitize(chat), sanitize(id)),
+        Some(name) => format!("{id}-{}-{}", chat_tag(chat), capped(name, MAX_NAME_CHARS)),
+        None => format!("{}-{id}", capped(chat, MAX_ID_CHARS)),
     };
     dir.join(format!("{stem}.{extension}"))
+}
+
+/// Message ids are only unique per sender, so named documents carry a short
+/// digest of their chat to keep two chats from sharing a cache file.
+fn chat_tag(chat: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(chat.as_bytes())[..4]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+const PROMOTION_ATTEMPTS: usize = 100;
+
+/// Moves a finished download to `destination`. `recorded` is the path the
+/// archive already holds for this message: when it is `destination` or one
+/// of its numbered siblings, the file is this message's own and is replaced
+/// (as when two downloads of it overlap). Otherwise no existing file is
+/// replaced and a numbered name next to `destination` is used. Returns the
+/// path the download now lives at.
+pub(super) fn promote_download(
+    staged: &Path,
+    destination: &Path,
+    recorded: Option<&Path>,
+) -> std::io::Result<PathBuf> {
+    if let Some(own) = recorded.filter(|path| is_destination_or_sibling(path, destination)) {
+        std::fs::rename(staged, own)?;
+        return Ok(own.to_owned());
+    }
+    for attempt in 0..PROMOTION_ATTEMPTS {
+        let candidate = match attempt {
+            0 => destination.to_owned(),
+            n => numbered_path(destination, n),
+        };
+        match rename_no_replace(staged, &candidate) {
+            Ok(()) => return Ok(candidate),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Err(std::io::ErrorKind::AlreadyExists.into())
+}
+
+fn numbered_path(path: &Path, n: usize) -> PathBuf {
+    let stem = path
+        .file_stem()
+        .map(|stem| stem.to_string_lossy())
+        .unwrap_or_default();
+    let name = match path.extension() {
+        Some(extension) => format!("{stem}-{n}.{}", extension.to_string_lossy()),
+        None => format!("{stem}-{n}"),
+    };
+    path.with_file_name(name)
+}
+
+fn is_destination_or_sibling(path: &Path, destination: &Path) -> bool {
+    if path == destination {
+        return true;
+    }
+    if path.parent() != destination.parent() || path.extension() != destination.extension() {
+        return false;
+    }
+    let (Some(stem), Some(own)) = (
+        destination.file_stem().and_then(|stem| stem.to_str()),
+        path.file_stem().and_then(|stem| stem.to_str()),
+    ) else {
+        return false;
+    };
+    own.strip_prefix(stem)
+        .and_then(|rest| rest.strip_prefix('-'))
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+fn rename_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
+    use rustix::fs::{CWD, RenameFlags, renameat_with};
+    use rustix::io::Errno;
+    match renameat_with(CWD, from, CWD, to, RenameFlags::NOREPLACE) {
+        Ok(()) => Ok(()),
+        // Some filesystems (NFS, older FUSE) reject the flag; a hard link
+        // gives the same no-replace guarantee there.
+        Err(Errno::INVAL | Errno::NOSYS) => match std::fs::hard_link(from, to) {
+            Ok(()) => {
+                if std::fs::remove_file(from).is_err() {
+                    log::debug!("could not remove a staged download after linking it");
+                }
+                Ok(())
+            }
+            Err(error)
+                if matches!(
+                    Errno::from_io_error(&error),
+                    Some(Errno::PERM | Errno::NOTSUP | Errno::NOSYS)
+                ) =>
+            {
+                rename_if_absent(from, to)
+            }
+            Err(error) => Err(error),
+        },
+        Err(errno) => Err(errno.into()),
+    }
+}
+
+/// Last resort where the filesystem has neither the rename flag nor hard
+/// links (FAT, some FUSE mounts): not atomic, but it still never replaces
+/// a file that is already there when the check runs.
+fn rename_if_absent(from: &Path, to: &Path) -> std::io::Result<()> {
+    match std::fs::symlink_metadata(to) {
+        Ok(_) => Err(std::io::ErrorKind::AlreadyExists.into()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => std::fs::rename(from, to),
+        Err(error) => Err(error),
+    }
 }
 
 /// Keep staging names short and independent for overlapping downloads, even
@@ -804,5 +925,28 @@ impl Worker {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_last_resort_rename_never_replaces() {
+        let dir = tempfile::tempdir().unwrap();
+        let staged = dir.path().join(".download.tmp");
+        let taken = dir.path().join("taken.pdf");
+        let free = dir.path().join("free.pdf");
+        std::fs::write(&staged, b"new").unwrap();
+        std::fs::write(&taken, b"old").unwrap();
+
+        let refused = rename_if_absent(&staged, &taken).unwrap_err();
+        assert_eq!(refused.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read(&taken).unwrap(), b"old");
+
+        rename_if_absent(&staged, &free).unwrap();
+        assert_eq!(std::fs::read(&free).unwrap(), b"new");
+        assert!(!staged.exists());
     }
 }

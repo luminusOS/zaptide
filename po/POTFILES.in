@@ -12,6 +12,7 @@ src/application/dialogs.rs
 src/application/dispatch/attachments.rs
 src/application/dispatch/backend_events.rs
 src/application/dispatch.rs
+src/application/document_safety.rs
 src/application/helpers.rs
 src/application/link_page.rs
 src/application/profile_dialog.rs

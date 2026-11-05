@@ -156,10 +156,195 @@ fn media_paths_keep_document_names_and_map_mimes() {
             "application/pdf",
             Some("tax return.pdf")
         ),
-        PathBuf::from("/cache/ABC-tax_return.pdf")
+        PathBuf::from("/cache/ABC-0b617fa3-tax_return.pdf")
     );
     assert_eq!(extension_for("audio/ogg; codecs=opus", None), "ogg");
     assert_eq!(extension_for("application/x-unknown", None), "x-unknown");
+}
+
+#[test]
+fn media_paths_drop_unsafe_sender_extensions() {
+    let dir = Path::new("/cache");
+    let path = |name: &str| {
+        outbound::media_path(
+            dir,
+            "1@s.whatsapp.net",
+            "ABC",
+            "application/pdf",
+            Some(name),
+        )
+    };
+    let extension = |name: &str| {
+        path(name)
+            .extension()
+            .map(|extension| extension.to_string_lossy().into_owned())
+    };
+    assert_eq!(
+        path("x.\u{202e}fdp"),
+        PathBuf::from("/cache/ABC-0b617fa3-x.pdf")
+    );
+    assert_eq!(path("a.ex e"), PathBuf::from("/cache/ABC-0b617fa3-a.pdf"));
+    assert_eq!(extension("report.PDF").as_deref(), Some("pdf"));
+    assert_eq!(extension("archive.tar7z123").as_deref(), Some("tar7z123"));
+    assert_eq!(extension("archive.toolongext").as_deref(), Some("pdf"));
+    assert_eq!(extension("report.").as_deref(), Some("pdf"));
+    assert_eq!(extension("...").as_deref(), Some("pdf"));
+    assert_eq!(extension(".").as_deref(), Some("pdf"));
+    assert_eq!(extension("").as_deref(), Some("pdf"));
+    assert_eq!(extension("a.b/../c.sh").as_deref(), Some("sh"));
+    for name in [
+        "x.\u{202e}fdp",
+        "a.ex e",
+        "a.e\u{301}xe",
+        "a.ex\0e",
+        "a.pdf\n",
+    ] {
+        let path = path(name);
+        let file_name = path.file_name().unwrap().to_str().unwrap();
+        assert!(
+            file_name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte)),
+            "{name:?} became {file_name:?}"
+        );
+        assert_eq!(path.parent(), Some(dir));
+    }
+}
+
+#[test]
+fn the_same_message_id_in_two_chats_gets_two_files() {
+    let dir = Path::new("/cache");
+    let first = outbound::media_path(
+        dir,
+        "1@s.whatsapp.net",
+        "ABC",
+        "application/pdf",
+        Some("invoice.pdf"),
+    );
+    let second = outbound::media_path(
+        dir,
+        "2@s.whatsapp.net",
+        "ABC",
+        "application/pdf",
+        Some("invoice.pdf"),
+    );
+    assert_ne!(first, second);
+    assert_eq!(
+        first,
+        outbound::media_path(
+            dir,
+            "1@s.whatsapp.net",
+            "ABC",
+            "application/pdf",
+            Some("invoice.pdf"),
+        )
+    );
+}
+
+#[test]
+fn promoting_a_download_never_replaces_an_existing_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let destination = dir.path().join("ABC-0b617fa3-invoice.pdf");
+    std::fs::write(&destination, b"first").unwrap();
+    let staged = dir.path().join(".download-1.tmp");
+    std::fs::write(&staged, b"second").unwrap();
+
+    let promoted = outbound::promote_download(&staged, &destination, None).unwrap();
+
+    assert_eq!(promoted, dir.path().join("ABC-0b617fa3-invoice-1.pdf"));
+    assert_eq!(std::fs::read(&destination).unwrap(), b"first");
+    assert_eq!(std::fs::read(&promoted).unwrap(), b"second");
+    assert!(!staged.exists());
+
+    let staged = dir.path().join(".download-2.tmp");
+    std::fs::write(&staged, b"third").unwrap();
+    let again = outbound::promote_download(&staged, &destination, None).unwrap();
+    assert_eq!(again, dir.path().join("ABC-0b617fa3-invoice-2.pdf"));
+    assert_eq!(std::fs::read(&again).unwrap(), b"third");
+
+    let fresh = dir.path().join("1_s_whatsapp_net-XYZ.jpg");
+    let staged = dir.path().join(".download-3.tmp");
+    std::fs::write(&staged, b"fourth").unwrap();
+    assert_eq!(
+        outbound::promote_download(&staged, &fresh, None).unwrap(),
+        fresh
+    );
+    assert_eq!(std::fs::read(&fresh).unwrap(), b"fourth");
+
+    let staged = dir.path().join(".download-4.tmp");
+    std::fs::write(&staged, b"fifth").unwrap();
+    assert_eq!(
+        outbound::promote_download(&staged, &fresh, Some(&fresh)).unwrap(),
+        fresh
+    );
+    assert_eq!(std::fs::read(&fresh).unwrap(), b"fifth");
+    assert!(!dir.path().join("1_s_whatsapp_net-XYZ-1.jpg").exists());
+}
+
+#[test]
+fn promoting_replaces_only_the_messages_own_numbered_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let destination = dir.path().join("ABC-0b617fa3-invoice.pdf");
+    let own = dir.path().join("ABC-0b617fa3-invoice-1.pdf");
+    std::fs::write(&destination, b"another message").unwrap();
+    std::fs::write(&own, b"old copy").unwrap();
+    let staged = dir.path().join(".download-1.tmp");
+    std::fs::write(&staged, b"new copy").unwrap();
+
+    assert_eq!(
+        outbound::promote_download(&staged, &destination, Some(&own)).unwrap(),
+        own
+    );
+    assert_eq!(std::fs::read(&own).unwrap(), b"new copy");
+    assert_eq!(std::fs::read(&destination).unwrap(), b"another message");
+
+    for unrelated in [
+        dir.path().join("ABC-0b617fa3-invoice-x.pdf"),
+        dir.path().join("ABC-0b617fa3-invoice-.pdf"),
+        dir.path().join("ABC-0b617fa3-invoice-2.txt"),
+        dir.path().join("other").join("ABC-0b617fa3-invoice-2.pdf"),
+        dir.path().join("XYZ-0b617fa3-invoice-2.pdf"),
+    ] {
+        let staged = dir.path().join(".download-2.tmp");
+        std::fs::write(&staged, b"third").unwrap();
+        let promoted = outbound::promote_download(&staged, &destination, Some(&unrelated)).unwrap();
+        assert_ne!(promoted, unrelated, "{unrelated:?}");
+        assert!(promoted.starts_with(dir.path()));
+        std::fs::remove_file(promoted).unwrap();
+    }
+}
+
+#[test]
+fn long_document_names_are_capped() {
+    let name = format!("{}.pdf", "n".repeat(400));
+    let path = outbound::media_path(
+        Path::new("/cache"),
+        "1@s.whatsapp.net",
+        "ABC",
+        "application/pdf",
+        Some(&name),
+    );
+    let file_name = path.file_name().unwrap().to_str().unwrap();
+    assert_eq!(file_name, format!("ABC-0b617fa3-{}.pdf", "n".repeat(120)));
+    assert!(file_name.len() < 200);
+}
+
+#[test]
+fn long_ids_and_chats_are_capped() {
+    let id = "I".repeat(300);
+    let chat = format!("{}@g.us", "9".repeat(300));
+    let dir = Path::new("/cache");
+    let named = outbound::media_path(dir, &chat, &id, "application/pdf", Some("a.pdf"));
+    let tag = named.file_name().unwrap().to_str().unwrap()[65..73].to_owned();
+    assert_eq!(named, dir.join(format!("{}-{tag}-a.pdf", "I".repeat(64))));
+    let unnamed = outbound::media_path(dir, &chat, &id, "image/jpeg", None);
+    assert_eq!(
+        unnamed,
+        dir.join(format!("{}-{}.jpg", "9".repeat(64), "I".repeat(64)))
+    );
+    for path in [named, unnamed] {
+        assert!(path.file_name().unwrap().len() < 255 - 8);
+    }
 }
 
 #[test]
@@ -2280,6 +2465,102 @@ async fn simultaneous_download_completions_for_same_attachment_both_succeed() {
     assert_eq!(
         stored.content.media().unwrap().path.as_ref(),
         Some(&destination)
+    );
+}
+
+#[tokio::test]
+async fn download_completion_keeps_another_messages_file() {
+    let (mut worker, events, _inbox, _wa) = worker();
+    let directory = tempfile::tempdir().unwrap();
+    let chat = "1@s.whatsapp.net";
+    let id = "message";
+    let raw = b"synthetic document raw";
+    let mut message = crate::archive::tests::message(chat, id, 100, false);
+    message.content = Content::Document {
+        file_name: "invoice.pdf".into(),
+        caption: None,
+        pages: None,
+        media: crate::model::Media {
+            mime: "application/pdf".into(),
+            size: 10,
+            width: None,
+            height: None,
+            path: None,
+            state: Default::default(),
+        },
+    };
+    worker.archive.ensure_chat(chat, "A").unwrap();
+    worker.archive.insert_message(&message, Some(raw)).unwrap();
+    let destination = media_path(
+        directory.path(),
+        chat,
+        id,
+        "application/pdf",
+        Some("invoice.pdf"),
+    );
+    std::fs::write(&destination, b"another message").unwrap();
+    let staged = download_staging_path(directory.path());
+    std::fs::write(&staged, b"synthetic document bytes").unwrap();
+
+    worker
+        .handle_command(Command::Downloaded {
+            chat: chat.to_owned(),
+            id: id.to_owned(),
+            session_generation: worker.session_generation,
+            raw_fingerprint: message_raw_fingerprint(raw),
+            destination: destination.clone(),
+            result: Ok(staged.clone()),
+        })
+        .await;
+
+    let renamed = directory.path().join("message-0b617fa3-invoice-1.pdf");
+    assert!(matches!(
+        events.try_recv(),
+        Ok(Event::Media { result: Ok(path), .. }) if path == renamed
+    ));
+    assert_eq!(std::fs::read(&destination).unwrap(), b"another message");
+    assert_eq!(
+        std::fs::read(&renamed).unwrap(),
+        b"synthetic document bytes"
+    );
+    assert!(!staged.exists());
+    let stored = worker.archive.message(chat, id).unwrap().unwrap();
+    assert_eq!(
+        stored.content.media().unwrap().path.as_ref(),
+        Some(&renamed)
+    );
+
+    // An overlapping second download of the same message replaces its own
+    // numbered file instead of leaving it behind unreferenced.
+    let staged = download_staging_path(directory.path());
+    std::fs::write(&staged, b"second download").unwrap();
+    worker
+        .handle_command(Command::Downloaded {
+            chat: chat.to_owned(),
+            id: id.to_owned(),
+            session_generation: worker.session_generation,
+            raw_fingerprint: message_raw_fingerprint(raw),
+            destination: destination.clone(),
+            result: Ok(staged.clone()),
+        })
+        .await;
+
+    assert!(matches!(
+        events.try_recv(),
+        Ok(Event::Media { result: Ok(path), .. }) if path == renamed
+    ));
+    assert_eq!(std::fs::read(&renamed).unwrap(), b"second download");
+    let mut files: Vec<_> = std::fs::read_dir(directory.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    files.sort();
+    assert_eq!(
+        files,
+        [
+            "message-0b617fa3-invoice-1.pdf",
+            "message-0b617fa3-invoice.pdf"
+        ]
     );
 }
 

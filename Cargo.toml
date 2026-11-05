@@ -83,6 +83,9 @@ url = "2"
 jiff = "0.2"
 # MIME detection for attachments.
 mime_guess2 = "2"
+# Promotes downloads with renameat2(RENAME_NOREPLACE). Already in the tree
+# through tempfile, polling and async-io.
+rustix = { version = "1.1", default-features = false, features = ["std", "fs"] }
 
 rodio = { version = "0.23", default-features = false, features = ["playback", "recording", "mp3", "mp4", "wav", "vorbis"] }
 opus = "0.4"

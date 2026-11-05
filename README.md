@@ -159,6 +159,14 @@ little after it starts and every few hours while it runs. Only those files go, n
 messages, stickers or anything outside that folder. A removed file downloads again
 when you open it, if WhatsApp still has it; files WhatsApp no longer keeps are lost.
 
+Received photos (JPEG, PNG, GIF, WebP, AVIF, HEIF, BMP, TIFF, JPEG XL and camera RAW),
+audio, video, PDF, EPUB, RTF, office documents (OpenDocument and Microsoft Office), plain
+text, Markdown, CSV and common archives open in their default app as before. Any other
+received document asks before it opens, and so does a file whose content does not match
+its name: scripts, launchers, installers, packages, web pages, SVG, PostScript,
+playlists and types the system cannot identify. Inside Flatpak the desktop then lets you
+pick the app. Very long sender file names are shortened in the download folder.
+
 Previews contact websites directly while composing, without proxies or redirects.
 Private/reserved destinations are blocked. Disable previews per account or remove one.
 

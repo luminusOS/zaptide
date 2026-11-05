@@ -4279,9 +4279,15 @@ fn extension_for(mime: &str, file_name: Option<&str>) -> String {
     if let Some(extension) = file_name
         .and_then(|name| Path::new(name).extension())
         .and_then(|extension| extension.to_str())
-        .filter(|extension| !extension.is_empty() && extension.len() <= 8)
+        .map(str::to_ascii_lowercase)
+        .filter(|extension| {
+            (1..=8).contains(&extension.len())
+                && extension
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+        })
     {
-        return extension.to_ascii_lowercase();
+        return extension;
     }
     let mime = mime.split(';').next().unwrap_or(mime).trim();
     match mime {

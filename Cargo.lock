@@ -6133,6 +6133,7 @@ dependencies = [
  "ring",
  "rodio",
  "rusqlite",
+ "rustix",
  "serde",
  "serde_json",
  "sha2",

@@ -14,6 +14,7 @@ mod contact_sharing;
 mod conversation;
 mod dialogs;
 mod dispatch;
+mod document_safety;
 mod helpers;
 mod icons;
 mod link_page;
@@ -2054,6 +2055,30 @@ impl NativeApplication {
                 self.refresh_message_row(&message);
             }
             crate::model::Action::OpenFile(path) => {
+                let content = self
+                    .message_snapshots
+                    .get(id)
+                    .map(|message| &message.content);
+                let declared = content
+                    .and_then(|content| content.media())
+                    .map(|media| media.mime.as_str())
+                    .unwrap_or_default();
+                if document_safety::path_needs_confirmation(&path, declared) {
+                    let cached_name = path
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    let sender_name = match content {
+                        Some(crate::model::Content::Document { file_name, .. })
+                            if !file_name.is_empty() =>
+                        {
+                            file_name.clone()
+                        }
+                        _ => cached_name,
+                    };
+                    document_safety::confirm_and_open(&self.window, &path, &sender_name);
+                    return;
+                }
                 let file = gtk::gio::File::for_path(path);
                 if gtk::gio::AppInfo::launch_default_for_uri(
                     &file.uri(),
@@ -2801,15 +2826,27 @@ impl NativeApplication {
     }
 
     fn toast(&self, text: &str) {
-        self.add_toast(adw::Toast::builder().title(text).use_markup(false).build());
+        show_toast(&self.window, text);
     }
 
     fn add_toast(&self, toast: adw::Toast) {
-        if let Some(child) = gtk::prelude::GtkWindowExt::child(&self.window)
-            && let Ok(overlay) = child.downcast::<adw::ToastOverlay>()
-        {
-            overlay.add_toast(toast);
-        }
+        add_window_toast(&self.window, toast);
+    }
+}
+
+/// Shows plain `text` as a toast; for callbacks that only hold the window.
+fn show_toast(window: &adw::ApplicationWindow, text: &str) {
+    add_window_toast(
+        window,
+        adw::Toast::builder().title(text).use_markup(false).build(),
+    );
+}
+
+fn add_window_toast(window: &adw::ApplicationWindow, toast: adw::Toast) {
+    if let Some(child) = gtk::prelude::GtkWindowExt::child(window)
+        && let Ok(overlay) = child.downcast::<adw::ToastOverlay>()
+    {
+        overlay.add_toast(toast);
     }
 }
 

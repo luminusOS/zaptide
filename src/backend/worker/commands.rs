@@ -892,10 +892,20 @@ impl Worker {
                     return;
                 }
                 if let Ok(staged) = &result {
-                    match std::fs::rename(staged, &destination) {
-                        Ok(()) => {
-                            let _ = self.archive.set_media_path(&chat, &id, &destination);
-                            result = Ok(destination);
+                    let recorded = self
+                        .archive
+                        .message(&chat, &id)
+                        .ok()
+                        .flatten()
+                        .and_then(|message| message.content.media()?.path.clone());
+                    match super::outbound::promote_download(
+                        staged,
+                        &destination,
+                        recorded.as_deref(),
+                    ) {
+                        Ok(promoted) => {
+                            let _ = self.archive.set_media_path(&chat, &id, &promoted);
+                            result = Ok(promoted);
                         }
                         Err(_error) => {
                             let _ = std::fs::remove_file(staged);
