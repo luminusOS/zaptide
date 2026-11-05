@@ -23,6 +23,7 @@ mod presence;
 mod presentation;
 mod profile_dialog;
 mod reaction_drawer;
+mod resume;
 mod rows;
 mod sidebar;
 mod stars;
@@ -1489,22 +1490,9 @@ impl SimpleComponent for NativeApplication {
                 shown_sender.input(Input::SidebarShown(!split.shows_content()));
             });
         model.sync_translucent_sidebar();
+        resume::watch(sender.clone());
         // The whole conversation accepts dropped files, not only the composer.
         // Capture runs before the text view's own drop handling.
-        let (mut last_wall, mut last_monotonic) =
-            (std::time::SystemTime::now(), std::time::Instant::now());
-        let resume_sender = sender.clone();
-        gtk::glib::timeout_add_local(std::time::Duration::from_secs(5), move || {
-            let (wall, monotonic) = (std::time::SystemTime::now(), std::time::Instant::now());
-            if slept_through(
-                wall.duration_since(last_wall).unwrap_or_default(),
-                monotonic.duration_since(last_monotonic),
-            ) {
-                resume_sender.input(Input::Resumed);
-            }
-            (last_wall, last_monotonic) = (wall, monotonic);
-            gtk::glib::ControlFlow::Continue
-        });
         let drop_target = gtk::DropTarget::new(
             gtk::gdk::FileList::static_type(),
             gtk::gdk::DragAction::COPY,
