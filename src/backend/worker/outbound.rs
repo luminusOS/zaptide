@@ -582,15 +582,6 @@ pub(super) enum StagedDownload<E> {
     Local(String),
 }
 
-impl<E: std::fmt::Display> StagedDownload<E> {
-    pub(super) fn into_message(self) -> String {
-        match self {
-            Self::Fetch(error) => error.to_string(),
-            Self::Local(message) => message,
-        }
-    }
-}
-
 const ACCOUNT_CHANGED: &str = "The linked account changed during the download";
 
 /// Streams a download into a new staging file at `path`. `fetch` receives

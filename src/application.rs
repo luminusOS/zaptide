@@ -203,7 +203,7 @@ enum NativeEvent {
     Media {
         chat: String,
         message: String,
-        result: Result<std::path::PathBuf, String>,
+        result: Result<std::path::PathBuf, crate::backend::DownloadFailure>,
     },
     ReceiptsPrivacy {
         disabled: bool,
@@ -2604,7 +2604,7 @@ impl NativeApplication {
         &mut self,
         chat: &str,
         id: &str,
-        result: Result<std::path::PathBuf, String>,
+        result: Result<std::path::PathBuf, crate::backend::DownloadFailure>,
     ) {
         if self.active_chat.as_deref() != Some(chat) {
             return;
@@ -2621,11 +2621,12 @@ impl NativeApplication {
                 media.path = Some(path);
                 media.state = crate::model::MediaState::Idle;
             }
-            Err(error) => {
-                let notice = if error.contains("403") || error.contains("404") {
-                    "No longer available on WhatsApp's servers".to_owned()
-                } else {
-                    error
+            Err(failure) => {
+                let notice = match failure {
+                    crate::backend::DownloadFailure::Expired => {
+                        "No longer available on WhatsApp's servers".to_owned()
+                    }
+                    crate::backend::DownloadFailure::Other(error) => error,
                 };
                 media.state = crate::model::MediaState::Failed(notice);
             }

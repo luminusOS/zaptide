@@ -909,7 +909,9 @@ impl Worker {
                         }
                         Err(_error) => {
                             let _ = std::fs::remove_file(staged);
-                            result = Err("The attachment could not be saved".to_owned());
+                            result = Err(DownloadFailure::Other(
+                                "The attachment could not be saved".to_owned(),
+                            ));
                         }
                     }
                 }

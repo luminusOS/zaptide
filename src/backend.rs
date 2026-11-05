@@ -475,7 +475,7 @@ pub enum Command {
         session_generation: u64,
         raw_fingerprint: [u8; 32],
         destination: PathBuf,
-        result: Result<PathBuf, String>,
+        result: Result<PathBuf, DownloadFailure>,
     },
     /// Internal recent-sticker download result.
     StickerFetched {
@@ -637,6 +637,15 @@ pub enum CallNotice {
     Ended,
 }
 
+/// Why an attachment did not download.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DownloadFailure {
+    /// WhatsApp's servers no longer hold the file.
+    Expired,
+    /// Any other failure, as text for the bubble.
+    Other(String),
+}
+
 #[derive(Debug)]
 pub enum Event {
     /// The phone changed this account's link-preview setting.
@@ -746,7 +755,7 @@ pub enum Event {
     Media {
         chat: ChatId,
         message: String,
-        result: Result<PathBuf, String>,
+        result: Result<PathBuf, DownloadFailure>,
     },
     /// Link-time history sync state.
     Syncing(bool),

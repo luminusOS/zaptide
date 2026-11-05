@@ -41,6 +41,7 @@ mod commands;
 mod contacts;
 mod device_store;
 mod events;
+mod failures;
 mod history;
 mod outbound;
 mod poll_history;
@@ -66,7 +67,7 @@ use outbound::{
 use outbound::{THUMBNAIL_SIDE, consume_attachment_reply, encode_jpeg, thumbnail_jpeg};
 use protocol::{base_message, classify};
 
-use super::{Command, Event, LinkStatus, Wake, read_sync::ReadSync};
+use super::{Command, DownloadFailure, Event, LinkStatus, Wake, read_sync::ReadSync};
 use crate::archive::Archive;
 use crate::link_preview;
 
@@ -1565,11 +1566,7 @@ impl Worker {
                     });
                 }
                 Err(error) => {
-                    let text = error.to_string();
-                    // Missing, forbidden, and unauthorized groups do not retry.
-                    let permanent = ["item-not-found", "forbidden", "not-authorized"]
-                        .iter()
-                        .any(|word| text.contains(word));
+                    let permanent = failures::group_lookup_is_final(&error);
                     log::warn!("could not fetch group metadata");
                     let _ = commands.send(Command::GroupInfoFailed {
                         session_generation,
@@ -3205,7 +3202,9 @@ impl Worker {
             self.emit(Event::Media {
                 chat,
                 message: id,
-                result: Err("Not connected to WhatsApp".to_owned()),
+                result: Err(DownloadFailure::Other(
+                    "Not connected to WhatsApp".to_owned(),
+                )),
             });
             return;
         };
@@ -3214,7 +3213,9 @@ impl Worker {
             self.emit(Event::Media {
                 chat,
                 message: id,
-                result: Err("Attachment download keys are missing".to_owned()),
+                result: Err(DownloadFailure::Other(
+                    "Attachment download keys are missing".to_owned(),
+                )),
             });
             return;
         };
@@ -3223,7 +3224,9 @@ impl Worker {
             self.emit(Event::Media {
                 chat,
                 message: id,
-                result: Err("Attachment download keys are missing".to_owned()),
+                result: Err(DownloadFailure::Other(
+                    "Attachment download keys are missing".to_owned(),
+                )),
             });
             return;
         };
@@ -3267,7 +3270,9 @@ impl Worker {
                 self.emit(Event::Media {
                     chat,
                     message: id,
-                    result: Err("This message has no downloadable file".to_owned()),
+                    result: Err(DownloadFailure::Other(
+                        "This message has no downloadable file".to_owned(),
+                    )),
                 });
                 return;
             };
@@ -3365,10 +3370,9 @@ impl Worker {
             };
             let result = match fetch(downloadable).await {
                 Ok(path) => Ok(path),
-                Err(StagedDownload::Local(error)) => Err(error),
+                Err(StagedDownload::Local(error)) => Err(DownloadFailure::Other(error)),
                 Err(StagedDownload::Fetch(error)) => {
-                    let text = error.to_string();
-                    let expired = ["403", "404", "410"].iter().any(|code| text.contains(code));
+                    let expired = failures::needs_reupload(&error);
                     match (&jid, expired && !media_key.is_empty()) {
                         (Some(jid), true) => {
                             // Ask the phone to re-upload expired media, then retry once.
@@ -3383,21 +3387,26 @@ impl Worker {
                                 Ok(MediaRetryResult::Success { direct_path }) => {
                                     match refreshed(direct_path) {
                                         Some(again) => {
-                                            fetch(again).await.map_err(StagedDownload::into_message)
+                                            fetch(again).await.map_err(|error| match error {
+                                                StagedDownload::Fetch(error) => {
+                                                    failures::download_failure(&error)
+                                                }
+                                                StagedDownload::Local(error) => {
+                                                    DownloadFailure::Other(error)
+                                                }
+                                            })
                                         }
-                                        None => Err(text),
+                                        None => Err(failures::download_failure(&error)),
                                     }
                                 }
-                                Ok(_) => {
-                                    Err("No longer available on WhatsApp's servers".to_owned())
-                                }
+                                Ok(_) => Err(DownloadFailure::Expired),
                                 Err(_error) => {
                                     log::info!("media re-upload was not granted");
-                                    Err("No longer available on WhatsApp's servers".to_owned())
+                                    Err(DownloadFailure::Expired)
                                 }
                             }
                         }
-                        _ => Err(text),
+                        _ => Err(failures::download_failure(&error)),
                     }
                 }
             };

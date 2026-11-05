@@ -2787,7 +2787,9 @@ async fn stale_download_does_not_release_replacement_picker_request() {
             std::fs::write(&old_staged, b"obsolete sticker bytes").unwrap();
             Ok(old_staged.clone())
         } else {
-            Err("obsolete download failure".to_owned())
+            Err(DownloadFailure::Other(
+                "obsolete download failure".to_owned(),
+            ))
         };
 
         worker
@@ -2815,7 +2817,9 @@ async fn stale_download_does_not_release_replacement_picker_request() {
             std::fs::write(&current_staged, b"current sticker bytes").unwrap();
             Ok(current_staged.clone())
         } else {
-            Err("current download failure".to_owned())
+            Err(DownloadFailure::Other(
+                "current download failure".to_owned(),
+            ))
         };
         worker
             .handle_command(Command::Downloaded {
@@ -2838,7 +2842,7 @@ async fn stale_download_does_not_release_replacement_picker_request() {
             );
         } else {
             assert!(
-                matches!(events.try_recv(), Ok(Event::Media { result: Err(error), .. }) if error == "current download failure")
+                matches!(events.try_recv(), Ok(Event::Media { result: Err(error), .. }) if error == DownloadFailure::Other("current download failure".to_owned()))
             );
             assert!(!destination.exists());
         }

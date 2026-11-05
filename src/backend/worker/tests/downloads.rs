@@ -150,7 +150,7 @@ async fn a_cdn_refusal_keeps_its_status_through_the_staging_file() {
     let lock = tokio::sync::Mutex::new(());
     let (params, _) = encrypted(b"expired");
 
-    for status in [404, 410] {
+    for (status, reupload) in [(404, true), (410, true), (500, false)] {
         let downloader = downloader_answering(status, shared(Vec::new()));
         let staging = download_staging_path(dir);
         let result =
@@ -162,6 +162,11 @@ async fn a_cdn_refusal_keeps_its_status_through_the_staging_file() {
             panic!("status {status} should fail the fetch");
         };
         assert!(error.to_string().contains(&status.to_string()), "{error}");
+        assert_eq!(
+            failures::needs_reupload(&anyhow::Error::from(error)),
+            reupload,
+            "{status}"
+        );
         assert!(files_in(dir).is_empty());
     }
 }
@@ -216,9 +221,8 @@ async fn a_failed_stream_removes_what_it_wrote() {
     )
     .await;
 
-    assert_eq!(
-        result.map_err(StagedDownload::into_message),
-        Err("connection reset".to_owned())
+    assert!(
+        matches!(&result, Err(StagedDownload::Fetch(error)) if error.to_string() == "connection reset")
     );
     assert_eq!(files_in(&dir), Vec::<PathBuf>::new());
 }
