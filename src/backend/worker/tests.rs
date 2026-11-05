@@ -1864,6 +1864,8 @@ pub(in crate::backend::worker) fn worker() -> (
         sticker_downloads: HashSet::new(),
         deferred_downloads: Vec::new(),
         next_attachment_batch: 0,
+        maintenance: None,
+        maintenance_deferred: 0,
         read_sync: ReadSync::default(),
         poll_decrypting: 0,
         poll_history: Default::default(),
@@ -4060,5 +4062,394 @@ mod stars {
         assert_eq!(worker.archive.starred_ids(PEER).unwrap(), ["STAR"]);
         worker.set_starred(PEER.to_owned(), "UNKNOWN".to_owned(), true);
         assert!(changes(&events).is_empty());
+    }
+}
+
+#[tokio::test]
+async fn shutdown_drains_queued_whatsapp_events_up_to_limit() {
+    let (mut worker, _, _, _) = worker();
+    let group = "123-456@g.us";
+    let update = wa_events::GroupUpdate::builder()
+        .group_jid(group.parse().unwrap())
+        .timestamp(whatsapp_rust::wacore::time::from_secs(200).unwrap())
+        .is_lid_addressing_mode(false)
+        .action(Box::new(
+            whatsapp_rust::wacore::stanza::groups::GroupNotificationAction::Ephemeral {
+                expiration: 86_400,
+                trigger: None,
+            },
+        ))
+        .build();
+    worker
+        .wa_sender
+        .send(RuntimeEvent::WhatsApp(Arc::new(
+            wa_events::Event::GroupUpdate(update),
+        )))
+        .unwrap();
+    for _ in 0..256 {
+        worker
+            .wa_sender
+            .send(RuntimeEvent::PreferencesRecovered {
+                generation: u64::MAX,
+                locks: false,
+                complete: false,
+            })
+            .unwrap();
+    }
+    worker.drain_shutdown_events().await;
+    assert_eq!(
+        worker
+            .archive
+            .chat(group)
+            .unwrap()
+            .unwrap()
+            .ephemeral_expiration,
+        Some(86_400)
+    );
+    assert_eq!(worker.wa_events.len(), 1);
+}
+
+mod maintenance {
+    use super::*;
+
+    const PEER: &str = "fixture@s.whatsapp.net";
+
+    fn stale_archive(worker: &mut Worker, count: usize) {
+        worker.archive.ensure_chat(PEER, "Fixture").unwrap();
+        for n in 0..count {
+            let raw = wa::Message {
+                conversation: Some(format!("derived {n}")),
+                ..Default::default()
+            };
+            let mut row =
+                crate::archive::tests::message(PEER, &format!("M{n}"), 10 + n as i64, false);
+            row.content = Content::text("stale");
+            worker
+                .archive
+                .insert_message(&row, Some(&raw.encode_to_vec()))
+                .unwrap();
+        }
+        worker.archive.set_meta("derived", "5").unwrap();
+    }
+
+    fn row(worker: &Worker, n: usize) -> Message {
+        worker
+            .archive
+            .message(PEER, &format!("M{n}"))
+            .unwrap()
+            .unwrap()
+    }
+
+    fn derived(worker: &Worker) -> Option<String> {
+        worker.archive.meta("derived").unwrap()
+    }
+
+    fn ephemeral_update(group: &str) -> RuntimeEvent {
+        let update = wa_events::GroupUpdate::builder()
+            .group_jid(group.parse().unwrap())
+            .timestamp(whatsapp_rust::wacore::time::from_secs(200).unwrap())
+            .is_lid_addressing_mode(false)
+            .action(Box::new(
+                whatsapp_rust::wacore::stanza::groups::GroupNotificationAction::Ephemeral {
+                    expiration: 86_400,
+                    trigger: None,
+                },
+            ))
+            .build();
+        RuntimeEvent::WhatsApp(Arc::new(wa_events::Event::GroupUpdate(update)))
+    }
+
+    fn ephemeral(worker: &Worker, group: &str) -> Option<u32> {
+        worker
+            .archive
+            .chat(group)
+            .unwrap()
+            .and_then(|chat| chat.ephemeral_expiration)
+    }
+
+    #[test]
+    fn backfill_in_steps_matches_a_single_pass() {
+        let (mut single, _, _, _) = worker();
+        let (mut stepped, _, _, _) = worker();
+        for worker in [&mut single, &mut stepped] {
+            stale_archive(worker, 7);
+            worker
+                .archive
+                .set_content(PEER, "M5", &Content::Revoked, false)
+                .unwrap();
+        }
+        let mut pass = single.start_backfill().unwrap();
+        assert!(!single.backfill_step(&mut pass, usize::MAX));
+        assert!(single.backfill_step(&mut pass, usize::MAX));
+        let mut pass = stepped.start_backfill().unwrap();
+        let mut steps = 1;
+        while !stepped.backfill_step(&mut pass, 2) {
+            steps += 1;
+        }
+        assert_eq!(steps, 5);
+        let all = |worker: &Worker| worker.archive.messages(PEER, None, 100).unwrap();
+        assert_eq!(all(&stepped), all(&single));
+        assert_eq!(row(&stepped, 6).content, Content::text("derived 6"));
+        assert_eq!(row(&stepped, 5).content, Content::Revoked);
+        assert_eq!(derived(&stepped), derived(&single));
+        assert_eq!(derived(&stepped).as_deref(), Some(DERIVED_VERSION));
+    }
+
+    #[test]
+    fn live_changes_between_backfill_steps_survive() {
+        let (mut worker, _, _, _) = worker();
+        stale_archive(&mut worker, 5);
+        let mut pass = worker.start_backfill().unwrap();
+        assert!(!worker.backfill_step(&mut pass, 1));
+        assert_eq!(row(&worker, 0).content, Content::text("derived 0"));
+        assert_eq!(row(&worker, 1).content, Content::text("stale"));
+
+        worker
+            .archive
+            .set_content(PEER, "M0", &Content::text("edited first"), true)
+            .unwrap();
+        worker
+            .archive
+            .set_content(PEER, "M2", &Content::text("edited later"), true)
+            .unwrap();
+        worker
+            .archive
+            .set_reaction(PEER, "M3", "friend@s.whatsapp.net", false, "👍")
+            .unwrap();
+        worker.confirm_revoke(PEER, "M4");
+
+        while !worker.backfill_step(&mut pass, 1) {
+            assert_eq!(derived(&worker).as_deref(), Some("5"));
+        }
+        assert_eq!(derived(&worker).as_deref(), Some(DERIVED_VERSION));
+        assert_eq!(row(&worker, 0).content, Content::text("edited first"));
+        assert_eq!(row(&worker, 1).content, Content::text("derived 1"));
+        assert_eq!(row(&worker, 2).content, Content::text("edited later"));
+        let reacted = row(&worker, 3);
+        assert_eq!(reacted.content, Content::text("derived 3"));
+        assert_eq!(reacted.reactions.len(), 1);
+        assert_eq!(reacted.reactions[0].emoji, "👍");
+        assert_eq!(row(&worker, 4).content, Content::Revoked);
+    }
+
+    #[test]
+    fn media_relocation_in_steps_repairs_moved_and_missing_files() {
+        use whatsapp_rust::prelude::MessageField;
+        let root = tempfile::tempdir().unwrap();
+        let (mut worker, events, _, _) = worker();
+        worker.dirs = AppDirs::under(root.path());
+        worker.archive.ensure_chat(PEER, "Fixture").unwrap();
+        let image = wa::Message {
+            image_message: MessageField::some(wa::message::ImageMessage {
+                direct_path: Some("/media/path".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let present = root.path().join("present.jpg");
+        std::fs::write(&present, b"").unwrap();
+        let cache = worker.dirs.media_cache_dir();
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(cache.join("moved.jpg"), b"").unwrap();
+        let gone = root.path().join("gone");
+        for (id, path) in [
+            ("PRESENT", present.clone()),
+            ("MOVED", gone.join("moved.jpg")),
+            ("TEXT", PathBuf::new()),
+            ("MISSING", gone.join("missing.jpg")),
+        ] {
+            let mut row = crate::archive::tests::message(PEER, id, 10, false);
+            if !path.as_os_str().is_empty() {
+                row.content = classify(&image).unwrap();
+                row.content.media_mut().unwrap().path = Some(path);
+            }
+            worker.archive.insert_message(&row, None).unwrap();
+        }
+        let mut relocation = Relocation::default();
+        let mut steps = 1;
+        while !worker.relocate_step(&mut relocation, 1) {
+            steps += 1;
+        }
+        assert_eq!(steps, 5);
+        let path = |id| {
+            worker
+                .archive
+                .message(PEER, id)
+                .unwrap()
+                .unwrap()
+                .content
+                .media()
+                .and_then(|media| media.path.clone())
+        };
+        assert_eq!(path("PRESENT"), Some(present));
+        assert_eq!(path("MOVED"), Some(cache.join("moved.jpg")));
+        assert_eq!(path("MISSING"), None);
+        assert_eq!((relocation.moved, relocation.forgotten), (1, 1));
+        assert!(
+            events
+                .try_iter()
+                .any(|event| matches!(event, Event::RefreshTranscript))
+        );
+    }
+
+    #[test]
+    fn a_finished_re_derive_refreshes_the_open_transcript() {
+        let (mut worker, events, _, _) = worker();
+        stale_archive(&mut worker, 3);
+        worker.backfill();
+        assert!(
+            events
+                .try_iter()
+                .any(|event| matches!(event, Event::RefreshTranscript))
+        );
+
+        worker.start_maintenance();
+        while worker.maintenance.is_some() {
+            worker.maintain();
+        }
+        assert!(
+            !events
+                .try_iter()
+                .any(|event| matches!(event, Event::RefreshTranscript))
+        );
+    }
+
+    #[test]
+    fn an_interrupted_re_derive_resumes_from_its_saved_position() {
+        let (mut worker, _, _, _) = worker();
+        stale_archive(&mut worker, 5);
+        let mut pass = worker.start_backfill().unwrap();
+        assert!(!worker.backfill_step(&mut pass, 2));
+        let saved = pass.after;
+        worker
+            .archive
+            .set_content(PEER, "M0", &Content::text("stale"), false)
+            .unwrap();
+
+        let mut resumed = worker.start_backfill().unwrap();
+        assert_eq!(resumed.after, saved);
+        while !worker.backfill_step(&mut resumed, 2) {}
+        assert_eq!(derived(&worker).as_deref(), Some(DERIVED_VERSION));
+        assert_eq!(row(&worker, 0).content, Content::text("stale"));
+        assert_eq!(row(&worker, 1).content, Content::text("derived 1"));
+        assert_eq!(row(&worker, 4).content, Content::text("derived 4"));
+
+        worker.archive.set_meta("derived", "5").unwrap();
+        worker
+            .archive
+            .set_meta(DERIVED_CURSOR, &format!("5:{saved}"))
+            .unwrap();
+        assert_eq!(worker.start_backfill().unwrap().after, 0);
+    }
+
+    #[test]
+    fn a_failed_row_freezes_the_saved_position_before_it() {
+        let (mut worker, _, _, _) = worker();
+        stale_archive(&mut worker, 5);
+        worker
+            .archive
+            .execute_batch_for_test(
+                "CREATE TRIGGER reject_m3 BEFORE UPDATE ON messages WHEN OLD.id = 'M3'
+                 BEGIN SELECT RAISE(ABORT, 'synthetic update failure'); END;",
+            )
+            .unwrap();
+        let mut pass = worker.start_backfill().unwrap();
+        assert!(!worker.backfill_step(&mut pass, 2));
+        let before_failure = format!("{DERIVED_VERSION}:{}", pass.after);
+        while !worker.backfill_step(&mut pass, 2) {}
+        assert_eq!(
+            worker.archive.meta(DERIVED_CURSOR).unwrap(),
+            Some(before_failure)
+        );
+        assert_eq!(derived(&worker).as_deref(), Some("5"));
+        assert_eq!(row(&worker, 3).content, Content::text("stale"));
+        assert_eq!(row(&worker, 4).content, Content::text("derived 4"));
+
+        worker
+            .archive
+            .execute_batch_for_test("DROP TRIGGER reject_m3;")
+            .unwrap();
+        worker.backfill();
+        assert_eq!(row(&worker, 3).content, Content::text("derived 3"));
+        assert_eq!(derived(&worker).as_deref(), Some(DERIVED_VERSION));
+    }
+
+    #[tokio::test]
+    async fn a_stream_of_events_cannot_starve_maintenance() {
+        let (mut worker, _, mut inbox, _) = worker();
+        stale_archive(&mut worker, MAINTENANCE_BATCH + 1);
+        let mut tick = tokio::time::interval(Duration::from_secs(5));
+        tick.tick().await;
+        worker.start_maintenance();
+        for _ in 0..=MAINTENANCE_DEFERRALS {
+            worker
+                .wa_sender
+                .send(RuntimeEvent::PreferencesRecovered {
+                    generation: u64::MAX,
+                    locks: false,
+                    complete: false,
+                })
+                .unwrap();
+        }
+        for _ in 0..=MAINTENANCE_DEFERRALS {
+            assert!(worker.turn(&mut inbox, &mut tick).await);
+        }
+        assert_eq!(worker.wa_events.len(), 1);
+        match worker.maintenance {
+            Some(Maintenance::Backfill(ref pass)) => assert!(pass.after > 0),
+            _ => panic!("backfill should still be pending"),
+        }
+    }
+
+    #[tokio::test]
+    async fn queued_event_is_handled_before_the_next_maintenance_step() {
+        let group = "123-456@g.us";
+        let (mut worker, _, mut inbox, _) = worker();
+        stale_archive(&mut worker, MAINTENANCE_BATCH * 2 + 1);
+        let mut tick = tokio::time::interval(Duration::from_secs(5));
+        tick.tick().await;
+        worker.start_maintenance();
+        let cursor = |worker: &Worker| match worker.maintenance {
+            Some(Maintenance::Backfill(ref pass)) => pass.after,
+            _ => panic!("backfill should still be pending"),
+        };
+
+        assert!(worker.turn(&mut inbox, &mut tick).await);
+        let after_first_step = cursor(&worker);
+        assert!(after_first_step > 0);
+
+        worker.wa_sender.send(ephemeral_update(group)).unwrap();
+        assert!(worker.turn(&mut inbox, &mut tick).await);
+        assert_eq!(ephemeral(&worker, group), Some(86_400));
+        assert_eq!(cursor(&worker), after_first_step);
+        assert_eq!(derived(&worker).as_deref(), Some("5"));
+
+        while worker.maintenance.is_some() {
+            assert!(worker.turn(&mut inbox, &mut tick).await);
+        }
+        assert_eq!(derived(&worker).as_deref(), Some(DERIVED_VERSION));
+        assert_eq!(
+            row(&worker, MAINTENANCE_BATCH * 2).content,
+            Content::text(format!("derived {}", MAINTENANCE_BATCH * 2))
+        );
+    }
+
+    #[tokio::test]
+    async fn shutdown_during_maintenance_still_drains_queued_events() {
+        let group = "123-456@g.us";
+        let (mut worker, _, mut inbox, _) = worker();
+        stale_archive(&mut worker, MAINTENANCE_BATCH + 1);
+        let mut tick = tokio::time::interval(Duration::from_secs(5));
+        tick.tick().await;
+        worker.start_maintenance();
+        assert!(worker.turn(&mut inbox, &mut tick).await);
+
+        worker.commands.send(Command::Shutdown).unwrap();
+        worker.wa_sender.send(ephemeral_update(group)).unwrap();
+        while worker.turn(&mut inbox, &mut tick).await {}
+        worker.drain_shutdown_events().await;
+        assert_eq!(ephemeral(&worker, group), Some(86_400));
+        assert!(worker.maintenance.is_some());
+        assert_eq!(derived(&worker).as_deref(), Some("5"));
     }
 }

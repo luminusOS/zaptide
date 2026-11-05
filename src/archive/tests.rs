@@ -1007,3 +1007,44 @@ fn history_replay_preserves_revocation_and_matching_download_path() {
         None
     );
 }
+
+#[test]
+fn derived_fields_are_not_written_over_a_row_changed_after_it_was_read() {
+    let archive = Archive::in_memory().unwrap();
+    let chat = "fixture@s.whatsapp.net";
+    archive.ensure_chat(chat, "Fixture").unwrap();
+    for id in ["KEEP", "EDIT", "RAW"] {
+        archive
+            .insert_message(&message(chat, id, 10, false), Some(b"raw"))
+            .unwrap();
+    }
+    let sources = archive.derived_sources(0, 10).unwrap();
+    assert_eq!(sources.len(), 3);
+    assert_eq!(
+        archive.derived_sources(sources[0].rowid, 10).unwrap().len(),
+        2
+    );
+    archive
+        .set_content(chat, "EDIT", &Content::text("edited"), true)
+        .unwrap();
+    let mut replaced = message(chat, "RAW", 10, false);
+    replaced.content = Content::text("replayed");
+    archive
+        .insert_message(&replaced, Some(b"newer raw"))
+        .unwrap();
+
+    let derived = Content::text("derived");
+    let results = sources
+        .iter()
+        .map(|source| {
+            archive
+                .set_derived_if_unchanged(source, &derived, &[], None, false)
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(results, [true, false, false]);
+    let content = |id| archive.message(chat, id).unwrap().unwrap().content;
+    assert_eq!(content("KEEP"), derived);
+    assert_eq!(content("EDIT"), Content::text("edited"));
+    assert_eq!(content("RAW"), Content::text("replayed"));
+}

@@ -177,6 +177,7 @@ enum NativeEvent {
     Syncing(bool),
     Chats(Vec<crate::model::Chat>),
     ChatUpdated(Box<crate::model::Chat>),
+    RefreshTranscript,
     Contacts(Vec<crate::model::Contact>),
     Messages {
         chat: String,

@@ -36,6 +36,17 @@ pub struct ArchivedSticker {
     pub raw: Option<Vec<u8>>,
 }
 
+/// A stored row as a re-derive pass read it.
+#[derive(Clone, Debug)]
+pub struct DerivedSource {
+    pub rowid: i64,
+    pub chat: String,
+    pub id: String,
+    pub raw: Vec<u8>,
+    content: String,
+    edited: bool,
+}
+
 pub struct Archive {
     connection: Connection,
 }
@@ -43,6 +54,7 @@ pub struct Archive {
 pub type Result<T> = std::result::Result<T, rusqlite::Error>;
 type PendingQuotedMessage = (String, String, String, Vec<u8>);
 type FailedQuotedMessage = (String, Vec<u8>);
+type MediaPathRow = (i64, String, String, Option<std::path::PathBuf>);
 
 struct StoredMessageProjection {
     status: i64,
@@ -853,7 +865,28 @@ impl Archive {
         rows.collect()
     }
 
+    /// Up to `limit` rows with a raw protobuf after `rowid`, in rowid order, so
+    /// a re-derive pass can resume where it stopped.
+    pub fn derived_sources(&self, after: i64, limit: usize) -> Result<Vec<DerivedSource>> {
+        let mut statement = self.connection.prepare(
+            "SELECT rowid, chat, id, raw, content, edited FROM messages
+             WHERE raw IS NOT NULL AND rowid > ?1 ORDER BY rowid LIMIT ?2",
+        )?;
+        let rows = statement.query_map(params![after, limit as i64], |row| {
+            Ok(DerivedSource {
+                rowid: row.get(0)?,
+                chat: row.get(1)?,
+                id: row.get(2)?,
+                raw: row.get(3)?,
+                content: row.get(4)?,
+                edited: row.get(5)?,
+            })
+        })?;
+        rows.collect()
+    }
+
     /// Replaces protobuf-derived fields while preserving local file state.
+    #[cfg(test)]
     pub fn set_derived(
         &self,
         chat: &str,
@@ -863,20 +896,61 @@ impl Archive {
         thumbnail: Option<&[u8]>,
         forwarded: bool,
     ) -> Result<()> {
+        self.write_derived((chat, id), None, content, mentions, thumbnail, forwarded)?;
+        Ok(())
+    }
+
+    /// Replaces the fields derived from `source.raw` only if the row still
+    /// holds the raw body, content and edit flag read into `source`. Returns
+    /// false when a newer write changed the row since, which then stands.
+    /// The worker reads and writes a row without yielding in between, so this
+    /// is defence in depth: it keeps holding if that ever stops being true.
+    pub fn set_derived_if_unchanged(
+        &self,
+        source: &DerivedSource,
+        content: &Content,
+        mentions: &[crate::model::MentionRef],
+        thumbnail: Option<&[u8]>,
+        forwarded: bool,
+    ) -> Result<bool> {
+        self.write_derived(
+            (&source.chat, &source.id),
+            Some(source),
+            content,
+            mentions,
+            thumbnail,
+            forwarded,
+        )
+    }
+
+    fn write_derived(
+        &self,
+        (chat, id): (&str, &str),
+        source: Option<&DerivedSource>,
+        content: &Content,
+        mentions: &[crate::model::MentionRef],
+        thumbnail: Option<&[u8]>,
+        forwarded: bool,
+    ) -> Result<bool> {
         let content = self.keep_answer(chat, id, content);
-        self.connection.execute(
+        let changed = self.connection.execute(
             "UPDATE messages SET content = ?3, mentions = ?4, thumbnail = COALESCE(?5, thumbnail), forwarded = ?6
-             WHERE chat = ?1 AND id = ?2",
+             WHERE chat = ?1 AND id = ?2
+                AND (?7 = 0 OR (raw IS ?8 AND content IS ?9 AND edited IS ?10))",
             params![
                 chat,
                 id,
                 serde_json::to_string(&content).unwrap_or_default(),
                 serde_json::to_string(mentions).unwrap_or_default(),
                 thumbnail,
-                forwarded
+                forwarded,
+                source.is_some(),
+                source.map(|source| source.raw.as_slice()),
+                source.map(|source| source.content.as_str()),
+                source.map(|source| source.edited),
             ],
         )?;
-        Ok(())
+        Ok(changed > 0)
     }
 
     pub fn delete_message(&self, chat: &str, id: &str) -> Result<bool> {

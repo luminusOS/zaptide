@@ -36,6 +36,25 @@ impl Archive {
         rows.collect()
     }
 
+    /// The next `limit` rows after `rowid` with their attachment path, if
+    /// any, so a relocation pass can resume where it stopped.
+    pub fn media_paths_after(&self, after: i64, limit: usize) -> Result<Vec<MediaPathRow>> {
+        let mut statement = self.connection.prepare(
+            "SELECT rowid, chat, id, json_extract(content, '$.media.path') FROM messages
+             WHERE rowid > ?1 ORDER BY rowid LIMIT ?2",
+        )?;
+        let rows = statement.query_map(params![after, limit as i64], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get::<_, Option<String>>(3)?
+                    .map(std::path::PathBuf::from),
+            ))
+        })?;
+        rows.collect()
+    }
+
     /// Downloaded files that may be deleted to free space: not stickers, which
     /// the picker reuses, and only messages that can fetch the file again. A
     /// pending or failed send has no raw message, and its file is the only copy.

@@ -92,6 +92,15 @@ const ON_DEMAND: i32 = 6;
 const MAX_EARLY_HISTORY_IDS: usize = 16;
 /// Sticker download batch size for the picker.
 const STICKER_FETCH_LIMIT: usize = 40;
+/// Bump to re-derive stored rows after `classify` or `thumbnail_of` change.
+const DERIVED_VERSION: &str = "6";
+/// Rows visited per maintenance step; bounds how long a queued event waits.
+const MAINTENANCE_BATCH: usize = 256;
+/// Turns handled while maintenance waits before one step runs regardless,
+/// so a steady stream of events, as history sync sends, cannot starve it.
+const MAINTENANCE_DEFERRALS: u32 = 32;
+/// Archive meta key holding `version:rowid` of an unfinished re-derive pass.
+const DERIVED_CURSOR: &str = "derived_cursor";
 /// How long private content waits for phone lock state before it is shown
 /// unconfirmed. A healthy sync answers well within this.
 const PRIVACY_GRACE: Duration = Duration::from_secs(10);
@@ -552,6 +561,8 @@ pub async fn run(
         sticker_downloads: HashSet::new(),
         deferred_downloads: Vec::new(),
         next_attachment_batch: 0,
+        maintenance: None,
+        maintenance_deferred: 0,
         read_sync: ReadSync::default(),
         poll_decrypting: 0,
         poll_history: Default::default(),
@@ -565,56 +576,36 @@ pub async fn run(
     };
     worker.load_state();
     worker.recover_interrupted_answers();
-    worker.backfill();
-    worker.reconcile_confirmed_answers();
-    worker.relocate_media();
     worker.start_bot().await;
+    worker.start_maintenance();
     let mut tick = tokio::time::interval(Duration::from_secs(5));
-    loop {
-        let deadline = worker.sync_deadline;
-        tokio::select! {
-            command = inbox.recv() => {
-                match command {
-                    Some(Command::Shutdown) | None => break,
-                    Some(command) => worker.handle_command(command).await,
-                }
-            }
-            Some(event) = worker.wa_events.recv() => match event {
-                RuntimeEvent::WhatsApp(event) => worker.handle_wa_event(event).await,
-                RuntimeEvent::PreferencesRecovered {
-                    generation,
-                    locks,
-                    complete,
-                } => {
-                    worker.preferences_recovered(generation, locks, complete);
-                }
-            },
-            _ = async {
-                match deadline {
-                    Some(deadline) => tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await,
-                    None => std::future::pending::<()>().await,
-                }
-            } => {
-                worker.sync_deadline = None;
-                worker.set_syncing(false);
-                worker.emit_chats();
-            }
-            _ = tick.tick() => {
-                worker.retry_deferred_downloads(Instant::now()).await;
-                worker.reveal_unconfirmed_after_grace();
-                worker.refresh_legacy_preferences();
-                worker.expire_older_requests();
-                worker.retry_avatars();
-                worker.pump_group_info();
-                worker.pump_read_sync();
-                worker.pump_poll_votes();
-                worker.pump_poll_history();
-                worker.pump_media_retention();
-            }
-        }
-    }
+    while worker.turn(&mut inbox, &mut tick).await {}
+    worker.drain_shutdown_events().await;
     worker.end_call_for_shutdown().await;
     let _ = worker.stop_bot().await;
+}
+
+/// Startup archive upkeep, run a step at a time between events: whatsapp-rust
+/// acknowledges a message once it is queued for this worker, so a long pass
+/// before the event loop would leave acknowledged messages only in memory.
+enum Maintenance {
+    Backfill(Backfill),
+    ConfirmAnswers,
+    RelocateMedia(Relocation),
+}
+
+struct Backfill {
+    after: i64,
+    updated: usize,
+    retry_required: bool,
+    started: Instant,
+}
+
+#[derive(Default)]
+struct Relocation {
+    after: i64,
+    moved: usize,
+    forgotten: usize,
 }
 
 enum RuntimeEvent {
@@ -768,9 +759,86 @@ struct Worker {
     deferred_downloads: Vec<DeferredDownload>,
     /// Correlates selected-file completion events without exposing error details.
     next_attachment_batch: u64,
+    maintenance: Option<Maintenance>,
+    maintenance_deferred: u32,
 }
 
 impl Worker {
+    /// Handles one command, event or timer, or else one maintenance step.
+    /// Returns false on shutdown.
+    async fn turn(
+        &mut self,
+        inbox: &mut mpsc::UnboundedReceiver<Command>,
+        tick: &mut tokio::time::Interval,
+    ) -> bool {
+        if self.maintenance.is_some() {
+            if self.maintenance_deferred >= MAINTENANCE_DEFERRALS {
+                self.maintain();
+                return true;
+            }
+            self.maintenance_deferred += 1;
+        }
+        let deadline = self.sync_deadline;
+        tokio::select! {
+            command = inbox.recv() => {
+                match command {
+                    Some(Command::Shutdown) | None => return false,
+                    Some(command) => self.handle_command(command).await,
+                }
+            }
+            Some(event) = self.wa_events.recv() => self.handle_runtime_event(event).await,
+            _ = async {
+                match deadline {
+                    Some(deadline) => tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await,
+                    None => std::future::pending::<()>().await,
+                }
+            } => {
+                self.sync_deadline = None;
+                self.set_syncing(false);
+                self.emit_chats();
+            }
+            _ = tick.tick() => {
+                self.retry_deferred_downloads(Instant::now()).await;
+                self.reveal_unconfirmed_after_grace();
+                self.refresh_legacy_preferences();
+                self.expire_older_requests();
+                self.retry_avatars();
+                self.pump_group_info();
+                self.pump_read_sync();
+                self.pump_poll_votes();
+                self.pump_poll_history();
+                self.pump_media_retention();
+            }
+            // yield_now is pending on its first poll, so anything already
+            // queued when this turn starts is handled before the next step.
+            () = tokio::task::yield_now(), if self.maintenance.is_some() => self.maintain(),
+        }
+        true
+    }
+
+    async fn handle_runtime_event(&mut self, event: RuntimeEvent) {
+        match event {
+            RuntimeEvent::WhatsApp(event) => self.handle_wa_event(event).await,
+            RuntimeEvent::PreferencesRecovered {
+                generation,
+                locks,
+                complete,
+            } => {
+                self.preferences_recovered(generation, locks, complete);
+            }
+        }
+    }
+
+    async fn drain_shutdown_events(&mut self) {
+        // whatsapp-rust may acknowledge messages as soon as it queues them here.
+        for _ in 0..super::EVENT_BATCH_LIMIT {
+            let Ok(event) = self.wa_events.try_recv() else {
+                break;
+            };
+            self.handle_runtime_event(event).await;
+        }
+    }
+
     fn ephemeral_expiration(&self, chat: &str) -> Option<u32> {
         self.archive
             .ephemeral_expiration(chat)
@@ -947,78 +1015,157 @@ impl Worker {
         self.emit_profile();
     }
 
-    /// Re-derives archived rows from raw protobufs after parser changes. Also
-    /// repairs moved attachment paths or clears missing files for redownload.
-    fn relocate_media(&mut self) {
+    /// Repairs moved attachment paths or clears missing files for redownload,
+    /// over the next `limit` rows. Returns true once the pass has ended.
+    fn relocate_step(&mut self, relocation: &mut Relocation, limit: usize) -> bool {
         let dir = self.dirs.media_cache_dir();
-        let rows = match self.archive.media_paths() {
+        let rows = match self.archive.media_paths_after(relocation.after, limit) {
             Ok(rows) => rows,
             Err(error) => {
                 log::warn!("could not list attachments: {error}");
-                return;
+                return true;
             }
         };
-        let (mut moved, mut forgotten) = (0, 0);
-        for (chat, id, path) in rows {
-            if path.exists() {
-                continue;
+        let Some(&(last, ..)) = rows.last() else {
+            if relocation.moved + relocation.forgotten > 0 {
+                log::info!(
+                    "attachments: {} re-pointed to {}, {} to fetch again",
+                    relocation.moved,
+                    dir.display(),
+                    relocation.forgotten
+                );
+                self.emit(Event::RefreshTranscript);
             }
+            return true;
+        };
+        relocation.after = last;
+        for (_, chat, id, path) in rows {
+            let Some(path) = path.filter(|path| !path.exists()) else {
+                continue;
+            };
             let candidate = path.file_name().map(|name| dir.join(name));
             match candidate.filter(|candidate| candidate.exists()) {
                 Some(candidate) => {
                     if self.archive.set_media_path(&chat, &id, &candidate).is_ok() {
-                        moved += 1;
+                        relocation.moved += 1;
                     }
                 }
                 None => {
                     if self.archive.clear_media_path(&chat, &id).is_ok() {
-                        forgotten += 1;
+                        relocation.forgotten += 1;
                     }
                 }
             }
         }
-        if moved + forgotten > 0 {
-            log::info!(
-                "attachments: {moved} re-pointed to {}, {forgotten} to fetch again",
-                dir.display()
-            );
+        false
+    }
+
+    /// Starts the startup upkeep that [`Self::maintain`] runs a step at a time.
+    fn start_maintenance(&mut self) {
+        self.maintenance = Some(match self.start_backfill() {
+            Some(backfill) => Maintenance::Backfill(backfill),
+            None => Maintenance::ConfirmAnswers,
+        });
+    }
+
+    /// Runs the next bounded step of startup upkeep.
+    fn maintain(&mut self) {
+        self.maintenance_deferred = 0;
+        self.maintenance = match self.maintenance.take() {
+            Some(Maintenance::Backfill(mut backfill)) => {
+                if self.backfill_step(&mut backfill, MAINTENANCE_BATCH) {
+                    Some(Maintenance::ConfirmAnswers)
+                } else {
+                    Some(Maintenance::Backfill(backfill))
+                }
+            }
+            // One indexed query over outgoing replies to unanswered buttons or
+            // lists; short enough for a single step.
+            Some(Maintenance::ConfirmAnswers) => {
+                self.reconcile_confirmed_answers();
+                Some(Maintenance::RelocateMedia(Relocation::default()))
+            }
+            Some(Maintenance::RelocateMedia(mut relocation)) => {
+                if self.relocate_step(&mut relocation, MAINTENANCE_BATCH) {
+                    None
+                } else {
+                    Some(Maintenance::RelocateMedia(relocation))
+                }
+            }
+            None => None,
+        };
+    }
+
+    #[cfg(test)]
+    fn backfill(&mut self) {
+        if let Some(mut backfill) = self.start_backfill() {
+            while !self.backfill_step(&mut backfill, MAINTENANCE_BATCH) {}
         }
     }
 
-    fn backfill(&mut self) {
-        // Bump to re-derive stored rows after `classify` or `thumbnail_of` change.
-        const VERSION: &str = "6";
-        if self.archive.meta("derived").ok().flatten().as_deref() == Some(VERSION) {
-            return;
+    /// Resumes an interrupted pass of the current version from its saved
+    /// position, since the rows before it are already re-derived.
+    fn start_backfill(&self) -> Option<Backfill> {
+        if self.archive.meta("derived").ok().flatten().as_deref() == Some(DERIVED_VERSION) {
+            return None;
         }
-        let rows = match self.archive.rows_with_raw() {
+        let after = self
+            .archive
+            .meta(DERIVED_CURSOR)
+            .ok()
+            .flatten()
+            .and_then(|cursor| {
+                cursor
+                    .strip_prefix(DERIVED_VERSION)?
+                    .strip_prefix(':')?
+                    .parse()
+                    .ok()
+            })
+            .unwrap_or(0);
+        Some(Backfill {
+            after,
+            updated: 0,
+            retry_required: false,
+            started: Instant::now(),
+        })
+    }
+
+    /// Re-derives the next `limit` stored rows and returns true once the
+    /// pass has ended. Each row is read fresh and written within this call,
+    /// with no await between, so what events changed between steps is the
+    /// state it starts from; edited and revoked rows are left alone.
+    fn backfill_step(&mut self, backfill: &mut Backfill, limit: usize) -> bool {
+        let rows = match self.archive.derived_sources(backfill.after, limit) {
             Ok(rows) => rows,
             Err(error) => {
                 log::warn!("could not read the archive for re-deriving: {error}");
-                return;
+                return true;
             }
         };
-        let started = Instant::now();
-        let mut updated = 0;
-        let mut retry_required = false;
-        for (chat, id, raw) in rows {
+        let Some(last) = rows.last() else {
+            self.finish_backfill(backfill);
+            return true;
+        };
+        backfill.after = last.rowid;
+        for source in rows {
+            let (chat, id) = (&source.chat, &source.id);
             // Malformed or unsupported raw messages have no derived projection to retry.
-            let Ok(message) = wa::Message::decode_from_slice(&raw) else {
+            let Ok(message) = wa::Message::decode_from_slice(&source.raw) else {
                 continue;
             };
             let base = base_message(&message);
             let Some(mut content) = classify(base) else {
                 continue;
             };
-            let existing = match self.archive.message(&chat, &id) {
+            let existing = match self.archive.message(chat, id) {
                 Ok(Some(existing)) => existing,
                 Ok(None) => continue,
                 Err(_error) => {
-                    retry_required = true;
+                    backfill.retry_required = true;
                     continue;
                 }
             };
-            if matches!(existing.content, Content::Revoked) {
+            if existing.edited || matches!(existing.content, Content::Revoked) {
                 continue;
             }
             if let (Some(new), Some(old)) = (content.media_mut(), existing.content.media()) {
@@ -1026,37 +1173,46 @@ impl Worker {
             }
             let mentions = self.mentions_of(&mentioned_of(base));
             let thumbnail = thumbnail_of(base);
-            if self
-                .archive
-                .set_derived(
-                    &chat,
-                    &id,
-                    &content,
-                    &mentions,
-                    thumbnail.as_deref(),
-                    forwarded_of(base),
-                )
-                .is_ok()
-            {
-                updated += 1;
-            } else {
-                retry_required = true;
+            match self.archive.set_derived_if_unchanged(
+                &source,
+                &content,
+                &mentions,
+                thumbnail.as_deref(),
+                forwarded_of(base),
+            ) {
+                Ok(true) => backfill.updated += 1,
+                Ok(false) => {}
+                Err(_error) => backfill.retry_required = true,
             }
         }
-        if retry_required {
+        // A failed row freezes the cursor before it, so the next launch retries it.
+        if !backfill.retry_required {
+            let cursor = format!("{DERIVED_VERSION}:{}", backfill.after);
+            if let Err(error) = self.archive.set_meta(DERIVED_CURSOR, &cursor) {
+                log::debug!("could not save the re-derive position: {error}");
+            }
+        }
+        false
+    }
+
+    fn finish_backfill(&mut self, backfill: &Backfill) {
+        if backfill.retry_required {
             log::warn!("some archived messages could not be re-derived; will retry later");
             return;
         }
-        if self.archive.set_meta("derived", VERSION).is_err() {
+        if self.archive.set_meta("derived", DERIVED_VERSION).is_err() {
             log::warn!("could not save the archive re-derivation version");
             return;
         }
-        if updated > 0 {
+        if backfill.updated > 0 {
             log::info!(
-                "re-derived {updated} archived messages in {:.1?}",
-                started.elapsed()
+                "re-derived {} archived messages in {:.1?}",
+                backfill.updated,
+                backfill.started.elapsed()
             );
             self.emit_chats();
+            // Pages sent while the pass ran may hold rows it re-derived since.
+            self.emit(Event::RefreshTranscript);
         }
     }
 
