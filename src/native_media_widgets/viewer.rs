@@ -688,7 +688,7 @@ impl PhotoState {
             .details
             .thumbnail
             .as_deref()
-            .and_then(|bytes| gdk::Texture::from_bytes(&glib::Bytes::from(bytes)).ok());
+            .and_then(super::inline_thumbnail_texture);
         let picture = thumbnail.as_ref().map_or((1.0, 1.0), |texture| {
             zoom::logical_size(
                 (
@@ -1527,7 +1527,7 @@ fn video_placeholder(details: &ViewerDetails, clip: &VideoStream) -> gtk::Overla
         details
             .thumbnail
             .as_deref()
-            .and_then(|bytes| gdk::Texture::from_bytes(&glib::Bytes::from(bytes)).ok())
+            .and_then(super::inline_thumbnail_texture)
             .as_ref(),
     );
     let placeholder = gtk::Overlay::builder()

@@ -180,7 +180,7 @@ impl ProfileDialog {
         avatar.set_custom_image(
             init.picture
                 .as_deref()
-                .and_then(|path| gtk::gdk::Texture::from_filename(path).ok())
+                .and_then(crate::native_media_widgets::avatar_texture)
                 .as_ref(),
         );
         let change = gtk::Button::builder()

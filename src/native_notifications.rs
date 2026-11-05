@@ -378,8 +378,13 @@ fn round_icon(source: &std::path::Path) -> Option<std::path::PathBuf> {
     {
         return Some(target);
     }
-    let mut image = image::open(source)
-        .ok()?
+    let crate::native_media::ThumbnailResult::Image(decoded) =
+        crate::native_media::decode_avatar_file(source)
+    else {
+        return None;
+    };
+    let decoded = image::RgbaImage::from_raw(decoded.width, decoded.height, decoded.rgba)?;
+    let mut image = image::DynamicImage::ImageRgba8(decoded)
         .resize_to_fill(SIZE, SIZE, image::imageops::FilterType::Triangle)
         .to_rgba8();
     let radius = SIZE as f32 / 2.0;
@@ -483,6 +488,19 @@ mod tests {
             Some(round),
             "cached copy reused"
         );
+    }
+
+    #[test]
+    fn chat_pictures_outside_the_avatar_bounds_get_no_icon() {
+        let directory = tempfile::tempdir().unwrap();
+        let tiff = directory.path().join("avatar.tiff");
+        std::fs::write(&tiff, b"II*\0\x08\0\0\0").unwrap();
+        assert_eq!(super::round_icon(&tiff), None);
+        let wide = directory.path().join("wide.png");
+        image::RgbImage::new(crate::native_media::MAX_AVATAR_DIMENSION + 1, 1)
+            .save(&wide)
+            .unwrap();
+        assert_eq!(super::round_icon(&wide), None);
     }
 
     #[test]

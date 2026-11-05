@@ -2884,7 +2884,12 @@ impl Worker {
         let session_generation = self.session_generation;
         let session_generation_shared = self.session_generation_shared.clone();
         let mentions = self.mentions_of(&mentioned_of(&message));
-        let thumbnail = thumbnail_of(&message).or_else(|| source.thumbnail.clone());
+        let thumbnail = thumbnail_of(&message).or_else(|| {
+            source
+                .thumbnail
+                .clone()
+                .filter(|bytes| crate::native_media::is_inline_thumbnail(bytes))
+        });
         let row = forwarded_row(
             source,
             to_chat.clone(),
@@ -4524,7 +4529,8 @@ fn first_link(text: &str) -> Option<String> {
         .map(|url| url.trim_end_matches(['.', ',', ')', ']']).to_owned())
 }
 
-/// Extracts the attachment or link-preview thumbnail.
+/// Extracts the attachment or link-preview thumbnail, dropping one that is
+/// too large or not JPEG, PNG, or WebP.
 fn thumbnail_of(base: &wa::Message) -> Option<Vec<u8>> {
     let bytes = if let Some(image) = base.image_message.as_option() {
         image.jpeg_thumbnail.clone()
@@ -4545,7 +4551,7 @@ fn thumbnail_of(base: &wa::Message) -> Option<Vec<u8>> {
     } else {
         None
     };
-    bytes.filter(|bytes| !bytes.is_empty())
+    bytes.filter(|bytes| crate::native_media::is_inline_thumbnail(bytes))
 }
 
 /// Displayed emoji for a reaction: `text`, else `groupingKey` when text is empty.

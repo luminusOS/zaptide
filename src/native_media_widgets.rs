@@ -38,6 +38,35 @@ impl Drop for ThumbnailDecodePermit {
     }
 }
 
+/// A message's embedded thumbnail as a texture, or `None` when it is not a
+/// small JPEG, PNG, or WebP image.
+pub(crate) fn inline_thumbnail_texture(bytes: &[u8]) -> Option<gdk::Texture> {
+    decoded_texture(crate::native_media::decode_inline_thumbnail(bytes))
+}
+
+/// A saved profile picture as a texture, decoded under the same bounds as
+/// embedded thumbnails.
+pub(crate) fn avatar_texture(path: &std::path::Path) -> Option<gdk::Texture> {
+    decoded_texture(crate::native_media::decode_avatar_file(path))
+}
+
+fn decoded_texture(result: ThumbnailResult) -> Option<gdk::Texture> {
+    let ThumbnailResult::Image(image) = result else {
+        return None;
+    };
+    let stride = image.width as usize * 4;
+    Some(
+        gdk::MemoryTexture::new(
+            i32::try_from(image.width).ok()?,
+            i32::try_from(image.height).ok()?,
+            gdk::MemoryFormat::R8g8b8a8,
+            &glib::Bytes::from_owned(image.rgba),
+            stride,
+        )
+        .upcast(),
+    )
+}
+
 /// GTK media row. Attachment actions are forwarded by button callbacks.
 pub struct NativeMediaWidget {
     pub widget: gtk::Box,

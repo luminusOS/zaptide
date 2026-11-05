@@ -43,7 +43,7 @@ fn texture(frame: RgbaFrame) -> Option<gtk::gdk::Texture> {
 }
 
 fn avatar_image(path: Option<&std::path::Path>) -> Option<gtk::gdk::Texture> {
-    gtk::gdk::Texture::from_filename(path?).ok()
+    crate::native_media_widgets::avatar_texture(path?)
 }
 
 fn avatar_for(

@@ -561,7 +561,7 @@ pub(super) fn cached_texture(path: &std::path::Path) -> Option<gtk::gdk::Texture
         if !cache.contains_key(path) {
             cache.insert(
                 path.to_path_buf(),
-                gtk::gdk::Texture::from_filename(path).ok()?,
+                crate::native_media_widgets::avatar_texture(path)?,
             );
         }
         cache.get(path).cloned()
@@ -1036,7 +1036,7 @@ pub(super) fn show_chat_info_dialog(
         .spacing(6)
         .build();
     let picture = adw::Avatar::new(96, Some(&chat.name), true);
-    let image = avatar.and_then(|path| gtk::gdk::Texture::from_filename(path).ok());
+    let image = avatar.and_then(crate::native_media_widgets::avatar_texture);
     picture.set_custom_image(image.as_ref());
     picture.set_margin_bottom(6);
     header.append(&picture);

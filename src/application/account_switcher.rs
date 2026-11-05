@@ -130,7 +130,7 @@ pub(super) struct AccountSwitcher {
 }
 
 fn set_picture(avatar: &adw::Avatar, path: Option<&std::path::Path>) {
-    let texture = path.and_then(|path| gtk::gdk::Texture::from_filename(path).ok());
+    let texture = path.and_then(crate::native_media_widgets::avatar_texture);
     avatar.set_custom_image(texture.as_ref());
 }
 

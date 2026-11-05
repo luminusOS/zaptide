@@ -580,6 +580,29 @@ fn classification_covers_text_and_media() {
 }
 
 #[test]
+fn ingest_keeps_only_small_jpeg_png_and_webp_thumbnails() {
+    let image_with = |thumbnail: Vec<u8>| wa::Message {
+        image_message: whatsapp_rust::prelude::MessageField::some(wa::message::ImageMessage {
+            jpeg_thumbnail: Some(thumbnail),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+    let webp = b"RIFF\x10\0\0\0WEBPVP8 ".to_vec();
+    assert_eq!(thumbnail_of(&image_with(png.clone())), Some(png));
+    assert_eq!(thumbnail_of(&image_with(webp.clone())), Some(webp));
+
+    let tiff = b"II*\0\x08\0\0\0".to_vec();
+    let svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>".to_vec();
+    let mut oversized = vec![0xff, 0xd8, 0xff, 0xe0];
+    oversized.resize(crate::native_media::MAX_INLINE_THUMBNAIL_BYTES + 1, 0);
+    for rejected in [tiff, svg, oversized, b"garbage".to_vec()] {
+        assert_eq!(thumbnail_of(&image_with(rejected)), None);
+    }
+}
+
+#[test]
 fn unsafe_preview_metadata_cannot_launch_a_desktop_handler() {
     let message = wa::Message {
         extended_text_message: MessageField::some(wa::message::ExtendedTextMessage {
