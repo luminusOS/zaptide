@@ -46,7 +46,14 @@ protocol. These notes are for coding agents and new contributors.
   privacy-id mappings. WhatsApp replays history once, at link time, so the
   archive is the only copy. It keeps each message's raw protobuf because
   the keys to fetch an attachment live in it. `src/archive/encryption.rs` opens
-  the archive with SQLCipher and a random key stored in the OS keyring. Plaintext
+  the archive with SQLCipher and a random key stored in the OS keyring through
+  oo7 (`archive/secrets.rs`): the Secret portal's file keyring inside Flatpak,
+  the Secret Service (any collection, never duplicated) outside. Inside
+  Flatpak a key missing from the file keyring is copied once from the Secret
+  Service where older builds kept it and read back from disk before use; that
+  old item is only read, never written or deleted. All keyring work runs in
+  order on one keyring thread; the GTK thread only waits, for at most two
+  minutes, on the one-time key copy when the legacy layout moves. Plaintext
   migration checkpoints the old WAL and verifies an encrypted staging file before
   atomic replacement. A locked or missing key stops linking; never fall back to
   a disposable archive. Tests use fixtures and mock credentials only.

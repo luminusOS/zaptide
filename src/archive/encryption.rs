@@ -8,13 +8,13 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
-use keyring_core::api::CredentialStoreApi;
 use rusqlite::{Connection, OpenFlags};
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
+use super::secrets::{self, Keyring, Lookup};
+
 const HEADER: &[u8; 16] = b"SQLite format 3\0";
-const KEYRING_SERVICE: &str = "dev.luminusos.ZapTide";
 const ARCHIVE_FILE: &str = "archive.db";
 const DEVICE_STORE_FILE: &str = "session.db";
 const DEVICE_STORE_KEY_INFO: &[u8] = b"dev.luminusos.ZapTide device store key v1";
@@ -98,23 +98,8 @@ pub(super) fn key_for(path: &Path) -> Result<Zeroizing<[u8; 32]>> {
     let parent = path.parent().context("Archive has no parent directory")?;
     fs::create_dir_all(parent)?;
     let identity = identity_for(parent)?;
-    let entry = store()?
-        .build(KEYRING_SERVICE, &identity, None)
-        .context("The OS keyring could not open ZapTide's archive key")?;
-    key_from_entry(path, &entry)
-}
-
-#[cfg(not(test))]
-fn store() -> Result<std::sync::Arc<zbus_secret_service_keyring_store::Store>> {
-    zbus_secret_service_keyring_store::Store::new()
-        .context("Unlock your OS keyring and restart ZapTide")
-}
-
-/// Tests run on developer machines with a real keyring; a test that reaches
-/// it would create or delete the user's own items, so it fails instead.
-#[cfg(test)]
-fn store() -> Result<std::sync::Arc<zbus_secret_service_keyring_store::Store>> {
-    anyhow::bail!("tests must not use the OS keyring")
+    let path = path.to_owned();
+    secrets::with_os_keyring(move |keyring| key_in(&path, &identity, keyring))
 }
 
 /// Separate profiles must not overwrite each other's keys. The credential
@@ -135,19 +120,27 @@ pub fn archive_key_identity(path: &Path) -> Result<String> {
     identity_for(path.parent().context("Archive has no parent directory")?)
 }
 
+/// How long the window's thread waits for the keyring while moving an
+/// account's files at startup; long enough to type a keyring password.
+const COPY_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
+
 /// Copies an encrypted archive's key to the identity of `new_archive`'s
-/// folder and reads it back, so the archive can move there.
+/// folder and reads it back, so the archive can move there. Gives up after
+/// two minutes, leaving the files where they are.
 pub fn copy_archive_key(old_archive: &Path, new_archive: &Path) -> Result<()> {
     if !folder_encrypted(old_archive)? {
         return Ok(());
     }
-    copy_archive_key_in(old_archive, new_archive, &*store()?)
+    let (old_archive, new_archive) = (old_archive.to_owned(), new_archive.to_owned());
+    secrets::with_os_keyring_within(COPY_WAIT, move |keyring| {
+        copy_archive_key_in(&old_archive, &new_archive, keyring)
+    })
 }
 
 fn copy_archive_key_in(
     old_archive: &Path,
     new_archive: &Path,
-    store: &dyn CredentialStoreApi,
+    keyring: &Keyring<'_>,
 ) -> Result<()> {
     let old_parent = old_archive
         .parent()
@@ -162,40 +155,23 @@ fn copy_archive_key_in(
     if old_parent.canonicalize()? == new_parent.canonicalize()? {
         return Ok(());
     }
-    let old_entry = store
-        .build(KEYRING_SERVICE, &identity_for(old_parent)?, None)
-        .context("The OS keyring could not open ZapTide's archive key")?;
-    let key = match old_entry.get_secret() {
-        Ok(secret) => {
-            let secret = Zeroizing::new(secret);
-            ensure!(
-                secret.len() == 32,
-                "The archive key in the OS keyring is invalid"
-            );
-            let mut key = Zeroizing::new([0; 32]);
-            key.copy_from_slice(&secret);
-            key
-        }
-        Err(keyring_core::Error::NoEntry) => {
-            ensure_nothing_encrypted(old_archive)?;
+    let key = match keyring.get(&identity_for(old_parent)?)? {
+        Lookup::Found(secret) => key_from(&secret)?,
+        Lookup::Missing { legacy } => {
+            ensure_key_may_be_missing(old_archive, legacy)?;
             return Ok(());
         }
-        Err(error) => return Err(error).context("Unlock your OS keyring and restart ZapTide"),
     };
-    let new_entry = store
-        .build(KEYRING_SERVICE, &identity_for(new_parent)?, None)
-        .context("The OS keyring could not open ZapTide's archive key")?;
-    new_entry
-        .set_secret(key.as_ref())
+    let new_identity = identity_for(new_parent)?;
+    keyring
+        .set(&new_identity, key.as_ref())
         .context("Could not save the archive key in the OS keyring")?;
     // Read back before the only copy of the history moves under this key.
-    let saved = Zeroizing::new(
-        new_entry
-            .get_secret()
-            .context("Could not verify the copied archive key")?,
-    );
+    let saved = keyring
+        .get_saved(&new_identity)
+        .context("Could not verify the copied archive key")?;
     ensure!(
-        saved.as_slice() == key.as_ref(),
+        saved.as_deref().map(Vec::as_slice) == Some(key.as_slice()),
         "The OS keyring did not retain the copied archive key"
     );
     Ok(())
@@ -203,53 +179,69 @@ fn copy_archive_key_in(
 
 /// Deletes the keyring entry of an archive folder that is gone for good,
 /// such as a removed account's. Never call it while the archive is in use.
+///
+/// The deletion is queued on the keyring thread and only its failure to
+/// start is returned; later errors are logged. Keyring work runs in order, so
+/// a new key for the same folder is created only after this one is gone.
+/// Outside a sandbox, or without a Secret portal, the key is deleted from
+/// the host Secret Service in every collection, which is also where builds
+/// before oo7 kept it. Inside a sandbox it is deleted from oo7's file
+/// keyring, and a copy an older build left in the host Secret Service stays.
 pub fn forget_archive_key(identity: &str) -> Result<()> {
-    forget_archive_key_in(identity, &*store()?)
+    let identity = identity.to_owned();
+    secrets::with_os_keyring_later("delete an archive key", move |keyring| {
+        forget_archive_key_in(&identity, keyring)
+    })
 }
 
-fn forget_archive_key_in(identity: &str, store: &dyn CredentialStoreApi) -> Result<()> {
-    let entry = store
-        .build(KEYRING_SERVICE, identity, None)
-        .context("The OS keyring could not open ZapTide's archive key")?;
-    match entry.delete_credential() {
-        Ok(()) | Err(keyring_core::Error::NoEntry) => Ok(()),
-        Err(error) => Err(error).context("Could not delete the archive key from the OS keyring"),
-    }
+fn forget_archive_key_in(identity: &str, keyring: &Keyring<'_>) -> Result<()> {
+    keyring
+        .delete(identity)
+        .context("Could not delete the archive key from the OS keyring")
 }
 
-fn key_from_entry(path: &Path, entry: &keyring_core::Entry) -> Result<Zeroizing<[u8; 32]>> {
-    match entry.get_secret() {
-        Ok(secret) => {
-            let secret = Zeroizing::new(secret);
-            ensure!(
-                secret.len() == 32,
-                "The archive key in the OS keyring is invalid"
-            );
-            let mut key = Zeroizing::new([0; 32]);
-            key.copy_from_slice(&secret);
-            Ok(key)
-        }
-        Err(keyring_core::Error::NoEntry) => {
-            ensure_nothing_encrypted(path)?;
-            let mut key = Zeroizing::new([0; 32]);
-            getrandom::fill(key.as_mut()).context("Could not generate an archive key")?;
-            entry
-                .set_secret(key.as_ref())
-                .context("Could not save the archive key in the OS keyring")?;
-            // Read back before touching the only copy of the message history.
-            let saved = Zeroizing::new(
-                entry
-                    .get_secret()
-                    .context("Could not verify the saved archive key")?,
-            );
-            ensure!(
-                saved.as_slice() == key.as_ref(),
-                "The OS keyring did not retain the archive key"
-            );
-            Ok(key)
-        }
-        Err(error) => Err(error).context("Unlock your OS keyring and restart ZapTide"),
+fn key_from(secret: &[u8]) -> Result<Zeroizing<[u8; 32]>> {
+    ensure!(
+        secret.len() == 32,
+        "The archive key in the OS keyring is invalid"
+    );
+    let mut key = Zeroizing::new([0; 32]);
+    key.copy_from_slice(secret);
+    Ok(key)
+}
+
+/// A key that no store has is fine only while nothing in the folder needs it.
+/// When the old store could not be searched, its error explains more than
+/// "missing" does.
+fn ensure_key_may_be_missing(archive: &Path, legacy: Option<anyhow::Error>) -> Result<()> {
+    if let Some(error) = legacy
+        && folder_encrypted(archive)?
+    {
+        return Err(error).context("Unlock your OS keyring and restart ZapTide");
     }
+    ensure_nothing_encrypted(archive)
+}
+
+fn key_in(path: &Path, identity: &str, keyring: &Keyring<'_>) -> Result<Zeroizing<[u8; 32]>> {
+    let legacy = match keyring.get(identity)? {
+        Lookup::Found(secret) => return key_from(&secret),
+        Lookup::Missing { legacy } => legacy,
+    };
+    ensure_key_may_be_missing(path, legacy)?;
+    let mut key = Zeroizing::new([0; 32]);
+    getrandom::fill(key.as_mut()).context("Could not generate an archive key")?;
+    keyring
+        .set(identity, key.as_ref())
+        .context("Could not save the archive key in the OS keyring")?;
+    // Read back before touching the only copy of the message history.
+    let saved = keyring
+        .get_saved(identity)
+        .context("Could not verify the saved archive key")?;
+    ensure!(
+        saved.as_deref().map(Vec::as_slice) == Some(key.as_slice()),
+        "The OS keyring did not retain the archive key"
+    );
+    Ok(key)
 }
 
 pub(crate) fn key_literal(key: &[u8; 32]) -> Zeroizing<String> {
@@ -374,6 +366,7 @@ fn encrypt_in_place(path: &Path, staging: &Path, key: &[u8; 32], database: Datab
 
 #[cfg(test)]
 mod tests {
+    use super::super::secrets::{KEYRING_SERVICE, memory::Store};
     use super::*;
 
     fn directory() -> tempfile::TempDir {
@@ -406,36 +399,24 @@ mod tests {
         copy_archive_key(&old, &directory.path().join("accounts/1/archive.db")).unwrap();
     }
 
+    fn keyring<'a>(current: &'a Store, legacy: &'a Store) -> Keyring<'a> {
+        Keyring { current, legacy }
+    }
+
     #[test]
     fn an_encrypted_archive_key_is_copied_and_read_back() {
         let directory = directory();
         let old = directory.path().join("archive.db");
         let new = directory.path().join("accounts/1/archive.db");
         fs::write(&old, [7u8; 64]).unwrap();
-        let store = keyring_core::mock::Store::new().unwrap();
         let old_identity = archive_key_identity(&old).unwrap();
-        store
-            .build(KEYRING_SERVICE, &old_identity, None)
-            .unwrap()
-            .set_secret(&[9u8; 32])
-            .unwrap();
-        copy_archive_key_in(&old, &new, &*store).unwrap();
+        let (store, legacy) = (Store::with(&old_identity, &[9u8; 32]), Store::default());
+        copy_archive_key_in(&old, &new, &keyring(&store, &legacy)).unwrap();
         let new_identity = archive_key_identity(&new).unwrap();
-        let copied = store
-            .build(KEYRING_SERVICE, &new_identity, None)
-            .unwrap()
-            .get_secret()
-            .unwrap();
-        assert_eq!(copied, vec![9u8; 32]);
-        forget_archive_key_in(&new_identity, &*store).unwrap();
-        assert!(matches!(
-            store
-                .build(KEYRING_SERVICE, &new_identity, None)
-                .unwrap()
-                .get_secret(),
-            Err(keyring_core::Error::NoEntry)
-        ));
-        forget_archive_key_in(&new_identity, &*store).unwrap();
+        assert_eq!(store.read(&new_identity), Some(vec![9u8; 32]));
+        forget_archive_key_in(&new_identity, &keyring(&store, &legacy)).unwrap();
+        assert_eq!(store.read(&new_identity), None);
+        forget_archive_key_in(&new_identity, &keyring(&store, &legacy)).unwrap();
     }
 
     #[test]
@@ -443,11 +424,11 @@ mod tests {
         let directory = directory();
         let old = directory.path().join("archive.db");
         fs::write(&old, [7u8; 64]).unwrap();
-        let store = keyring_core::mock::Store::new().unwrap();
+        let (store, legacy) = (Store::default(), Store::default());
         let error = copy_archive_key_in(
             &old,
             &directory.path().join("accounts/1/archive.db"),
-            &*store,
+            &keyring(&store, &legacy),
         )
         .unwrap_err();
         assert!(error.to_string().contains("missing"));
@@ -466,18 +447,14 @@ mod tests {
         let directory = directory();
         let archive = directory.path().join("archive.db");
         fs::write(directory.path().join("session.db"), [7u8; 64]).unwrap();
-        let store = keyring_core::mock::Store::new().unwrap();
-        let entry = store.build("zaptide-test", "archive", None).unwrap();
+        let (store, legacy) = (Store::default(), Store::default());
         assert!(
-            key_from_entry(&archive, &entry)
+            key_in(&archive, "archive", &keyring(&store, &legacy))
                 .unwrap_err()
                 .to_string()
                 .contains("device store is encrypted")
         );
-        assert!(matches!(
-            entry.get_secret(),
-            Err(keyring_core::Error::NoEntry)
-        ));
+        assert_eq!(store.read("archive"), None);
         assert!(!archive.exists());
     }
 
@@ -488,25 +465,102 @@ mod tests {
         let new = directory.path().join("accounts/1/archive.db");
         fs::write(directory.path().join("session.db"), [7u8; 64]).unwrap();
         assert!(folder_encrypted(&old).unwrap());
-        let store = keyring_core::mock::Store::new().unwrap();
+        let (store, legacy) = (Store::default(), Store::default());
         assert!(
-            copy_archive_key_in(&old, &new, &*store)
+            copy_archive_key_in(&old, &new, &keyring(&store, &legacy))
                 .unwrap_err()
                 .to_string()
                 .contains("missing")
         );
-        store
-            .build(KEYRING_SERVICE, &archive_key_identity(&old).unwrap(), None)
+        store.put(&archive_key_identity(&old).unwrap(), &[9u8; 32]);
+        copy_archive_key_in(&old, &new, &keyring(&store, &legacy)).unwrap();
+        assert_eq!(
+            store.read(&archive_key_identity(&new).unwrap()),
+            Some(vec![9u8; 32])
+        );
+    }
+
+    #[test]
+    fn an_existing_archive_and_device_store_keep_their_key_through_migration() {
+        let directory = directory();
+        let archive = directory.path().join("archive.db");
+        let session = directory.path().join("session.db");
+        let identity = archive_key_identity(&archive).unwrap();
+        let folder_key = [4u8; 32];
+        drop(open(&archive, &folder_key, Database::Archive).unwrap());
+        let device_key = derive_device_store_key(&folder_key).unwrap();
+        open(&session, &device_key, Database::DeviceStore)
             .unwrap()
-            .set_secret(&[9u8; 32])
+            .execute_batch("CREATE TABLE fixture(value TEXT)")
             .unwrap();
-        copy_archive_key_in(&old, &new, &*store).unwrap();
-        let copied = store
-            .build(KEYRING_SERVICE, &archive_key_identity(&new).unwrap(), None)
-            .unwrap()
-            .get_secret()
-            .unwrap();
-        assert_eq!(copied, vec![9u8; 32]);
+        let (store, legacy) = (Store::default(), Store::with(&identity, &folder_key));
+        let key = key_in(&archive, &identity, &keyring(&store, &legacy)).unwrap();
+        assert_eq!(*key, folder_key);
+        assert_eq!(store.read(&identity), Some(folder_key.to_vec()));
+        assert_eq!(legacy.read(&identity), Some(folder_key.to_vec()));
+        keyed(&archive, &key, Database::Archive).unwrap();
+        keyed(
+            &session,
+            &derive_device_store_key(&key).unwrap(),
+            Database::DeviceStore,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_failed_migration_neither_uses_nor_replaces_the_key() {
+        let directory = directory();
+        let archive = directory.path().join("archive.db");
+        fs::write(&archive, [7u8; 64]).unwrap();
+        let identity = archive_key_identity(&archive).unwrap();
+        let (store, legacy) = (Store::default(), Store::with(&identity, &[4u8; 32]));
+        store.damage_writes();
+        assert!(
+            key_in(&archive, &identity, &keyring(&store, &legacy))
+                .unwrap_err()
+                .to_string()
+                .contains("did not retain")
+        );
+        assert_eq!(store.read(&identity), None);
+        assert_eq!(legacy.read(&identity), Some(vec![4u8; 32]));
+        assert_eq!(fs::read(&archive).unwrap(), [7u8; 64]);
+    }
+
+    #[test]
+    fn an_unreachable_old_keyring_never_leads_to_a_new_key_for_encrypted_data() {
+        let directory = directory();
+        let archive = directory.path().join("archive.db");
+        let identity = archive_key_identity(&archive).unwrap();
+        let (store, legacy) = (Store::default(), Store::default());
+        legacy.fail("no Secret Service");
+        fs::write(directory.path().join("session.db"), [7u8; 64]).unwrap();
+        assert!(
+            key_in(&archive, &identity, &keyring(&store, &legacy))
+                .unwrap_err()
+                .to_string()
+                .contains("Unlock")
+        );
+        assert_eq!(store.read(&identity), None);
+        fs::remove_file(directory.path().join("session.db")).unwrap();
+        let key = key_in(&archive, &identity, &keyring(&store, &legacy)).unwrap();
+        assert_eq!(store.read(&identity), Some(key.to_vec()));
+    }
+
+    #[test]
+    fn an_old_key_that_is_missing_too_is_never_replaced() {
+        let directory = directory();
+        let archive = directory.path().join("archive.db");
+        fs::write(&archive, [7u8; 64]).unwrap();
+        let identity = archive_key_identity(&archive).unwrap();
+        let (store, legacy) = (Store::default(), Store::default());
+        assert!(
+            key_in(&archive, &identity, &keyring(&store, &legacy))
+                .unwrap_err()
+                .to_string()
+                .contains("missing")
+        );
+        assert_eq!(store.read(&identity), None);
+        assert_eq!(legacy.read(&identity), None);
     }
 
     fn read_secret(connection: &Connection) -> String {
@@ -519,10 +573,10 @@ mod tests {
     fn keyring_unlock_reuses_keys_and_never_replaces_a_missing_key() {
         let directory = directory();
         let path = directory.path().join("archive.db");
-        let store = keyring_core::mock::Store::new().unwrap();
-        let entry = store.build("zaptide-test", "archive", None).unwrap();
-        let key = key_from_entry(&path, &entry).unwrap();
-        assert_eq!(*key, *key_from_entry(&path, &entry).unwrap());
+        let (store, legacy) = (Store::default(), Store::default());
+        let entry = keyring(&store, &legacy);
+        let key = key_in(&path, "archive", &entry).unwrap();
+        assert_eq!(*key, *key_in(&path, "archive", &entry).unwrap());
         let connection = open(&path, &key, Database::Archive).unwrap();
         connection
             .execute_batch(
@@ -531,34 +585,25 @@ mod tests {
             .unwrap();
         drop(connection);
         let original = fs::read(&path).unwrap();
-        entry.delete_credential().unwrap();
+        entry.delete("archive").unwrap();
         assert!(
-            key_from_entry(&path, &entry)
+            key_in(&path, "archive", &entry)
                 .unwrap_err()
                 .to_string()
                 .contains("missing")
         );
-        assert!(matches!(
-            entry.get_secret(),
-            Err(keyring_core::Error::NoEntry)
-        ));
+        assert_eq!(store.read("archive"), None);
         assert_eq!(fs::read(&path).unwrap(), original);
-        entry.set_secret(&[1; 12]).unwrap();
+        store.put("archive", &[1; 12]);
         assert!(
-            key_from_entry(&path, &entry)
+            key_in(&path, "archive", &entry)
                 .unwrap_err()
                 .to_string()
                 .contains("invalid")
         );
-        let mock = entry
-            .as_any()
-            .downcast_ref::<keyring_core::mock::Cred>()
-            .unwrap();
-        mock.set_error(keyring_core::Error::PlatformFailure(Box::new(
-            std::io::Error::other("locked"),
-        )));
+        store.fail("locked");
         assert!(
-            key_from_entry(&path, &entry)
+            key_in(&path, "archive", &entry)
                 .unwrap_err()
                 .to_string()
                 .contains("Unlock")

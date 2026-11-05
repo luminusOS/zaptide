@@ -150,6 +150,15 @@ camera portal, which also reaches cameras that only PipeWire exposes.
 > replacing the key or deleting the archive. If the credential is gone for good,
 > remove the account and link it again: that deletes the unreadable files, and
 > only the history the phone sends while linking comes back.
+>
+> Where the credential lives depends on how ZapTide runs. Outside Flatpak it is an
+> item in your desktop keyring (GNOME Keyring, KWallet or another Secret Service).
+> In the Flatpak it is in ZapTide's own keyring file,
+> `~/.var/app/dev.luminusos.ZapTide/data/keyrings/default.keyring`, and that file
+> is encrypted with a per-app secret the Secret portal keeps in your desktop
+> keyring. Back up both: the file without the desktop keyring cannot be opened.
+> On a desktop without a Secret portal the Flatpak keeps the credential in the
+> desktop keyring directly, as outside Flatpak.
 
 The device credentials in `session.db` are encrypted with a key derived from the
 same keyring credential, so losing it also means linking the computer again. An
