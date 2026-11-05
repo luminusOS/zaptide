@@ -573,6 +573,51 @@ pub(super) fn download_staging_path(dir: &Path) -> PathBuf {
     dir.join(format!(".download-{token:032x}.tmp"))
 }
 
+/// Staging files untouched for this long belong to a download that was
+/// interrupted, never to one still streaming in another instance.
+const STALE_STAGING_AGE: Duration = Duration::from_secs(60 * 60);
+
+/// Whether `name` is exactly what [`download_staging_path`] produces.
+fn is_staging_name(name: &std::ffi::OsStr) -> bool {
+    name.to_str()
+        .and_then(|name| name.strip_prefix(".download-"))
+        .and_then(|rest| rest.strip_suffix(".tmp"))
+        .is_some_and(|token| {
+            token.len() == 32
+                && token
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
+}
+
+/// Removes staging files that interrupted downloads left directly in `dir`:
+/// regular files only (a symlink is never followed or removed), named
+/// exactly like a staging file, last modified at least `max_age` before
+/// `now`. Returns how many were removed.
+pub(super) fn remove_stale_staging_files(
+    dir: &Path,
+    max_age: Duration,
+    now: std::time::SystemTime,
+) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter(|entry| is_staging_name(&entry.file_name()))
+        // DirEntry::file_type and DirEntry::metadata describe the entry
+        // itself and do not traverse symlinks.
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+        .filter(|entry| {
+            entry
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .is_ok_and(|modified| now.duration_since(modified).is_ok_and(|age| age >= max_age))
+        })
+        .filter(|entry| std::fs::remove_file(entry.path()).is_ok())
+        .count()
+}
+
 /// Why a streamed download produced no staging file.
 #[derive(Debug)]
 pub(super) enum StagedDownload<E> {
@@ -660,6 +705,19 @@ impl Drop for RemoveOnDrop<'_> {
 }
 
 impl Worker {
+    /// Clears staging files left by downloads that a crash or a quit cut
+    /// short, off the async threads.
+    pub(super) fn remove_stale_staging(&self) {
+        let dir = self.dirs.media_cache_dir();
+        tokio::task::spawn_blocking(move || {
+            let removed =
+                remove_stale_staging_files(&dir, STALE_STAGING_AGE, std::time::SystemTime::now());
+            if removed > 0 {
+                log::info!("removed {removed} interrupted download staging files");
+            }
+        });
+    }
+
     pub(super) fn send_files(
         &mut self,
         chat: ChatId,
@@ -1034,5 +1092,126 @@ mod tests {
         rename_if_absent(&staged, &free).unwrap();
         assert_eq!(std::fs::read(&free).unwrap(), b"new");
         assert!(!staged.exists());
+    }
+
+    fn aged(path: &Path, age: Duration) {
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - age)
+            .unwrap();
+    }
+
+    #[test]
+    fn staging_names_match_only_the_generated_pattern() {
+        let dir = Path::new("/cache");
+        for _ in 0..32 {
+            let staged = download_staging_path(dir);
+            assert!(is_staging_name(staged.file_name().unwrap()), "{staged:?}");
+        }
+        let token = "0123456789abcdef0123456789abcdef";
+        for name in [
+            format!("download-{token}.tmp"),
+            format!(".download-{token}.tmp.pdf"),
+            format!(".download-{token}"),
+            format!(".download-{}.tmp", &token[1..]),
+            format!(".download-{token}0.tmp"),
+            format!(".download-{}.tmp", token.to_ascii_uppercase()),
+            ".download-0123456789abcdef0123456789abcdeg.tmp".to_owned(),
+            ".download-.tmp".to_owned(),
+            "ABC-0b617fa3-invoice.pdf".to_owned(),
+        ] {
+            assert!(!is_staging_name(std::ffi::OsStr::new(&name)), "{name}");
+        }
+    }
+
+    #[test]
+    fn stale_staging_files_are_removed_and_everything_else_kept() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("media");
+        std::fs::create_dir(&dir).unwrap();
+        let hour = Duration::from_secs(60 * 60);
+
+        let stale = download_staging_path(&dir);
+        std::fs::write(&stale, b"interrupted").unwrap();
+        aged(&stale, 2 * hour);
+
+        let recent = download_staging_path(&dir);
+        std::fs::write(&recent, b"still streaming").unwrap();
+        aged(&recent, Duration::from_secs(10 * 60));
+
+        let attachment = dir.join("ABC-0b617fa3-invoice.pdf");
+        std::fs::write(&attachment, b"kept").unwrap();
+        aged(&attachment, 48 * hour);
+        let lookalike = dir.join(".download-notatoken.tmp");
+        std::fs::write(&lookalike, b"kept").unwrap();
+        aged(&lookalike, 48 * hour);
+
+        let outside = root.path().join("outside.pdf");
+        std::fs::write(&outside, b"outside").unwrap();
+        aged(&outside, 48 * hour);
+        let link = download_staging_path(&dir);
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        let old = rustix::fs::Timespec {
+            tv_sec: (std::time::SystemTime::now() - 48 * hour)
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64,
+            tv_nsec: 0,
+        };
+        rustix::fs::utimensat(
+            rustix::fs::CWD,
+            &link,
+            &rustix::fs::Timestamps {
+                last_access: old,
+                last_modification: old,
+            },
+            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+        )
+        .unwrap();
+
+        let nested_dir = download_staging_path(&dir);
+        std::fs::create_dir(&nested_dir).unwrap();
+        let nested = download_staging_path(&nested_dir);
+        std::fs::write(&nested, b"nested").unwrap();
+        aged(&nested, 48 * hour);
+        let subdir = dir.join("sub");
+        std::fs::create_dir(&subdir).unwrap();
+        let in_subdir = download_staging_path(&subdir);
+        std::fs::write(&in_subdir, b"nested").unwrap();
+        aged(&in_subdir, 48 * hour);
+
+        let removed = remove_stale_staging_files(&dir, hour, std::time::SystemTime::now());
+
+        assert_eq!(removed, 1);
+        assert!(!stale.exists());
+        for kept in [
+            &recent,
+            &attachment,
+            &lookalike,
+            &outside,
+            &nested,
+            &in_subdir,
+        ] {
+            assert!(kept.exists(), "{kept:?}");
+        }
+        let link_metadata = link.symlink_metadata().unwrap();
+        assert!(link_metadata.file_type().is_symlink());
+        assert!(link_metadata.modified().unwrap() < std::time::SystemTime::now() - hour);
+        assert!(nested_dir.is_dir());
+    }
+
+    #[test]
+    fn a_missing_media_directory_removes_nothing() {
+        let root = tempfile::tempdir().unwrap();
+        assert_eq!(
+            remove_stale_staging_files(
+                &root.path().join("absent"),
+                Duration::from_secs(1),
+                std::time::SystemTime::now()
+            ),
+            0
+        );
     }
 }

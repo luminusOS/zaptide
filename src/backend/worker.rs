@@ -572,6 +572,7 @@ pub async fn run(
     worker.backfill();
     worker.reconcile_confirmed_answers();
     worker.relocate_media();
+    worker.remove_stale_staging();
     worker.start_bot().await;
     let mut tick = tokio::time::interval(Duration::from_secs(5));
     loop {
