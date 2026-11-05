@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use crate::audio;
+use crate::i18n::gettext;
 
 use gst::prelude::*;
 use gstreamer as gst;
@@ -17,6 +18,21 @@ struct NativePlayback {
     ended: bool,
     rate_applied: bool,
     pending_seek: Option<f32>,
+    /// Without `scaletempo` a rate other than 1x would change the pitch, so
+    /// such a pipeline only plays at 1x.
+    scaletempo: bool,
+}
+
+fn missing_scaletempo() -> String {
+    gettext("Playing faster needs the GStreamer scaletempo plugin (gst-plugins-good)")
+}
+
+fn check_rate(scaletempo: bool, speed: f32) -> Result<(), String> {
+    if scaletempo || speed <= audio::SPEEDS[0] {
+        Ok(())
+    } else {
+        Err(missing_scaletempo())
+    }
 }
 
 fn apply_rate(pipeline: &gst::Element, speed: f32) -> bool {
@@ -35,53 +51,42 @@ fn apply_rate(pipeline: &gst::Element, speed: f32) -> bool {
         .is_ok()
 }
 
-#[derive(Default)]
 pub struct MediaService {
-    player: audio::Player,
+    speed: f32,
     native: Option<NativePlayback>,
     recorder: Option<audio::Recorder>,
 }
 
+impl Default for MediaService {
+    fn default() -> Self {
+        Self {
+            speed: audio::SPEEDS[0],
+            native: None,
+            recorder: None,
+        }
+    }
+}
+
 impl MediaService {
+    /// Sets the playback speed for the clip playing now and for later ones.
+    ///
+    /// A clip playing without `scaletempo` keeps its 1x rate; the next
+    /// `poll` stops it and reports the missing plugin.
     pub fn set_speed(&mut self, speed: f32) {
-        let previous = self.player.speed();
-        self.player.set_speed(speed);
-        if self.player.speed() == previous {
+        let speed = audio::playable_speed(speed);
+        if speed == self.speed {
             return;
         }
-        let speed = self.player.speed();
-        if let Some(native) = &mut self.native {
-            let position = native
-                .pipeline
-                .query_position::<gst::ClockTime>()
-                .unwrap_or(gst::ClockTime::ZERO);
-            // Preserve the clip's pitch when speeding up; keep the existing
-            // Rust engine as fallback when the GStreamer plugin is missing.
-            if speed > 1.0 && gst::ElementFactory::make("scaletempo").build().is_err() {
-                let message = native.message.clone();
-                let path = native.path.clone();
-                let duration = native
-                    .pipeline
-                    .query_duration::<gst::ClockTime>()
-                    .unwrap_or(gst::ClockTime::ZERO);
-                let playing = native.state == audio::State::Playing;
-                self.stop_native();
-                if playing {
-                    let fraction = if duration.is_zero() {
-                        0.0
-                    } else {
-                        position.nseconds() as f32 / duration.nseconds() as f32
-                    };
-                    let _ = self.player.seek(&message, &path, fraction);
-                }
-            } else {
-                native.rate_applied = apply_rate(&native.pipeline, speed);
-            }
+        self.speed = speed;
+        if let Some(native) = &mut self.native
+            && native.scaletempo
+        {
+            native.rate_applied = apply_rate(&native.pipeline, speed);
         }
     }
 
     pub fn speed(&self) -> f32 {
-        self.player.speed()
+        self.speed
     }
 
     pub fn cycle_speed(&mut self) -> f32 {
@@ -116,11 +121,7 @@ impl MediaService {
                 total: std::time::Duration::from_nanos(duration.nseconds()),
             };
         }
-        self.player.status(message)
-    }
-
-    pub fn waveform(&self, message: &str) -> Option<&[u8]> {
-        self.player.bars(message)
+        audio::Status::IDLE
     }
 
     pub fn toggle_playback(&mut self, message: &str, path: &Path) -> Result<(), String> {
@@ -130,6 +131,9 @@ impl MediaService {
                 && native.message == message
                 && native.path == path
             {
+                if native.state != audio::State::Playing {
+                    check_rate(native.scaletempo, speed as f32)?;
+                }
                 if native.ended {
                     native
                         .pipeline
@@ -161,7 +165,6 @@ impl MediaService {
                 return Ok(());
             }
             self.stop_native();
-            self.player.stop();
             if !path.is_file() {
                 return Err("Audio file is unavailable".into());
             }
@@ -172,11 +175,14 @@ impl MediaService {
             if let Ok(video_sink) = gst::ElementFactory::make("fakesink").build() {
                 pipeline.set_property("video-sink", video_sink);
             }
-            if let Ok(filter) = gst::ElementFactory::make("scaletempo").build() {
-                pipeline.set_property("audio-filter", filter);
-            } else if self.speed() > 1.0 {
-                return self.player.toggle(message, path);
-            }
+            let scaletempo = match gst::ElementFactory::make("scaletempo").build() {
+                Ok(filter) => {
+                    pipeline.set_property("audio-filter", filter);
+                    true
+                }
+                Err(_) => false,
+            };
+            check_rate(scaletempo, self.speed())?;
             let uri = gtk4::gio::File::for_path(path).uri();
             pipeline.set_property("uri", uri.as_str());
             pipeline
@@ -189,8 +195,9 @@ impl MediaService {
                 _hold: crate::media_retention::hold([path.to_owned()]),
                 state: audio::State::Loading,
                 ended: false,
-                rate_applied: self.speed() <= 1.0,
+                rate_applied: self.speed() <= audio::SPEEDS[0],
                 pending_seek: None,
+                scaletempo,
             });
             Ok(())
         }
@@ -207,6 +214,7 @@ impl MediaService {
                 self.toggle_playback(message, path)?;
             }
             if let Some(native) = &mut self.native {
+                check_rate(native.scaletempo, speed as f32)?;
                 let duration = native
                     .pipeline
                     .query_duration::<gst::ClockTime>()
@@ -241,14 +249,21 @@ impl MediaService {
                 } else {
                     audio::State::Playing
                 };
-                return Ok(());
             }
-            self.player.seek(message, path, fraction)
+            Ok(())
         }
     }
 
     pub fn poll(&mut self) -> Result<(), String> {
         let speed = self.speed();
+        if let Some(native) = &self.native
+            && !native.ended
+            && matches!(native.state, audio::State::Loading | audio::State::Playing)
+            && let Err(error) = check_rate(native.scaletempo, speed)
+        {
+            self.stop_native();
+            return Err(error);
+        }
         if let Some(native) = &mut self.native
             && let Some(bus) = native.pipeline.bus()
         {
@@ -308,7 +323,7 @@ impl MediaService {
                 native.rate_applied = apply_rate(&native.pipeline, speed);
             }
         }
-        self.player.poll()
+        Ok(())
     }
 
     pub fn is_playing(&self) -> bool {
@@ -316,7 +331,7 @@ impl MediaService {
             return !native.ended
                 && matches!(native.state, audio::State::Loading | audio::State::Playing);
         }
-        self.player.is_playing()
+        false
     }
 
     pub fn actually_playing(&self, message: &str) -> bool {
@@ -325,7 +340,6 @@ impl MediaService {
 
     pub fn stop_playback(&mut self) {
         self.stop_native();
-        self.player.stop();
     }
 
     fn stop_native(&mut self) {
@@ -413,6 +427,7 @@ mod tests {
             ended: false,
             rate_applied: true,
             pending_seek: None,
+            scaletempo: false,
         });
         let start = std::time::Instant::now();
         while !media.actually_playing("synthetic-audio") && start.elapsed().as_secs() < 4 {
@@ -439,6 +454,180 @@ mod tests {
         assert_eq!(
             media.playback_status("synthetic-audio").state,
             audio::State::Idle
+        );
+    }
+
+    fn synthetic_clip(seconds: u32) -> tempfile::NamedTempFile {
+        let file = tempfile::NamedTempFile::new().expect("temporary clip");
+        let tone: Vec<f32> = (0..crate::voice::RATE * seconds)
+            .map(|i| {
+                (i as f32 * 330.0 * std::f32::consts::TAU / crate::voice::RATE as f32).sin() * 0.3
+            })
+            .collect();
+        std::fs::write(
+            file.path(),
+            crate::voice::encode(&tone).expect("encode opus"),
+        )
+        .expect("write clip");
+        file
+    }
+
+    fn wait_until_playing(media: &mut MediaService, message: &str) {
+        let start = std::time::Instant::now();
+        while !media.actually_playing(message) && start.elapsed().as_secs() < 4 {
+            media.poll().expect("decode and playback");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(media.actually_playing(message));
+    }
+
+    #[test]
+    fn cycling_wraps_through_every_speed() {
+        let mut media = MediaService::default();
+        assert_eq!(media.speed(), audio::SPEEDS[0]);
+        assert_eq!(media.cycle_speed(), 1.5);
+        assert_eq!(media.cycle_speed(), 2.0);
+        assert_eq!(media.cycle_speed(), 1.0);
+        // A speed set by hand still cycles up to the next known one.
+        media.set_speed(1.75);
+        assert_eq!(media.cycle_speed(), 2.0);
+        media.set_speed(f32::NAN);
+        assert_eq!(media.speed(), 1.0);
+        media.set_speed(50.0);
+        assert_eq!(media.speed(), 2.0);
+    }
+
+    #[test]
+    fn without_scaletempo_only_one_x_plays() {
+        gst::init().expect("GStreamer initialized");
+        let file = synthetic_clip(2);
+        let pipeline = gst::ElementFactory::make("playbin")
+            .build()
+            .expect("playbin plugin");
+        let sink = gst::ElementFactory::make("fakesink")
+            .build()
+            .expect("test audio sink");
+        sink.set_property("sync", true);
+        pipeline.set_property("audio-sink", sink);
+        pipeline.set_property("uri", gtk4::gio::File::for_path(file.path()).uri().as_str());
+        pipeline.set_state(gst::State::Playing).expect("start clip");
+        let mut media = MediaService::default();
+        media.native = Some(NativePlayback {
+            message: "synthetic-audio".into(),
+            path: file.path().to_owned(),
+            pipeline,
+            _hold: crate::media_retention::hold([file.path().to_owned()]),
+            state: audio::State::Loading,
+            ended: false,
+            rate_applied: true,
+            pending_seek: None,
+            scaletempo: false,
+        });
+        wait_until_playing(&mut media, "synthetic-audio");
+
+        media
+            .toggle_playback("synthetic-audio", file.path())
+            .expect("pause at 1x");
+        media.set_speed(2.0);
+        assert_eq!(
+            media.toggle_playback("synthetic-audio", file.path()),
+            Err(missing_scaletempo())
+        );
+        assert_eq!(
+            media.seek("synthetic-audio", file.path(), 0.5),
+            Err(missing_scaletempo())
+        );
+        assert_eq!(
+            media.playback_status("synthetic-audio").state,
+            audio::State::Paused
+        );
+
+        media.set_speed(1.0);
+        media
+            .toggle_playback("synthetic-audio", file.path())
+            .expect("resume at 1x");
+        wait_until_playing(&mut media, "synthetic-audio");
+        media.set_speed(1.5);
+        assert_eq!(media.poll(), Err(missing_scaletempo()));
+        assert!(!media.is_playing());
+        assert_eq!(
+            media.playback_status("synthetic-audio").state,
+            audio::State::Idle
+        );
+    }
+
+    /// Plays a one-second tone on the default output device:
+    /// `cargo test services::media::tests::plays -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "makes a sound on this machine"]
+    fn plays_a_clip_on_this_machine() {
+        let file = synthetic_clip(1);
+        let mut media = MediaService::default();
+        media
+            .toggle_playback("clip", file.path())
+            .expect("starts playing");
+        let started = std::time::Instant::now();
+        let mut seen_playing = false;
+        while started.elapsed() < std::time::Duration::from_secs(3) {
+            media.poll().expect("plays");
+            let status = media.playback_status("clip");
+            if status.state == audio::State::Playing
+                && status.position > std::time::Duration::from_millis(300)
+            {
+                seen_playing = true;
+                eprintln!("playing at {:?} of {:?}", status.position, status.total);
+            }
+            if seen_playing && status.state == audio::State::Idle {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
+        assert!(seen_playing, "never heard it playing");
+        assert_eq!(
+            media.playback_status("clip").state,
+            audio::State::Idle,
+            "ends on its own"
+        );
+    }
+
+    /// Plays a two-second tone at double speed and checks the position
+    /// outruns the clock:
+    /// `cargo test services::media::tests::doubles -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "makes a sound on this machine"]
+    fn doubles_the_position_rate_on_this_machine() {
+        let file = synthetic_clip(2);
+        let mut media = MediaService::default();
+        media.set_speed(2.0);
+        media
+            .toggle_playback("clip", file.path())
+            .expect("starts playing");
+        let started = std::time::Instant::now();
+        let mut seen = Vec::new();
+        while started.elapsed() < std::time::Duration::from_secs(4) {
+            media.poll().expect("plays");
+            let status = media.playback_status("clip");
+            if status.state == audio::State::Playing
+                && status.position > std::time::Duration::from_millis(200)
+            {
+                seen.push((started.elapsed(), status.position));
+            }
+            if status.state == audio::State::Idle && !seen.is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
+        let (first_wall, first_position) = seen.first().expect("played");
+        let (last_wall, last_position) = seen.last().expect("played");
+        let wall = *last_wall - *first_wall;
+        let advanced = *last_position - *first_position;
+        assert!(
+            wall > std::time::Duration::from_millis(200),
+            "played for {wall:?}"
+        );
+        assert!(
+            advanced.as_secs_f32() >= 1.5 * wall.as_secs_f32(),
+            "position advanced {advanced:?} over {wall:?} of wall time"
         );
     }
 }

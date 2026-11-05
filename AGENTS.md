@@ -102,10 +102,11 @@ protocol. These notes are for coding agents and new contributors.
   (the `ogg` crate for the container, `opus` with libopus bundled and
   built by cmake for the codec, so cmake is a build dependency), plus
   the 64-bar waveform WhatsApp draws and a mono/48 kHz resampler.
-  `src/services/media.rs` plays one clip at a time with GStreamer; when the
-  `scaletempo` plugin is unavailable for accelerated playback, `src/audio.rs`
-  uses rodio. Bounded waveform decoding
-  also uses `src/audio.rs` on a worker thread. `Recorder` reads the default
+  `src/services/media.rs` plays one clip at a time with GStreamer's
+  `playbin`; `scaletempo` (gst-plugins-good) keeps the pitch at 1.5x and
+  2x. Without it a clip still plays at 1x, and other speeds show an error
+  in the bubble. Bounded waveform decoding uses `src/audio.rs` on a worker
+  thread. `Recorder` reads the default
   microphone through rodio's `Microphone` on a thread, keeping a loudness per
   50 ms for the live bars. Linux needs ALSA and GStreamer headers to build
   (`alsa-lib` and `gstreamer` on Arch). Audio controls live in each message bubble;

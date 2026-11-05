@@ -273,8 +273,7 @@ impl NativeApplication {
                 .audio
                 .audio_waveforms
                 .get(&(message.chat.clone(), message.id.clone()))
-                .map(Vec::as_slice)
-                .or_else(|| self.audio.media.waveform(&message.id)),
+                .map(Vec::as_slice),
             playback: self.audio.media.playback_status(&message.id),
             speed: if *voice_note {
                 self.audio.media.speed()
@@ -329,8 +328,14 @@ impl NativeApplication {
                 }
             }
             crate::model::Action::PlayVoice { message, path } => {
-                if self.audio.media.toggle_playback(&message, &path).is_err() {
+                let key = (
+                    self.active_chat.clone().unwrap_or_default(),
+                    message.clone(),
+                );
+                self.audio.audio_errors.remove(&key);
+                if let Err(error) = self.audio.media.toggle_playback(&message, &path) {
                     self.status = gettext("Voice playback could not start.");
+                    self.audio.audio_errors.insert(key, error);
                 } else if self.audio.media.is_playing() {
                     self.audio.playing_audio = Some(message.clone());
                 }
@@ -353,8 +358,15 @@ impl NativeApplication {
             fraction,
         } = action
         {
-            if self.audio.media.seek(&message, &path, fraction).is_err() {
+            if let Err(error) = self.audio.media.seek(&message, &path, fraction) {
                 self.status = gettext("Voice playback could not seek");
+                self.audio.audio_errors.insert(
+                    (
+                        self.active_chat.clone().unwrap_or_default(),
+                        message.clone(),
+                    ),
+                    error,
+                );
             } else {
                 self.audio.playing_audio = Some(message.clone());
             }

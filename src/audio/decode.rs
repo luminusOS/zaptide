@@ -44,37 +44,6 @@ impl Drop for DecodePermit {
     }
 }
 
-pub(super) type Decoded =
-    std::sync::Arc<std::sync::Mutex<Option<Result<(Vec<f32>, Vec<u8>), String>>>>;
-
-pub(super) fn publish_decode(
-    slot: &Decoded,
-    cancelled: &AtomicBool,
-    result: Result<(Vec<f32>, Vec<u8>), String>,
-) -> bool {
-    if cancelled.load(Ordering::Relaxed) {
-        return false;
-    }
-    *slot.lock().unwrap_or_else(|p| p.into_inner()) = Some(result);
-    true
-}
-
-pub(super) fn decode_file_with_waveform(
-    path: &std::path::Path,
-    cancelled: &AtomicBool,
-) -> Result<(Vec<f32>, Vec<u8>), String> {
-    let samples = decode_file_with(path, cancelled)?;
-    samples_with_waveform(samples, cancelled)
-}
-
-fn samples_with_waveform(
-    samples: Vec<f32>,
-    cancelled: &AtomicBool,
-) -> Result<(Vec<f32>, Vec<u8>), String> {
-    let bars = super::waveform_cancellable(&samples, cancelled)?;
-    Ok((samples, bars))
-}
-
 /// Decodes a file to mono 48 kHz samples. OGG/Opus uses the voice codec; other
 /// supported formats use rodio.
 #[cfg(test)]
@@ -373,7 +342,6 @@ pub(super) fn collect_samples_with_limits<I: Iterator<Item = f32>>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
 
     static TEST_ACTIVE_DECODE_JOBS: AtomicUsize = AtomicUsize::new(0);
 
@@ -385,24 +353,6 @@ mod tests {
 
         assert_eq!(TEST_ACTIVE_DECODE_JOBS.load(Ordering::Acquire), 1);
         TEST_ACTIVE_DECODE_JOBS.store(0, Ordering::Release);
-    }
-
-    #[test]
-    fn decode_completion_publishes_samples_and_waveform_together() {
-        let slot: Decoded = Arc::new(Mutex::new(None));
-        let cancelled = AtomicBool::new(false);
-        let samples = vec![0.5; voice::BARS];
-        let (projected_samples, bars) = samples_with_waveform(samples.clone(), &cancelled).unwrap();
-
-        assert!(publish_decode(
-            &slot,
-            &cancelled,
-            Ok((projected_samples, bars.clone()))
-        ));
-
-        let (published_samples, published_bars) = slot.lock().unwrap().take().unwrap().unwrap();
-        assert_eq!(published_samples, samples);
-        assert_eq!(published_bars, bars);
     }
 
     #[test]

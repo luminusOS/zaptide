@@ -14,7 +14,7 @@
 //! | `recorder_handles_permission_denied`           | No            | No (tests denial) | No |
 //! | `player_respects_seek_within_bounds`           | Optional      | No         | No      |
 //! | `recorder_level_metering_produces_50ms_windows`| No            | Optional   | No      |
-//! | `alsa_playback_reaches_completion_within_budget`| ALSA         | No         | No      |
+//! | `playback_reaches_completion_within_budget`    | Yes           | No         | No      |
 //! | `alsa_capture_produces_at_least_one_second_of_audio` | ALSA  | ALSA       | No      |
 //! | `player_handles_device_unplug_during_playback` | Deferred      | No         | No      |
 //! | `recorder_handles_device_unplug_during_capture`| No            | Deferred   | No      |
@@ -26,7 +26,8 @@ use std::time::{Duration, Instant};
 
 use tempfile::NamedTempFile;
 
-use zaptide::audio::{Player, Recorder, State};
+use zaptide::audio::{Recorder, State};
+use zaptide::services::media::MediaService;
 use zaptide::voice;
 
 static AUDIO_DECODE_TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -94,12 +95,16 @@ fn ordinary_wav_attachment_generates_a_waveform() {
     assert!(bars.iter().any(|bar| *bar > 0));
 }
 
-fn poll_until_loaded(player: &mut Player, message: &str, timeout: Duration) -> Result<(), String> {
+fn poll_until_loaded(
+    player: &mut MediaService,
+    message: &str,
+    timeout: Duration,
+) -> Result<(), String> {
     let started = Instant::now();
     while started.elapsed() < timeout {
         match player.poll() {
             Ok(()) => {
-                if player.status(message).state != State::Loading {
+                if player.playback_status(message).state != State::Loading {
                     return Ok(());
                 }
             }
@@ -116,28 +121,17 @@ fn poll_until_loaded(player: &mut Player, message: &str, timeout: Duration) -> R
 fn player_handles_missing_device_gracefully() {
     let _guard = decode_test_guard();
     let file = write_ogg_temp(&synthetic_tone(0.5, 440.0, 0.3));
-    let mut player = Player::default();
+    let mut player = MediaService::default();
 
-    player
-        .toggle("missing-device", file.path())
-        .expect("toggle spawns decode thread");
-
-    // Poll picks up the decoded clip and attempts to open the output device.
-    // Without a device, restart() returns a recoverable error; with one,
-    // playback begins. Neither path panics.
-    match poll_until_loaded(&mut player, "missing-device", Duration::from_secs(3)) {
-        Ok(()) => {
-            player.stop();
-        }
-        Err(error) => {
-            // Device was missing or denied; verify the error is a clean string.
-            assert!(
-                error.contains("No sound output") || error.contains("device"),
-                "unexpected error: {error}"
-            );
-            player.stop();
-        }
+    // Without a device the pipeline reports a recoverable error, either when
+    // it starts or on the bus; with one, playback begins. Neither path panics.
+    let started = player
+        .toggle_playback("missing-device", file.path())
+        .and_then(|()| poll_until_loaded(&mut player, "missing-device", Duration::from_secs(3)));
+    if let Err(error) = started {
+        assert!(!error.is_empty(), "error message must be non-empty");
     }
+    player.stop_playback();
 }
 
 #[test]
@@ -207,14 +201,10 @@ fn waveform_generation_is_64_bars() {
 fn player_respects_seek_within_bounds() {
     let _guard = decode_test_guard();
     let file = write_ogg_temp(&synthetic_tone(2.0, 440.0, 0.3));
-    let mut player = Player::default();
+    let mut player = MediaService::default();
 
-    player
-        .seek("seek-msg", file.path(), 0.0)
-        .expect("seek spawns decode thread");
-
-    let device_available =
-        poll_until_loaded(&mut player, "seek-msg", Duration::from_secs(3)).is_ok();
+    let device_available = player.seek("seek-msg", file.path(), 0.0).is_ok()
+        && poll_until_loaded(&mut player, "seek-msg", Duration::from_secs(3)).is_ok();
 
     if !device_available {
         // No output device: subsequent seeks still return cleanly, no panic.
@@ -222,7 +212,7 @@ fn player_respects_seek_within_bounds() {
         let _ = player.poll();
         let _ = player.seek("seek-msg", file.path(), 1.0);
         let _ = player.poll();
-        player.stop();
+        player.stop_playback();
         return;
     }
 
@@ -232,7 +222,7 @@ fn player_respects_seek_within_bounds() {
         .expect("seek to 0.5");
     std::thread::sleep(Duration::from_millis(100));
     let _ = player.poll();
-    let status = player.status("seek-msg");
+    let status = player.playback_status("seek-msg");
     let total = status.total.as_secs_f32();
     if total > 0.0 {
         let fraction = status.position.as_secs_f32() / total;
@@ -247,7 +237,7 @@ fn player_respects_seek_within_bounds() {
     std::thread::sleep(Duration::from_millis(100));
     let _ = player.poll();
 
-    player.stop();
+    player.stop_playback();
 }
 
 #[test]
@@ -296,18 +286,18 @@ fn narrowest_audio_permissions_documented() {
     }
 }
 
-// ─── ALSA-specific tests (ignored: require live audio devices) ─────────────────
+// ─── Device tests (ignored: require live audio devices) ───────────────────────
 
 #[test]
-#[ignore = "requires ALSA output device; run with: cargo test --test audio_validation -- --ignored"]
-fn alsa_playback_reaches_completion_within_budget() {
+#[ignore = "requires an audio output device; run with: cargo test --test audio_validation -- --ignored"]
+fn playback_reaches_completion_within_budget() {
     let _guard = decode_test_guard();
     let file = write_ogg_temp(&synthetic_tone(1.0, 330.0, 0.3));
-    let mut player = Player::default();
+    let mut player = MediaService::default();
 
     player
-        .toggle("alsa-playback", file.path())
-        .expect("starts decoding");
+        .toggle_playback("alsa-playback", file.path())
+        .expect("starts playing");
 
     let budget = Duration::from_millis(1_500);
     let deadline = Duration::from_secs(3);
@@ -316,7 +306,7 @@ fn alsa_playback_reaches_completion_within_budget() {
 
     while started.elapsed() < deadline {
         player.poll().expect("poll does not error during playback");
-        let status = player.status("alsa-playback");
+        let status = player.playback_status("alsa-playback");
         if status.state == State::Playing {
             seen_playing = true;
         }
@@ -334,7 +324,7 @@ fn alsa_playback_reaches_completion_within_budget() {
         budget
     );
     assert_eq!(
-        player.status("alsa-playback").state,
+        player.playback_status("alsa-playback").state,
         State::Idle,
         "playback should reach completion"
     );
