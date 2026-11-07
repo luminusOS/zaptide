@@ -85,10 +85,11 @@ impl Worker {
                         match client.fetch_privacy_settings().await {
                             Ok(settings) => {
                                 let disabled = !account_allows_receipts(&settings);
-                                let _ = commands.send(Command::ReceiptsPrivacy {
-                                    session_generation,
-                                    disabled,
-                                });
+                                let _ = Completion {
+                                    generation: session_generation,
+                                    done: Done::ReceiptsPrivacy { disabled },
+                                }
+                                .send(&commands);
                             }
                             Err(error) => log::debug!("privacy settings not fetched: {error}"),
                         }
@@ -103,10 +104,11 @@ impl Worker {
                                         .get(&me)
                                         .and_then(|info| info.status.clone())
                                         .filter(|about| !about.is_empty());
-                                    let _ = commands.send(Command::MeInfo {
-                                        session_generation,
-                                        about,
-                                    });
+                                    let _ = Completion {
+                                        generation: session_generation,
+                                        done: Done::MeInfo { about },
+                                    }
+                                    .send(&commands);
                                 }
                                 Err(error) => log::debug!("own info not fetched: {error}"),
                             }

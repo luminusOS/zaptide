@@ -4,7 +4,30 @@ use super::*;
 
 impl Worker {
     pub(super) async fn handle_command(&mut self, command: Command) {
-        let contact_completion = matches!(&command, Command::ContactSent { .. });
+        if matches!(
+            &command,
+            Command::Completed(Completion {
+                done: Done::MediaSwept(_),
+                ..
+            })
+        ) {
+            // A finished sweep releases the running slot even after an account change.
+            self.retention.running = false;
+        }
+        let command = match command {
+            Command::Completed(completion) if completion.generation != self.session_generation => {
+                completion.done.discard();
+                return;
+            }
+            command => command,
+        };
+        let contact_completion = matches!(
+            &command,
+            Command::Completed(Completion {
+                generation: _,
+                done: Done::ContactSent { .. }
+            })
+        );
         let destination = match &command {
             Command::SendText { chat, .. }
             | Command::SendContact { chat, .. }
@@ -45,60 +68,50 @@ impl Worker {
             }
         }
         match command {
-            Command::PollHistoryFailed {
-                session_generation,
-                chat,
-                message,
-                requested,
-            } => {
-                if session_generation != self.session_generation {
-                    return;
-                }
+            Command::Completed(Completion {
+                generation: _,
+                done:
+                    Done::PollHistoryFailed {
+                        chat,
+                        message,
+                        requested,
+                    },
+            }) => {
                 self.poll_history
                     .fail(&chat, &message, requested, Instant::now());
                 self.emit_message(&chat, &message);
                 self.pump_poll_history();
             }
             Command::CreatePoll { chat, draft } => self.create_poll(chat, draft),
-            Command::PollCreated {
-                session_generation,
-                chat,
-                draft,
-                result,
-            } => {
-                if session_generation != self.session_generation {
-                    return;
-                }
-                self.poll_created(chat, draft, result)
-            }
+            Command::Completed(Completion {
+                generation: _,
+                done:
+                    Done::PollCreated {
+                        chat,
+                        draft,
+                        result,
+                    },
+            }) => self.poll_created(chat, draft, result),
             Command::VotePoll {
                 chat,
                 message,
                 choices,
             } => self.vote_poll(chat, message, choices),
-            Command::PollVoted {
-                session_generation,
-                chat,
-                message,
-                choices,
-                at,
-                result,
-            } => {
-                if session_generation != self.session_generation {
-                    return;
-                }
-                self.poll_voted(chat, message, choices, at, result)
-            }
-            Command::PollDecoded {
-                session_generation,
-                vote,
-                choices,
-            } => {
-                if session_generation != self.session_generation {
-                    return;
-                }
-                self.poll_decoded(vote, choices)
-            }
+            Command::Completed(Completion {
+                generation: _,
+                done:
+                    Done::PollVoted {
+                        chat,
+                        message,
+                        choices,
+                        at,
+                        result,
+                    },
+            }) => self.poll_voted(chat, message, choices, at, result),
+            Command::Completed(Completion {
+                generation: _,
+                done: Done::PollDecoded { vote, choices },
+            }) => self.poll_decoded(vote, choices),
             Command::SendText {
                 chat,
                 text,
@@ -109,7 +122,10 @@ impl Worker {
             Command::SetLinkPreviews(enabled) => self.set_link_previews(enabled),
             Command::SetOnline(online) => self.set_online(online),
             Command::SetMediaRetention(days) => self.set_media_retention(days),
-            Command::MediaSwept(swept) => self.media_swept(swept),
+            Command::Completed(Completion {
+                done: Done::MediaSwept(swept),
+                ..
+            }) => self.media_swept(swept),
             Command::SendContact {
                 chat,
                 contact,
@@ -142,16 +158,16 @@ impl Worker {
                 });
             }
             Command::MarkRead { chat, receipts } => self.mark_read(chat, receipts),
-            Command::ReadSyncFinished {
-                session_generation,
-                attempt_id,
-                chat,
-                through,
-                success,
-            } => {
-                if session_generation != self.session_generation {
-                    return;
-                }
+            Command::Completed(Completion {
+                generation: _,
+                done:
+                    Done::ReadSyncFinished {
+                        attempt_id,
+                        chat,
+                        through,
+                        success,
+                    },
+            }) => {
                 if !self
                     .read_sync
                     .finish(attempt_id, &chat, through, success, Instant::now())
@@ -198,25 +214,27 @@ impl Worker {
                     self.emit_chat(&chat);
                 }
             }
-            Command::AttachmentCompleted {
-                chat,
-                session_generation,
-                batch,
-                index,
-                total,
-                path,
-                success,
-            } => {
-                if session_generation == self.session_generation {
-                    self.emit(Event::AttachmentCompleted {
+            Command::Completed(Completion {
+                generation: _,
+                done:
+                    Done::AttachmentCompleted {
                         chat,
+
                         batch,
                         index,
                         total,
                         path,
                         success,
-                    });
-                }
+                    },
+            }) => {
+                self.emit(Event::AttachmentCompleted {
+                    chat,
+                    batch,
+                    index,
+                    total,
+                    path,
+                    success,
+                });
             }
             Command::SendFiles {
                 chat,
@@ -247,19 +265,21 @@ impl Worker {
                     mentions,
                 },
             ),
-            Command::Outbound {
-                chat,
-                session_generation,
-                row,
-                raw,
-            } => self.outbound(chat, session_generation, *row, raw),
-            Command::OutboundBatch {
-                chat,
-                session_generation,
-                row,
-                raw,
-                sent,
-            } => self.outbound_batch(chat, session_generation, *row, raw, sent),
+            Command::Completed(Completion {
+                generation: session_generation,
+                done: Done::Outbound { chat, row, raw },
+            }) => self.outbound(chat, session_generation, *row, raw),
+            Command::Completed(Completion {
+                generation: session_generation,
+                done:
+                    Done::OutboundBatch {
+                        chat,
+
+                        row,
+                        raw,
+                        sent,
+                    },
+            }) => self.outbound_batch(chat, session_generation, *row, raw, sent),
             Command::SendSticker { chat, path } => self.send_sticker(chat, path),
             Command::SaveContact {
                 session_generation,
@@ -291,23 +311,21 @@ impl Worker {
                         .await
                         .err()
                         .map(|error| error.to_string());
-                    let _ = commands.send(Command::ContactSaved {
-                        session_generation,
-                        id,
-                        name: full_name,
-                        error,
-                    });
+                    let _ = Completion {
+                        generation: session_generation,
+                        done: Done::ContactSaved {
+                            id,
+                            name: full_name,
+                            error,
+                        },
+                    }
+                    .send(&commands);
                 });
             }
-            Command::ContactSaved {
-                session_generation,
-                id,
-                name,
-                error,
-            } => {
-                if session_generation != self.session_generation {
-                    return;
-                }
+            Command::Completed(Completion {
+                generation: _,
+                done: Done::ContactSaved { id, name, error },
+            }) => {
                 if let Some(error) = error {
                     self.emit(Event::Error(format!("Could not save contact: {error}")));
                     return;
@@ -350,42 +368,49 @@ impl Worker {
                     match client.contacts().is_on_whatsapp(&[jid]).await {
                         Ok(results) => {
                             let registered = results.iter().any(|result| result.is_registered);
-                            let _ = commands.send(Command::ContactChecked {
-                                session_generation,
-                                phone,
-                                full_name,
-                                first_name,
-                                to_phone,
-                                registered,
-                            });
+                            let _ = Completion {
+                                generation: session_generation,
+                                done: Done::ContactChecked {
+                                    phone,
+                                    full_name,
+                                    first_name,
+                                    to_phone,
+                                    registered,
+                                },
+                            }
+                            .send(&commands);
                         }
                         Err(_) => {
                             log::debug!("number registration check failed");
-                            let _ =
-                                commands.send(Command::ContactCheckFailed { session_generation });
+                            let _ = Completion {
+                                generation: session_generation,
+                                done: Done::ContactCheckFailed {},
+                            }
+                            .send(&commands);
                         }
                     }
                 });
             }
-            Command::ContactCheckFailed { session_generation } => {
-                if session_generation == self.session_generation {
-                    self.emit(Event::Error(
-                        "Could not verify this phone number. Try again later.".to_owned(),
-                    ));
-                }
+            Command::Completed(Completion {
+                generation: _,
+                done: Done::ContactCheckFailed {},
+            }) => {
+                self.emit(Event::Error(
+                    "Could not verify this phone number. Try again later.".to_owned(),
+                ));
             }
-            Command::ContactChecked {
-                session_generation,
-                phone,
-                full_name,
-                first_name,
-                to_phone,
-                registered,
-            } => {
-                if session_generation != self.session_generation
-                    || !self.privacy.privacy_ready
-                    || self.archive_cleanup_failed
-                {
+            Command::Completed(Completion {
+                generation: session_generation,
+                done:
+                    Done::ContactChecked {
+                        phone,
+                        full_name,
+                        first_name,
+                        to_phone,
+                        registered,
+                    },
+            }) => {
+                if !self.privacy.privacy_ready || self.archive_cleanup_failed {
                     return;
                 }
                 if !registered {
@@ -425,26 +450,18 @@ impl Worker {
                     self.mark_played(chat, message, sender);
                 }
             }
-            Command::ReceiptsPrivacy {
-                session_generation,
-                disabled,
-            } => {
-                if session_generation == self.session_generation {
-                    self.emit(Event::ReceiptsPrivacy { disabled });
-                }
-            }
+            Command::Completed(Completion {
+                done: Done::ReceiptsPrivacy { disabled },
+                ..
+            }) => self.emit(Event::ReceiptsPrivacy { disabled }),
             Command::RecentStickers => {
                 self.fetch_missing_stickers();
                 self.emit_stickers();
             }
-            Command::StickerFetched {
-                hash,
-                session_generation,
-                result,
-            } => {
-                if session_generation != self.session_generation {
-                    return;
-                }
+            Command::Completed(Completion {
+                generation: _,
+                done: Done::StickerFetched { hash, result },
+            }) => {
                 match result {
                     Ok(path) => {
                         self.sticker_fetches.remove(&hash);
@@ -459,11 +476,10 @@ impl Worker {
                 self.stickers_dirty = true;
             }
             Command::EditProfile(edit) => self.edit_profile(edit),
-            Command::ProfileSaved {
-                session_generation,
-                edit,
-                result,
-            } => self.profile_saved(session_generation, edit, result).await,
+            Command::Completed(Completion {
+                generation: _,
+                done: Done::ProfileSaved { edit, result },
+            }) => self.profile_saved(edit, result).await,
             Command::ContactAbout { id } => {
                 let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&id)) else {
                     return;
@@ -485,29 +501,23 @@ impl Worker {
                             None
                         }
                     };
-                    let _ = commands.send(Command::ContactAboutFetched {
-                        session_generation,
-                        id,
-                        about,
-                    });
+                    let _ = Completion {
+                        generation: session_generation,
+                        done: Done::ContactAboutFetched { id, about },
+                    }
+                    .send(&commands);
                 });
             }
-            Command::ContactAboutFetched {
-                session_generation,
-                id,
-                about,
-            } => {
-                if session_generation == self.session_generation {
-                    self.emit(Event::ContactAbout { id, about });
-                }
+            Command::Completed(Completion {
+                generation: _,
+                done: Done::ContactAboutFetched { id, about },
+            }) => {
+                self.emit(Event::ContactAbout { id, about });
             }
-            Command::MeInfo {
-                session_generation,
-                about,
-            } => {
-                if session_generation != self.session_generation {
-                    return;
-                }
+            Command::Completed(Completion {
+                generation: _,
+                done: Done::MeInfo { about },
+            }) => {
                 self.identity.me_about = about;
                 match &self.identity.me_about {
                     Some(about) => {
@@ -645,25 +655,26 @@ impl Worker {
                 }
             }
             Command::Shutdown => {}
-            Command::OlderStarted {
-                session_generation,
-                request_id,
-                chat,
-                protocol_id,
-            } => {
-                if session_generation == self.session_generation {
-                    self.older_request_started(chat, request_id, protocol_id);
-                }
+            Command::Completed(Completion {
+                generation: _,
+                done:
+                    Done::OlderStarted {
+                        request_id,
+                        chat,
+                        protocol_id,
+                    },
+            }) => {
+                self.older_request_started(chat, request_id, protocol_id);
             }
-            Command::OlderFailed {
-                session_generation,
-                request_id,
-                chat,
-                error,
-            } => {
-                if session_generation != self.session_generation {
-                    return;
-                }
+            Command::Completed(Completion {
+                generation: _,
+                done:
+                    Done::OlderFailed {
+                        request_id,
+                        chat,
+                        error,
+                    },
+            }) => {
                 if !self
                     .older
                     .pending_older
@@ -689,16 +700,16 @@ impl Worker {
 
                 self.emit(Event::Error(error));
             }
-            Command::RevokeFinished {
-                session_generation,
-                attempt_id,
-                chat,
-                message,
-                success,
-            } => {
-                if session_generation != self.session_generation {
-                    return;
-                }
+            Command::Completed(Completion {
+                generation: _,
+                done:
+                    Done::RevokeFinished {
+                        attempt_id,
+                        chat,
+                        message,
+                        success,
+                    },
+            }) => {
                 let key = (chat.clone(), message.clone());
                 if !self
                     .pending_revokes
@@ -733,27 +744,24 @@ impl Worker {
                     "Could not delete the message for everyone".to_owned(),
                 ));
             }
-            Command::GroupInfoFailed {
-                session_generation,
-                chat,
-                permanent,
-            } => {
-                if session_generation != self.session_generation {
-                    return;
-                }
+            Command::Completed(Completion {
+                generation: _,
+                done: Done::GroupInfoFailed { chat, permanent },
+            }) => {
                 self.handle_failed_group(chat, permanent);
             }
-            Command::Edited {
-                chat,
-                id,
-                session_generation,
-                success,
-                content,
-                mentions,
-            } => {
-                if session_generation != self.session_generation {
-                    return;
-                }
+            Command::Completed(Completion {
+                generation: _,
+                done:
+                    Done::Edited {
+                        chat,
+                        id,
+
+                        success,
+                        content,
+                        mentions,
+                    },
+            }) => {
                 if success
                     && let Ok(true) = self
                         .archive
@@ -764,21 +772,14 @@ impl Worker {
                 }
                 self.emit(Event::Edited { chat, id, success });
             }
-            Command::Sent {
-                chat,
-                id,
-                session_generation,
-                error,
-            }
-            | Command::ContactSent {
-                chat,
-                id,
-                session_generation,
-                error,
-            } => {
-                if session_generation != self.session_generation {
-                    return;
-                }
+            Command::Completed(Completion {
+                generation: _,
+                done: Done::Sent { chat, id, error },
+            })
+            | Command::Completed(Completion {
+                generation: _,
+                done: Done::ContactSent { chat, id, error },
+            }) => {
                 if id.is_empty() {
                     // No message row can be updated, but native pending sends
                     // still need one sanitized terminal result.
@@ -865,20 +866,17 @@ impl Worker {
                     self.emit(Event::Error(format!("Message not sent: {error}")));
                 }
             }
-            Command::Downloaded {
-                chat,
-                id,
-                session_generation,
-                raw_fingerprint,
-                destination,
-                mut result,
-            } => {
-                if session_generation != self.session_generation {
-                    if let Ok(path) = &result {
-                        let _ = std::fs::remove_file(path);
-                    }
-                    return;
-                }
+            Command::Completed(Completion {
+                generation: session_generation,
+                done:
+                    Done::Downloaded {
+                        chat,
+                        id,
+                        raw_fingerprint,
+                        destination,
+                        mut result,
+                    },
+            }) => {
                 let current_raw = match self.archive.raw(&chat, &id) {
                     Ok(raw) => raw,
                     Err(_) => {
@@ -887,14 +885,16 @@ impl Worker {
                         );
                         self.deferred_downloads.push(DeferredDownload {
                             retry_at: Instant::now() + DOWNLOAD_VALIDATION_RETRY,
-                            completion: Some(Command::Downloaded {
-                                chat,
-                                id,
-                                session_generation,
-                                raw_fingerprint,
-                                destination,
-                                result,
-                            }),
+                            completion: Some(Command::Completed(Completion {
+                                generation: session_generation,
+                                done: Done::Downloaded {
+                                    chat,
+                                    id,
+                                    raw_fingerprint,
+                                    destination,
+                                    result,
+                                },
+                            })),
                         });
                         return;
                     }
@@ -946,71 +946,76 @@ impl Worker {
                     self.stickers_dirty = true;
                 }
             }
-            Command::AvatarFetched {
-                id,
-                full,
-                session_generation,
-                avatar_generation,
-                path,
-            } => {
-                if session_generation == self.session_generation
-                    && self
-                        .avatar_generations
-                        .get(&(id.clone(), full))
-                        .is_some_and(|generation| {
-                            avatar_generation == generation.load(Ordering::Acquire)
-                        })
+            Command::Completed(Completion {
+                generation: _,
+                done:
+                    Done::AvatarFetched {
+                        id,
+                        full,
+
+                        avatar_generation,
+                        path,
+                    },
+            }) => {
+                if self
+                    .avatar_generations
+                    .get(&(id.clone(), full))
+                    .is_some_and(|generation| {
+                        avatar_generation == generation.load(Ordering::Acquire)
+                    })
                 {
                     self.emit(Event::Avatar { id, full, path });
                 }
             }
-            Command::AvatarFailed {
-                id,
-                full,
-                session_generation,
-                avatar_generation,
-            } => {
-                if session_generation == self.session_generation
-                    && self
-                        .avatar_generations
-                        .get(&(id.clone(), full))
-                        .is_some_and(|generation| {
-                            avatar_generation == generation.load(Ordering::Acquire)
-                        })
+            Command::Completed(Completion {
+                generation: _,
+                done:
+                    Done::AvatarFailed {
+                        id,
+                        full,
+
+                        avatar_generation,
+                    },
+            }) => {
+                if self
+                    .avatar_generations
+                    .get(&(id.clone(), full))
+                    .is_some_and(|generation| {
+                        avatar_generation == generation.load(Ordering::Acquire)
+                    })
                 {
                     *self.pending_avatars.entry((id, full)).or_insert(0) += 1;
                 }
             }
-            Command::GroupRecipients {
-                session_generation,
-                chat,
-                id,
-                recipients,
-                lids,
-                stored,
-            } => {
-                if session_generation != self.session_generation {
-                    let _ = stored.send(false);
-                } else {
-                    for (lid, pn) in lids {
-                        self.learn_lid(&lid, &pn);
-                    }
-                    let saved = self.save_group_recipients(&chat, &id, &recipients);
-                    let _ = stored.send(saved);
+            Command::Completed(Completion {
+                generation: _,
+                done:
+                    Done::GroupRecipients {
+                        chat,
+                        id,
+                        recipients,
+                        lids,
+                        stored,
+                    },
+            }) => {
+                for (lid, pn) in lids {
+                    self.learn_lid(&lid, &pn);
                 }
+                let saved = self.save_group_recipients(&chat, &id, &recipients);
+                let _ = stored.send(saved);
             }
-            Command::GroupInfo {
-                session_generation,
-                chat,
-                name,
-                participants,
-                read_only,
-                ephemeral_expiration,
-                ephemeral_setting_timestamp,
-            } => {
-                if session_generation != self.session_generation {
-                    return;
-                }
+            Command::Completed(Completion {
+                generation: _,
+                done:
+                    Done::GroupInfo {
+                        chat,
+                        name,
+                        participants,
+                        read_only,
+                        ephemeral_expiration,
+                        ephemeral_setting_timestamp,
+                    },
+            }) => {
                 self.group_info.group_info_tries.remove(&chat);
                 let _ =
                     self.archive

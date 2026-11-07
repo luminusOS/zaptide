@@ -80,7 +80,10 @@ use outbound::{
 use outbound::{THUMBNAIL_SIDE, consume_attachment_reply, encode_jpeg, thumbnail_jpeg};
 use protocol::{base_message, classify};
 
-use super::{Command, DownloadFailure, Event, LinkStatus, PageKey, Wake, read_sync::ReadSync};
+use super::{
+    Command, Completion, Done, DownloadFailure, Event, LinkStatus, PageKey, Wake,
+    read_sync::ReadSync,
+};
 use crate::archive::Archive;
 use crate::link_preview;
 
@@ -229,10 +232,11 @@ async fn receipts_allowed(
     match client.fetch_privacy_settings().await {
         Ok(settings) => {
             let allowed = account_allows_receipts(&settings);
-            let _ = commands.send(Command::ReceiptsPrivacy {
-                session_generation,
-                disabled: !allowed,
-            });
+            let _ = Completion {
+                generation: session_generation,
+                done: Done::ReceiptsPrivacy { disabled: !allowed },
+            }
+            .send(commands);
             allowed
         }
         Err(error) => {
@@ -859,11 +863,8 @@ struct DeferredDownload {
 
 impl Drop for DeferredDownload {
     fn drop(&mut self) {
-        if let Some(Command::Downloaded {
-            result: Ok(path), ..
-        }) = &self.completion
-        {
-            let _ = std::fs::remove_file(path);
+        if let Some(Command::Completed(completion)) = self.completion.take() {
+            completion.done.discard();
         }
     }
 }
@@ -1667,15 +1668,13 @@ async fn send_outgoing_with_kind(
                 .map(Jid::to_non_ad_string)
                 .collect();
             let (stored, mut saved) = mpsc::unbounded_channel();
-            commands
-                .send(Command::GroupRecipients {
-                    session_generation,
+            Completion { generation: session_generation, done: Done::GroupRecipients {
                     chat: chat.clone(),
                     id: id.clone(),
                     recipients,
                     lids,
                     stored,
-                })
+                } }.send(&commands)
                 .map_err(|_| "The application is shutting down".to_owned())?;
             if saved.recv().await != Some(true) {
                 return Err("Could not save the group message recipients".to_owned());
@@ -1712,21 +1711,17 @@ async fn send_outgoing_with_kind(
     let success = result.is_ok();
     let error = result.err().map(|_| sanitized_send_error().to_owned());
     let completion = if contact {
-        Command::ContactSent {
-            chat,
-            id,
-            session_generation,
-            error,
+        Completion {
+            generation: session_generation,
+            done: Done::ContactSent { chat, id, error },
         }
     } else {
-        Command::Sent {
-            chat,
-            id,
-            session_generation,
-            error,
+        Completion {
+            generation: session_generation,
+            done: Done::Sent { chat, id, error },
         }
     };
-    let _ = commands.send(completion);
+    let _ = completion.send(&commands);
     success
 }
 

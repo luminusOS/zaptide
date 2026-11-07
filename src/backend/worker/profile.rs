@@ -18,23 +18,15 @@ impl Worker {
         let session_generation = self.session_generation;
         tokio::spawn(async move {
             let result = apply(&client, &edit).await;
-            let _ = commands.send(Command::ProfileSaved {
-                session_generation,
-                edit,
-                result,
-            });
+            let _ = Completion {
+                generation: session_generation,
+                done: Done::ProfileSaved { edit, result },
+            }
+            .send(&commands);
         });
     }
 
-    pub(super) async fn profile_saved(
-        &mut self,
-        session_generation: u64,
-        edit: ProfileEdit,
-        result: Result<(), String>,
-    ) {
-        if session_generation != self.session_generation {
-            return;
-        }
+    pub(super) async fn profile_saved(&mut self, edit: ProfileEdit, result: Result<(), String>) {
         if result.is_ok() {
             if let Some(name) = edit.name {
                 let _ = self.archive.set_meta("me_name", &name);

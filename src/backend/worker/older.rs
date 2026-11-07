@@ -244,21 +244,29 @@ impl Worker {
                 .await
             {
                 Ok(protocol_id) => {
-                    let _ = commands.send(Command::OlderStarted {
-                        session_generation,
-                        request_id,
-                        chat,
-                        protocol_id,
-                    });
+                    let _ = Completion {
+                        generation: session_generation,
+                        done: Done::OlderStarted {
+                            request_id,
+                            chat,
+                            protocol_id,
+                        },
+                    }
+                    .send(&commands);
                 }
                 Err(error) => {
                     log::warn!("could not request older messages");
-                    let _ = commands.send(Command::OlderFailed {
-                        session_generation,
-                        request_id,
-                        chat: chat.clone(),
-                        error: format!("Could not request older messages from your phone: {error}"),
-                    });
+                    let _ = Completion {
+                        generation: session_generation,
+                        done: Done::OlderFailed {
+                            request_id,
+                            chat: chat.clone(),
+                            error: format!(
+                                "Could not request older messages from your phone: {error}"
+                            ),
+                        },
+                    }
+                    .send(&commands);
                 }
             }
         });

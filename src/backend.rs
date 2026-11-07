@@ -178,7 +178,6 @@ pub struct ProfileEdit {
 /// What a cleanup run removed. The archive forgets those files afterwards.
 #[derive(Clone, Debug)]
 pub struct MediaSwept {
-    pub session_generation: u64,
     pub cleared: Vec<(ChatId, String, PathBuf)>,
     pub bytes: u64,
     pub failed: usize,
@@ -187,40 +186,70 @@ pub struct MediaSwept {
 }
 
 #[derive(Clone, Debug)]
-pub enum Command {
-    /// Deletes downloaded attachments older than this many days; `None`
-    /// keeps them.
-    SetMediaRetention(Option<u32>),
-    /// Internal result of a cleanup run.
+pub struct Completion {
+    pub generation: u64,
+    pub done: Done,
+}
+
+impl Completion {
+    fn send(self, sender: &mpsc::UnboundedSender<Command>) -> Result<(), ()> {
+        match sender.send(Command::Completed(self)) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                if let Command::Completed(completion) = error.0 {
+                    completion.done.discard();
+                }
+                Err(())
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum Done {
+    /// Internal uploaded attachment ready for archiving and sending.
+    Outbound {
+        chat: ChatId,
+        row: Box<Message>,
+        raw: Vec<u8>,
+    },
+    /// Internal ordered attachment send; completion arrives after WhatsApp accepts it.
+    OutboundBatch {
+        chat: ChatId,
+        row: Box<Message>,
+        raw: Vec<u8>,
+        sent: tokio::sync::mpsc::UnboundedSender<bool>,
+    },
+    /// Internal send audience. The sender waits for it to be archived.
+    GroupRecipients {
+        chat: ChatId,
+        id: String,
+        recipients: Vec<String>,
+        lids: Vec<(String, String)>,
+        stored: tokio::sync::mpsc::UnboundedSender<bool>,
+    },
     MediaSwept(MediaSwept),
-    /// Turns link previews on or off for this account, synced with the phone.
-    SetLinkPreviews(bool),
-    /// Shows this account as online or offline. WhatsApp holds the phone's
-    /// notifications while ZapTide is online.
-    SetOnline(bool),
+    Downloaded {
+        chat: ChatId,
+        id: String,
+        raw_fingerprint: [u8; 32],
+        destination: PathBuf,
+        result: Result<PathBuf, DownloadFailure>,
+    },
+    ReceiptsPrivacy {
+        disabled: bool,
+    },
     PollHistoryFailed {
-        session_generation: u64,
         chat: ChatId,
         message: String,
         requested: std::time::Instant,
     },
-    CreatePoll {
-        chat: ChatId,
-        draft: PollDraft,
-    },
     PollCreated {
-        session_generation: u64,
         chat: ChatId,
         draft: PollDraft,
         result: Result<CreatedPoll, String>,
     },
-    VotePoll {
-        chat: ChatId,
-        message: String,
-        choices: Vec<usize>,
-    },
     PollVoted {
-        session_generation: u64,
         chat: ChatId,
         message: String,
         choices: Vec<usize>,
@@ -228,10 +257,171 @@ pub enum Command {
         result: Result<String, String>,
     },
     PollDecoded {
-        session_generation: u64,
         vote: crate::archive::PollVote,
         choices: Option<Vec<usize>>,
     },
+    /// Contact sharing completes independently of the composer request.
+    ContactSent {
+        chat: ChatId,
+        id: String,
+        error: Option<String>,
+    },
+    /// Result of a private read-state update to the other linked devices.
+    ReadSyncFinished {
+        attempt_id: u64,
+        chat: ChatId,
+        through: i64,
+        success: bool,
+    },
+    /// Internal result for a failed phone-history request.
+    OlderFailed {
+        request_id: u64,
+        chat: ChatId,
+        error: String,
+    },
+    /// Correlates the phone's history response with the local fetch attempt.
+    OlderStarted {
+        request_id: u64,
+        chat: ChatId,
+        protocol_id: String,
+    },
+    /// Completes one optimistic revoke attempt, unless the phone confirmed it first.
+    RevokeFinished {
+        attempt_id: u64,
+        chat: ChatId,
+        message: String,
+        success: bool,
+    },
+    /// Internal group-metadata failure.
+    GroupInfoFailed {
+        chat: ChatId,
+        /// Whether the server refusal is permanent.
+        permanent: bool,
+    },
+    /// Internal completion of an edit request.
+    Edited {
+        chat: ChatId,
+        id: String,
+        success: bool,
+        content: Content,
+        mentions: Vec<MentionRef>,
+    },
+    /// Internal contact-save result.
+    ContactSaved {
+        id: String,
+        name: String,
+        error: Option<String>,
+    },
+    /// Internal number-lookup result.
+    ContactChecked {
+        phone: String,
+        full_name: Option<String>,
+        first_name: Option<String>,
+        to_phone: bool,
+        registered: bool,
+    },
+    /// Internal number-lookup failure; never treat an API error as registration.
+    ContactCheckFailed {},
+    /// Internal send result.
+    Sent {
+        chat: ChatId,
+        id: String,
+        error: Option<String>,
+    },
+    /// Internal recent-sticker download result.
+    StickerFetched {
+        hash: String,
+        result: Result<PathBuf, String>,
+    },
+    /// Internal profile-picture result.
+    AvatarFetched {
+        id: String,
+        full: bool,
+        avatar_generation: u64,
+        path: Option<PathBuf>,
+    },
+    /// Internal retryable profile-picture failure.
+    AvatarFailed {
+        id: String,
+        full: bool,
+        avatar_generation: u64,
+    },
+    /// Internal result of [`Command::EditProfile`].
+    ProfileSaved {
+        edit: ProfileEdit,
+        result: Result<(), String>,
+    },
+    /// Internal contact About-text result.
+    ContactAboutFetched {
+        id: String,
+        about: Option<String>,
+    },
+    /// Internal account about-text result.
+    MeInfo {
+        about: Option<String>,
+    },
+    /// Internal upload result for one selected attachment.
+    AttachmentCompleted {
+        chat: ChatId,
+        batch: u64,
+        index: usize,
+        total: usize,
+        path: PathBuf,
+        success: bool,
+    },
+    /// Internal group metadata result.
+    GroupInfo {
+        chat: ChatId,
+        name: Option<String>,
+        participants: Vec<String>,
+        read_only: bool,
+        ephemeral_expiration: Option<u32>,
+        ephemeral_setting_timestamp: Option<i64>,
+    },
+}
+
+impl Done {
+    fn discard(self) {
+        match self {
+            Self::Downloaded {
+                result: Ok(path), ..
+            } => {
+                let _ = std::fs::remove_file(path);
+            }
+            Self::OutboundBatch { sent, .. } => {
+                let _ = sent.send(false);
+            }
+            Self::GroupRecipients { stored, .. } => {
+                let _ = stored.send(false);
+            }
+            _ => {}
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum Command {
+    Completed(Completion),
+    /// Deletes downloaded attachments older than this many days; `None`
+    /// keeps them.
+    SetMediaRetention(Option<u32>),
+    /// Turns link previews on or off for this account, synced with the phone.
+    SetLinkPreviews(bool),
+    /// Shows this account as online or offline. WhatsApp holds the phone's
+    /// notifications while ZapTide is online.
+    SetOnline(bool),
+
+    CreatePoll {
+        chat: ChatId,
+        draft: PollDraft,
+    },
+
+    VotePoll {
+        chat: ChatId,
+        message: String,
+        choices: Vec<usize>,
+    },
+
     SendText {
         chat: ChatId,
         text: String,
@@ -244,13 +434,7 @@ pub enum Command {
         contact: crate::contact_cards::ContactCard,
         quoting: Option<String>,
     },
-    /// Contact sharing completes independently of the composer request.
-    ContactSent {
-        chat: ChatId,
-        id: String,
-        session_generation: u64,
-        error: Option<String>,
-    },
+
     /// Answers a quick-reply button message with one of its buttons.
     AnswerButton {
         chat: ChatId,
@@ -279,14 +463,7 @@ pub enum Command {
         chat: ChatId,
         receipts: bool,
     },
-    /// Result of a private read-state update to the other linked devices.
-    ReadSyncFinished {
-        session_generation: u64,
-        attempt_id: u64,
-        chat: ChatId,
-        through: i64,
-        success: bool,
-    },
+
     /// Loads archived chat messages before an optional boundary.
     LoadChat {
         chat: ChatId,
@@ -314,50 +491,14 @@ pub enum Command {
         id: String,
         before: PageKey,
     },
-    /// Internal result for a failed phone-history request.
-    OlderFailed {
-        session_generation: u64,
-        request_id: u64,
-        chat: ChatId,
-        error: String,
-    },
-    /// Correlates the phone's history response with the local fetch attempt.
-    OlderStarted {
-        session_generation: u64,
-        request_id: u64,
-        chat: ChatId,
-        protocol_id: String,
-    },
-    /// Completes one optimistic revoke attempt, unless the phone confirmed it first.
-    RevokeFinished {
-        session_generation: u64,
-        attempt_id: u64,
-        chat: ChatId,
-        message: String,
-        success: bool,
-    },
-    /// Internal group-metadata failure.
-    GroupInfoFailed {
-        session_generation: u64,
-        chat: ChatId,
-        /// Whether the server refusal is permanent.
-        permanent: bool,
-    },
+
     EditText {
         chat: ChatId,
         id: String,
         text: String,
         mentions: Vec<String>,
     },
-    /// Internal completion of an edit request.
-    Edited {
-        chat: ChatId,
-        id: String,
-        session_generation: u64,
-        success: bool,
-        content: Content,
-        mentions: Vec<MentionRef>,
-    },
+
     Revoke {
         chat: ChatId,
         id: String,
@@ -423,13 +564,7 @@ pub enum Command {
         first_name: Option<String>,
         to_phone: bool,
     },
-    /// Internal contact-save result.
-    ContactSaved {
-        session_generation: u64,
-        id: String,
-        name: String,
-        error: Option<String>,
-    },
+
     /// Checks a number, optionally saves it, and opens its chat.
     NewContact {
         phone: String,
@@ -437,19 +572,7 @@ pub enum Command {
         first_name: Option<String>,
         to_phone: bool,
     },
-    /// Internal number-lookup result.
-    ContactChecked {
-        session_generation: u64,
-        phone: String,
-        full_name: Option<String>,
-        first_name: Option<String>,
-        to_phone: bool,
-        registered: bool,
-    },
-    /// Internal number-lookup failure; never treat an API error as registration.
-    ContactCheckFailed {
-        session_generation: u64,
-    },
+
     /// Loads recent and saved stickers for the picker.
     RecentStickers,
     React {
@@ -466,119 +589,19 @@ pub enum Command {
     Unlink,
     Reconnect,
     Shutdown,
-    /// Internal send result.
-    Sent {
-        chat: ChatId,
-        id: String,
-        session_generation: u64,
-        error: Option<String>,
-    },
-    /// Internal attachment-download result.
-    Downloaded {
-        chat: ChatId,
-        id: String,
-        session_generation: u64,
-        raw_fingerprint: [u8; 32],
-        destination: PathBuf,
-        result: Result<PathBuf, DownloadFailure>,
-    },
-    /// Internal recent-sticker download result.
-    StickerFetched {
-        hash: String,
-        session_generation: u64,
-        result: Result<PathBuf, String>,
-    },
-    /// Internal profile-picture result.
-    AvatarFetched {
-        id: String,
-        full: bool,
-        session_generation: u64,
-        avatar_generation: u64,
-        path: Option<PathBuf>,
-    },
-    /// Internal retryable profile-picture failure.
-    AvatarFailed {
-        id: String,
-        full: bool,
-        session_generation: u64,
-        avatar_generation: u64,
-    },
+
     /// Saves this account's name, About text, and picture.
     EditProfile(ProfileEdit),
-    /// Internal result of [`Command::EditProfile`].
-    ProfileSaved {
-        session_generation: u64,
-        edit: ProfileEdit,
-        result: Result<(), String>,
-    },
+
     /// Fetches a contact's About text for the info dialog.
     ContactAbout {
         id: String,
     },
-    /// Internal contact About-text result.
-    ContactAboutFetched {
-        session_generation: u64,
-        id: String,
-        about: Option<String>,
-    },
-    /// Internal account about-text result.
-    MeInfo {
-        session_generation: u64,
-        about: Option<String>,
-    },
-    /// Internal uploaded attachment ready for archiving and sending.
-    Outbound {
-        chat: ChatId,
-        session_generation: u64,
-        row: Box<Message>,
-        raw: Vec<u8>,
-    },
-    /// Internal ordered attachment send; completion arrives after WhatsApp accepts it.
-    OutboundBatch {
-        chat: ChatId,
-        session_generation: u64,
-        row: Box<Message>,
-        raw: Vec<u8>,
-        sent: tokio::sync::mpsc::UnboundedSender<bool>,
-    },
-    /// Internal upload result for one selected attachment.
-    AttachmentCompleted {
-        chat: ChatId,
-        session_generation: u64,
-        batch: u64,
-        index: usize,
-        total: usize,
-        path: PathBuf,
-        success: bool,
-    },
-    /// Internal send audience. The sender waits for it to be archived.
-    GroupRecipients {
-        session_generation: u64,
-        chat: ChatId,
-        id: String,
-        recipients: Vec<String>,
-        lids: Vec<(String, String)>,
-        stored: tokio::sync::mpsc::UnboundedSender<bool>,
-    },
-    /// Internal group metadata result.
-    GroupInfo {
-        session_generation: u64,
-        chat: ChatId,
-        name: Option<String>,
-        participants: Vec<String>,
-        read_only: bool,
-        ephemeral_expiration: Option<u32>,
-        ephemeral_setting_timestamp: Option<i64>,
-    },
+
     /// Internal pairing-code result.
     PairCode {
         request_id: u64,
         result: Result<String, String>,
-    },
-    /// Internal account read-receipt setting.
-    ReceiptsPrivacy {
-        session_generation: u64,
-        disabled: bool,
     },
     /// Places a voice or video call to a direct chat.
     StartCall {
@@ -880,7 +903,11 @@ impl Backend {
     }
 
     pub fn send(&self, command: Command) {
-        let _ = self.commands.send(command);
+        if let Err(mpsc::error::SendError(Command::Completed(completion))) =
+            self.commands.send(command)
+        {
+            completion.done.discard();
+        }
     }
 
     #[cfg(test)]
