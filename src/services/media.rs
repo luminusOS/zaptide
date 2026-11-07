@@ -400,7 +400,7 @@ mod tests {
     fn gstreamer_plays_and_seeks_received_opus_without_audio_device() {
         gst::init().expect("GStreamer initialized");
         let file = tempfile::NamedTempFile::new().expect("temporary clip");
-        let samples = vec![0.1; crate::voice::RATE as usize * 2];
+        let samples = vec![0.1; crate::voice::RATE as usize * 8];
         std::fs::write(
             file.path(),
             crate::voice::encode(&samples).expect("encode opus"),
@@ -436,9 +436,29 @@ mod tests {
         }
         assert!(media.actually_playing("synthetic-audio"));
         media
+            .seek("synthetic-audio", file.path(), 0.0)
+            .expect("seek to start");
+        media
             .seek("synthetic-audio", file.path(), 0.5)
             .expect("seek");
-        assert!(media.playback_status("synthetic-audio").total.as_millis() > 0);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        loop {
+            media.poll().expect("poll after seek");
+            let status = media.playback_status("synthetic-audio");
+            assert!(status.total.as_millis() > 0);
+            let fraction = status.position.as_secs_f64() / status.total.as_secs_f64();
+            if (0.45..=0.65).contains(&fraction) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "seek landed at {fraction}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        media
+            .seek("synthetic-audio", file.path(), 1.0)
+            .expect("seek to end");
         if let Some(native) = media.native.as_mut() {
             native.ended = true;
             native.state = audio::State::Idle;
@@ -455,6 +475,57 @@ mod tests {
             media.playback_status("synthetic-audio").state,
             audio::State::Idle
         );
+    }
+
+    #[test]
+    fn playback_bus_error_is_reported_and_service_can_be_reused() {
+        gst::init().expect("GStreamer initialized");
+        let file = synthetic_clip(2);
+        let pipeline =
+            gst::parse::launch("filesrc location=/nonexistent/zaptide-audio-test ! fakesink")
+                .expect("test pipeline");
+        let mut media = MediaService::default();
+        media.native = Some(NativePlayback {
+            message: "failed".into(),
+            path: file.path().to_owned(),
+            pipeline: pipeline.clone(),
+            _hold: crate::media_retention::hold([file.path().to_owned()]),
+            state: audio::State::Loading,
+            ended: false,
+            rate_applied: true,
+            pending_seek: None,
+            scaletempo: false,
+        });
+        let _ = pipeline.set_state(gst::State::Playing);
+        let error = media.poll().expect_err("bus error must be reported");
+        assert!(!error.is_empty());
+        assert!(media.native.is_none());
+        assert!(!media.is_playing());
+        assert_eq!(media.playback_status("failed").state, audio::State::Idle);
+        assert!(media.poll().is_ok());
+
+        let pipeline = gst::ElementFactory::make("playbin")
+            .build()
+            .expect("playbin");
+        let sink = gst::ElementFactory::make("fakesink").build().expect("sink");
+        sink.set_property("sync", true);
+        pipeline.set_property("audio-sink", sink);
+        pipeline.set_property("uri", gtk4::gio::File::for_path(file.path()).uri().as_str());
+        pipeline.set_state(gst::State::Playing).expect("start clip");
+        media.native = Some(NativePlayback {
+            message: "reused".into(),
+            path: file.path().to_owned(),
+            pipeline,
+            _hold: crate::media_retention::hold([file.path().to_owned()]),
+            state: audio::State::Loading,
+            ended: false,
+            rate_applied: true,
+            pending_seek: None,
+            scaletempo: false,
+        });
+        wait_until_playing(&mut media, "reused");
+        media.stop_playback();
+        assert_eq!(media.playback_status("reused").state, audio::State::Idle);
     }
 
     fn synthetic_clip(seconds: u32) -> tempfile::NamedTempFile {
