@@ -1,6 +1,7 @@
 use super::gtk;
 use crate::i18n::gettext;
 use gtk::prelude::*;
+use relm4::adw;
 
 pub(super) enum AttachmentRemoval {
     Clear,
@@ -46,8 +47,7 @@ pub(super) fn loading_tile(url: &str) -> gtk::Widget {
         .width_request(320)
         .css_classes(["zaptide-attachment-file", "zaptide-link-tile"])
         .build();
-    let spinner = gtk::Spinner::builder()
-        .spinning(true)
+    let spinner = adw::Spinner::builder()
         .halign(gtk::Align::Center)
         .valign(gtk::Align::Center)
         .build();
