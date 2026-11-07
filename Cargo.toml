@@ -79,7 +79,6 @@ getrandom = "0.4"
 # crypto stack comes with it.
 oo7 = { version = "0.6", default-features = false, features = ["tokio", "openssl_crypto"] }
 zeroize = "1"
-rand = "0.10"
 qrcode = { version = "0.14", default-features = false }
 # Downloads profile pictures. The protocol library already includes this crate
 # and TLS stack.

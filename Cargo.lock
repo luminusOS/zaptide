@@ -5486,7 +5486,6 @@ dependencies = [
  "opus",
  "png",
  "qrcode",
- "rand 0.10.3",
  "relm4",
  "ring",
  "rusqlite",
