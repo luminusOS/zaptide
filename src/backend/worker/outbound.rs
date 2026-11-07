@@ -1419,6 +1419,399 @@ impl Worker {
     }
 }
 
+impl Worker {
+    /// Save the same audience the protocol library uses to encrypt the send.
+    pub(super) fn save_group_recipients(
+        &self,
+        chat: &str,
+        id: &str,
+        recipients: &[String],
+    ) -> bool {
+        let recipients: Vec<_> = recipients
+            .iter()
+            .map(|id| self.canonical_str(id))
+            .filter(|id| !self.is_me(id))
+            .collect();
+        match self
+            .archive
+            .snapshot_group_recipients(chat, id, &recipients)
+        {
+            Ok(()) => true,
+            Err(error) => {
+                log::warn!("could not save the group message audience: {error}");
+                false
+            }
+        }
+    }
+
+    pub(super) fn send_text(
+        &mut self,
+        chat: ChatId,
+        text: String,
+        quoting: Option<String>,
+        mentions: Vec<String>,
+        link_preview: Option<crate::model::LinkPreview>,
+    ) {
+        let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&chat)) else {
+            self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
+            self.emit(Event::Sent {
+                chat,
+                success: false,
+            });
+            return;
+        };
+        let (context, quoted_row) = self.quote_context(&chat, quoting.as_deref());
+        let mut message = outgoing_text(text.clone(), context, &mentions);
+        let expiration = self.apply_ephemeral(&chat, &mut message);
+        let mut link_preview =
+            link_preview.filter(|preview| link_preview::matches_text(&text, preview));
+        let thumbnail = link_preview
+            .as_mut()
+            .and_then(|preview| preview.thumbnail.take());
+        if let Some(preview) = &link_preview {
+            message = with_link_preview(
+                message,
+                &text,
+                preview.clone(),
+                thumbnail.clone(),
+                expiration,
+            );
+        }
+        let mentions = self.mentions_of(&mentions);
+        let id = client.generate_message_id();
+        let session_generation = self.session_generation;
+        let session_generation_shared = self.session_generation_shared.clone();
+        let row = Message {
+            id: id.clone(),
+            chat: chat.clone(),
+            sender: self.me(),
+            sender_name: None,
+            from_me: true,
+            timestamp: crate::util::now(),
+            content: link_preview.as_ref().map_or_else(
+                || Content::text(text.clone()),
+                |preview| Content::Text {
+                    text: text.clone(),
+                    preview: Some(preview.clone()),
+                },
+            ),
+            status: Delivery::Pending,
+            delivered_at: None,
+            read_at: None,
+            quoted: quoted_row,
+            reactions: Vec::new(),
+            edited: false,
+            mentions,
+            forwarded: false,
+            thumbnail,
+        };
+        self.store_message(row, Some(message.encode_to_vec()), None);
+        let session = OutgoingSession {
+            client,
+            commands: self.commands.clone(),
+            generation: session_generation,
+            generation_shared: session_generation_shared,
+        };
+        tokio::spawn(
+            async move { send_outgoing(session, chat, jid, id, message, expiration).await },
+        );
+    }
+
+    pub(super) fn set_link_previews(&self, enabled: bool) {
+        let Some(client) = self.client.clone() else {
+            self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
+            return;
+        };
+        tokio::spawn(async move {
+            if let Err(error) = client
+                .app_state_settings()
+                .set_link_previews_disabled(!enabled)
+                .await
+            {
+                log::warn!("link-preview setting was not synced: {error}");
+            }
+        });
+    }
+
+    /// Answers a buttons or list message with one of its choices. The wire
+    /// message is a `ButtonsResponseMessage` or `ListResponseMessage`; the
+    /// local row and its archived body are a plain reply quoting the
+    /// original, which is what the user sees.
+    /// Builds protocol context and archive metadata for an available quoted message.
+    pub(super) fn quote_context(
+        &self,
+        chat: &ChatId,
+        quoting: Option<&str>,
+    ) -> (Option<wa::ContextInfo>, Option<Quoted>) {
+        let Some((context, row)) = quoting.and_then(|id| {
+            let raw = self.archive.raw(chat, id).ok().flatten()?;
+            let quoted = wa::Message::decode_from_slice(&raw).ok()?;
+            let row = self.archive.message(chat, id).ok().flatten()?;
+            let jid = Self::jid_of(chat)?;
+            let sender = Self::jid_of(&row.sender).unwrap_or_else(|| jid.clone());
+            let context = whatsapp_rust::wacore::proto_helpers::build_quote_context_with_info(
+                row.id.clone(),
+                &sender,
+                &jid,
+                &jid,
+                &quoted,
+            );
+            Some((context, row))
+        }) else {
+            return (None, None);
+        };
+        let quoted = Quoted {
+            mentions: row.mentions.clone(),
+            id: row.id,
+            sender_name: if row.from_me {
+                Some("You".to_owned())
+            } else {
+                row.sender_name
+                    .clone()
+                    .or_else(|| self.name_for(&row.sender))
+            },
+            sender: row.sender,
+            summary: row.content.summary(),
+        };
+        (Some(context), Some(quoted))
+    }
+
+    pub(super) fn forward_message(
+        &mut self,
+        from_chat: ChatId,
+        message_id: String,
+        to_chat: ChatId,
+    ) {
+        let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&to_chat)) else {
+            self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
+            return;
+        };
+        let Ok(Some(source)) = self.archive.message(&from_chat, &message_id) else {
+            self.emit(Event::Error(
+                "This message is not stored on this computer".to_owned(),
+            ));
+            return;
+        };
+        if matches!(
+            source.content,
+            Content::Revoked
+                | Content::Unsupported { .. }
+                | Content::Call { .. }
+                | Content::Poll { .. }
+                | Content::Buttons { .. }
+                | Content::List { .. }
+                | Content::Template { .. }
+        ) {
+            self.emit(Event::Error("This message cannot be forwarded".to_owned()));
+            return;
+        }
+        let Ok(Some(raw)) = self.archive.raw(&from_chat, &message_id) else {
+            self.emit(Event::Error(
+                "The original message data is not available to forward".to_owned(),
+            ));
+            return;
+        };
+        let Ok(original) = wa::Message::decode_from_slice(&raw) else {
+            self.emit(Event::Error(
+                "The original message data could not be read".to_owned(),
+            ));
+            return;
+        };
+        // whatsapp-rust owns the forwarding rules: unwrap transient wrappers,
+        // strip quote chains and secrets, and retain reusable media metadata.
+        let (message, expiration) =
+            outgoing_forward(&original, self.ephemeral_expiration(&to_chat));
+        let id = client.generate_message_id();
+        let session_generation = self.session_generation;
+        let session_generation_shared = self.session_generation_shared.clone();
+        let mentions = self.mentions_of(&mentioned_of(&message));
+        let thumbnail = thumbnail_of(&message).or_else(|| {
+            source
+                .thumbnail
+                .clone()
+                .filter(|bytes| crate::native_media::is_inline_thumbnail(bytes))
+        });
+        let row = forwarded_row(
+            source,
+            to_chat.clone(),
+            self.me(),
+            id.clone(),
+            crate::util::now(),
+            mentions,
+            thumbnail,
+        );
+        self.store_message(row, Some(message.encode_to_vec()), None);
+        self.forward_tails.retain(|_, send| !send.is_finished());
+        let previous = self.forward_tails.remove(&to_chat);
+        let destination = to_chat.clone();
+        let send = send_outgoing(
+            OutgoingSession {
+                client,
+                commands: self.commands.clone(),
+                generation: session_generation,
+                generation_shared: session_generation_shared,
+            },
+            to_chat,
+            jid,
+            id,
+            message,
+            expiration,
+        );
+        let tail = tokio::spawn(async move {
+            if let Some(previous) = previous {
+                let _ = previous.await;
+            }
+            send.await
+        });
+        self.forward_tails.insert(destination, tail);
+    }
+}
+
+impl Worker {
+    pub(super) fn edit_text(
+        &mut self,
+        chat: ChatId,
+        id: String,
+        text: String,
+        mentions: Vec<String>,
+    ) {
+        let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&chat)) else {
+            self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
+            self.emit(Event::Edited {
+                chat,
+                id,
+                success: false,
+            });
+            return;
+        };
+        let content = Content::text(text.clone());
+        let mention_rows = self.mentions_of(&mentions);
+        let mut message = outgoing_text(text, None, &mentions);
+        self.apply_ephemeral(&chat, &mut message);
+        let commands = self.commands.clone();
+        let events = self.events.clone();
+        let waker = self.waker.clone();
+        let session_generation = self.session_generation;
+        let session_generation_shared = self.session_generation_shared.clone();
+        tokio::spawn(async move {
+            let result = client.edit_message(jid, id.clone(), message).await;
+            let success = result.is_ok();
+            let _ = commands.send(Command::Edited {
+                chat: chat.clone(),
+                id,
+                session_generation,
+                success,
+                content,
+                mentions: mention_rows,
+            });
+            if result.is_err()
+                && session_generation_shared.load(Ordering::Acquire) == session_generation
+            {
+                let _ = events.send(Event::Error("Could not edit the message".to_owned()));
+                waker.wake();
+            }
+        });
+    }
+}
+
+impl Worker {
+    /// Archives and sends an uploaded attachment message.
+    pub(super) fn outbound(
+        &mut self,
+        chat: ChatId,
+        session_generation: u64,
+        row: Message,
+        raw: Vec<u8>,
+    ) {
+        if session_generation != self.session_generation || self.archive_cleanup_failed {
+            return;
+        }
+        // A sticker's pending row is already shown; fail it rather than
+        // leave it pending forever.
+        let fail = |worker: &mut Self, error: &str| {
+            if let Ok(true) =
+                worker
+                    .archive
+                    .set_status(&chat, &row.id, Delivery::Failed, crate::util::now())
+            {
+                worker.emit_message(&chat, &row.id);
+            }
+            worker.emit(Event::Error(error.to_owned()));
+        };
+        let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&chat)) else {
+            fail(self, "Not connected to WhatsApp");
+            return;
+        };
+        let Ok(mut message) = wa::Message::decode_from_slice(&raw) else {
+            fail(self, "Could not encode the attachment");
+            return;
+        };
+        let expiration = self.apply_ephemeral(&chat, &mut message);
+        let raw = message.encode_to_vec();
+        let id = row.id.clone();
+        self.store_message(row, Some(raw), None);
+        let session_generation_shared = self.session_generation_shared.clone();
+        tokio::spawn(send_outgoing(
+            OutgoingSession {
+                client,
+                commands: self.commands.clone(),
+                generation: session_generation,
+                generation_shared: session_generation_shared,
+            },
+            chat,
+            jid,
+            id,
+            message,
+            expiration,
+        ));
+    }
+
+    pub(super) fn outbound_batch(
+        &mut self,
+        chat: ChatId,
+        session_generation: u64,
+        row: Message,
+        raw: Vec<u8>,
+        sent: tokio::sync::mpsc::UnboundedSender<bool>,
+    ) {
+        if session_generation != self.session_generation || self.archive_cleanup_failed {
+            let _ = sent.send(false);
+            return;
+        }
+        let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&chat)) else {
+            let _ = sent.send(false);
+            return;
+        };
+        let Ok(mut message) = wa::Message::decode_from_slice(&raw) else {
+            let _ = sent.send(false);
+            return;
+        };
+        let expiration = self.apply_ephemeral(&chat, &mut message);
+        let raw = message.encode_to_vec();
+        let id = row.id.clone();
+        self.store_message(row, Some(raw), None);
+        let commands = self.commands.clone();
+        let session_generation_shared = self.session_generation_shared.clone();
+        tokio::spawn(async move {
+            let success = send_outgoing(
+                OutgoingSession {
+                    client,
+                    commands,
+                    generation: session_generation,
+                    generation_shared: session_generation_shared,
+                },
+                chat,
+                jid,
+                id,
+                message,
+                expiration,
+            )
+            .await;
+            let _ = sent.send(success);
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

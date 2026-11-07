@@ -832,3 +832,57 @@ impl Worker {
         Ok((filed, effects))
     }
 }
+
+impl Worker {
+    pub(super) async fn on_history_sync(&mut self, lazy: &wa_events::LazyHistorySync) {
+        let on_demand =
+            lazy.sync_type() == ON_DEMAND || lazy.peer_data_request_session_id().is_some();
+        if !on_demand {
+            self.sync_deadline = Some(Instant::now() + SYNC_QUIET);
+            self.set_syncing(true);
+        }
+        let compressed = lazy.compressed_bytes().clone();
+        let parsed = tokio::task::spawn_blocking(move || parse_history(&compressed)).await;
+        let failed = !matches!(&parsed, Ok(Ok(_)));
+        match parsed {
+            Ok(Ok(parsed)) => {
+                if on_demand {
+                    log::info!(
+                        "poll recovery: on-demand history received; chats={}, messages={}, standalone_votes={}",
+                        parsed.chats.len(),
+                        parsed
+                            .chats
+                            .iter()
+                            .map(|chat| chat.messages.len())
+                            .sum::<usize>(),
+                        parsed
+                            .chats
+                            .iter()
+                            .map(|chat| chat.poll_updates.len())
+                            .sum::<usize>()
+                    );
+                }
+                let (filed, committed) = self.apply_history(parsed, !on_demand);
+                if on_demand && committed {
+                    self.answer_older(
+                        filed,
+                        lazy.peer_data_request_session_id().map(str::to_owned),
+                    );
+                }
+            }
+            Ok(Err(error)) => {
+                log::warn!("a history chunk could not be read");
+                self.emit(Event::Error(format!(
+                    "Could not read part of the chat history: {error}"
+                )));
+            }
+            Err(_error) => log::warn!("history parsing worker failed"),
+        }
+        if !on_demand && lazy.progress().is_some_and(|progress| progress >= 100) {
+            self.sync_deadline = Some(Instant::now() + Duration::from_secs(3));
+        }
+        if emit_after_history_chunk(on_demand, failed, lazy.progress()) {
+            self.emit_chats();
+        }
+    }
+}
