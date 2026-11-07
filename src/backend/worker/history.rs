@@ -29,7 +29,7 @@ pub(super) struct ParsedChat {
     /// Whether the phone reports more available history.
     pub(super) more_on_phone: Option<bool>,
     pub(super) messages: Vec<ParsedMessage>,
-    pub(super) revoked: Vec<String>,
+    pub(super) revoked: Vec<HistoryRevoke>,
     pub(super) poll_updates: Vec<HistoryPollUpdate>,
     pub(super) reactions: Vec<HistoryReaction>,
 }
@@ -42,8 +42,16 @@ pub(super) struct HistoryPollUpdate {
     update: wa::message::PollUpdateMessage,
 }
 
+pub(super) struct HistoryRevoke {
+    pub(super) id: String,
+    pub(super) target: String,
+    pub(super) sender: Option<String>,
+    pub(super) from_me: bool,
+}
+
 /// Standalone reaction from history, applied after the parent row is stored.
 pub(super) struct HistoryReaction {
+    pub(super) id: String,
     pub(super) target: String,
     pub(super) sender: Option<String>,
     pub(super) from_me: bool,
@@ -127,20 +135,25 @@ pub(super) fn parse_conversation(conversation: wa::Conversation) -> ParsedChat {
         let timestamp = info.message_timestamp.unwrap_or(0) as i64;
         newest = newest.max(timestamp);
         let base = base_message(message);
-        if let Some(protocol) = base.protocol_message.as_option() {
-            if protocol.r#type == Some(wa::message::protocol_message::Type::REVOKE)
-                && let Some(target) = protocol.key.as_option().and_then(|key| key.id.clone())
-            {
-                revoked.push(target);
-            }
-            continue;
-        }
         let sender = info
             .participant
             .clone()
             .or_else(|| key.participant.clone())
             .filter(|sender| !sender.is_empty())
             .or_else(|| key.remote_jid.clone());
+        if let Some(protocol) = base.protocol_message.as_option() {
+            if protocol.r#type == Some(wa::message::protocol_message::Type::REVOKE)
+                && let Some(target) = protocol.key.as_option().and_then(|key| key.id.clone())
+            {
+                revoked.push(HistoryRevoke {
+                    id,
+                    target,
+                    sender,
+                    from_me,
+                });
+            }
+            continue;
+        }
         if let Some(reaction) = base.reaction_message.as_option() {
             if let Some(target) = reaction
                 .key
@@ -149,6 +162,7 @@ pub(super) fn parse_conversation(conversation: wa::Conversation) -> ParsedChat {
                 .filter(|id| !id.is_empty())
             {
                 reactions.push(HistoryReaction {
+                    id,
                     target,
                     sender,
                     from_me,
@@ -170,6 +184,7 @@ pub(super) fn parse_conversation(conversation: wa::Conversation) -> ParsedChat {
                 && let (Some(payload), Some(iv)) = (enc.enc_payload.clone(), enc.enc_iv.clone())
             {
                 reactions.push(HistoryReaction {
+                    id,
                     target,
                     sender,
                     from_me,
@@ -310,20 +325,188 @@ pub(super) fn parse_conversation(conversation: wa::Conversation) -> ParsedChat {
     }
 }
 
+#[derive(Default)]
+struct HistoryEffects {
+    stickers_dirty: bool,
+    groups: Vec<String>,
+    finished_polls: Vec<(String, String)>,
+    revoked: Vec<(String, String)>,
+    poll_messages: Vec<(String, String)>,
+}
+
+type FiledHistory = (Vec<(ChatId, usize, Option<bool>)>, HistoryEffects);
+
+#[cfg(test)]
+thread_local! {
+    pub(super) static PANIC_AFTER_HISTORY_IDENTITIES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 impl Worker {
+    fn preflight_history_senders(&self, parsed: &mut ParsedHistory) -> crate::archive::Result<()> {
+        fn retain_checked<T>(
+            items: &mut Vec<T>,
+            mut allowed: impl FnMut(&T) -> crate::archive::Result<bool>,
+        ) -> crate::archive::Result<()> {
+            let mut kept = Vec::new();
+            for item in std::mem::take(items) {
+                if allowed(&item)? {
+                    kept.push(item);
+                }
+            }
+            *items = kept;
+            Ok(())
+        }
+
+        let mut seen = HashMap::<(String, String), (String, bool)>::new();
+        let mut rejected = false;
+        for chat in &mut parsed.chats {
+            let chat_id = self.canonical_str(&chat.id);
+            if !chat_id.ends_with("@g.us") {
+                continue;
+            }
+            let mut allowed =
+                |id: &str, sender: Option<&str>, from_me: bool| -> crate::archive::Result<bool> {
+                    let sender = if from_me {
+                        self.me()
+                    } else {
+                        sender
+                            .map(|sender| self.canonical_str(sender))
+                            .unwrap_or_else(|| chat_id.clone())
+                    };
+                    let key = (chat_id.clone(), id.to_owned());
+                    let collision = self
+                        .archive
+                        .sender_collision_for(&chat_id, id, &sender, from_me)?
+                        || seen.get(&key).is_some_and(|(previous, own)| {
+                            *own != from_me || (!from_me && *previous != sender)
+                        });
+                    if collision {
+                        rejected = true;
+                        return Ok(false);
+                    }
+                    seen.entry(key).or_insert((sender, from_me));
+                    Ok(true)
+                };
+            retain_checked(&mut chat.messages, |row| {
+                allowed(&row.id, row.sender.as_deref(), row.from_me)
+            })?;
+            retain_checked(&mut chat.reactions, |row| {
+                allowed(&row.id, row.sender.as_deref(), row.from_me)
+            })?;
+            retain_checked(&mut chat.poll_updates, |row| {
+                allowed(&row.id, row.sender.as_deref(), row.from_me)
+            })?;
+            retain_checked(&mut chat.revoked, |row| {
+                allowed(&row.id, row.sender.as_deref(), row.from_me)
+            })?;
+            let mut missing_identity = false;
+            for message in &mut chat.messages {
+                for update in &mut message.poll_votes {
+                    let permitted = match update.poll_update_message_key.as_option() {
+                        Some(key) => {
+                            let from_me = key.from_me.unwrap_or(false);
+                            match (
+                                key.id.as_deref().filter(|id| !id.is_empty()),
+                                key.participant
+                                    .as_deref()
+                                    .filter(|sender| !sender.is_empty()),
+                            ) {
+                                (Some(id), sender) if from_me || sender.is_some() => {
+                                    allowed(id, sender, from_me)?
+                                }
+                                _ => {
+                                    missing_identity = true;
+                                    false
+                                }
+                            }
+                        }
+                        None => {
+                            missing_identity = true;
+                            false
+                        }
+                    };
+                    if !permitted {
+                        // Keep the unusable entry so a partial snapshot cannot finish recovery.
+                        update.poll_update_message_key = MessageField::none();
+                    }
+                }
+            }
+            rejected |= missing_identity;
+        }
+        if rejected {
+            parsed.lids.clear();
+            for chat in &mut parsed.chats {
+                chat.lid_jid = None;
+                chat.pn_jid = None;
+            }
+        }
+        Ok(())
+    }
+
     /// Archives a history chunk. `metadata` controls chat-state updates.
     /// Returns each chat's message count and whether the phone has more.
     pub(super) fn apply_history(
         &mut self,
+        mut parsed: ParsedHistory,
+        metadata: bool,
+    ) -> (Vec<(ChatId, usize, Option<bool>)>, bool) {
+        if self.preflight_history_senders(&mut parsed).is_err() {
+            log::warn!("could not check a history message sender; history remains retryable");
+            self.emit_chats();
+            self.emit(Event::RefreshTranscript);
+            return (Vec::new(), false);
+        }
+        let mut batch = self.begin_batch();
+        if !batch.owned {
+            return (Vec::new(), false);
+        }
+        batch.protect_state(true);
+        let (filed, effects) = match batch.file_history(parsed, metadata) {
+            Ok(result) => result,
+            Err(_) => {
+                log::warn!("could not check a history message sender; history remains retryable");
+                drop(batch);
+                self.emit_chats();
+                self.emit(Event::RefreshTranscript);
+                return (Vec::new(), false);
+            }
+        };
+        let committed = batch.finish();
+        if committed {
+            self.stickers_dirty |= effects.stickers_dirty;
+            for (chat, id) in effects.finished_polls {
+                self.poll_history.finish(&chat, &id);
+            }
+            for (chat, id) in effects.revoked {
+                self.pending_revokes.remove(&(chat, id));
+            }
+            for id in effects.groups {
+                self.request_group_info(&id, false);
+            }
+            for (chat, id) in effects.poll_messages {
+                self.emit_message(&chat, &id);
+            }
+            self.pump_poll_votes();
+            self.pump_poll_history();
+            (filed, true)
+        } else {
+            (Vec::new(), false)
+        }
+    }
+
+    fn file_history(
+        &mut self,
         parsed: ParsedHistory,
         metadata: bool,
-    ) -> Vec<(ChatId, usize, Option<bool>)> {
+    ) -> crate::archive::Result<FiledHistory> {
+        let mut effects = HistoryEffects::default();
         for (lid, pn) in &parsed.lids {
             if let (Some(lid), Some(pn)) = (Self::jid_of(lid), Self::jid_of(pn)) {
                 self.learn_pair(&lid, &pn);
             }
         }
         if !parsed.stickers.is_empty() {
+            effects.stickers_dirty = true;
             log::info!(
                 "the phone listed {} recently used stickers",
                 parsed.stickers.len()
@@ -353,10 +536,20 @@ impl Worker {
             }
         }
         let mut filed = Vec::new();
+        // Sent together at the end: an event per name made the window
+        // rebuild the open conversation for each one.
+        let mut learned = Vec::new();
         for (id, name) in &parsed.push_names {
             let id = self.canonical_str(id);
-            self.remember_push_name(&id, name);
+            if let Some(contact) = self.learn_push_name(&id, name) {
+                learned.push(contact);
+                self.refresh_chat_name(&id);
+            }
         }
+        #[cfg(test)]
+        PANIC_AFTER_HISTORY_IDENTITIES.with(|panic| {
+            assert!(!panic.replace(false), "synthetic history panic");
+        });
         for chat in parsed.chats {
             let id = self.canonical_str(&chat.id);
             if id.ends_with("@broadcast") {
@@ -368,11 +561,15 @@ impl Worker {
                     Some(name) if ChatKind::from_id(&id) == ChatKind::Group => name,
                     Some(name) => {
                         // Prefer the phone's address-book name for direct chats.
-                        let contact = self.contacts.entry(id.clone()).or_insert_with(|| Contact {
-                            id: id.clone(),
-                            full_name: None,
-                            push_name: None,
-                        });
+                        let contact =
+                            self.identity
+                                .contacts
+                                .entry(id.clone())
+                                .or_insert_with(|| Contact {
+                                    id: id.clone(),
+                                    full_name: None,
+                                    push_name: None,
+                                });
                         if contact.full_name.is_none()
                             && !name
                                 .chars()
@@ -381,7 +578,7 @@ impl Worker {
                             contact.full_name = Some(name.clone());
                             let contact = contact.clone();
                             let _ = self.archive.upsert_contact(&contact);
-                            self.emit(Event::Contacts(vec![contact]));
+                            learned.push(contact);
                         }
                         self.chat_name(&id, None)
                     }
@@ -422,18 +619,11 @@ impl Worker {
                 );
             }
             if ChatKind::from_id(&id) == ChatKind::Group {
-                self.request_group_info(&id, false);
+                effects.groups.push(id.clone());
             }
             let count = chat.messages.len();
             let mut secrets = HashMap::new();
             for message in chat.messages {
-                if let Some(secret) = message
-                    .poll_secret
-                    .as_deref()
-                    .filter(|secret| secret.len() == 32)
-                {
-                    secrets.insert(message.id.clone(), secret.to_vec());
-                }
                 let poll_creator = if message.from_me {
                     self.me()
                 } else {
@@ -450,8 +640,10 @@ impl Worker {
                 };
                 if let Some(push_name) = message.push_name.as_deref()
                     && !message.from_me
+                    && let Some(contact) = self.learn_push_name(&sender, push_name)
                 {
-                    self.remember_push_name(&sender, push_name);
+                    learned.push(contact);
+                    self.refresh_chat_name(&sender);
                 }
                 let reactions = message
                     .reactions
@@ -499,6 +691,16 @@ impl Worker {
                     forwarded: message.forwarded,
                     thumbnail: message.thumbnail,
                 };
+                if self.archive.sender_collision(&row)? {
+                    continue;
+                }
+                if let Some(secret) = message
+                    .poll_secret
+                    .as_deref()
+                    .filter(|secret| secret.len() == 32)
+                {
+                    secrets.insert(row.id.clone(), secret.to_vec());
+                }
                 let mut poll_history_received = false;
                 let raw =
                     ensure_message_secret(message.raw, secrets.get(&row.id).map(Vec::as_slice));
@@ -530,12 +732,29 @@ impl Worker {
                 if matches!(row.content, Content::Poll { .. }) {
                     if poll_history_received {
                         let _ = self.archive.mark_poll_history(&id, &row.id);
-                        self.poll_history.finish(&id, &row.id);
+                        effects.finished_polls.push((id.clone(), row.id.clone()));
                     }
-                    self.emit_message(&id, &row.id);
+                    effects.poll_messages.push((id.clone(), row.id.clone()));
                 }
             }
             for reaction in chat.reactions {
+                let sender = if reaction.from_me {
+                    self.me()
+                } else {
+                    reaction
+                        .sender
+                        .as_deref()
+                        .map(|sender| self.canonical_str(sender))
+                        .unwrap_or_else(|| id.clone())
+                };
+                if self.archive.sender_collision_for(
+                    &id,
+                    &reaction.id,
+                    &sender,
+                    reaction.from_me,
+                )? {
+                    continue;
+                }
                 self.apply_history_reaction(&id, reaction, &secrets);
             }
             for update in chat.poll_updates {
@@ -544,7 +763,15 @@ impl Worker {
                 } else {
                     update.sender.unwrap_or_else(|| chat.id.clone())
                 };
-                self.ingest_poll_vote(
+                if self.archive.sender_collision_for(
+                    &id,
+                    &update.id,
+                    &self.canonical_str(&sender),
+                    update.from_me,
+                )? {
+                    continue;
+                }
+                self.file_poll_vote(
                     &id,
                     &update.id,
                     &sender,
@@ -554,7 +781,29 @@ impl Worker {
                 );
             }
             for revoked in chat.revoked {
-                self.confirm_revoke(&id, &revoked);
+                let sender = if revoked.from_me {
+                    self.me()
+                } else {
+                    revoked
+                        .sender
+                        .as_deref()
+                        .map(|sender| self.canonical_str(sender))
+                        .unwrap_or_else(|| id.clone())
+                };
+                if self
+                    .archive
+                    .sender_collision_for(&id, &revoked.id, &sender, revoked.from_me)?
+                {
+                    continue;
+                }
+                effects.revoked.push((id.clone(), revoked.target.clone()));
+                if let Ok(true) =
+                    self.archive
+                        .set_content(&id, &revoked.target, &Content::Revoked, false)
+                {
+                    self.emit_message(&id, &revoked.target);
+                    self.emit_chat(&id);
+                }
             }
             if (metadata || existing.is_none())
                 && let Some(snapshot_unread) = chat.unread
@@ -574,11 +823,12 @@ impl Worker {
             }
             filed.push((id, count, chat.more_on_phone));
         }
-        self.pump_poll_votes();
-        self.pump_poll_history();
+        if !learned.is_empty() {
+            self.emit(Event::Contacts(learned));
+        }
         for (id, _, _) in &filed {
             self.emit_chat(id);
         }
-        filed
+        Ok((filed, effects))
     }
 }

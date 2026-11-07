@@ -561,7 +561,7 @@ pub(super) fn cached_texture(path: &std::path::Path) -> Option<gtk::gdk::Texture
         if !cache.contains_key(path) {
             cache.insert(
                 path.to_path_buf(),
-                gtk::gdk::Texture::from_filename(path).ok()?,
+                crate::native_media_widgets::avatar_texture(path)?,
             );
         }
         cache.get(path).cloned()
@@ -584,7 +584,7 @@ pub(super) fn show_forward_dialog(
     parent: &adw::ApplicationWindow,
     on_action: &DialogActionCallback,
     summary: &str,
-    chats: Vec<crate::model::Chat>,
+    chats: Vec<std::rc::Rc<crate::model::Chat>>,
     avatars: &std::collections::HashMap<String, std::path::PathBuf>,
 ) {
     let dialog = adw::Dialog::builder()
@@ -1015,7 +1015,7 @@ pub(super) fn show_chat_info_dialog(
     avatar: Option<&std::path::Path>,
     presence: Option<(bool, Option<i64>)>,
     directory: (
-        &[crate::model::Chat],
+        &[std::rc::Rc<crate::model::Chat>],
         &std::collections::HashMap<String, std::path::PathBuf>,
     ),
     on_action: &DialogActionCallback,
@@ -1036,7 +1036,7 @@ pub(super) fn show_chat_info_dialog(
         .spacing(6)
         .build();
     let picture = adw::Avatar::new(96, Some(&chat.name), true);
-    let image = avatar.and_then(|path| gtk::gdk::Texture::from_filename(path).ok());
+    let image = avatar.and_then(crate::native_media_widgets::avatar_texture);
     picture.set_custom_image(image.as_ref());
     picture.set_margin_bottom(6);
     header.append(&picture);
@@ -1183,6 +1183,7 @@ pub(super) fn show_chat_info_dialog(
     if !chat.is_group() {
         let mut shared: Vec<&crate::model::Chat> = chats
             .iter()
+            .map(std::rc::Rc::as_ref)
             .filter(|other| other.is_group() && other.participants.contains(&chat.id))
             .collect();
         if !shared.is_empty() {

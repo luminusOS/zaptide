@@ -1,138 +1,39 @@
 use super::*;
+use crate::application::conversation::{TranscriptChange, sender_in_window};
 use crate::i18n::gettext;
 
-pub(super) fn drain_and_convert(
-    backend: Option<&Backend>,
-    notifier: &EventNotifier,
-) -> Vec<NativeEvent> {
+pub(in crate::application) fn poll_error_message(event: &Event) -> Option<String> {
+    match event {
+        Event::PollCreated {
+            error: Some(error), ..
+        } if error == "The poll was sent, but its voting key could not be saved." => Some(gettext(
+            "The poll was sent, but its voting key could not be saved.",
+        )),
+        Event::PollCreated { error: Some(_), .. } => {
+            Some(gettext("Poll creation could not be completed."))
+        }
+        Event::PollVoted {
+            error: Some(error), ..
+        } if error == "Your vote was sent, but could not be saved locally." => Some(gettext(
+            "Your vote was sent, but could not be saved locally.",
+        )),
+        Event::PollVoted { error: Some(_), .. } => Some(gettext("Could not send your vote.")),
+        _ => None,
+    }
+}
+
+pub(super) fn drain_events(backend: Option<&Backend>, notifier: &EventNotifier) -> Vec<Event> {
     let mut events = Vec::new();
     if let Some(backend) = backend {
-        drain_backend_events(backend, notifier, |event| match event {
-            Event::Profile { phone, name } => events.push(NativeEvent::Profile { phone, name }),
-            Event::Link(status) => events.push(NativeEvent::Link(status)),
-            Event::Syncing(syncing) => events.push(NativeEvent::Syncing(syncing)),
-            Event::Chats(rows) => events.push(NativeEvent::Chats(rows)),
-            Event::ChatUpdated(chat) => events.push(NativeEvent::ChatUpdated(chat)),
-            Event::Contacts(contacts) => events.push(NativeEvent::Contacts(contacts)),
-            Event::Messages {
-                chat,
-                messages,
-                older,
-                complete,
-            } => events.push(NativeEvent::Messages {
-                chat,
-                messages,
-                older,
-                complete,
-            }),
-            Event::OlderFetched { chat, more } => {
-                events.push(NativeEvent::OlderFetched { chat, more })
-            }
-            Event::Stickers {
-                saved,
-                packs,
-                recent,
-            } => events.push(NativeEvent::Stickers {
-                saved,
-                packs,
-                recent,
-            }),
-            Event::MessageUpdated(message) => events.push(NativeEvent::MessageUpdated(message)),
-            Event::Edited { chat, id, success } => {
-                events.push(NativeEvent::Edited { chat, id, success })
-            }
-            Event::Sent { chat, success } => events.push(NativeEvent::Sent { chat, success }),
-            Event::AttachmentCompleted {
-                chat,
-                path,
-                success,
-                ..
-            } => events.push(NativeEvent::AttachmentCompleted {
-                chat,
-                path,
-                success,
-            }),
-            Event::Media {
-                chat,
-                message,
-                result,
-            } => events.push(NativeEvent::Media {
-                chat,
-                message,
-                result,
-            }),
-            Event::ReceiptsPrivacy { disabled } => {
-                events.push(NativeEvent::ReceiptsPrivacy { disabled })
-            }
-            Event::ContactReady { id, name } => events.push(NativeEvent::ContactReady { id, name }),
-            Event::ContactAbout { id, about } => {
-                events.push(NativeEvent::ContactAbout { id, about })
-            }
-            Event::ProfileSaved { error } => events.push(NativeEvent::ProfileSaved { error }),
-            Event::LinkPreviewsChanged(enabled) => {
-                events.push(NativeEvent::LinkPreviewsChanged(enabled))
-            }
-            Event::Info(message) => events.push(NativeEvent::Info(message)),
-            Event::StarChanged {
-                chat,
-                id,
-                starred,
-                local,
-            } => events.push(NativeEvent::StarChanged {
-                chat,
-                id,
-                starred,
-                local,
-            }),
-            Event::StarredIds { chat, ids } => events.push(NativeEvent::StarredIds { chat, ids }),
-            Event::StarredList(list) => events.push(NativeEvent::StarredList(list)),
-            Event::MessageDeleted { chat, id } => {
-                events.push(NativeEvent::MessageDeleted { chat, id })
-            }
-            Event::Incoming { chat, message } => {
-                events.push(NativeEvent::Incoming { chat, message })
-            }
-            Event::Typing {
-                chat,
-                sender,
-                composing,
-            } => events.push(NativeEvent::Typing {
-                chat,
-                sender,
-                composing,
-            }),
-            Event::Presence {
-                id,
-                online,
-                last_seen,
-            } => events.push(NativeEvent::Presence {
-                id,
-                online,
-                last_seen,
-            }),
-            Event::Avatar {
-                id,
-                full: false,
-                path,
-            } => events.push(NativeEvent::Avatar { id, path }),
-            Event::Call(session) => events.push(NativeEvent::Call(session)),
-            Event::CallWaiting(session) => events.push(NativeEvent::CallWaiting(session)),
-            Event::CallVideo(slots) => events.push(NativeEvent::CallVideo(slots)),
-            Event::CallFrames => events.push(NativeEvent::CallFrames),
-            Event::Calls { entries, seen_at } => {
-                events.push(NativeEvent::Calls { entries, seen_at })
-            }
-            Event::Error(error) => events.push(NativeEvent::Error(error)),
-            _ => {}
-        });
+        drain_backend_events(backend, notifier, |event| events.push(event));
     }
     events
 }
 
 pub(in crate::application) fn drain_hidden(
     session: &crate::application::accounts::AccountSession,
-) -> Vec<NativeEvent> {
-    drain_and_convert(session.backend.as_ref(), &session.notifier)
+) -> Vec<Event> {
+    drain_events(session.backend.as_ref(), &session.notifier)
 }
 
 pub(super) fn handle_backend_ready(
@@ -145,15 +46,19 @@ pub(super) fn handle_backend_ready(
         app.poll_theme_catalog();
         return;
     }
-    let events = drain_and_convert(app.backend.as_ref(), &app.notifier);
+    let events = drain_events(app.backend.as_ref(), &app.notifier);
     for event in events {
         // A removal or a duplicate link can put another account on screen
         // mid-batch; the rest of the batch belongs to the one that left.
         if app.active_account != account {
             break;
         }
+        if let Some(feedback) = poll_error_message(&event) {
+            app.status = feedback.clone();
+            app.toast(&feedback);
+        }
         match event {
-            NativeEvent::Link(link) => {
+            Event::Link(link) => {
                 if matches!(link, LinkStatus::LoggedOut) {
                     app.leave_screen();
                     clear_avatar_textures();
@@ -188,56 +93,76 @@ pub(super) fn handle_backend_ready(
                 (app.page_title, app.status) = link_page(&app.link);
                 app.sync_translucent_sidebar();
             }
-            NativeEvent::Profile { phone, name } => {
-                app.remember_profile(account, phone, name, &sender)
-            }
-            NativeEvent::Syncing(syncing) => app.syncing = syncing,
-            NativeEvent::Chats(chats) => {
+            Event::Profile { phone, name } => app.remember_profile(account, phone, name, &sender),
+            Event::Syncing(syncing) => app.syncing = syncing,
+            Event::Chats(chats) => {
                 app.apply_chat_changes(vec![ChatChange::Snapshot(chats)]);
             }
-            NativeEvent::ChatUpdated(chat) => {
+            Event::ChatUpdated(chat) => {
                 app.apply_chat_changes(vec![ChatChange::Update(*chat)]);
                 app.read_open_chat();
             }
-            // An empty list clears contacts on logout; otherwise
-            // the backend sends the full set or single updates.
-            NativeEvent::Contacts(contacts) => {
-                if contacts.is_empty() {
-                    app.contacts.clear();
-                }
-                app.contacts.extend(
-                    contacts
-                        .into_iter()
-                        .map(|contact| (contact.id.clone(), contact)),
-                );
-                if !app.message_ids.is_empty() {
-                    app.sync_transcript();
-                    app.rebuild_message_rows(false);
+
+            Event::RefreshTranscript => {
+                if let (Some(backend), Some(chat)) = (&app.backend, app.active_chat.clone()) {
+                    app.message_ids.clear();
+                    app.message_snapshots.clear();
+                    app.editable_messages.clear();
+                    app.messages.clear();
+                    app.transcript.clear();
+                    app.loading_older = false;
+                    app.history_complete = false;
+                    let request = app.transcript_requests.reload();
+                    backend.send(crate::backend::Command::LoadChat {
+                        chat,
+                        before: None,
+                        request,
+                    });
                 }
             }
-            NativeEvent::Messages {
+            // An empty list clears contacts on logout; otherwise
+            // the backend sends the full set or single updates.
+            Event::Contacts(contacts) => {
+                app.apply_transcript_change(TranscriptChange::Contacts(contacts))
+            }
+            Event::Messages {
                 chat,
                 messages,
                 older,
                 complete,
+                request,
             } => {
-                if app.active_chat.as_deref() == Some(&chat) {
-                    app.history_complete = complete;
-                    app.loading_older = false;
+                if !app.transcript_requests.messages(
+                    app.active_chat.as_deref() == Some(&chat),
+                    request,
+                    older,
+                    complete,
+                    &mut app.history_complete,
+                    &mut app.loading_older,
+                ) {
+                    continue;
                 }
                 app.apply_messages(chat.clone(), messages, older);
                 app.continue_message_jump(&chat);
             }
-            NativeEvent::OlderFetched { chat, more } => {
-                if app.active_chat.as_deref() == Some(&chat) {
-                    app.loading_older = false;
-                    app.history_complete = !more;
-                    if !more {
-                        app.status = gettext("No older messages available");
-                    }
+
+            Event::OlderFetched {
+                chat,
+                more,
+                request,
+            } => {
+                if app.transcript_requests.older_fetched(
+                    app.active_chat.as_deref() == Some(&chat),
+                    request,
+                    more,
+                    &mut app.history_complete,
+                    &mut app.loading_older,
+                ) && !more
+                {
+                    app.status = gettext("No older messages available");
                 }
             }
-            NativeEvent::Stickers {
+            Event::Stickers {
                 saved,
                 packs,
                 recent,
@@ -245,21 +170,23 @@ pub(super) fn handle_backend_ready(
                 let changed = saved != app.favorite_stickers
                     || packs != app.sticker_packs
                     || recent != app.recent_stickers;
-                let packs_changed = packs != app.sticker_packs;
                 app.favorite_stickers = saved;
                 app.sticker_packs = packs;
                 app.recent_stickers = recent;
                 if changed {
                     app.refresh_sticker_picker(&sender);
                 }
-                if !packs_changed {
-                    continue;
-                }
-                app.rebuild_sticker_emojis();
             }
-            NativeEvent::MessageUpdated(message) => app.message_updated(*message),
-            NativeEvent::Edited { chat, id, success } => app.edited(chat, id, success),
-            NativeEvent::Sent { chat, success } => {
+            Event::MessageUpdated(message) => {
+                app.apply_transcript_change(TranscriptChange::Message(message))
+            }
+            Event::MessagesUpdated(messages) => {
+                for message in messages {
+                    app.apply_transcript_change(TranscriptChange::Message(Box::new(message)));
+                }
+            }
+            Event::Edited { chat, id, success } => app.edited(chat, id, success),
+            Event::Sent { chat, success } => {
                 if app.audio.voice_send_pending {
                     app.audio.voice_send_pending = false;
                     app.status = if success {
@@ -271,31 +198,32 @@ pub(super) fn handle_backend_ready(
                     app.sent(chat, success);
                 }
             }
-            NativeEvent::AttachmentCompleted {
+            Event::AttachmentCompleted {
                 chat,
                 path,
                 success,
+                ..
             } => app.attachment_completed(chat, path, success),
-            NativeEvent::Media {
+            Event::Media {
                 chat,
                 message,
                 result,
             } => app.media_completed(&chat, &message, result),
-            NativeEvent::StarChanged {
+            Event::StarChanged {
                 chat,
                 id,
                 starred,
                 local,
             } => app.star_changed(&chat, id, starred, local),
-            NativeEvent::StarredIds { chat, ids } => app.starred_ids_loaded(&chat, ids),
-            NativeEvent::StarredList(list) => app.starred_list_loaded(list, &sender),
-            NativeEvent::MessageDeleted { chat, id } => app.message_deleted(&chat, &id),
-            NativeEvent::Calls { entries, seen_at } => app.calls_loaded(entries, seen_at),
-            event @ (NativeEvent::Call(_)
-            | NativeEvent::CallWaiting(_)
-            | NativeEvent::CallVideo(_)
-            | NativeEvent::CallFrames) => app.handle_call_event(account, event, &sender),
-            NativeEvent::Incoming { chat, message } => {
+            Event::StarredIds { chat, ids } => app.starred_ids_loaded(&chat, ids),
+            Event::StarredList(list) => app.starred_list_loaded(list, &sender),
+            Event::MessageDeleted { chat, id } => app.message_deleted(&chat, &id),
+            Event::Calls { entries, seen_at } => app.calls_loaded(entries, seen_at),
+            event @ (Event::Call(_)
+            | Event::CallWaiting(_)
+            | Event::CallVideo(_)
+            | Event::CallFrames) => app.handle_call_event(account, event, &sender),
+            Event::Incoming { chat, message } => {
                 if app.settings.auto_download
                     && should_auto_download(message.content.media())
                     && let Some(backend) = &app.backend
@@ -310,9 +238,14 @@ pub(super) fn handle_backend_ready(
                         .and_then(|known| known.content.media_mut())
                     {
                         media.state = crate::model::MediaState::Downloading;
+                        app.pending_transcript.mark_rows();
                     }
                 }
-                let known = app.chat_snapshots.iter().find(|known| known.id == chat);
+                let known = app
+                    .chat_snapshots
+                    .iter()
+                    .find(|known| known.id == chat)
+                    .map(std::rc::Rc::as_ref);
                 if notification_should_show(
                     app.settings.notifications,
                     app.window.is_active(),
@@ -336,7 +269,7 @@ pub(super) fn handle_backend_ready(
                     }
                 }
             }
-            NativeEvent::Typing {
+            Event::Typing {
                 chat,
                 sender: typing_sender,
                 composing,
@@ -393,14 +326,18 @@ pub(super) fn handle_backend_ready(
                     app.typing_until.remove(&chat);
                 }
             }
-            NativeEvent::Presence {
+            Event::Presence {
                 id,
                 online,
                 last_seen,
             } => {
                 app.presence.insert(id, (online, last_seen));
             }
-            NativeEvent::Avatar { id, path } => {
+            Event::Avatar {
+                id,
+                full: false,
+                path,
+            } => {
                 let previous = app.avatars.get(&id).cloned();
                 if let Some(current) = &path {
                     app.avatars.insert(id.clone(), current.clone());
@@ -409,9 +346,12 @@ pub(super) fn handle_backend_ready(
                 }
                 update_avatar_texture_reference(previous, path);
                 app.chats_dirty = true;
+                if sender_in_window(&app.message_ids, &app.message_snapshots, &id) {
+                    app.pending_transcript.mark_rows();
+                }
             }
-            NativeEvent::ReceiptsPrivacy { disabled } => app.account_receipts_off = disabled,
-            NativeEvent::ProfileSaved { error } => {
+            Event::ReceiptsPrivacy { disabled } => app.account_receipts_off = disabled,
+            Event::ProfileSaved { error } => {
                 if let Some(dialog) = &app.profile_dialog {
                     dialog.saved(error.as_deref());
                 }
@@ -419,13 +359,13 @@ pub(super) fn handle_backend_ready(
                     app.toast(&gettext("Profile saved"));
                 }
             }
-            NativeEvent::LinkPreviewsChanged(enabled) => {
+            Event::LinkPreviewsChanged(enabled) => {
                 app.settings.link_previews = enabled;
                 if app.save_settings().is_err() {
                     app.toast(&gettext("Could not save preferences"));
                 }
             }
-            NativeEvent::ContactAbout { id, about } => {
+            Event::ContactAbout { id, about } => {
                 if let Some(dialog) = &app.profile_dialog
                     && dialog.is_for(&id)
                 {
@@ -439,7 +379,7 @@ pub(super) fn handle_backend_ready(
                     row.set_visible(true);
                 }
             }
-            NativeEvent::ContactReady { id, name } => {
+            Event::ContactReady { id, name } => {
                 let display_name = name
                     .filter(|name| !name.trim().is_empty())
                     .unwrap_or_else(|| crate::util::phone(&id));
@@ -450,11 +390,11 @@ pub(super) fn handle_backend_ready(
                 app.status = gettext("Contact is on WhatsApp");
                 sender.input(Input::OpenChatId(id));
             }
-            NativeEvent::Info(message) => {
+            Event::Info(message) => {
                 app.status = message.clone();
                 app.toast(&message);
             }
-            NativeEvent::Error(error) => {
+            Event::Error(error) => {
                 if error.contains("remains linked") {
                     // The removal did not happen; a later logout must not finish it.
                     app.removing = None;
@@ -462,11 +402,13 @@ pub(super) fn handle_backend_ready(
                 app.loading_older = false;
                 log::warn!("native backend operation failed");
                 let feedback = sanitized_error_feedback(&error);
-                app.status = feedback.into();
-                app.toast(feedback);
+                app.status = feedback.clone();
+                app.toast(&feedback);
             }
+            _ => {}
         }
     }
+    app.flush_transcript();
     if app.chats_dirty && app.chat_ids.is_empty() {
         app.flush_chats();
     } else if app.chats_dirty && !app.chats_flush_scheduled {
@@ -477,4 +419,42 @@ pub(super) fn handle_backend_ready(
         });
     }
     app.poll_theme_catalog();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn poll_errors_surface_without_exposing_details_or_misreporting_sent_results() {
+        let created = |error: Option<&str>| Event::PollCreated {
+            chat: "fixture".into(),
+            error: error.map(str::to_owned),
+        };
+        let voted = |error: Option<&str>| Event::PollVoted {
+            chat: "fixture".into(),
+            message: "fixture".into(),
+            error: error.map(str::to_owned),
+        };
+        assert_eq!(poll_error_message(&created(None)), None);
+        assert_eq!(poll_error_message(&voted(None)), None);
+        assert_eq!(
+            poll_error_message(&created(Some("private detail"))),
+            Some(gettext("Poll creation could not be completed."))
+        );
+        assert_eq!(
+            poll_error_message(&voted(Some("private detail"))),
+            Some(gettext("Could not send your vote."))
+        );
+        let sent_poll = "The poll was sent, but its voting key could not be saved.";
+        let sent_vote = "Your vote was sent, but could not be saved locally.";
+        assert_eq!(
+            poll_error_message(&created(Some(sent_poll))),
+            Some(gettext(sent_poll))
+        );
+        assert_eq!(
+            poll_error_message(&voted(Some(sent_vote))),
+            Some(gettext(sent_vote))
+        );
+    }
 }

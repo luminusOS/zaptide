@@ -291,9 +291,14 @@ pub enum Command {
     LoadChat {
         chat: ChatId,
         before: Option<PageKey>,
+        request: u64,
     },
     /// Requests messages before the archive's earliest message.
-    FetchOlder(ChatId),
+    FetchOlder {
+        chat: ChatId,
+        request: u64,
+        before: Option<PageKey>,
+    },
     Download {
         chat: ChatId,
         message: String,
@@ -475,7 +480,7 @@ pub enum Command {
         session_generation: u64,
         raw_fingerprint: [u8; 32],
         destination: PathBuf,
-        result: Result<PathBuf, String>,
+        result: Result<PathBuf, DownloadFailure>,
     },
     /// Internal recent-sticker download result.
     StickerFetched {
@@ -637,6 +642,15 @@ pub enum CallNotice {
     Ended,
 }
 
+/// Why an attachment did not download.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DownloadFailure {
+    /// WhatsApp's servers no longer hold the file.
+    Expired,
+    /// Any other failure, as text for the bubble.
+    Other(String),
+}
+
 #[derive(Debug)]
 pub enum Event {
     /// The phone changed this account's link-preview setting.
@@ -663,6 +677,8 @@ pub enum Event {
     /// Full chat list, newest first.
     Chats(Vec<Chat>),
     ChatUpdated(Box<Chat>),
+    /// Reload the open transcript after archive changes or a failed batch.
+    RefreshTranscript,
     /// Chat messages in ascending order. `older` prepends them; `complete`
     /// means the archive has no earlier rows.
     Messages {
@@ -670,8 +686,11 @@ pub enum Event {
         messages: Vec<Message>,
         older: bool,
         complete: bool,
+        request: Option<u64>,
     },
     MessageUpdated(Box<Message>),
+    /// Several rows changed by one protocol event, such as a receipt.
+    MessagesUpdated(Vec<Message>),
     /// Result of an outgoing message edit, without protocol error details.
     Edited {
         chat: ChatId,
@@ -746,7 +765,7 @@ pub enum Event {
     Media {
         chat: ChatId,
         message: String,
-        result: Result<PathBuf, String>,
+        result: Result<PathBuf, DownloadFailure>,
     },
     /// Link-time history sync state.
     Syncing(bool),
@@ -754,6 +773,7 @@ pub enum Event {
     OlderFetched {
         chat: ChatId,
         more: bool,
+        request: u64,
     },
     /// Whether account privacy disables direct-chat read receipts.
     ReceiptsPrivacy {

@@ -147,9 +147,23 @@ camera portal, which also reaches cameras that only PipeWire exposes.
 > [!IMPORTANT]
 > Back up the archive with its OS keyring credential: `archive.db` alone cannot
 > be decrypted. Unlock a locked keyring; restore a missing credential instead of
-> replacing the key or deleting the archive.
+> replacing the key or deleting the archive. If the credential is gone for good,
+> remove the account and link it again: that deletes the unreadable files, and
+> only the history the phone sends while linking comes back.
+>
+> Where the credential lives depends on how ZapTide runs. Outside Flatpak it is an
+> item in your desktop keyring (GNOME Keyring, KWallet or another Secret Service).
+> In the Flatpak it is in ZapTide's own keyring file,
+> `~/.var/app/dev.luminusos.ZapTide/data/keyrings/default.keyring`, and that file
+> is encrypted with a per-app secret the Secret portal keeps in your desktop
+> keyring. Back up both: the file without the desktop keyring cannot be opened.
+> On a desktop without a Secret portal the Flatpak keeps the credential in the
+> desktop keyring directly, as outside Flatpak.
 
-Device credentials, downloads, saved stickers and settings are unencrypted; use
+The device credentials in `session.db` are encrypted with a key derived from the
+same keyring credential, so losing it also means linking the computer again. An
+older ZapTide build cannot open the encrypted `session.db`; going back to one
+requires linking again. Downloads, saved stickers and settings are unencrypted; use
 full-disk encryption for them and backups. Data and keyring entries are separate
 from ZapFast, FastsApp and FastWhatsApp. Link ZapTide separately.
 
@@ -158,6 +172,14 @@ downloads", ZapTide removes the ones saved longer ago than the period you pick, 
 little after it starts and every few hours while it runs. Only those files go, never
 messages, stickers or anything outside that folder. A removed file downloads again
 when you open it, if WhatsApp still has it; files WhatsApp no longer keeps are lost.
+
+Received photos (JPEG, PNG, GIF, WebP, AVIF, HEIF, BMP, TIFF, JPEG XL and camera RAW),
+audio, video, PDF, EPUB, RTF, office documents (OpenDocument and Microsoft Office), plain
+text, Markdown, CSV and common archives open in their default app as before. Any other
+received document asks before it opens, and so does a file whose content does not match
+its name: scripts, launchers, installers, packages, web pages, SVG, PostScript,
+playlists and types the system cannot identify. Inside Flatpak the desktop then lets you
+pick the app. Very long sender file names are shortened in the download folder.
 
 Previews contact websites directly while composing, without proxies or redirects.
 Private/reserved destinations are blocked. Disable previews per account or remove one.

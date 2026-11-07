@@ -4,6 +4,7 @@ use crate::i18n::gettext;
 mod attachments;
 mod backend_events;
 pub(super) use backend_events::drain_hidden;
+pub(super) use backend_events::poll_error_message;
 
 impl NativeApplication {
     pub(super) fn handle_input(&mut self, input: Input, sender: ComponentSender<Self>) {
@@ -258,16 +259,28 @@ impl NativeApplication {
                 };
                 self.loading_older = true;
                 if self.history_complete {
-                    backend.send(crate::backend::Command::FetchOlder(chat.clone()));
+                    let request = self.transcript_requests.older(true);
+                    backend.send(crate::backend::Command::FetchOlder {
+                        chat: chat.clone(),
+                        request,
+                        before: self
+                            .message_snapshots
+                            .values()
+                            .filter(|message| message.chat == chat)
+                            .min_by_key(|message| (message.timestamp, message.id.as_str()))
+                            .map(|message| (message.timestamp, message.id.clone())),
+                    });
                 } else if let Some(oldest) = self
                     .message_snapshots
                     .values()
                     .filter(|message| message.chat == chat)
                     .min_by_key(|message| (message.timestamp, message.id.as_str()))
                 {
+                    let request = self.transcript_requests.older(false);
                     backend.send(crate::backend::Command::LoadChat {
                         chat: chat.clone(),
                         before: Some((oldest.timestamp, oldest.id.clone())),
+                        request,
                     });
                 } else {
                     self.loading_older = false;
@@ -494,7 +507,7 @@ impl NativeApplication {
                         // unless the portal lists the app under Background Apps.
                         // GNOME turns the tray extension off while the screen is
                         // locked, which must not pull a hidden window back up.
-                        if !shown && !crate::native_background::sandboxed() {
+                        if !shown && !crate::portal::sandboxed() {
                             self.window.present();
                         }
                     }
@@ -695,7 +708,7 @@ impl NativeApplication {
                     .active_chat
                     .as_deref()
                     .and_then(|chat| self.chat_snapshots.iter().find(|known| known.id == chat))
-                    .map(|chat| chat.participants.clone())
+                    .map(|chat| chat.participants.to_vec())
                     .unwrap_or_default();
                 if participants.is_empty() {
                     return;

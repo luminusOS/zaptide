@@ -107,6 +107,7 @@ impl Worker {
                 .unwrap_or(message);
             self.polish(&mut stored);
             self.emit(Event::Messages {
+                request: None,
                 chat: chat.clone(),
                 messages: vec![stored],
                 older: false,

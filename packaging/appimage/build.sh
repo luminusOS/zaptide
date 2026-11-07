@@ -6,13 +6,18 @@
 set -eux
 
 ARCH="$(uname -m)"
-TOOLS="https://raw.githubusercontent.com/pkgforge-dev/Anylinux-AppImages/refs/heads/main/useful-tools"
+# Pinned by commit and checked by hash; bump both together.
+QUICK_SHARUN_URL="https://raw.githubusercontent.com/pkgforge-dev/Anylinux-AppImages/9559f2ca679a4d790c2f79c746fed29c77008a2e/useful-tools/quick-sharun.sh"
+QUICK_SHARUN_SHA256=97453db8111947d0e88b19e71122f8acb1d16ad636d9318fc87c3210161e7a25
 
 if command -v pacman >/dev/null; then
 	# libadwaita 1.10 (GNOME 51) is only in the testing repos until Arch promotes it;
 	# drop this block once extra has it. They must precede core and extra to win.
 	sed -i 's|^\[core\]|[core-testing]\nInclude = /etc/pacman.d/mirrorlist\n[extra-testing]\nInclude = /etc/pacman.d/mirrorlist\n\n[core]|' /etc/pacman.conf
 
+	# A digest-pinned image carries an old keyring that may not trust newer
+	# packager keys, so refresh it before the full upgrade.
+	pacman -Sy --noconfirm archlinux-keyring
 	pacman -Syu --noconfirm base-devel git wget rustup gtk4 libadwaita \
 		gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-libav cmake libseccomp fontconfig \
 		glycin bubblewrap xorg-server-xvfb patchelf strace adwaita-icon-theme
@@ -36,7 +41,8 @@ fi
 cargo build --release --locked
 install -Dm755 target/release/zaptide /usr/bin/zaptide
 
-wget "$TOOLS/quick-sharun.sh" -O ./quick-sharun
+wget "$QUICK_SHARUN_URL" -O ./quick-sharun
+echo "$QUICK_SHARUN_SHA256  ./quick-sharun" | sha256sum -c -
 chmod +x ./quick-sharun
 
 export OUTPATH=./dist
@@ -71,8 +77,8 @@ for dir in bin lib share etc shared; do
 	ln -s "usr/$dir" "AppDir/$dir"
 done
 
-# quick-sharun is fetched unpinned: fail here if its layout changes, not after
-# an unusable image is published.
+# Fail here if a quick-sharun bump changes its layout, not after an unusable
+# image is published.
 test -x AppDir/usr/bin/zaptide
 test -d AppDir/usr/lib
 test -d AppDir/usr/share

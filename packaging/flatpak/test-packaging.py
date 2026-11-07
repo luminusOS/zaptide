@@ -201,8 +201,7 @@ pathlib.Path(sys.argv[sys.argv.index("-o") + 1]).write_text(json.dumps({"lock_sh
         self.assertIn("manifest", jobs["publish"]["needs"])
         self.assertEqual(jobs["flatpak"]["permissions"], {"contents": "read"})
         self.assertEqual(jobs["manifest"]["permissions"], {"contents": "read"})
-        self.assertNotIn("ZAPTIDE_GIPHY_KEY", workflow.get("env", {}))
-        self.assertIn("ZAPTIDE_GIPHY_KEY", jobs["build"]["env"])
+        self.assertNotIn("GIPHY", workflow_text.upper())
         self.assertEqual({entry["arch"] for entry in jobs["flatpak"]["strategy"]["matrix"]["include"]},
                          {"x86_64", "aarch64"})
         self.assertIn("steps.upload-bundle.outputs.artifact-id", workflow_text)

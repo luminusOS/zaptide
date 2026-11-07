@@ -130,7 +130,7 @@ pub(super) struct AccountSwitcher {
 }
 
 fn set_picture(avatar: &adw::Avatar, path: Option<&std::path::Path>) {
-    let texture = path.and_then(|path| gtk::gdk::Texture::from_filename(path).ok());
+    let texture = path.and_then(crate::native_media_widgets::avatar_texture);
     avatar.set_custom_image(texture.as_ref());
 }
 
@@ -296,6 +296,7 @@ fn row(widgets: &std::rc::Rc<Widgets>, account: &SwitcherRow, active: bool) -> a
     let row = adw::ActionRow::builder()
         .title(account.label.as_str())
         .subtitle(account.subtitle())
+        .use_markup(false)
         .title_lines(1)
         .subtitle_lines(1)
         .activatable(!active)

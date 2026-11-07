@@ -196,9 +196,3 @@ pub(super) fn record_with<I: Iterator<Item = f32>>(
     }
     Ok(voice::mono_at_rate(&heard, channels, rate))
 }
-
-/// Temporary recording path used before sending and archiving.
-#[allow(dead_code)]
-pub fn recording_path(dir: &std::path::Path) -> std::path::PathBuf {
-    dir.join(format!("voice-{}.ogg", crate::util::now()))
-}

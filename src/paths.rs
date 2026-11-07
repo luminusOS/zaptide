@@ -93,16 +93,6 @@ impl AppDirs {
         self.state.join("accounts.json")
     }
 
-    /// Current-run log, replaced at startup.
-    pub fn log_file(&self) -> PathBuf {
-        self.state.join("zaptide.log")
-    }
-
-    /// Panic log written before process exit.
-    pub fn panic_log(&self) -> PathBuf {
-        self.state.join("panic.log")
-    }
-
     /// Icons ZapTide draws itself, where GTK's icon theme looks for them.
     pub fn icon_dir(&self) -> PathBuf {
         self.cache.join("icons")
@@ -166,14 +156,7 @@ impl AppDirs {
     /// move before anything changes, and an encrypted archive moves only once
     /// its keyring key has been copied to the new folder's identity and read
     /// back. An interrupted move is finished by the next start.
-    pub fn adopt_single_account(&self) -> std::io::Result<()> {
-        self.adopt_single_account_with(|from, to| {
-            crate::archive::copy_archive_key(from, to)
-                .map_err(|error| std::io::Error::other(format!("{error:#}")))
-        })
-    }
-
-    pub(crate) fn adopt_single_account_with(
+    pub(crate) fn adopt_single_account(
         &self,
         copy_key: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
     ) -> std::io::Result<()> {
@@ -257,7 +240,8 @@ impl AppDirs {
         copy_key: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
     ) -> std::io::Result<()> {
         let legacy_archive = self.archive_db();
-        if legacy_archive.exists() {
+        // The device store is keyed from the archive's keyring entry too.
+        if legacy_archive.exists() || self.session_db().exists() {
             copy_key(&legacy_archive, &dest.archive_db()).map_err(|error| {
                 std::io::Error::other(format!(
                     "Could not move the archive's key to the new account folder, so the archive was left where it is: {error}"
@@ -402,7 +386,7 @@ mod tests {
     fn migration_moves_everything_into_the_first_account() {
         let (root, dirs) = legacy("migration-moves");
         assert!(dirs.has_legacy_session());
-        dirs.adopt_single_account_with(|_, _| Ok(())).unwrap();
+        dirs.adopt_single_account(|_, _| Ok(())).unwrap();
         let one = first(&dirs);
         assert_eq!(std::fs::read(one.session_db()).unwrap(), b"session");
         assert_eq!(std::fs::read(one.archive_db()).unwrap(), b"archive");
@@ -426,7 +410,7 @@ mod tests {
     fn migration_leaves_everything_when_the_key_cannot_move() {
         let (root, dirs) = legacy("migration-key");
         let error = dirs
-            .adopt_single_account_with(|_, _| Err(std::io::Error::other("locked")))
+            .adopt_single_account(|_, _| Err(std::io::Error::other("locked")))
             .unwrap_err();
         assert!(error.to_string().contains("left where it is"));
         assert_eq!(std::fs::read(dirs.archive_db()).unwrap(), b"archive");
@@ -440,7 +424,7 @@ mod tests {
         let (root, dirs) = legacy("migration-order");
         let archive = dirs.archive_db();
         let target = first(&dirs).archive_db();
-        dirs.adopt_single_account_with(|from, to| {
+        dirs.adopt_single_account(|from, to| {
             assert!(
                 from.exists(),
                 "the archive stays put while its key is copied"
@@ -449,6 +433,21 @@ mod tests {
             Ok(())
         })
         .unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn migration_copies_the_key_of_a_device_store_without_an_archive() {
+        let (root, dirs) = legacy("migration-session-key");
+        for name in ["archive.db", "archive.db-wal"] {
+            std::fs::remove_file(dirs.state.join(name)).unwrap();
+        }
+        let error = dirs
+            .adopt_single_account(|_, _| Err(std::io::Error::other("locked")))
+            .unwrap_err();
+        assert!(error.to_string().contains("left where it is"));
+        assert_eq!(std::fs::read(dirs.session_db()).unwrap(), b"session");
+        assert!(!first(&dirs).session_db().exists());
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -463,7 +462,7 @@ mod tests {
             one.state.join("archive.db-wal"),
         )
         .unwrap();
-        dirs.adopt_single_account_with(|_, _| Ok(())).unwrap();
+        dirs.adopt_single_account(|_, _| Ok(())).unwrap();
         assert_eq!(std::fs::read(one.archive_db()).unwrap(), b"archive");
         assert_eq!(
             std::fs::read(one.state.join("archive.db-wal")).unwrap(),
@@ -483,7 +482,7 @@ mod tests {
             std::fs::rename(dirs.state.join(name), one.state.join(name)).unwrap();
         }
         assert!(
-            dirs.adopt_single_account_with(|_, _| Err(std::io::Error::other("locked")))
+            dirs.adopt_single_account(|_, _| Err(std::io::Error::other("locked")))
                 .is_err()
         );
         assert_eq!(std::fs::read(dirs.session_db()).unwrap(), b"session");
@@ -504,7 +503,7 @@ mod tests {
         // Another setup's files, and one name the root also has.
         std::fs::write(one.session_db(), b"other session").unwrap();
         std::fs::write(one.archive_db(), b"other archive").unwrap();
-        assert!(dirs.adopt_single_account_with(|_, _| Ok(())).is_err());
+        assert!(dirs.adopt_single_account(|_, _| Ok(())).is_err());
         assert!(!dirs.session_db().exists());
         assert_eq!(std::fs::read(one.session_db()).unwrap(), b"other session");
         std::fs::remove_dir_all(root).unwrap();
@@ -516,7 +515,7 @@ mod tests {
         let one = first(&dirs);
         one.ensure().unwrap();
         std::fs::write(one.session_db(), b"other").unwrap();
-        assert!(dirs.adopt_single_account_with(|_, _| Ok(())).is_err());
+        assert!(dirs.adopt_single_account(|_, _| Ok(())).is_err());
         assert_eq!(std::fs::read(dirs.session_db()).unwrap(), b"session");
         assert_eq!(std::fs::read(dirs.archive_db()).unwrap(), b"archive");
         assert_eq!(std::fs::read(one.session_db()).unwrap(), b"other");

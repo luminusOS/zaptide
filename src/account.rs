@@ -216,24 +216,37 @@ pub struct Prepared {
     pub legacy: bool,
 }
 
+/// Deletes a folder's key from the OS keyring, given its keyring identity.
+type ForgetKey<'a> = &'a dyn Fn(&str) -> anyhow::Result<()>;
+
+fn forget_os_key(identity: &str) -> anyhow::Result<()> {
+    crate::archive::forget_archive_key(identity)
+}
+
 pub fn prepare(dirs: &AppDirs, global: &crate::settings::Settings) -> Prepared {
-    prepare_with(dirs, global, |from, to| {
-        crate::archive::copy_archive_key(from, to)
-            .map_err(|error| std::io::Error::other(format!("{error:#}")))
-    })
+    prepare_with(
+        dirs,
+        global,
+        |from, to| {
+            crate::archive::copy_archive_key(from, to)
+                .map_err(|error| std::io::Error::other(format!("{error:#}")))
+        },
+        &forget_os_key,
+    )
 }
 
 fn prepare_with(
     dirs: &AppDirs,
     global: &crate::settings::Settings,
     copy_key: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
+    forget_key: ForgetKey<'_>,
 ) -> Prepared {
     let path = dirs.accounts_file();
     let mut registry = Registry::load(&path);
     if registry.accounts.is_empty() && dirs.has_legacy_session() {
         // A first start, or a move that stopped half-way: finish it before
         // trusting the folders, so no database is left behind at the root.
-        if let Err(error) = dirs.adopt_single_account_with(copy_key) {
+        if let Err(error) = dirs.adopt_single_account(copy_key) {
             log::error!("could not move the existing account into its folder: {error}");
             return Prepared {
                 registry,
@@ -266,7 +279,7 @@ fn prepare_with(
         log::warn!("could not move saved stickers or caches into the first account: {error}");
     }
     for id in registry.discard_pending() {
-        delete_account_data(dirs, id);
+        delete_account_data_with(dirs, id, forget_key);
     }
     if registry
         .active
@@ -274,7 +287,7 @@ fn prepare_with(
     {
         registry.active = registry.accounts.first().map(|entry| entry.id);
     }
-    delete_orphans(dirs, &registry);
+    delete_orphans(dirs, &registry, forget_key);
     if let Err(error) = registry.save(&path) {
         log::warn!("could not save the accounts file: {error}");
     }
@@ -287,12 +300,16 @@ fn prepare_with(
 /// Forgets an account's archive key and deletes its folders. Errors are
 /// logged; whatever is left is removed as an orphan on the next start.
 pub fn delete_account_data(dirs: &AppDirs, id: AccountId) {
+    delete_account_data_with(dirs, id, &forget_os_key);
+}
+
+fn delete_account_data_with(dirs: &AppDirs, id: AccountId, forget_key: ForgetKey<'_>) {
     let account = dirs.for_account(id);
     let archive = account.archive_db();
-    if archive.exists() {
+    if archive.exists() || account.session_db().exists() {
         match crate::archive::archive_key_identity(&archive) {
             Ok(identity) => {
-                if let Err(error) = crate::archive::forget_archive_key(&identity) {
+                if let Err(error) = forget_key(&identity) {
                     log::warn!("could not delete account {id}'s archive key: {error:#}");
                 }
             }
@@ -337,7 +354,7 @@ fn recover(dirs: &AppDirs) -> Registry {
 }
 
 /// Folders left by a removal that stopped half-way.
-fn delete_orphans(dirs: &AppDirs, registry: &Registry) {
+fn delete_orphans(dirs: &AppDirs, registry: &Registry, forget_key: ForgetKey<'_>) {
     for base in [dirs.accounts_state_dir(), dirs.accounts_cache_dir()] {
         let Ok(entries) = std::fs::read_dir(&base) else {
             continue;
@@ -351,7 +368,7 @@ fn delete_orphans(dirs: &AppDirs, registry: &Registry) {
                 continue;
             };
             if registry.entry(AccountId(id)).is_none() {
-                delete_account_data(dirs, AccountId(id));
+                delete_account_data_with(dirs, AccountId(id), forget_key);
             }
         }
     }
@@ -417,6 +434,11 @@ mod tests {
         assert_eq!(Registry::load(&path), Registry::default());
     }
 
+    /// Tests never reach the OS keyring; folders here hold no real key.
+    fn never_forget(_: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     fn dirs(name: &str) -> (tempfile::TempDir, crate::paths::AppDirs) {
         let root = tempfile::tempdir().unwrap();
         let dirs = crate::paths::AppDirs::under(&root.path().join(name));
@@ -427,7 +449,12 @@ mod tests {
     #[test]
     fn a_fresh_install_starts_with_one_pending_account() {
         let (_root, dirs) = dirs("fresh");
-        let prepared = prepare_with(&dirs, &crate::settings::Settings::default(), |_, _| Ok(()));
+        let prepared = prepare_with(
+            &dirs,
+            &crate::settings::Settings::default(),
+            |_, _| Ok(()),
+            &never_forget,
+        );
         assert!(!prepared.legacy);
         assert_eq!(prepared.registry.active, Some(AccountId::FIRST));
         assert!(!prepared.registry.entry(AccountId::FIRST).unwrap().linked);
@@ -442,7 +469,7 @@ mod tests {
             send_typing: false,
             ..Default::default()
         };
-        let prepared = prepare_with(&dirs, &global, |_, _| Ok(()));
+        let prepared = prepare_with(&dirs, &global, |_, _| Ok(()), &never_forget);
         assert!(!prepared.legacy);
         assert!(prepared.registry.entry(AccountId::FIRST).unwrap().linked);
         let one = dirs.for_account(AccountId::FIRST);
@@ -457,9 +484,12 @@ mod tests {
     fn a_failed_migration_keeps_the_legacy_layout() {
         let (_root, dirs) = dirs("legacy-failed");
         std::fs::write(dirs.archive_db(), b"archive").unwrap();
-        let prepared = prepare_with(&dirs, &Default::default(), |_, _| {
-            Err(std::io::Error::other("locked"))
-        });
+        let prepared = prepare_with(
+            &dirs,
+            &Default::default(),
+            |_, _| Err(std::io::Error::other("locked")),
+            &never_forget,
+        );
         assert!(prepared.legacy);
         assert_eq!(std::fs::read(dirs.archive_db()).unwrap(), b"archive");
         assert!(!dirs.accounts_file().exists());
@@ -480,7 +510,18 @@ mod tests {
         std::fs::write(orphan.session_db(), b"left behind").unwrap();
         let unrelated = dirs.accounts_state_dir().join("not-a-number");
         std::fs::create_dir_all(&unrelated).unwrap();
-        prepare_with(&dirs, &Default::default(), |_, _| Ok(()));
+        let expected = crate::archive::archive_key_identity(&orphan.archive_db()).unwrap();
+        let forgotten = std::cell::RefCell::new(Vec::new());
+        let record = |identity: &str| {
+            forgotten.borrow_mut().push(identity.to_owned());
+            Ok(())
+        };
+        prepare_with(&dirs, &Default::default(), |_, _| Ok(()), &record);
+        assert_eq!(
+            forgotten.into_inner(),
+            [expected],
+            "a folder with only a device store still forgets its key"
+        );
         assert!(!orphan.state.exists() && !orphan.cache.exists());
         assert!(kept_dirs.state.exists());
         assert!(unrelated.exists(), "only numeric folders are touched");
@@ -496,7 +537,7 @@ mod tests {
         registry.active = Some(pending);
         registry.save(&dirs.accounts_file()).unwrap();
         dirs.for_account(pending).ensure().unwrap();
-        let prepared = prepare_with(&dirs, &Default::default(), |_, _| Ok(()));
+        let prepared = prepare_with(&dirs, &Default::default(), |_, _| Ok(()), &never_forget);
         assert_eq!(prepared.registry.active, Some(linked));
         assert!(prepared.registry.entry(pending).is_none());
         assert!(!dirs.for_account(pending).state.exists());
@@ -511,7 +552,7 @@ mod tests {
             std::fs::write(account.session_db(), b"session").unwrap();
         }
         std::fs::write(dirs.accounts_file(), b"{damaged").unwrap();
-        let mut prepared = prepare_with(&dirs, &Default::default(), |_, _| Ok(()));
+        let mut prepared = prepare_with(&dirs, &Default::default(), |_, _| Ok(()), &never_forget);
         assert_eq!(
             prepared.registry.linked_ids(),
             vec![AccountId(1), AccountId(3)]
@@ -528,7 +569,7 @@ mod tests {
             account.ensure().unwrap();
             std::fs::write(account.session_db(), b"session").unwrap();
         }
-        let prepared = prepare_with(&dirs, &Default::default(), |_, _| Ok(()));
+        let prepared = prepare_with(&dirs, &Default::default(), |_, _| Ok(()), &never_forget);
         assert_eq!(
             prepared.registry.linked_ids(),
             vec![AccountId(1), AccountId(2)]
@@ -549,7 +590,7 @@ mod tests {
             send_read_receipts: false,
             ..Default::default()
         };
-        let prepared = prepare_with(&dirs, &global, |_, _| Ok(()));
+        let prepared = prepare_with(&dirs, &global, |_, _| Ok(()), &never_forget);
         assert!(!prepared.legacy);
         assert_eq!(prepared.registry.linked_ids(), vec![AccountId::FIRST]);
         assert_eq!(
@@ -570,7 +611,7 @@ mod tests {
         std::fs::write(one.session_db(), b"session").unwrap();
         std::fs::write(one.state.join("archive.db-wal"), b"wal").unwrap();
         std::fs::write(dirs.archive_db(), b"archive").unwrap();
-        let prepared = prepare_with(&dirs, &Default::default(), |_, _| Ok(()));
+        let prepared = prepare_with(&dirs, &Default::default(), |_, _| Ok(()), &never_forget);
         assert!(!prepared.legacy);
         assert_eq!(prepared.registry.linked_ids(), vec![AccountId::FIRST]);
         assert_eq!(std::fs::read(one.archive_db()).unwrap(), b"archive");
@@ -581,7 +622,7 @@ mod tests {
     fn root_stickers_stay_put_for_a_pending_first_account() {
         let (_root, dirs) = dirs("fresh-with-stickers");
         std::fs::create_dir_all(dirs.saved_sticker_dir()).unwrap();
-        prepare_with(&dirs, &Default::default(), |_, _| Ok(()));
+        prepare_with(&dirs, &Default::default(), |_, _| Ok(()), &never_forget);
         assert!(dirs.saved_sticker_dir().exists());
     }
 
@@ -593,7 +634,7 @@ mod tests {
             ..Default::default()
         };
         registry.save(&dirs.accounts_file()).unwrap();
-        let prepared = prepare_with(&dirs, &Default::default(), |_, _| Ok(()));
+        let prepared = prepare_with(&dirs, &Default::default(), |_, _| Ok(()), &never_forget);
         assert_eq!(prepared.registry.active, Some(AccountId(4)));
     }
 

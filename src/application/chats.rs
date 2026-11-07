@@ -29,7 +29,7 @@ impl ChatTargets {
     }
 }
 
-fn chat_row(chat: crate::model::Chat, avatar: Option<std::path::PathBuf>, open: bool) -> ChatRow {
+fn chat_row(chat: &crate::model::Chat, avatar: Option<std::path::PathBuf>, open: bool) -> ChatRow {
     let unread = (chat.unread != 0).then(|| chat.unread.to_string());
     let muted = chat.muted(crate::util::now());
     let delivery = chat
@@ -43,7 +43,7 @@ fn chat_row(chat: crate::model::Chat, avatar: Option<std::path::PathBuf>, open: 
         .map(|last| last.summary.clone())
         .unwrap_or_else(|| "No messages yet".into());
     ChatRow {
-        id: chat.id,
+        id: chat.id.clone(),
         last_activity: chat.last_activity,
         name: chat.name.clone(),
         preview,
@@ -122,6 +122,7 @@ impl NativeApplication {
         self.message_snapshots.clear();
         self.editable_messages.clear();
         self.transcript.clear();
+        self.pending_transcript.clear();
         self.audio.selected_voice = None;
         self.audio.selected_voice_message = None;
         self.page_title = self
@@ -131,12 +132,17 @@ impl NativeApplication {
             .map(|known| known.name.clone())
             .unwrap_or_else(|| "Conversation".into());
         self.status = gettext("Loading messages");
+        let request = self.transcript_requests.reload();
         if let Some(backend) = &self.backend {
             backend.send(crate::backend::Command::MarkRead {
                 chat: chat.clone(),
                 receipts: self.settings.send_read_receipts && !self.account_receipts_off,
             });
-            backend.send(crate::backend::Command::LoadChat { chat, before: None });
+            backend.send(crate::backend::Command::LoadChat {
+                chat,
+                before: None,
+                request,
+            });
         }
         self.focus_composer();
     }
@@ -177,7 +183,7 @@ impl NativeApplication {
         if let Some(tray) = &self.tray {
             tray.update(state.clone());
         }
-        if crate::native_background::sandboxed() {
+        if crate::portal::sandboxed() {
             crate::native_background::set_status(
                 &crate::native_tray::unread_label(state.unread_chats)
                     .unwrap_or_else(|| "No unread chats".into()),
@@ -289,17 +295,13 @@ impl NativeApplication {
         self.active_chat
             .as_ref()
             .and_then(|id| self.chat_snapshots.iter().find(|chat| &chat.id == id))
+            .map(std::rc::Rc::as_ref)
     }
 
     pub(super) fn apply_chat_changes(&mut self, changes: Vec<ChatChange>) {
         for change in changes {
             match change {
-                ChatChange::Snapshot(chats) => {
-                    for chat in &chats {
-                        self.request_avatar(&chat.id);
-                    }
-                    self.reset_chats(chats)
-                }
+                ChatChange::Snapshot(chats) => self.reset_chats(chats),
                 ChatChange::Update(chat) => {
                     self.request_avatar(&chat.id);
                     self.update_chat(chat)
@@ -309,6 +311,13 @@ impl NativeApplication {
     }
 
     fn reset_chats(&mut self, chats: Vec<crate::model::Chat>) {
+        self.reset_shared_chats(chats.into_iter().map(std::rc::Rc::new).collect());
+    }
+
+    pub(super) fn reset_shared_chats(&mut self, chats: Vec<std::rc::Rc<crate::model::Chat>>) {
+        for chat in &chats {
+            self.request_avatar(&chat.id);
+        }
         self.chat_snapshots = chats;
         self.chats_dirty = true;
         if self.active_chat.as_deref().is_some_and(|id| {
@@ -335,7 +344,7 @@ impl NativeApplication {
         if self.leaves_section(&chat) && self.active_chat.as_deref() == Some(&chat.id) {
             self.clear_active_chat();
         }
-        self.chat_snapshots.insert(index, chat);
+        self.chat_snapshots.insert(index, std::rc::Rc::new(chat));
         self.chats_dirty = true;
     }
 
@@ -405,7 +414,7 @@ impl NativeApplication {
             .is_none_or(|adjustment| adjustment.value() <= 0.0);
         if std::mem::take(&mut self.chats_dirty) {
             self.chat_projection
-                .replace_snapshot(self.chat_snapshots.clone());
+                .replace_shared_snapshot(self.chat_snapshots.iter().cloned());
             self.chat_projection.set_filters(self.chat_filters);
         }
         let selected = self.chat_projection.selected_id().map(str::to_owned);
@@ -414,11 +423,7 @@ impl NativeApplication {
         for chat in self.chat_projection.visible() {
             self.chat_ids.push(chat.id.clone());
             let open = self.active_chat.as_deref() == Some(chat.id.as_str());
-            rows.push(chat_row(
-                chat.clone(),
-                self.avatars.get(&chat.id).cloned(),
-                open,
-            ));
+            rows.push(chat_row(chat, self.avatars.get(&chat.id).cloned(), open));
         }
         self.chat_targets
             .borrow_mut()

@@ -222,7 +222,7 @@ mod tests {
         .unwrap();
         assert_eq!(video.kind, AttachmentKind::Video);
         assert_eq!(video.title, "GIF");
-        assert_eq!(video.detail, "1:05 · 1.0 KB");
+        assert_eq!(video.detail, "1:05 · 1.0\u{a0}kB");
 
         let audio = project(&message(Content::Audio {
             media: media(None, MediaState::Idle),
@@ -244,7 +244,7 @@ mod tests {
         .unwrap();
         assert_eq!(document.kind, AttachmentKind::Document);
         assert_eq!(document.title, "report.pdf");
-        assert_eq!(document.detail, "1.0 KB · 3 pages");
+        assert_eq!(document.detail, "1.0\u{a0}kB · 3 pages");
         assert!(!format!("{document:?}").contains("private"));
     }
 

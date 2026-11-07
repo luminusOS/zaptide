@@ -84,7 +84,7 @@ impl Worker {
             log::info!("poll recovery: phone history timed out; retry scheduled");
             self.emit_message(&chat, &id);
         }
-        if !self.status.is_connected() || !self.pending_older.is_empty() {
+        if !self.status.is_connected() || !self.older.pending_older.is_empty() {
             return;
         }
         let Some(client) = self.client.clone() else {
@@ -579,6 +579,19 @@ impl Worker {
         timestamp: i64,
         update: &wa::message::PollUpdateMessage,
     ) {
+        self.file_poll_vote(chat, update_id, sender, from_me, timestamp, update);
+        self.pump_poll_votes();
+    }
+
+    pub(super) fn file_poll_vote(
+        &mut self,
+        chat: &str,
+        update_id: &str,
+        sender: &str,
+        from_me: bool,
+        timestamp: i64,
+        update: &wa::message::PollUpdateMessage,
+    ) {
         let Some(poll) = update
             .poll_creation_message_key
             .as_option()
@@ -606,7 +619,6 @@ impl Worker {
         if let Err(error) = self.archive.save_poll_vote(&vote) {
             log::warn!("could not store a poll vote: {error}");
         }
-        self.pump_poll_votes();
     }
 
     pub(super) fn pump_poll_votes(&mut self) {

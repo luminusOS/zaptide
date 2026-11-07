@@ -100,7 +100,7 @@ pub(super) fn link_preview_tile(preview: &crate::model::LinkPreview) -> gtk::Wid
     if let Some(texture) = preview
         .thumbnail
         .as_ref()
-        .and_then(|bytes| gtk::gdk::Texture::from_bytes(&gtk::glib::Bytes::from(bytes)).ok())
+        .and_then(|bytes| crate::native_media_widgets::inline_thumbnail_texture(bytes))
     {
         let image = gtk::Picture::for_paintable(&texture);
         image.set_content_fit(gtk::ContentFit::Cover);
