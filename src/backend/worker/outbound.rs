@@ -17,9 +17,126 @@ struct Prepared {
     message: wa::Message,
     content: Content,
     thumbnail: Option<Vec<u8>>,
-    bytes: Vec<u8>,
+    data: PreparedData,
     mime: String,
     file_name: Option<String>,
+}
+
+enum PreparedData {
+    Bytes(Vec<u8>),
+    Snapshot(tempfile::NamedTempFile),
+}
+
+struct FileUploadSource {
+    file: tempfile::NamedTempFile,
+    len: u64,
+}
+
+fn upload_staging_file(directory: &Path) -> std::io::Result<tempfile::NamedTempFile> {
+    tempfile::Builder::new()
+        .prefix(".upload-")
+        .suffix(".tmp")
+        .rand_bytes(32)
+        .tempfile_in(directory)
+}
+
+impl whatsapp_rust::wacore::upload::UploadSource for FileUploadSource {
+    fn len(&self) -> u64 {
+        self.len
+    }
+
+    fn reader_from(&self, offset: u64) -> std::io::Result<Box<dyn std::io::Read + Send>> {
+        use std::io::Seek;
+        let mut file = std::fs::File::open(self.file.path())?;
+        file.seek(std::io::SeekFrom::Start(offset))?;
+        Ok(Box::new(file))
+    }
+}
+
+async fn encrypt_snapshot(
+    snapshot: &tempfile::NamedTempFile,
+    media_type: MediaType,
+) -> Result<
+    (
+        FileUploadSource,
+        whatsapp_rust::wacore::upload::EncryptedMediaInfo,
+    ),
+    String,
+> {
+    let input = std::fs::File::open(snapshot.path()).map_err(|error| error.to_string())?;
+    let directory = snapshot
+        .path()
+        .parent()
+        .ok_or("Missing staging directory")?;
+    let output = upload_staging_file(directory).map_err(|error| error.to_string())?;
+    tokio::task::spawn_blocking(move || {
+        let mut output = output;
+        let info = whatsapp_rust::wacore::upload::encrypt_media_streaming(
+            input,
+            output.as_file_mut(),
+            media_type,
+        )
+        .map_err(|error| error.to_string())?;
+        let len = output
+            .as_file()
+            .metadata()
+            .map_err(|error| error.to_string())?
+            .len();
+        Ok((FileUploadSource { file: output, len }, info))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+async fn snapshot_session_file(
+    source: &Path,
+    directory: &Path,
+    generation: u64,
+    current_generation: &AtomicU64,
+    cache_lock: &tokio::sync::Mutex<()>,
+) -> Result<tempfile::NamedTempFile, String> {
+    let staging = {
+        let _guard = cache_lock.lock().await;
+        if current_generation.load(Ordering::Acquire) != generation {
+            return Err(ACCOUNT_CHANGED.to_owned());
+        }
+        tokio::fs::create_dir_all(directory)
+            .await
+            .map_err(|error| error.to_string())?;
+        if current_generation.load(Ordering::Acquire) != generation {
+            return Err(ACCOUNT_CHANGED.to_owned());
+        }
+        upload_staging_file(directory).map_err(|error| error.to_string())?
+    };
+    let source = source.to_owned();
+    let staging = tokio::task::spawn_blocking(move || {
+        let mut input = std::fs::File::open(source)?;
+        let mut staging = staging;
+        std::io::copy(&mut input, staging.as_file_mut())?;
+        Ok::<_, std::io::Error>(staging)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())?;
+    let _guard = cache_lock.lock().await;
+    if current_generation.load(Ordering::Acquire) != generation {
+        return Err(ACCOUNT_CHANGED.to_owned());
+    }
+    Ok(staging)
+}
+
+async fn promote_session_snapshot(
+    staging: tempfile::NamedTempFile,
+    destination: &Path,
+    generation: u64,
+    current_generation: &AtomicU64,
+    cache_lock: &tokio::sync::Mutex<()>,
+) -> Result<PathBuf, String> {
+    let _guard = cache_lock.lock().await;
+    if current_generation.load(Ordering::Acquire) != generation {
+        return Err(ACCOUNT_CHANGED.to_owned());
+    }
+    promote_download(staging.path(), destination, None).map_err(|error| error.to_string())
 }
 
 struct FileOutboundContext<'a> {
@@ -90,7 +207,7 @@ async fn prepare_voice(
             waveform,
         },
         thumbnail: None,
-        bytes,
+        data: PreparedData::Bytes(bytes),
         mime,
         file_name: None,
     })
@@ -152,7 +269,7 @@ async fn prepare_media(
                 ),
             },
             thumbnail,
-            bytes: jpeg,
+            data: PreparedData::Bytes(jpeg),
             mime: "image/jpeg".to_owned(),
             file_name: None,
         });
@@ -181,7 +298,7 @@ async fn prepare_media(
                 gif,
             },
             thumbnail: None,
-            bytes,
+            data: PreparedData::Bytes(bytes),
             mime: mime_owned,
             file_name: file_name.map(str::to_owned),
         });
@@ -208,7 +325,7 @@ async fn prepare_media(
                 waveform: Vec::new(),
             },
             thumbnail: None,
-            bytes,
+            data: PreparedData::Bytes(bytes),
             mime: mime_owned,
             file_name: file_name.map(str::to_owned),
         });
@@ -248,9 +365,187 @@ async fn prepare_document(
             pages: None,
         },
         thumbnail: None,
-        bytes,
+        data: PreparedData::Bytes(bytes),
         mime: mime_owned,
         file_name: Some(name),
+    })
+}
+
+async fn prepare_streamed_file(
+    client: &Client,
+    snapshot: tempfile::NamedTempFile,
+    mime: &str,
+    file_name: Option<&str>,
+    document: bool,
+) -> Result<Prepared, String> {
+    let kind = mime.split('/').next().unwrap_or_default();
+    let media_type = if document {
+        MediaType::Document
+    } else {
+        match kind {
+            "video" => MediaType::Video,
+            "audio" => MediaType::Audio,
+            _ => MediaType::Document,
+        }
+    };
+    let (source, info) = encrypt_snapshot(&snapshot, media_type).await?;
+    let size = info.file_length;
+    let upload = client
+        .upload_stream(source, info, media_type)
+        .await
+        .map_err(|error| error.to_string())?;
+    let mime = mime.to_owned();
+    let (message, content, file_name) = match media_type {
+        MediaType::Video => (
+            video_message(
+                upload,
+                VideoOptions {
+                    mimetype: Some(mime.clone()),
+                    gif_playback: Some(false),
+                    ..Default::default()
+                },
+            ),
+            Content::Video {
+                caption: None,
+                media: media(Some(&mime), Some(size), None, None),
+                seconds: None,
+                gif: false,
+            },
+            file_name.map(str::to_owned),
+        ),
+        MediaType::Audio => (
+            audio_message(
+                upload,
+                AudioOptions {
+                    mimetype: Some(mime.clone()),
+                    ptt: Some(false),
+                    ..Default::default()
+                },
+            ),
+            Content::Audio {
+                media: media(Some(&mime), Some(size), None, None),
+                seconds: None,
+                voice_note: false,
+                waveform: Vec::new(),
+            },
+            file_name.map(str::to_owned),
+        ),
+        _ => {
+            let name = file_name.unwrap_or("file").to_owned();
+            (
+                document_message(
+                    upload,
+                    DocumentOptions {
+                        mimetype: Some(mime.clone()),
+                        file_name: Some(name.clone()),
+                        title: Some(name.clone()),
+                        ..Default::default()
+                    },
+                ),
+                Content::Document {
+                    media: media(Some(&mime), Some(size), None, None),
+                    file_name: name.clone(),
+                    caption: None,
+                    pages: None,
+                },
+                Some(name),
+            )
+        }
+    };
+    Ok(Prepared {
+        message,
+        content,
+        thumbnail: None,
+        data: PreparedData::Snapshot(snapshot),
+        mime,
+        file_name,
+    })
+}
+
+struct PreparedPhoto {
+    snapshot: tempfile::NamedTempFile,
+    width: u32,
+    height: u32,
+    thumbnail: Option<Vec<u8>>,
+}
+
+async fn transform_photo_snapshot(
+    snapshot: tempfile::NamedTempFile,
+    jpeg: bool,
+) -> Result<PreparedPhoto, String> {
+    tokio::task::spawn_blocking(move || {
+        let input = std::fs::File::open(snapshot.path()).map_err(|error| error.to_string())?;
+        let decoded = image::ImageReader::new(std::io::BufReader::new(input))
+            .with_guessed_format()
+            .map_err(|error| error.to_string())?
+            .decode()
+            .map_err(|error| error.to_string())?;
+        let (width, height) = (decoded.width(), decoded.height());
+        let thumbnail = thumbnail_jpeg(&decoded);
+        let snapshot = if jpeg {
+            snapshot
+        } else {
+            let directory = snapshot
+                .path()
+                .parent()
+                .ok_or("Missing staging directory")?;
+            let mut output = upload_staging_file(directory).map_err(|error| error.to_string())?;
+            image::codecs::jpeg::JpegEncoder::new_with_quality(output.as_file_mut(), 88)
+                .encode_image(&decoded.to_rgb8())
+                .map_err(|error| error.to_string())?;
+            output
+        };
+        Ok(PreparedPhoto {
+            snapshot,
+            width,
+            height,
+            thumbnail,
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+async fn prepare_streamed_photo(
+    client: &Client,
+    snapshot: tempfile::NamedTempFile,
+    jpeg: bool,
+) -> Result<Prepared, String> {
+    let photo = transform_photo_snapshot(snapshot, jpeg).await?;
+    let (source, info) = encrypt_snapshot(&photo.snapshot, MediaType::Image).await?;
+    let size = info.file_length;
+    let upload = client
+        .upload_stream(source, info, MediaType::Image)
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut message = image_message(
+        upload,
+        ImageOptions {
+            caption: None,
+            mimetype: Some("image/jpeg".to_owned()),
+            jpeg_thumbnail: photo.thumbnail.clone(),
+            context_info: None,
+        },
+    );
+    if let Some(image) = message.image_message.as_option_mut() {
+        image.width = Some(photo.width);
+        image.height = Some(photo.height);
+    }
+    Ok(Prepared {
+        message,
+        content: Content::Image {
+            caption: None,
+            media: media(
+                Some(&"image/jpeg".to_owned()),
+                Some(size),
+                Some(photo.width),
+                Some(photo.height),
+            ),
+        },
+        thumbnail: photo.thumbnail,
+        data: PreparedData::Snapshot(photo.snapshot),
+        mime: "image/jpeg".to_owned(),
+        file_name: None,
     })
 }
 
@@ -301,7 +596,7 @@ async fn prepare_sticker(client: &Client, bytes: Vec<u8>) -> Result<Prepared, St
             animated,
         },
         thumbnail: None,
-        bytes,
+        data: PreparedData::Bytes(bytes),
         mime: "image/webp".to_owned(),
         file_name: None,
     })
@@ -363,16 +658,30 @@ async fn file_outbound(
     if session_generation_shared.load(Ordering::Acquire) != session_generation {
         return Err("The linked account changed while preparing the attachment".to_owned());
     }
-    write_session_cache_file(
-        dir,
-        &path,
-        &prepared.bytes,
-        session_generation,
-        session_generation_shared,
-        None,
-        session_cache_lock,
-    )
-    .await?;
+    let path = match prepared.data {
+        PreparedData::Bytes(bytes) => {
+            write_session_cache_file(
+                dir,
+                &path,
+                &bytes,
+                session_generation,
+                session_generation_shared,
+                None,
+                session_cache_lock,
+            )
+            .await?
+        }
+        PreparedData::Snapshot(staging) => {
+            promote_session_snapshot(
+                staging,
+                &path,
+                session_generation,
+                session_generation_shared,
+                session_cache_lock,
+            )
+            .await?
+        }
+    };
     let mut content = prepared.content;
     if let Some(media) = content.media_mut() {
         media.path = Some(path);
@@ -429,6 +738,11 @@ fn sanitize(id: &str) -> String {
         .collect()
 }
 
+/// Keep the cache name well under the 255-byte file name limit once the
+/// parts, the extension and a collision number are joined.
+const MAX_NAME_CHARS: usize = 120;
+const MAX_ID_CHARS: usize = 64;
+
 pub(super) fn media_path(
     dir: &Path,
     chat: &str,
@@ -437,11 +751,141 @@ pub(super) fn media_path(
     file_name: Option<&str>,
 ) -> PathBuf {
     let extension = extension_for(mime, file_name);
+    let capped = |text: &str, limit: usize| {
+        let mut text = sanitize(text);
+        text.truncate(limit);
+        text
+    };
+    let id = capped(id, MAX_ID_CHARS);
     let stem = match file_name.and_then(|name| Path::new(name).file_stem()?.to_str()) {
-        Some(name) => format!("{}-{}", sanitize(id), sanitize(name)),
-        None => format!("{}-{}", sanitize(chat), sanitize(id)),
+        Some(name) => format!("{id}-{}-{}", chat_tag(chat), capped(name, MAX_NAME_CHARS)),
+        None => format!("{}-{id}", capped(chat, MAX_ID_CHARS)),
     };
     dir.join(format!("{stem}.{extension}"))
+}
+
+/// Message ids are only unique per sender, so named documents carry a short
+/// digest of their chat to keep two chats from sharing a cache file.
+fn chat_tag(chat: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(chat.as_bytes())[..4]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+const PROMOTION_ATTEMPTS: usize = 100;
+
+/// Moves a finished download to `destination`. `recorded` is the path the
+/// archive already holds for this message: when it is `destination` or one
+/// of its numbered siblings, the file is this message's own and is replaced
+/// (as when two downloads of it overlap). Otherwise no existing file is
+/// replaced and a numbered name next to `destination` is used. Returns the
+/// path the download now lives at.
+pub(super) fn promote_download(
+    staged: &Path,
+    destination: &Path,
+    recorded: Option<&Path>,
+) -> std::io::Result<PathBuf> {
+    if let Some(own) = recorded.filter(|path| is_destination_or_sibling(path, destination)) {
+        std::fs::rename(staged, own)?;
+        return Ok(own.to_owned());
+    }
+    for attempt in 0..PROMOTION_ATTEMPTS {
+        let candidate = match attempt {
+            0 => destination.to_owned(),
+            n => numbered_path(destination, n),
+        };
+        match rename_no_replace(staged, &candidate) {
+            Ok(()) => return Ok(candidate),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Err(std::io::ErrorKind::AlreadyExists.into())
+}
+
+fn numbered_path(path: &Path, n: usize) -> PathBuf {
+    let stem = path
+        .file_stem()
+        .map(|stem| stem.to_string_lossy())
+        .unwrap_or_default();
+    let name = match path.extension() {
+        Some(extension) => format!("{stem}-{n}.{}", extension.to_string_lossy()),
+        None => format!("{stem}-{n}"),
+    };
+    path.with_file_name(name)
+}
+
+fn is_destination_or_sibling(path: &Path, destination: &Path) -> bool {
+    if path == destination {
+        return true;
+    }
+    if path.parent() != destination.parent() || path.extension() != destination.extension() {
+        return false;
+    }
+    let (Some(stem), Some(own)) = (
+        destination.file_stem().and_then(|stem| stem.to_str()),
+        path.file_stem().and_then(|stem| stem.to_str()),
+    ) else {
+        return false;
+    };
+    own.strip_prefix(stem)
+        .and_then(|rest| rest.strip_prefix('-'))
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+fn rename_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
+    use rustix::fs::{CWD, RenameFlags, renameat_with};
+    use rustix::io::Errno;
+    match renameat_with(CWD, from, CWD, to, RenameFlags::NOREPLACE) {
+        Ok(()) => Ok(()),
+        // Some filesystems (NFS, older FUSE) reject the flag; a hard link
+        // gives the same no-replace guarantee there.
+        Err(Errno::INVAL | Errno::NOSYS) => match std::fs::hard_link(from, to) {
+            Ok(()) => {
+                if std::fs::remove_file(from).is_err() {
+                    log::debug!("could not remove a staged download after linking it");
+                }
+                Ok(())
+            }
+            Err(error)
+                if matches!(
+                    Errno::from_io_error(&error),
+                    Some(Errno::PERM | Errno::NOTSUP | Errno::NOSYS)
+                ) =>
+            {
+                rename_if_absent(from, to)
+            }
+            Err(error) => Err(error),
+        },
+        Err(errno) => Err(errno.into()),
+    }
+}
+
+/// Last resort where the filesystem has neither the rename flag nor hard
+/// links (FAT, some FUSE mounts): not atomic, but it still never replaces
+/// a file that is already there when the check runs.
+fn rename_if_absent(from: &Path, to: &Path) -> std::io::Result<()> {
+    match std::fs::symlink_metadata(to) {
+        Ok(_) => Err(std::io::ErrorKind::AlreadyExists.into()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => std::fs::rename(from, to),
+        Err(error) => Err(error),
+    }
+}
+
+pub(super) fn attachment_mime(path: &Path) -> String {
+    let is_rpm = path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("rpm"));
+    if is_rpm {
+        // mime_guess lists RealAudio's plugin type first for .rpm, which would
+        // route a package through the audio message path.
+        return "application/x-rpm".to_owned();
+    }
+    mime_guess::from_path(path)
+        .first_or_octet_stream()
+        .to_string()
 }
 
 /// Keep staging names short and independent for overlapping downloads, even
@@ -452,7 +896,160 @@ pub(super) fn download_staging_path(dir: &Path) -> PathBuf {
     dir.join(format!(".download-{token:032x}.tmp"))
 }
 
+/// Staging files untouched for this long belong to a download that was
+/// interrupted, never to one still streaming in another instance.
+const STALE_STAGING_AGE: Duration = Duration::from_secs(60 * 60);
+
+/// Whether `name` is exactly what [`download_staging_path`] produces.
+fn is_staging_name(name: &std::ffi::OsStr) -> bool {
+    name.to_str()
+        .and_then(|name| name.strip_prefix(".download-"))
+        .and_then(|rest| rest.strip_suffix(".tmp"))
+        .is_some_and(|token| {
+            token.len() == 32
+                && token
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
+}
+
+fn is_upload_staging_name(name: &std::ffi::OsStr) -> bool {
+    name.to_str()
+        .and_then(|name| name.strip_prefix(".upload-"))
+        .and_then(|rest| rest.strip_suffix(".tmp"))
+        .is_some_and(|token| token.len() == 32 && token.bytes().all(|b| b.is_ascii_alphanumeric()))
+}
+
+/// Removes staging files that interrupted transfers left directly in `dir`:
+/// regular files only (a symlink is never followed or removed), named
+/// exactly like a staging file, last modified at least `max_age` before
+/// `now`. Returns how many were removed.
+pub(super) fn remove_stale_staging_files(
+    dir: &Path,
+    max_age: Duration,
+    now: std::time::SystemTime,
+) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            is_staging_name(&entry.file_name()) || is_upload_staging_name(&entry.file_name())
+        })
+        // DirEntry::file_type and DirEntry::metadata describe the entry
+        // itself and do not traverse symlinks.
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+        .filter(|entry| {
+            entry
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .is_ok_and(|modified| now.duration_since(modified).is_ok_and(|age| age >= max_age))
+        })
+        .filter(|entry| std::fs::remove_file(entry.path()).is_ok())
+        .count()
+}
+
+/// Why a streamed download produced no staging file.
+#[derive(Debug)]
+pub(super) enum StagedDownload<E> {
+    /// The download itself failed, verification included.
+    Fetch(E),
+    /// The cache could not take the file, or the account changed.
+    Local(String),
+}
+
+const ACCOUNT_CHANGED: &str = "The linked account changed during the download";
+
+/// Streams a download into a new staging file at `path`. `fetch` receives
+/// the open file and returns it once the media is complete and verified; on
+/// any failure the staging file is removed. The cache lock is held only
+/// while the file is created and while the result is checked, not while the
+/// body streams, so a logout does not wait for a large download; a cleanup
+/// that runs meanwhile bumps the generation and the file is discarded.
+pub(super) async fn stream_session_cache_file<E, F, Fut>(
+    directory: &Path,
+    path: &Path,
+    generation: u64,
+    current_generation: &AtomicU64,
+    cache_lock: &tokio::sync::Mutex<()>,
+    fetch: F,
+) -> Result<PathBuf, StagedDownload<E>>
+where
+    F: FnOnce(std::fs::File) -> Fut,
+    Fut: std::future::Future<Output = Result<std::fs::File, E>>,
+{
+    let active = || current_generation.load(Ordering::Acquire) == generation;
+    let local = |error: std::io::Error| StagedDownload::Local(error.to_string());
+    let file = {
+        let _guard = cache_lock.lock().await;
+        if !active() {
+            return Err(StagedDownload::Local(ACCOUNT_CHANGED.to_owned()));
+        }
+        tokio::fs::create_dir_all(directory).await.map_err(local)?;
+        if !active() {
+            return Err(StagedDownload::Local(ACCOUNT_CHANGED.to_owned()));
+        }
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .map_err(local)?;
+        (RemoveOnDrop(Some(path)), file)
+    };
+    let (staging, file) = file;
+    let fetched = fetch(file).await;
+    let _guard = cache_lock.lock().await;
+    match fetched {
+        Ok(file) => {
+            drop(file);
+            if active() {
+                staging.disarm();
+                Ok(path.to_owned())
+            } else {
+                drop(staging);
+                Err(StagedDownload::Local(ACCOUNT_CHANGED.to_owned()))
+            }
+        }
+        Err(error) => {
+            drop(staging);
+            Err(StagedDownload::Fetch(error))
+        }
+    }
+}
+
+/// Removes a staging file unless the download it holds was kept, so a task
+/// dropped mid-download (a runtime shutting down) leaves no partial file.
+struct RemoveOnDrop<'a>(Option<&'a Path>);
+
+impl RemoveOnDrop<'_> {
+    fn disarm(mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for RemoveOnDrop<'_> {
+    fn drop(&mut self) {
+        if let Some(path) = self.0.take() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
 impl Worker {
+    /// Clears staging files left by transfers that a crash or a quit cut
+    /// short, off the async threads.
+    pub(super) fn remove_stale_staging(&self) {
+        let dir = self.dirs.media_cache_dir();
+        tokio::task::spawn_blocking(move || {
+            let removed =
+                remove_stale_staging_files(&dir, STALE_STAGING_AGE, std::time::SystemTime::now());
+            if removed > 0 {
+                log::info!("removed {removed} interrupted transfer staging files");
+            }
+        });
+    }
+
     pub(super) fn send_files(
         &mut self,
         chat: ChatId,
@@ -496,19 +1093,34 @@ impl Worker {
             let mut mentions = mentions;
             for (index, path) in paths.into_iter().enumerate() {
                 let outcome = async {
-                    let bytes = tokio::fs::read(&path)
-                        .await
-                        .map_err(|error| format!("{}: {error}", path.display()))?;
-                    let mime = mime_guess2::from_path(&path)
-                        .first_or_octet_stream()
-                        .to_string();
+                    let mime = attachment_mime(&path);
                     let file_name = path
                         .file_name()
                         .map(|name| name.to_string_lossy().into_owned());
-                    let prepared = if documents.contains(&path) {
-                        prepare_document(&client, bytes, &mime, file_name.as_deref()).await?
+                    let document = documents.contains(&path);
+                    let picture = matches!(
+                        mime.as_str(),
+                        "image/jpeg" | "image/png" | "image/webp" | "image/bmp" | "image/tiff"
+                    );
+                    let snapshot = snapshot_session_file(
+                        &path,
+                        &dir,
+                        session_generation,
+                        &session_generation_shared,
+                        &session_cache_lock,
+                    )
+                    .await?;
+                    let prepared = if picture && !document {
+                        prepare_streamed_photo(&client, snapshot, mime == "image/jpeg").await?
                     } else {
-                        prepare_media(&client, bytes, &mime, file_name.as_deref(), false).await?
+                        prepare_streamed_file(
+                            &client,
+                            snapshot,
+                            &mime,
+                            file_name.as_deref(),
+                            document,
+                        )
+                        .await?
                     };
                     file_outbound(
                         FileOutboundContext {
@@ -804,5 +1416,387 @@ impl Worker {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn snapshot_is_stable_when_source_changes_and_removed_on_drop() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        std::fs::write(&source, b"original").unwrap();
+        let generation = AtomicU64::new(1);
+        let lock = tokio::sync::Mutex::new(());
+        let staging = snapshot_session_file(&source, dir.path(), 1, &generation, &lock)
+            .await
+            .unwrap();
+        let path = staging.path().to_owned();
+        std::fs::write(&source, b"changed").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"original");
+        drop(staging);
+        assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn cancelled_preparation_removes_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        std::fs::write(&source, b"synthetic").unwrap();
+        let directory = dir.path().to_owned();
+        let (send, receive) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            let generation = AtomicU64::new(1);
+            let lock = tokio::sync::Mutex::new(());
+            let staging = snapshot_session_file(&source, &directory, 1, &generation, &lock)
+                .await
+                .unwrap();
+            send.send(staging.path().to_owned()).unwrap();
+            std::future::pending::<()>().await;
+            drop(staging);
+        });
+        let path = receive.await.unwrap();
+        task.abort();
+        let _ = task.await;
+        assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn invalidated_snapshot_cannot_be_promoted() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        let destination = dir.path().join("destination");
+        std::fs::write(&source, b"synthetic").unwrap();
+        let generation = AtomicU64::new(1);
+        let lock = tokio::sync::Mutex::new(());
+        let staging = snapshot_session_file(&source, dir.path(), 1, &generation, &lock)
+            .await
+            .unwrap();
+        let path = staging.path().to_owned();
+        generation.store(2, Ordering::Release);
+        assert!(
+            promote_session_snapshot(staging, &destination, 1, &generation, &lock)
+                .await
+                .is_err()
+        );
+        assert!(!path.exists());
+        assert!(!destination.exists());
+    }
+
+    #[tokio::test]
+    async fn snapshot_promotion_preserves_existing_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        let destination = dir.path().join("attachment.pdf");
+        std::fs::write(&source, b"new").unwrap();
+        std::fs::write(&destination, b"existing").unwrap();
+        let generation = AtomicU64::new(1);
+        let lock = tokio::sync::Mutex::new(());
+        let staging = snapshot_session_file(&source, dir.path(), 1, &generation, &lock)
+            .await
+            .unwrap();
+        let staging_path = staging.path().to_owned();
+        let promoted = promote_session_snapshot(staging, &destination, 1, &generation, &lock)
+            .await
+            .unwrap();
+        assert_ne!(promoted, destination);
+        assert_eq!(std::fs::read(destination).unwrap(), b"existing");
+        assert_eq!(std::fs::read(promoted).unwrap(), b"new");
+        assert!(!staging_path.exists());
+    }
+
+    #[tokio::test]
+    async fn encrypted_file_source_supports_independent_retry_offsets() {
+        use sha2::{Digest, Sha256};
+        use std::io::Read;
+        use whatsapp_rust::wacore::upload::UploadSource;
+
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        let plaintext = vec![42; 32769];
+        std::fs::write(&source, &plaintext).unwrap();
+        let generation = AtomicU64::new(1);
+        let lock = tokio::sync::Mutex::new(());
+        let snapshot = snapshot_session_file(&source, dir.path(), 1, &generation, &lock)
+            .await
+            .unwrap();
+        let (encrypted, info) = encrypt_snapshot(&snapshot, MediaType::Document)
+            .await
+            .unwrap();
+        let encrypted_path = encrypted.file.path().to_owned();
+        let mut all = Vec::new();
+        encrypted
+            .reader_from(0)
+            .unwrap()
+            .read_to_end(&mut all)
+            .unwrap();
+        let mut partial = Vec::new();
+        encrypted
+            .reader_from(17)
+            .unwrap()
+            .read_to_end(&mut partial)
+            .unwrap();
+        assert_eq!(partial, all[17..]);
+        assert_eq!(encrypted.len(), all.len() as u64);
+        assert_eq!(info.file_length, plaintext.len() as u64);
+        assert_eq!(
+            info.file_sha256,
+            <[u8; 32]>::from(Sha256::digest(&plaintext))
+        );
+        assert_eq!(info.file_enc_sha256, <[u8; 32]>::from(Sha256::digest(&all)));
+        drop(encrypted);
+        assert!(!encrypted_path.exists());
+    }
+
+    #[tokio::test]
+    async fn retrying_uploader_owns_source_until_all_attempts_finish() {
+        use std::io::Read;
+        use whatsapp_rust::wacore::upload::UploadSource;
+
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("source");
+        std::fs::write(&input, vec![7; 8192]).unwrap();
+        let generation = AtomicU64::new(1);
+        let lock = tokio::sync::Mutex::new(());
+        let snapshot = snapshot_session_file(&input, dir.path(), 1, &generation, &lock)
+            .await
+            .unwrap();
+        let (source, _) = encrypt_snapshot(&snapshot, MediaType::Document)
+            .await
+            .unwrap();
+        let path = source.file.path().to_owned();
+        let expected = std::fs::read(&path).unwrap();
+        let uploader = async move {
+            let source = std::sync::Arc::new(source);
+            for offset in [0, 31] {
+                let source = source.clone();
+                let attempt = tokio::task::spawn_blocking(move || {
+                    let mut bytes = Vec::new();
+                    source.reader_from(offset)?.read_to_end(&mut bytes)?;
+                    Ok::<_, std::io::Error>(bytes)
+                })
+                .await
+                .unwrap()
+                .unwrap();
+                assert_eq!(attempt, expected[offset as usize..]);
+                let result = if offset == 0 {
+                    Err("synthetic failure")
+                } else {
+                    Ok(())
+                };
+                if result.is_ok() {
+                    return;
+                }
+            }
+            panic!("retry did not succeed");
+        };
+        uploader.await;
+        assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn photo_snapshot_preserves_jpeg_and_transcodes_png() {
+        let dir = tempfile::tempdir().unwrap();
+        let image = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            7,
+            5,
+            image::Rgb([12, 34, 56]),
+        ));
+        let jpeg = encode_jpeg(&image, 88).unwrap();
+        let jpeg_path = dir.path().join("image.jpg");
+        let png_path = dir.path().join("image.png");
+        std::fs::write(&jpeg_path, &jpeg).unwrap();
+        image.save(&png_path).unwrap();
+        let generation = AtomicU64::new(1);
+        let lock = tokio::sync::Mutex::new(());
+        for (path, is_jpeg) in [(&jpeg_path, true), (&png_path, false)] {
+            let snapshot = snapshot_session_file(path, dir.path(), 1, &generation, &lock)
+                .await
+                .unwrap();
+            let original_staging = snapshot.path().to_owned();
+            let photo = transform_photo_snapshot(snapshot, is_jpeg).await.unwrap();
+            assert_eq!((photo.width, photo.height), (7, 5));
+            assert!(photo.thumbnail.is_some());
+            let transformed = std::fs::read(photo.snapshot.path()).unwrap();
+            if is_jpeg {
+                assert_eq!(transformed, jpeg);
+            } else {
+                assert_eq!(transformed, encode_jpeg(&image, 88).unwrap());
+                assert!(!original_staging.exists());
+            }
+            assert_eq!(image::load_from_memory(&transformed).unwrap().width(), 7);
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "synthetic 200 MB memory measurement"]
+    async fn synthetic_large_document_streams_to_disk() {
+        use whatsapp_rust::wacore::upload::UploadSource;
+
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        let size = 200_000_000;
+        std::fs::File::create(&source)
+            .unwrap()
+            .set_len(size)
+            .unwrap();
+        let generation = AtomicU64::new(1);
+        let lock = tokio::sync::Mutex::new(());
+        let snapshot = snapshot_session_file(&source, dir.path(), 1, &generation, &lock)
+            .await
+            .unwrap();
+        let (encrypted, info) = encrypt_snapshot(&snapshot, MediaType::Document)
+            .await
+            .unwrap();
+        assert_eq!(info.file_length, size);
+        assert_eq!(encrypted.len(), size + 26);
+    }
+
+    #[test]
+    fn the_last_resort_rename_never_replaces() {
+        let dir = tempfile::tempdir().unwrap();
+        let staged = dir.path().join(".download.tmp");
+        let taken = dir.path().join("taken.pdf");
+        let free = dir.path().join("free.pdf");
+        std::fs::write(&staged, b"new").unwrap();
+        std::fs::write(&taken, b"old").unwrap();
+
+        let refused = rename_if_absent(&staged, &taken).unwrap_err();
+        assert_eq!(refused.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read(&taken).unwrap(), b"old");
+
+        rename_if_absent(&staged, &free).unwrap();
+        assert_eq!(std::fs::read(&free).unwrap(), b"new");
+        assert!(!staged.exists());
+    }
+
+    fn aged(path: &Path, age: Duration) {
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - age)
+            .unwrap();
+    }
+
+    #[test]
+    fn staging_names_match_only_the_generated_pattern() {
+        let dir = Path::new("/cache");
+        for _ in 0..32 {
+            let staged = download_staging_path(dir);
+            assert!(is_staging_name(staged.file_name().unwrap()), "{staged:?}");
+        }
+        let temporary = tempfile::tempdir().unwrap();
+        let upload = upload_staging_file(temporary.path()).unwrap();
+        assert!(is_upload_staging_name(upload.path().file_name().unwrap()));
+        let token = "0123456789abcdef0123456789abcdef";
+        for name in [
+            format!("download-{token}.tmp"),
+            format!(".download-{token}.tmp.pdf"),
+            format!(".download-{token}"),
+            format!(".download-{}.tmp", &token[1..]),
+            format!(".download-{token}0.tmp"),
+            format!(".download-{}.tmp", token.to_ascii_uppercase()),
+            ".download-0123456789abcdef0123456789abcdeg.tmp".to_owned(),
+            ".download-.tmp".to_owned(),
+            "ABC-0b617fa3-invoice.pdf".to_owned(),
+        ] {
+            assert!(!is_staging_name(std::ffi::OsStr::new(&name)), "{name}");
+        }
+    }
+
+    #[test]
+    fn stale_staging_files_are_removed_and_everything_else_kept() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("media");
+        std::fs::create_dir(&dir).unwrap();
+        let hour = Duration::from_secs(60 * 60);
+
+        let stale = download_staging_path(&dir);
+        std::fs::write(&stale, b"interrupted").unwrap();
+        aged(&stale, 2 * hour);
+
+        let stale_upload = upload_staging_file(&dir).unwrap();
+        aged(stale_upload.path(), 2 * hour);
+
+        let recent = download_staging_path(&dir);
+        std::fs::write(&recent, b"still streaming").unwrap();
+        aged(&recent, Duration::from_secs(10 * 60));
+
+        let attachment = dir.join("ABC-0b617fa3-invoice.pdf");
+        std::fs::write(&attachment, b"kept").unwrap();
+        aged(&attachment, 48 * hour);
+        let lookalike = dir.join(".download-notatoken.tmp");
+        std::fs::write(&lookalike, b"kept").unwrap();
+        aged(&lookalike, 48 * hour);
+
+        let outside = root.path().join("outside.pdf");
+        std::fs::write(&outside, b"outside").unwrap();
+        aged(&outside, 48 * hour);
+        let link = download_staging_path(&dir);
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        let old = rustix::fs::Timespec {
+            tv_sec: (std::time::SystemTime::now() - 48 * hour)
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64,
+            tv_nsec: 0,
+        };
+        rustix::fs::utimensat(
+            rustix::fs::CWD,
+            &link,
+            &rustix::fs::Timestamps {
+                last_access: old,
+                last_modification: old,
+            },
+            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+        )
+        .unwrap();
+
+        let nested_dir = download_staging_path(&dir);
+        std::fs::create_dir(&nested_dir).unwrap();
+        let nested = download_staging_path(&nested_dir);
+        std::fs::write(&nested, b"nested").unwrap();
+        aged(&nested, 48 * hour);
+        let subdir = dir.join("sub");
+        std::fs::create_dir(&subdir).unwrap();
+        let in_subdir = download_staging_path(&subdir);
+        std::fs::write(&in_subdir, b"nested").unwrap();
+        aged(&in_subdir, 48 * hour);
+
+        let removed = remove_stale_staging_files(&dir, hour, std::time::SystemTime::now());
+
+        assert_eq!(removed, 2);
+        assert!(!stale.exists());
+        assert!(!stale_upload.path().exists());
+        for kept in [
+            &recent,
+            &attachment,
+            &lookalike,
+            &outside,
+            &nested,
+            &in_subdir,
+        ] {
+            assert!(kept.exists(), "{kept:?}");
+        }
+        let link_metadata = link.symlink_metadata().unwrap();
+        assert!(link_metadata.file_type().is_symlink());
+        assert!(link_metadata.modified().unwrap() < std::time::SystemTime::now() - hour);
+        assert!(nested_dir.is_dir());
+    }
+
+    #[test]
+    fn a_missing_media_directory_removes_nothing() {
+        let root = tempfile::tempdir().unwrap();
+        assert_eq!(
+            remove_stale_staging_files(
+                &root.path().join("absent"),
+                Duration::from_secs(1),
+                std::time::SystemTime::now()
+            ),
+            0
+        );
     }
 }

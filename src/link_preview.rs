@@ -147,13 +147,13 @@ pub fn parse(html: &str) -> Option<Preview> {
     })
 }
 
-/// Select the first whitespace-delimited HTTP(S) URL, trimming trailing punctuation.
+/// Select the first HTTP(S) link, trimming trailing punctuation.
 /// Returns the original spelling rather than canonicalizing it; this does not resolve DNS.
 pub fn first_url(text: &str) -> Option<String> {
-    let token = text
-        .split_whitespace()
-        .map(|token| token.trim_end_matches(['.', ',', ')', ']', '!', '?', ';', ':']))
-        .find(|token| token.starts_with("http://") || token.starts_with("https://"))?;
+    let span = crate::safety::web_link_spans(text).find(|span| {
+        text[span.clone()].starts_with("http://") || text[span.clone()].starts_with("https://")
+    })?;
+    let token = &text[span];
     crate::safety::preview_url(token)?;
     Some(token.to_owned())
 }
@@ -166,13 +166,19 @@ pub fn matches_text(text: &str, preview: &crate::model::LinkPreview) -> bool {
 /// Half-open Unicode character ranges, not byte offsets, for HTTP(S) words in `text`.
 pub fn link_ranges(text: &str) -> Vec<(usize, usize)> {
     let mut ranges = Vec::new();
-    let mut offset = 0;
-    for piece in text.split_inclusive(char::is_whitespace) {
-        let word = piece.trim_end();
-        if word.starts_with("http://") || word.starts_with("https://") {
-            ranges.push((offset, offset + word.chars().count()));
+    let (mut byte_offset, mut char_offset) = (0, 0);
+    for span in crate::safety::web_link_spans(text) {
+        if span.start < byte_offset {
+            continue;
         }
-        offset += piece.chars().count();
+        let word = &text[span.clone()];
+        if word.starts_with("http://") || word.starts_with("https://") {
+            char_offset += text[byte_offset..span.start].chars().count();
+            let end = char_offset + word.chars().count();
+            ranges.push((char_offset, end));
+            byte_offset = span.end;
+            char_offset = end;
+        }
     }
     ranges
 }
@@ -282,6 +288,38 @@ mod tests {
             first_url("http://127.0.0.1/"),
             Some("http://127.0.0.1/".to_owned())
         );
+    }
+
+    #[test]
+    fn shared_links_keep_balanced_parentheses_and_trim_outer_punctuation() {
+        let text = "ação (https://example.com/Foo_(bar)), next";
+        let url = "https://example.com/Foo_(bar)";
+        assert_eq!(first_url(text).as_deref(), Some(url));
+        let start = "ação (".chars().count();
+        assert_eq!(
+            link_ranges(text),
+            vec![(start, start + url.chars().count())]
+        );
+        assert!(crate::safety::linkify_markup(text).contains(&format!(">{url}</a>")));
+    }
+
+    #[test]
+    fn shared_links_handle_multiple_unicode_offsets_and_unmatched_parentheses() {
+        let text = "😀 https://a.io/Foo_(bar). é [http://b.io/x)]";
+        let first = "https://a.io/Foo_(bar)";
+        let second = "http://b.io/x";
+        let ranges = link_ranges(text);
+        let chars: Vec<_> = text.chars().collect();
+        let selected: Vec<String> = ranges
+            .iter()
+            .map(|&(start, end)| chars[start..end].iter().collect())
+            .collect();
+        assert_eq!(selected, [first, second]);
+        assert_eq!(first_url(text).as_deref(), Some(first));
+        let markup = crate::safety::linkify_markup(text);
+        for url in [first, second] {
+            assert!(markup.contains(&format!(">{url}</a>")), "{markup}");
+        }
     }
 
     #[test]

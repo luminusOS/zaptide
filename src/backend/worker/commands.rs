@@ -19,7 +19,7 @@ impl Worker {
             _ => None,
         };
         if let Some(chat) = destination {
-            let writable = self.privacy_ready
+            let writable = self.privacy.privacy_ready
                 && match self.archive.chat(chat) {
                     Ok(Some(chat)) => chat.can_send(),
                     Ok(None) => ChatKind::from_id(chat) != ChatKind::Broadcast,
@@ -163,8 +163,16 @@ impl Worker {
                     self.pump_read_sync();
                 }
             }
-            Command::LoadChat { chat, before } => self.load_chat(chat, before),
-            Command::FetchOlder(chat) => self.fetch_older(chat),
+            Command::LoadChat {
+                chat,
+                before,
+                request,
+            } => self.load_chat(chat, before, request),
+            Command::FetchOlder {
+                chat,
+                request,
+                before,
+            } => self.fetch_older(chat, request, before),
             Command::LoadUntil { chat, id, before } => self.load_until(chat, id, before),
             Command::Download { chat, message } => self.download(chat, message),
             Command::FetchAvatar { id, full } => self.fetch_avatar(id, full),
@@ -260,7 +268,7 @@ impl Worker {
                 first_name,
                 to_phone,
             } => {
-                if !self.privacy_ready
+                if !self.privacy.privacy_ready
                     || self.archive_cleanup_failed
                     || session_generation
                         .is_some_and(|generation| generation != self.session_generation)
@@ -324,7 +332,7 @@ impl Worker {
                 first_name,
                 to_phone,
             } => {
-                if !self.privacy_ready || self.archive_cleanup_failed {
+                if !self.privacy.privacy_ready || self.archive_cleanup_failed {
                     self.emit(Event::Error(
                         "Wait for account sync to finish before adding a contact.".to_owned(),
                     ));
@@ -375,7 +383,7 @@ impl Worker {
                 registered,
             } => {
                 if session_generation != self.session_generation
-                    || !self.privacy_ready
+                    || !self.privacy.privacy_ready
                     || self.archive_cleanup_failed
                 {
                     return;
@@ -448,14 +456,14 @@ impl Worker {
                     // in flight so reopening the picker does not refetch it.
                     Err(_error) => log::warn!("could not fetch a sticker"),
                 }
-                self.emit_stickers();
+                self.stickers_dirty = true;
             }
             Command::EditProfile(edit) => self.edit_profile(edit),
             Command::ProfileSaved {
                 session_generation,
                 edit,
                 result,
-            } => self.profile_saved(session_generation, edit, result),
+            } => self.profile_saved(session_generation, edit, result).await,
             Command::ContactAbout { id } => {
                 let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&id)) else {
                     return;
@@ -500,8 +508,8 @@ impl Worker {
                 if session_generation != self.session_generation {
                     return;
                 }
-                self.me_about = about;
-                match &self.me_about {
+                self.identity.me_about = about;
+                match &self.identity.me_about {
                     Some(about) => {
                         let _ = self.archive.set_meta("me_about", about);
                     }
@@ -657,14 +665,28 @@ impl Worker {
                     return;
                 }
                 if !self
+                    .older
                     .pending_older
                     .get(&chat)
                     .is_some_and(|request| request.request_id == request_id)
                 {
                     return;
                 }
-                self.pending_older.remove(&chat);
-                self.emit(Event::OlderFetched { chat, more: true });
+
+                let pending = self
+                    .older
+                    .pending_older
+                    .remove(&chat)
+                    .expect("request still present");
+                self.emit(Event::OlderFetched {
+                    chat: chat.clone(),
+                    more: true,
+                    request: pending.request,
+                });
+                if let Some((request, before)) = pending.queued {
+                    self.retry_queued_older(chat, request, before);
+                }
+
                 self.emit(Event::Error(error));
             }
             Command::RevokeFinished {
@@ -892,14 +914,26 @@ impl Worker {
                     return;
                 }
                 if let Ok(staged) = &result {
-                    match std::fs::rename(staged, &destination) {
-                        Ok(()) => {
-                            let _ = self.archive.set_media_path(&chat, &id, &destination);
-                            result = Ok(destination);
+                    let recorded = self
+                        .archive
+                        .message(&chat, &id)
+                        .ok()
+                        .flatten()
+                        .and_then(|message| message.content.media()?.path.clone());
+                    match super::outbound::promote_download(
+                        staged,
+                        &destination,
+                        recorded.as_deref(),
+                    ) {
+                        Ok(promoted) => {
+                            let _ = self.archive.set_media_path(&chat, &id, &promoted);
+                            result = Ok(promoted);
                         }
                         Err(_error) => {
                             let _ = std::fs::remove_file(staged);
-                            result = Err("The attachment could not be saved".to_owned());
+                            result = Err(DownloadFailure::Other(
+                                "The attachment could not be saved".to_owned(),
+                            ));
                         }
                     }
                 }
@@ -909,7 +943,7 @@ impl Worker {
                     result,
                 });
                 if for_picker {
-                    self.emit_stickers();
+                    self.stickers_dirty = true;
                 }
             }
             Command::AvatarFetched {
@@ -977,7 +1011,7 @@ impl Worker {
                 if session_generation != self.session_generation {
                     return;
                 }
-                self.group_info_tries.remove(&chat);
+                self.group_info.group_info_tries.remove(&chat);
                 let _ =
                     self.archive
                         .set_group_info(&chat, name.as_deref(), &participants, read_only);

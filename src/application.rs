@@ -14,6 +14,7 @@ mod contact_sharing;
 mod conversation;
 mod dialogs;
 mod dispatch;
+mod document_safety;
 mod helpers;
 mod icons;
 mod link_page;
@@ -23,6 +24,7 @@ mod presence;
 mod presentation;
 mod profile_dialog;
 mod reaction_drawer;
+mod resume;
 mod rows;
 mod sidebar;
 mod stars;
@@ -168,109 +170,93 @@ enum ChatChange {
     Update(crate::model::Chat),
 }
 
-enum NativeEvent {
-    Profile {
-        phone: Option<String>,
-        name: Option<String>,
-    },
-    Link(LinkStatus),
-    Syncing(bool),
-    Chats(Vec<crate::model::Chat>),
-    ChatUpdated(Box<crate::model::Chat>),
-    Contacts(Vec<crate::model::Contact>),
-    Messages {
-        chat: String,
-        messages: Vec<crate::model::Message>,
+#[derive(Default)]
+struct TranscriptRequests {
+    next: u64,
+    initial: Option<u64>,
+    older: Option<u64>,
+    older_phone: bool,
+}
+
+impl TranscriptRequests {
+    fn allocate(&mut self) -> u64 {
+        self.next = self
+            .next
+            .checked_add(1)
+            .expect("transcript request ID exhausted");
+        self.next
+    }
+
+    fn reload(&mut self) -> u64 {
+        let request = self.allocate();
+        self.initial = Some(request);
+        self.older = None;
+        request
+    }
+
+    fn older(&mut self, phone: bool) -> u64 {
+        let request = self.allocate();
+        self.initial = None;
+        self.older = Some(request);
+        self.older_phone = phone;
+        request
+    }
+
+    fn accepts(&self, request: Option<u64>, older: bool) -> bool {
+        request.is_none()
+            || if older {
+                self.older == request
+            } else {
+                self.initial == request
+            }
+    }
+
+    fn messages(
+        &mut self,
+        active: bool,
+        request: Option<u64>,
         older: bool,
         complete: bool,
-    },
-    MessageUpdated(Box<crate::model::Message>),
-    Edited {
-        chat: String,
-        id: String,
-        success: bool,
-    },
-    Sent {
-        chat: String,
-        success: bool,
-    },
-    AttachmentCompleted {
-        chat: String,
-        path: std::path::PathBuf,
-        success: bool,
-    },
-    Media {
-        chat: String,
-        message: String,
-        result: Result<std::path::PathBuf, String>,
-    },
-    ReceiptsPrivacy {
-        disabled: bool,
-    },
-    ContactReady {
-        id: String,
-        name: Option<String>,
-    },
-    ContactAbout {
-        id: String,
-        about: Option<String>,
-    },
-    LinkPreviewsChanged(bool),
-    ProfileSaved {
-        error: Option<String>,
-    },
-    Info(String),
-    Error(String),
-    Typing {
-        chat: String,
-        sender: String,
-        composing: bool,
-    },
-    Presence {
-        id: String,
-        online: bool,
-        last_seen: Option<i64>,
-    },
-    Avatar {
-        id: String,
-        path: Option<std::path::PathBuf>,
-    },
-    StarChanged {
-        chat: String,
-        id: String,
-        starred: bool,
-        local: bool,
-    },
-    StarredIds {
-        chat: String,
-        ids: Vec<String>,
-    },
-    StarredList(Vec<crate::archive::StarredMessage>),
-    Call(crate::model::call::CallSession),
-    CallWaiting(Option<crate::model::call::CallSession>),
-    CallVideo(std::sync::Arc<crate::calls::VideoSlots>),
-    CallFrames,
-    Calls {
-        entries: Vec<crate::model::call::CallEntry>,
-        seen_at: i64,
-    },
-    MessageDeleted {
-        chat: String,
-        id: String,
-    },
-    Incoming {
-        chat: String,
-        message: Box<crate::model::Message>,
-    },
-    OlderFetched {
-        chat: String,
+
+        history_complete: &mut bool,
+        loading_older: &mut bool,
+    ) -> bool {
+        if request.is_some() && (!active || !self.accepts(request, older)) {
+            return false;
+        }
+        if active && (request.is_some() || (self.initial.is_none() && self.older.is_none())) {
+            *history_complete = complete;
+            if request.is_none() || !older || !self.older_phone {
+                *loading_older = false;
+            }
+            if request.is_some() {
+                if !older {
+                    self.initial = None;
+                } else if !self.older_phone {
+                    self.older = None;
+                }
+            }
+        }
+        true
+    }
+
+    fn older_fetched(
+        &mut self,
+        active: bool,
+        request: u64,
+
         more: bool,
-    },
-    Stickers {
-        saved: Vec<std::path::PathBuf>,
-        packs: Vec<crate::model::StickerPack>,
-        recent: Vec<std::path::PathBuf>,
-    },
+        history_complete: &mut bool,
+        loading_older: &mut bool,
+    ) -> bool {
+        if !active || self.older != Some(request) {
+            return false;
+        }
+        self.older = None;
+        *loading_older = false;
+        *history_complete = !more;
+        true
+    }
 }
 
 struct PendingSend {
@@ -483,7 +469,7 @@ pub struct NativeApplication {
     chat_filters: crate::native_chat_list::ChatListFilters,
     chat_ids: Vec<String>,
     chat_targets: std::rc::Rc<std::cell::RefCell<chats::ChatTargets>>,
-    chat_snapshots: Vec<crate::model::Chat>,
+    chat_snapshots: Vec<std::rc::Rc<crate::model::Chat>>,
     contacts: std::collections::HashMap<String, crate::model::Contact>,
     contact_share_generation: u64,
     /// Header menu for the open chat, relabelled by `sync_chat_menu`.
@@ -509,6 +495,7 @@ pub struct NativeApplication {
     composer_view: relm4::Controller<ComposerView>,
     history_complete: bool,
     loading_older: bool,
+    transcript_requests: TranscriptRequests,
     message_ids: Vec<String>,
     message_snapshots: std::collections::HashMap<String, crate::model::Message>,
     pending_quote_navigation: Option<(String, String)>,
@@ -519,6 +506,7 @@ pub struct NativeApplication {
     pointer_sender: ComponentSender<NativeApplication>,
     editable_messages: std::collections::HashMap<String, String>,
     transcript: Vec<crate::native_transcript::TranscriptRow>,
+    pending_transcript: conversation::PendingTranscript,
     audio: AudioState,
     /// About row of the open contact-info dialog, filled when the fetch returns.
     info_about: Option<(String, adw::ActionRow)>,
@@ -536,7 +524,6 @@ pub struct NativeApplication {
     sticker_packs: Vec<crate::model::StickerPack>,
     recent_stickers: Vec<std::path::PathBuf>,
     favorite_stickers: Vec<std::path::PathBuf>,
-    sticker_emojis: std::collections::HashMap<std::path::PathBuf, Vec<String>>,
     active_chat: Option<String>,
     draft: String,
     drafts: std::collections::HashMap<String, String>,
@@ -1335,6 +1322,7 @@ impl SimpleComponent for NativeApplication {
             composer_view,
             history_complete: false,
             loading_older: false,
+            transcript_requests: TranscriptRequests::default(),
             message_ids: Vec::new(),
             message_snapshots: std::collections::HashMap::new(),
             pending_quote_navigation: None,
@@ -1343,6 +1331,7 @@ impl SimpleComponent for NativeApplication {
             pointer_sender: sender.clone(),
             editable_messages: std::collections::HashMap::new(),
             transcript: Vec::new(),
+            pending_transcript: Default::default(),
             audio: AudioState {
                 selected_voice: None,
                 selected_voice_message: None,
@@ -1370,7 +1359,6 @@ impl SimpleComponent for NativeApplication {
             sticker_packs: Vec::new(),
             recent_stickers: Vec::new(),
             favorite_stickers: Vec::new(),
-            sticker_emojis: std::collections::HashMap::new(),
             active_chat: None,
             draft: String::new(),
             drafts: std::collections::HashMap::new(),
@@ -1489,22 +1477,9 @@ impl SimpleComponent for NativeApplication {
                 shown_sender.input(Input::SidebarShown(!split.shows_content()));
             });
         model.sync_translucent_sidebar();
+        resume::watch(sender.clone());
         // The whole conversation accepts dropped files, not only the composer.
         // Capture runs before the text view's own drop handling.
-        let (mut last_wall, mut last_monotonic) =
-            (std::time::SystemTime::now(), std::time::Instant::now());
-        let resume_sender = sender.clone();
-        gtk::glib::timeout_add_local(std::time::Duration::from_secs(5), move || {
-            let (wall, monotonic) = (std::time::SystemTime::now(), std::time::Instant::now());
-            if slept_through(
-                wall.duration_since(last_wall).unwrap_or_default(),
-                monotonic.duration_since(last_monotonic),
-            ) {
-                resume_sender.input(Input::Resumed);
-            }
-            (last_wall, last_monotonic) = (wall, monotonic);
-            gtk::glib::ControlFlow::Continue
-        });
         let drop_target = gtk::DropTarget::new(
             gtk::gdk::FileList::static_type(),
             gtk::gdk::DragAction::COPY,
@@ -2021,7 +1996,7 @@ impl NativeApplication {
                 .active_chat
                 .as_deref()
                 .and_then(|id| self.chat_snapshots.iter().find(|chat| chat.id == id))
-                .is_some_and(crate::model::Chat::can_send)
+                .is_some_and(|chat| chat.can_send())
     }
 
     fn activate_attachment(&mut self, id: &str) {
@@ -2054,6 +2029,30 @@ impl NativeApplication {
                 self.refresh_message_row(&message);
             }
             crate::model::Action::OpenFile(path) => {
+                let content = self
+                    .message_snapshots
+                    .get(id)
+                    .map(|message| &message.content);
+                let declared = content
+                    .and_then(|content| content.media())
+                    .map(|media| media.mime.as_str())
+                    .unwrap_or_default();
+                if document_safety::path_needs_confirmation(&path, declared) {
+                    let cached_name = path
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    let sender_name = match content {
+                        Some(crate::model::Content::Document { file_name, .. })
+                            if !file_name.is_empty() =>
+                        {
+                            file_name.clone()
+                        }
+                        _ => cached_name,
+                    };
+                    document_safety::confirm_and_open(&self.window, &path, &sender_name);
+                    return;
+                }
                 let file = gtk::gio::File::for_path(path);
                 if gtk::gio::AppInfo::launch_default_for_uri(
                     &file.uri(),
@@ -2579,7 +2578,7 @@ impl NativeApplication {
         &mut self,
         chat: &str,
         id: &str,
-        result: Result<std::path::PathBuf, String>,
+        result: Result<std::path::PathBuf, crate::backend::DownloadFailure>,
     ) {
         if self.active_chat.as_deref() != Some(chat) {
             return;
@@ -2596,11 +2595,12 @@ impl NativeApplication {
                 media.path = Some(path);
                 media.state = crate::model::MediaState::Idle;
             }
-            Err(error) => {
-                let notice = if error.contains("403") || error.contains("404") {
-                    "No longer available on WhatsApp's servers".to_owned()
-                } else {
-                    error
+            Err(failure) => {
+                let notice = match failure {
+                    crate::backend::DownloadFailure::Expired => {
+                        "No longer available on WhatsApp's servers".to_owned()
+                    }
+                    crate::backend::DownloadFailure::Other(error) => error,
                 };
                 media.state = crate::model::MediaState::Failed(notice);
             }
@@ -2614,6 +2614,8 @@ impl NativeApplication {
         if self.active_chat.as_deref() != Some(chat) {
             return;
         }
+        // Deferred updates land first, so the deletion changes only its row.
+        self.flush_transcript();
         if self.audio.playing_audio.as_deref() == Some(id) {
             self.audio.media.stop_playback();
             self.audio.playing_audio = None;
@@ -2687,6 +2689,7 @@ impl NativeApplication {
         self.message_snapshots.clear();
         self.editable_messages.clear();
         self.transcript.clear();
+        self.pending_transcript.clear();
         self.audio.selected_voice = None;
         self.audio.selected_voice_message = None;
         self.messages.clear();
@@ -2770,7 +2773,7 @@ impl NativeApplication {
     fn finish_close(&mut self, sender: ComponentSender<Self>) {
         if !self.settings.keep_running_in_background {
             self.request_shutdown(sender);
-        } else if self.tray_shown || crate::native_background::sandboxed() {
+        } else if self.tray_shown || crate::portal::sandboxed() {
             self.window.set_visible(false);
         } else {
             self.present_quit_confirmation_dialog(sender);
@@ -2801,15 +2804,27 @@ impl NativeApplication {
     }
 
     fn toast(&self, text: &str) {
-        self.add_toast(adw::Toast::builder().title(text).use_markup(false).build());
+        show_toast(&self.window, text);
     }
 
     fn add_toast(&self, toast: adw::Toast) {
-        if let Some(child) = gtk::prelude::GtkWindowExt::child(&self.window)
-            && let Ok(overlay) = child.downcast::<adw::ToastOverlay>()
-        {
-            overlay.add_toast(toast);
-        }
+        add_window_toast(&self.window, toast);
+    }
+}
+
+/// Shows plain `text` as a toast; for callbacks that only hold the window.
+fn show_toast(window: &adw::ApplicationWindow, text: &str) {
+    add_window_toast(
+        window,
+        adw::Toast::builder().title(text).use_markup(false).build(),
+    );
+}
+
+fn add_window_toast(window: &adw::ApplicationWindow, toast: adw::Toast) {
+    if let Some(child) = gtk::prelude::GtkWindowExt::child(window)
+        && let Ok(overlay) = child.downcast::<adw::ToastOverlay>()
+    {
+        overlay.add_toast(toast);
     }
 }
 

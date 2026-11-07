@@ -38,6 +38,35 @@ impl Drop for ThumbnailDecodePermit {
     }
 }
 
+/// A message's embedded thumbnail as a texture, or `None` when it is not a
+/// small JPEG, PNG, or WebP image.
+pub(crate) fn inline_thumbnail_texture(bytes: &[u8]) -> Option<gdk::Texture> {
+    decoded_texture(crate::native_media::decode_inline_thumbnail(bytes))
+}
+
+/// A saved profile picture as a texture, decoded under the same bounds as
+/// embedded thumbnails.
+pub(crate) fn avatar_texture(path: &std::path::Path) -> Option<gdk::Texture> {
+    decoded_texture(crate::native_media::decode_avatar_file(path))
+}
+
+fn decoded_texture(result: ThumbnailResult) -> Option<gdk::Texture> {
+    let ThumbnailResult::Image(image) = result else {
+        return None;
+    };
+    let stride = image.width as usize * 4;
+    Some(
+        gdk::MemoryTexture::new(
+            i32::try_from(image.width).ok()?,
+            i32::try_from(image.height).ok()?,
+            gdk::MemoryFormat::R8g8b8a8,
+            &glib::Bytes::from_owned(image.rgba),
+            stride,
+        )
+        .upcast(),
+    )
+}
+
 /// GTK media row. Attachment actions are forwarded by button callbacks.
 pub struct NativeMediaWidget {
     pub widget: gtk::Box,
@@ -79,7 +108,9 @@ use cards::{
 };
 use photo::{append_photo, append_video, document_card};
 use sticker::append_sticker;
-use widget::playback_projection;
+use widget::{playback_projection, refuse_link};
+
+pub(crate) use cards::open_web_link;
 
 #[cfg(test)]
 mod tests {
@@ -367,6 +398,54 @@ mod tests {
                 .save_to_png(dir.join(format!("{name}.png")))
                 .unwrap();
         }
+    }
+
+    #[test]
+    #[ignore = "needs a display"]
+    fn template_buttons_open_only_web_links() {
+        gtk::init().expect("display");
+        adw::init().expect("libadwaita");
+        let urls = [
+            ("https://example.com/status", true),
+            ("file:///etc/passwd", false),
+            ("smb://server/share", false),
+            ("javascript:alert(1)", false),
+        ];
+        let template = message(Content::Template {
+            text: "Fixture".into(),
+            footer: None,
+            links: urls
+                .iter()
+                .map(|(url, _)| crate::model::TemplateLink {
+                    label: "Open".into(),
+                    url: (*url).into(),
+                })
+                .collect(),
+        });
+        let widget = build_media_widget_with_action(&template, |_| {}).widget;
+        let mut buttons = Vec::new();
+        let mut child = widget.first_child();
+        while let Some(current) = child {
+            if let Some(button) = current.downcast_ref::<gtk::Button>() {
+                buttons.push((
+                    button.tooltip_text().unwrap_or_default().to_string(),
+                    button.is_sensitive(),
+                ));
+            }
+            child = current.next_sibling();
+        }
+        let expected: Vec<(String, bool)> = urls
+            .iter()
+            .map(|(url, enabled)| {
+                let tooltip = if *enabled {
+                    (*url).to_owned()
+                } else {
+                    format!("This link can't be opened\n{url}")
+                };
+                (tooltip, *enabled)
+            })
+            .collect();
+        assert_eq!(buttons, expected);
     }
 
     #[test]

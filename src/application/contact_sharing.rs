@@ -192,12 +192,13 @@ fn valid_target(
     target: &ShareTarget,
     generation: u64,
     connected: bool,
-    chats: &[crate::model::Chat],
+    chats: &[impl std::borrow::Borrow<crate::model::Chat>],
 ) -> bool {
     target.generation == generation
         && connected
         && chats
             .iter()
+            .map(std::borrow::Borrow::borrow)
             .any(|chat| chat.id == target.chat && chat.can_send())
 }
 

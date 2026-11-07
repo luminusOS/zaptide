@@ -43,7 +43,7 @@ fn texture(frame: RgbaFrame) -> Option<gtk::gdk::Texture> {
 }
 
 fn avatar_image(path: Option<&std::path::Path>) -> Option<gtk::gdk::Texture> {
-    gtk::gdk::Texture::from_filename(path?).ok()
+    crate::native_media_widgets::avatar_texture(path?)
 }
 
 fn avatar_for(
@@ -260,12 +260,12 @@ impl CallsUi {
         self.entries.clear();
         self.seen_at = 0;
         self.selected = None;
-        self.refill(&[], &Default::default());
+        self.refill::<crate::model::Chat>(&[], &Default::default());
     }
 
-    fn refill(
+    fn refill<T: std::borrow::Borrow<crate::model::Chat>>(
         &self,
-        chats: &[crate::model::Chat],
+        chats: &[T],
         avatars: &std::collections::HashMap<String, std::path::PathBuf>,
     ) {
         while let Some(row) = self.list.first_child() {
@@ -318,9 +318,9 @@ impl CallsUi {
         }
     }
 
-    fn show_selected(
+    fn show_selected<T: std::borrow::Borrow<crate::model::Chat>>(
         &self,
-        chats: &[crate::model::Chat],
+        chats: &[T],
         avatars: &std::collections::HashMap<String, std::path::PathBuf>,
         busy: bool,
     ) {
@@ -390,9 +390,10 @@ fn day_heading(timestamp: i64) -> gtk::Label {
     heading
 }
 
-fn chat_label(chats: &[crate::model::Chat], id: &str) -> String {
+fn chat_label(chats: &[impl std::borrow::Borrow<crate::model::Chat>], id: &str) -> String {
     chats
         .iter()
+        .map(std::borrow::Borrow::borrow)
         .find(|chat| chat.id == id)
         .map(|chat| chat.name.clone())
         .filter(|name| !name.trim().is_empty())
@@ -425,7 +426,7 @@ impl NativeApplication {
         }
     }
 
-    fn chats_of(&self, account: AccountId) -> &[crate::model::Chat] {
+    fn chats_of(&self, account: AccountId) -> &[std::rc::Rc<crate::model::Chat>] {
         if account == self.active_account {
             &self.chat_snapshots
         } else {
@@ -529,18 +530,18 @@ impl NativeApplication {
     pub(super) fn handle_call_event(
         &mut self,
         account: AccountId,
-        event: NativeEvent,
+        event: Event,
         sender: &ComponentSender<Self>,
     ) {
         match event {
-            NativeEvent::CallVideo(slots) => {
+            Event::CallVideo(slots) => {
                 if !self.calls.busy_for_other(account) {
                     self.calls.slots = Some((account, slots));
                 }
             }
-            NativeEvent::CallFrames => self.paint_call_video(),
-            NativeEvent::Call(session) => self.call_changed(account, session, sender),
-            NativeEvent::CallWaiting(session) => self.waiting_changed(account, session),
+            Event::CallFrames => self.paint_call_video(),
+            Event::Call(session) => self.call_changed(account, session, sender),
+            Event::CallWaiting(session) => self.waiting_changed(account, session),
             _ => {}
         }
     }

@@ -168,7 +168,14 @@ fn read_theme(directory: &Path, filename: &str) -> Result<CustomTheme, String> {
 struct Loaded {
     themes: Vec<CustomTheme>,
     problem: Option<String>,
-    watch: Option<super::watch::ThemeWatch>,
+    watch: Option<WatchRequest>,
+}
+
+/// A themes folder that exists and can be monitored once the result reaches
+/// the main context.
+struct WatchRequest {
+    directory: PathBuf,
+    waker: std::sync::Arc<dyn crate::backend::Wake>,
 }
 
 fn discover(directory: &Path, selected: Option<&str>) -> Loaded {
@@ -318,13 +325,13 @@ impl Catalog {
                 loaded.themes.sort_by(|a, b| a.filename.cmp(&b.filename));
             }
             if needs_watch {
-                let watch = std::fs::create_dir_all(&scan.directory)
-                    .map_err(notify::Error::io)
-                    .and_then(|()| {
-                        super::watch::ThemeWatch::new(&scan.directory, scan.waker.clone())
-                    });
-                match watch {
-                    Ok(watch) => loaded.watch = Some(watch),
+                match std::fs::create_dir_all(&scan.directory) {
+                    Ok(()) => {
+                        loaded.watch = Some(WatchRequest {
+                            directory: scan.directory,
+                            waker: scan.waker,
+                        })
+                    }
                     Err(error) => log::warn!("unable to watch theme changes: {error}"),
                 }
             }
@@ -370,6 +377,8 @@ impl Catalog {
         self.receiver.is_some()
     }
 
+    /// Call from the GTK main context: a folder monitor started here reports
+    /// through the context that is current when it is created.
     pub fn poll(&mut self) -> bool {
         let Some(receiver) = &self.receiver else {
             return false;
@@ -389,8 +398,18 @@ impl Catalog {
             Ok(loaded) => {
                 self.themes = loaded.themes;
                 self.problem = loaded.problem;
-                if loaded.watch.is_some() {
-                    self.watch = loaded.watch;
+                if self.watch.is_none()
+                    && let Some(request) = loaded.watch
+                {
+                    match super::watch::ThemeWatch::new(&request.directory, request.waker) {
+                        Ok(watch) => {
+                            // The folder was read before the monitor started, so
+                            // rescan once to pick up anything written in between.
+                            watch.mark_changed();
+                            self.watch = Some(watch);
+                        }
+                        Err(error) => log::warn!("unable to watch theme changes: {error}"),
+                    }
                 }
             }
             Err(mpsc::TryRecvError::Disconnected) => {
@@ -533,5 +552,48 @@ mod custom_theme_tests {
         );
         assert!(loaded.problem.unwrap().contains("512"));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn wait_for(context: &gtk4::glib::MainContext, mut done: impl FnMut() -> bool, what: &str) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while !done() {
+            assert!(std::time::Instant::now() < deadline, "{what}");
+            if !context.iteration(false) {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+    }
+
+    #[test]
+    fn a_desktop_catalog_watches_its_folder_from_the_polling_context() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("themes");
+        let context = gtk4::glib::MainContext::new();
+        context
+            .with_thread_default(|| {
+                let mut catalog = Catalog::default();
+                catalog.enable_desktop_themes();
+                catalog.start(directory.clone(), None, &crate::backend::Waker);
+                wait_for(&context, || catalog.poll(), "the first scan did not finish");
+                assert!(directory.is_dir());
+                while context.iteration(false) {}
+                assert!(catalog.needs_reload(), "the startup gap was not rescanned");
+                catalog.start(directory.clone(), None, &crate::backend::Waker);
+                wait_for(&context, || catalog.poll(), "the rescan did not finish");
+                while context.iteration(false) {}
+                assert!(!catalog.needs_reload());
+
+                let temporary = root.path().join("next");
+                std::fs::write(&temporary, r#"{"base":"dark"}"#).unwrap();
+                std::fs::rename(temporary, directory.join("palette.json")).unwrap();
+                wait_for(
+                    &context,
+                    || catalog.needs_reload(),
+                    "the palette was not noticed",
+                );
+                while context.iteration(false) {}
+                assert!(!catalog.needs_reload());
+            })
+            .unwrap();
     }
 }

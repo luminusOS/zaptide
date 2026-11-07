@@ -51,13 +51,14 @@ impl Archive {
     }
 
     pub fn upsert_contact(&self, contact: &Contact) -> Result<()> {
-        self.connection.execute(
-            "INSERT INTO contacts (id, full_name, push_name) VALUES (?1, ?2, ?3)
-             ON CONFLICT(id) DO UPDATE SET
-                full_name = COALESCE(excluded.full_name, full_name),
-                push_name = COALESCE(excluded.push_name, push_name)",
-            params![contact.id, contact.full_name, contact.push_name],
-        )?;
+        self.connection
+            .prepare_cached(
+                "INSERT INTO contacts (id, full_name, push_name) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(id) DO UPDATE SET
+                    full_name = COALESCE(excluded.full_name, full_name),
+                    push_name = COALESCE(excluded.push_name, push_name)",
+            )?
+            .execute(params![contact.id, contact.full_name, contact.push_name])?;
         Ok(())
     }
 

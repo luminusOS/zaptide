@@ -1,6 +1,7 @@
 //! Toolkit-neutral chat-list search, filtering, and stable selection.
 
 use crate::model::{Chat, ChatId};
+use std::rc::Rc;
 
 /// How archived chats participate in a projection.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -60,7 +61,7 @@ pub struct ChatListFilters {
 /// selection; filtering a selected chat out of view does not.
 #[derive(Clone, Debug, Default)]
 pub struct ChatListProjection {
-    chats: Vec<Chat>,
+    chats: Vec<Rc<Chat>>,
     query: String,
     filters: ChatListFilters,
     selected_id: Option<ChatId>,
@@ -70,6 +71,11 @@ impl ChatListProjection {
     /// Replaces current snapshot, retaining selection when its ID still exists.
     /// Duplicate IDs in the input collapse in place.
     pub fn replace_snapshot(&mut self, chats: impl IntoIterator<Item = Chat>) {
+        self.replace_shared_snapshot(chats.into_iter().map(Rc::new));
+    }
+
+    /// Replaces the snapshot using chats shared with the caller.
+    pub fn replace_shared_snapshot(&mut self, chats: impl IntoIterator<Item = Rc<Chat>>) {
         self.chats.clear();
         // Scanning the growing list per chat would make a 10k snapshot
         // replacement quadratic.
@@ -114,7 +120,7 @@ impl ChatListProjection {
             .map(str::to_lowercase)
             .collect();
         let now = crate::util::now();
-        self.chats.iter().filter(move |chat| {
+        self.chats.iter().map(Rc::as_ref).filter(move |chat| {
             !chat.locked
                 && terms_match(chat, &terms)
                 && (!self.filters.unread_only || chat.unread > 0)
@@ -152,9 +158,10 @@ impl ChatListProjection {
         self.selected_id.as_deref()
     }
 
+    #[cfg(test)]
     pub fn selected_chat(&self) -> Option<&Chat> {
         let id = self.selected_id.as_deref()?;
-        self.chats.iter().find(|chat| chat.id == id)
+        self.chats.iter().find(|chat| chat.id == id).map(Rc::as_ref)
     }
 
     fn clear_selection_if_missing(&mut self) {
@@ -343,19 +350,68 @@ mod tests {
     fn replaces_10k_chat_snapshots_quickly_and_in_order() {
         use std::time::{Duration, Instant};
 
+        let participants: std::sync::Arc<[String]> = (0..200)
+            .map(|index| format!("member-{index}@s.whatsapp.net"))
+            .collect::<Vec<_>>()
+            .into();
         let fixture: Vec<Chat> = (0..10_000)
-            .map(|index| chat(&format!("{index}@s.whatsapp.net"), &format!("Chat {index}")))
+            .map(|index| {
+                let mut chat = chat(&format!("{index}@s.whatsapp.net"), &format!("Chat {index}"));
+                chat.participants = participants.clone();
+                chat
+            })
             .collect();
         let selected = fixture[5_000].id.clone();
         let mut projection = projection(fixture.iter().cloned());
         assert!(projection.select(selected.clone()));
 
+        let start = Instant::now();
+        let copied: Vec<Vec<String>> = (0..10_000).map(|_| participants.to_vec()).collect();
+        let copied_time = start.elapsed();
+        let start = Instant::now();
+        let shared: Vec<_> = (0..10_000).map(|_| participants.clone()).collect();
+        let shared_time = start.elapsed();
+        assert_eq!(copied[5_000].as_slice(), shared[5_000].as_ref());
+        eprintln!("10k participant copies: {copied_time:?}, shared: {shared_time:?}");
+        drop((copied, shared));
+
         let mut reversed = fixture;
         reversed.reverse();
         let start = Instant::now();
         projection.replace_snapshot(reversed.iter().cloned());
+        eprintln!(
+            "10k snapshot replacement with 200 shared participants: {:?}",
+            start.elapsed()
+        );
         assert!(start.elapsed() < Duration::from_millis(500));
         assert_eq!(projection.selected_id(), Some(selected.as_str()));
+        assert_eq!(
+            projection.selected_chat(),
+            reversed.iter().find(|chat| chat.id == selected)
+        );
+        assert!(std::sync::Arc::ptr_eq(
+            &projection.selected_chat().unwrap().participants,
+            &participants
+        ));
+        assert!(
+            ids(&projection)
+                .iter()
+                .eq(reversed.iter().map(|chat| &chat.id))
+        );
+
+        let shared_snapshot: Vec<_> = reversed.iter().cloned().map(Rc::new).collect();
+        let start = Instant::now();
+        projection.replace_shared_snapshot(shared_snapshot.iter().cloned());
+        eprintln!("10k shared snapshot replacement: {:?}", start.elapsed());
+        assert_eq!(projection.selected_id(), Some(selected.as_str()));
+        assert_eq!(
+            projection.selected_chat(),
+            Some(shared_snapshot[4_999].as_ref())
+        );
+        assert!(std::ptr::eq(
+            projection.selected_chat().unwrap(),
+            shared_snapshot[4_999].as_ref()
+        ));
         assert!(
             ids(&projection)
                 .iter()
@@ -364,5 +420,30 @@ mod tests {
 
         projection.set_query("chat 777");
         assert_eq!(ids(&projection).len(), 19);
+    }
+
+    #[test]
+    fn shared_snapshot_keeps_duplicate_selection_and_lock_semantics() {
+        let original = Rc::new(chat("one", "Original"));
+        let replacement = Rc::new(chat("one", "Replacement"));
+        let mut hidden = chat("hidden", "Hidden");
+        hidden.locked = true;
+        let hidden = Rc::new(hidden);
+        let mut projection = ChatListProjection::default();
+        projection.replace_shared_snapshot([original, hidden.clone(), replacement.clone()]);
+        assert_eq!(ids(&projection), ["one"]);
+        assert!(projection.select("hidden"));
+        assert!(std::ptr::eq(
+            projection.selected_chat().unwrap(),
+            hidden.as_ref()
+        ));
+        projection.replace_shared_snapshot([replacement.clone(), hidden]);
+        assert_eq!(projection.selected_id(), Some("hidden"));
+        projection.replace_shared_snapshot([replacement.clone()]);
+        assert_eq!(projection.selected_id(), None);
+        assert!(std::ptr::eq(
+            projection.visible().next().unwrap(),
+            replacement.as_ref()
+        ));
     }
 }

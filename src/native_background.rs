@@ -7,11 +7,6 @@
 
 use ashpd::desktop::background::{BackgroundProxy, SetStatusOptions};
 
-/// True inside a Flatpak, the only place the portal tracks the app.
-pub fn sandboxed() -> bool {
-    std::env::var_os("FLATPAK_ID").is_some()
-}
-
 fn status_options(message: &str) -> SetStatusOptions {
     SetStatusOptions::default().set_message(message)
 }

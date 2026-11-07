@@ -1,7 +1,640 @@
 use super::*;
 
+mod downloads;
+
+mod avatars;
+
 mod previews;
 mod session;
+mod synthetic_archive;
+
+fn group_message_id_info(sender: &str) -> MessageInfo {
+    MessageInfo {
+        id: "collision".into(),
+        source: MessageSource {
+            chat: "123-456@g.us".parse().unwrap(),
+            sender: sender.parse().unwrap(),
+            is_group: true,
+            ..Default::default()
+        },
+        timestamp: whatsapp_rust::wacore::time::from_secs(20).unwrap(),
+        ..Default::default()
+    }
+}
+
+fn snapshot_history(update_id: &str, sender: &str, alias: (&str, &str)) -> ParsedHistory {
+    let mut chat = parse_conversation(wa::Conversation {
+        id: "123-456@g.us".into(),
+        ..Default::default()
+    });
+    chat.messages.push(super::history::ParsedMessage {
+        id: "poll".into(),
+        sender: Some("999@s.whatsapp.net".into()),
+        from_me: false,
+        push_name: None,
+        timestamp: 1,
+        content: Content::Poll {
+            question: "Lunch?".into(),
+            options: vec!["Pizza".into(), "Pasta".into()],
+            state: crate::model::PollState {
+                selectable: 1,
+                ..Default::default()
+            },
+        },
+        status: Delivery::None,
+        quoted: None,
+        reactions: Vec::new(),
+        mentions: Vec::new(),
+        forwarded: false,
+        thumbnail: None,
+        raw: Vec::new(),
+        poll_secret: None,
+        poll_votes: vec![wa::PollUpdate {
+            poll_update_message_key: MessageField::some(wa::MessageKey {
+                id: Some(update_id.into()),
+                participant: Some(sender.into()),
+                ..Default::default()
+            }),
+            vote: MessageField::some(wa::message::PollVoteMessage {
+                selected_options: vec![
+                    whatsapp_rust::wacore::poll::compute_option_hash("Pizza").to_vec(),
+                ],
+            }),
+            sender_timestamp_ms: Some(50),
+            ..Default::default()
+        }],
+    });
+    ParsedHistory {
+        chats: vec![chat],
+        push_names: Vec::new(),
+        lids: vec![(alias.0.into(), alias.1.into())],
+        stickers: Vec::new(),
+    }
+}
+
+#[test]
+fn group_snapshot_poll_collision_rejects_vote_and_alias_but_known_alias_is_accepted() {
+    let (mut worker, _, _, _) = worker();
+    let chat = "123-456@g.us";
+    let mut original = crate::archive::tests::message(chat, "collision", 1, false);
+    original.sender = "111@s.whatsapp.net".into();
+    worker.archive.insert_message(&original, None).unwrap();
+    worker
+        .archive
+        .save_poll_vote(&crate::archive::PollVote {
+            chat: chat.into(),
+            poll: "poll".into(),
+            voter: "222@lid".into(),
+            sender: "222@lid".into(),
+            update_id: "old".into(),
+            at: 10,
+            from_me: false,
+            choices: Some(vec![1]),
+            encrypted: None,
+        })
+        .unwrap();
+    assert!(
+        worker
+            .apply_history(
+                snapshot_history("collision", "222@lid", ("222@lid", "111@s.whatsapp.net")),
+                false
+            )
+            .1
+    );
+    let votes = worker.archive.poll_votes(chat, "poll").unwrap();
+    assert_eq!(votes.len(), 1);
+    assert_eq!(votes[0].update_id, "old");
+    assert_eq!(votes[0].choices, Some(vec![1]));
+    assert!(!worker.identity.lid_to_pn.contains_key("222"));
+    assert!(
+        !worker
+            .archive
+            .lids()
+            .unwrap()
+            .iter()
+            .any(|(lid, _)| lid == "222")
+    );
+
+    worker.learn_lid("333", "111");
+    assert!(
+        worker
+            .apply_history(
+                snapshot_history("collision", "333@lid", ("444@lid", "555@s.whatsapp.net")),
+                false
+            )
+            .1
+    );
+    let votes = worker.archive.poll_votes(chat, "poll").unwrap();
+    assert!(
+        votes
+            .iter()
+            .any(|vote| vote.update_id == "collision" && vote.choices == Some(vec![0]))
+    );
+}
+
+#[test]
+fn group_snapshot_poll_lookup_error_aborts_then_retry_succeeds() {
+    let (mut worker, events, _, _) = worker();
+    let chat = "123-456@g.us";
+    let mut original = crate::archive::tests::message(chat, "collision", 1, false);
+    original.sender = "111@lid".into();
+    worker.archive.insert_message(&original, None).unwrap();
+    worker.archive.put_lid("111", "222").unwrap();
+    worker
+        .archive
+        .execute_batch_for_test("ALTER TABLE lids RENAME TO lids_unavailable")
+        .unwrap();
+    let history = || {
+        snapshot_history(
+            "collision",
+            "222@s.whatsapp.net",
+            ("333@lid", "444@s.whatsapp.net"),
+        )
+    };
+    assert!(!worker.apply_history(history(), false).1);
+    assert!(worker.archive.message(chat, "poll").unwrap().is_none());
+    assert!(worker.archive.poll_votes(chat, "poll").unwrap().is_empty());
+    assert!(!worker.identity.lid_to_pn.contains_key("333"));
+    assert!(
+        events
+            .try_iter()
+            .any(|event| matches!(event, Event::RefreshTranscript))
+    );
+    worker
+        .archive
+        .execute_batch_for_test("ALTER TABLE lids_unavailable RENAME TO lids")
+        .unwrap();
+    assert!(worker.apply_history(history(), false).1);
+    let votes = worker.archive.poll_votes(chat, "poll").unwrap();
+    assert_eq!(votes.len(), 1);
+    assert_eq!(votes[0].update_id, "collision");
+    assert_eq!(votes[0].choices, Some(vec![0]));
+    assert_eq!(
+        worker.identity.lid_to_pn.get("333").map(String::as_str),
+        Some("444")
+    );
+}
+
+#[test]
+fn group_message_id_sender_alt_cannot_poison_colliding_envelope() {
+    let (mut worker, events, _, _) = worker();
+    let chat = "123-456@g.us";
+    let mut original = crate::archive::tests::message(chat, "collision", 1, false);
+    original.sender = "111@s.whatsapp.net".into();
+    worker
+        .archive
+        .insert_message(&original, Some(b"original"))
+        .unwrap();
+    let mut info = group_message_id_info("222@lid");
+    info.source.sender_alt = Some("111@s.whatsapp.net".parse().unwrap());
+    let raw = Arc::new(wa::Message {
+        conversation: Some("forged".into()),
+        ..Default::default()
+    });
+    worker.ingest(&raw, &info);
+    worker.ingest_undecryptable(&info);
+    assert_eq!(
+        worker.archive.message(chat, "collision").unwrap().unwrap(),
+        original
+    );
+    assert_eq!(
+        worker.archive.raw(chat, "collision").unwrap(),
+        Some(b"original".to_vec())
+    );
+    assert!(!worker.identity.lid_to_pn.contains_key("222"));
+    assert!(
+        !worker
+            .archive
+            .lids()
+            .unwrap()
+            .iter()
+            .any(|(lid, _)| lid == "222")
+    );
+    assert!(events.try_iter().next().is_none());
+
+    let poll = wa::Message {
+        poll_update_message: MessageField::some(wa::message::PollUpdateMessage {
+            poll_creation_message_key: MessageField::some(wa::MessageKey {
+                id: Some("poll".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    worker.ingest(&Arc::new(poll), &info);
+    assert!(worker.archive.pending_poll_votes(10).unwrap().is_empty());
+    assert!(!worker.identity.lid_to_pn.contains_key("222"));
+
+    let mut same_sender = group_message_id_info("111@s.whatsapp.net");
+    same_sender.source.sender_alt = Some("333@lid".parse().unwrap());
+    worker.ingest(&raw, &same_sender);
+    assert!(!worker.identity.lid_to_pn.contains_key("333"));
+    assert!(
+        !worker
+            .archive
+            .lids()
+            .unwrap()
+            .iter()
+            .any(|(lid, _)| lid == "333")
+    );
+    assert_eq!(
+        worker
+            .archive
+            .message(chat, "collision")
+            .unwrap()
+            .unwrap()
+            .content,
+        Content::text("forged")
+    );
+}
+
+#[test]
+fn group_message_id_new_message_learns_sender_alt() {
+    let (mut worker, _, _, _) = worker();
+    let mut info = group_message_id_info("222@lid");
+    info.id = "new".into();
+    info.source.sender_alt = Some("111@s.whatsapp.net".parse().unwrap());
+    worker.ingest(
+        &Arc::new(wa::Message {
+            conversation: Some("new".into()),
+            ..Default::default()
+        }),
+        &info,
+    );
+    assert_eq!(
+        worker.identity.lid_to_pn.get("222").map(String::as_str),
+        Some("111")
+    );
+    assert_eq!(
+        worker
+            .archive
+            .message("123-456@g.us", "new")
+            .unwrap()
+            .unwrap()
+            .sender,
+        "111@s.whatsapp.net"
+    );
+}
+
+#[test]
+fn group_message_id_history_mapping_cannot_authorize_same_chunk_collision() {
+    let (mut worker, events, _, _) = worker();
+    let chat = "123-456@g.us";
+    worker.archive.ensure_chat(chat, "Fixture").unwrap();
+    let mut original = crate::archive::tests::message(chat, "collision", 1, false);
+    original.sender = "111@s.whatsapp.net".into();
+    worker
+        .archive
+        .insert_message(&original, Some(b"original"))
+        .unwrap();
+    let mut conversation = parse_conversation(wa::Conversation {
+        id: chat.into(),
+        ..Default::default()
+    });
+    conversation.messages.push(super::history::ParsedMessage {
+        id: "collision".into(),
+        sender: Some("222@lid".into()),
+        from_me: false,
+        push_name: None,
+        timestamp: 2,
+        content: Content::text("forged"),
+        status: Delivery::None,
+        quoted: None,
+        reactions: Vec::new(),
+        mentions: Vec::new(),
+        forwarded: false,
+        thumbnail: None,
+        raw: b"forged".to_vec(),
+        poll_secret: None,
+        poll_votes: Vec::new(),
+    });
+    let (_, committed) = worker.apply_history(
+        ParsedHistory {
+            chats: vec![conversation],
+            push_names: Vec::new(),
+            lids: vec![("222@lid".into(), "111@s.whatsapp.net".into())],
+            stickers: Vec::new(),
+        },
+        false,
+    );
+    assert!(committed);
+    assert_eq!(
+        worker.archive.message(chat, "collision").unwrap().unwrap(),
+        original
+    );
+    assert_eq!(
+        worker.archive.raw(chat, "collision").unwrap(),
+        Some(b"original".to_vec())
+    );
+    assert!(!worker.identity.lid_to_pn.contains_key("222"));
+    assert!(
+        !worker
+            .archive
+            .lids()
+            .unwrap()
+            .iter()
+            .any(|(lid, _)| lid == "222")
+    );
+    assert!(!events.try_iter().any(|event| matches!(
+        event,
+        Event::Messages { .. } | Event::Incoming { .. } | Event::MessageUpdated(_)
+    )));
+}
+
+#[test]
+fn group_message_id_collision_blocks_live_reaction_poll_and_protocol() {
+    let (mut worker, _, _, _) = worker();
+    let chat = "123-456@g.us";
+    let mut original = crate::archive::tests::message(chat, "collision", 1, false);
+    original.sender = "111@s.whatsapp.net".into();
+    worker.archive.insert_message(&original, None).unwrap();
+    let target = crate::archive::tests::message(chat, "target", 1, false);
+    worker.archive.insert_message(&target, None).unwrap();
+    let key = || {
+        MessageField::some(wa::MessageKey {
+            id: Some("target".into()),
+            ..Default::default()
+        })
+    };
+    let reaction = wa::Message {
+        reaction_message: MessageField::some(wa::message::ReactionMessage {
+            key: key(),
+            text: Some("x".into()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let poll = wa::Message {
+        poll_update_message: MessageField::some(wa::message::PollUpdateMessage {
+            poll_creation_message_key: key(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let revoke = wa::Message {
+        protocol_message: MessageField::some(wa::message::ProtocolMessage {
+            key: key(),
+            r#type: Some(wa::message::protocol_message::Type::REVOKE),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let edit = wa::Message {
+        protocol_message: MessageField::some(wa::message::ProtocolMessage {
+            key: key(),
+            r#type: Some(wa::message::protocol_message::Type::MESSAGE_EDIT),
+            edited_message: MessageField::some(wa::Message {
+                conversation: Some("forged edit".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    for raw in [reaction.clone(), poll, revoke, edit] {
+        worker.ingest(&Arc::new(raw), &group_message_id_info("222@s.whatsapp.net"));
+    }
+    assert_eq!(
+        worker.archive.message(chat, "target").unwrap().unwrap(),
+        target
+    );
+    assert!(worker.archive.pending_poll_votes(10).unwrap().is_empty());
+    worker.ingest(
+        &Arc::new(reaction),
+        &group_message_id_info("111@s.whatsapp.net"),
+    );
+    assert_eq!(
+        worker
+            .archive
+            .message(chat, "target")
+            .unwrap()
+            .unwrap()
+            .reactions
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn group_message_id_collision_blocks_history_reaction_poll_and_revoke() {
+    let (mut worker, _, _, _) = worker();
+    let chat = "123-456@g.us";
+    worker.archive.ensure_chat(chat, "Fixture").unwrap();
+    let mut original = crate::archive::tests::message(chat, "collision", 1, false);
+    original.sender = "111@s.whatsapp.net".into();
+    worker.archive.insert_message(&original, None).unwrap();
+    let target = crate::archive::tests::message(chat, "target", 1, false);
+    worker.archive.insert_message(&target, None).unwrap();
+    let key = || {
+        MessageField::some(wa::MessageKey {
+            id: Some("target".into()),
+            ..Default::default()
+        })
+    };
+    let reaction = wa::Message {
+        reaction_message: MessageField::some(wa::message::ReactionMessage {
+            key: key(),
+            text: Some("x".into()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let poll = wa::Message {
+        poll_update_message: MessageField::some(wa::message::PollUpdateMessage {
+            poll_creation_message_key: key(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let revoke = wa::Message {
+        protocol_message: MessageField::some(wa::message::ProtocolMessage {
+            key: key(),
+            r#type: Some(wa::message::protocol_message::Type::REVOKE),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let messages = [reaction, poll, revoke]
+        .into_iter()
+        .map(|message| wa::HistorySyncMsg {
+            message: MessageField::some(wa::WebMessageInfo {
+                key: MessageField::some(wa::MessageKey {
+                    id: Some("collision".into()),
+                    participant: Some("222@s.whatsapp.net".into()),
+                    remote_jid: Some(chat.into()),
+                    ..Default::default()
+                }),
+                message: MessageField::some(message),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .collect();
+    let parsed = parse_conversation(wa::Conversation {
+        id: chat.into(),
+        messages,
+        ..Default::default()
+    });
+    let (_, committed) = worker.apply_history(
+        ParsedHistory {
+            chats: vec![parsed],
+            push_names: Vec::new(),
+            lids: Vec::new(),
+            stickers: Vec::new(),
+        },
+        false,
+    );
+    assert!(committed);
+    assert_eq!(
+        worker.archive.message(chat, "target").unwrap().unwrap(),
+        target
+    );
+    assert!(worker.archive.pending_poll_votes(10).unwrap().is_empty());
+}
+
+#[test]
+fn group_message_id_lookup_error_retries_live_after_archive_recovery() {
+    let (mut worker, _, _, _) = worker();
+    let chat = "123-456@g.us";
+    let mut original = crate::archive::tests::message(chat, "collision", 1, false);
+    original.sender = "111@lid".into();
+    worker.archive.insert_message(&original, None).unwrap();
+    worker.archive.put_lid("111", "222").unwrap();
+    worker
+        .archive
+        .execute_batch_for_test("ALTER TABLE lids RENAME TO lids_unavailable")
+        .unwrap();
+    let raw = Arc::new(wa::Message {
+        conversation: Some("replayed".into()),
+        ..Default::default()
+    });
+    worker.ingest(&raw, &group_message_id_info("222@s.whatsapp.net"));
+    assert_eq!(worker.deferred_incoming.len(), 1);
+    assert_eq!(
+        worker
+            .archive
+            .message(chat, "collision")
+            .unwrap()
+            .unwrap()
+            .content,
+        original.content
+    );
+    worker
+        .archive
+        .execute_batch_for_test("ALTER TABLE lids_unavailable RENAME TO lids")
+        .unwrap();
+    worker.retry_deferred_incoming();
+    assert!(worker.deferred_incoming.is_empty());
+    assert_eq!(
+        worker
+            .archive
+            .message(chat, "collision")
+            .unwrap()
+            .unwrap()
+            .content,
+        Content::text("replayed")
+    );
+}
+
+#[test]
+fn group_message_id_lookup_error_rolls_back_history_and_keeps_request_retryable() {
+    let (mut worker, events, _, _) = worker();
+    let chat = "123-456@g.us";
+    worker.archive.ensure_chat(chat, "Fixture").unwrap();
+    let mut original = crate::archive::tests::message(chat, "collision", 1, false);
+    original.sender = "111@lid".into();
+    worker.archive.insert_message(&original, None).unwrap();
+    worker.older.pending_older.insert(
+        chat.into(),
+        PendingOlder {
+            request: 44,
+            queued: None,
+            request_id: 44,
+            asked: Instant::now(),
+            before: (200, "boundary".into()),
+            protocol_id: Some("request".into()),
+            received_count: 0,
+            more_on_phone: None,
+            early_responses: HashMap::new(),
+        },
+    );
+    worker
+        .archive
+        .execute_batch_for_test("ALTER TABLE lids RENAME TO lids_unavailable")
+        .unwrap();
+    let mut conversation = parse_conversation(wa::Conversation {
+        id: chat.into(),
+        ..Default::default()
+    });
+    conversation.ephemeral_expiration = Some(42);
+    conversation.messages.push(super::history::ParsedMessage {
+        id: "collision".into(),
+        sender: Some("222@s.whatsapp.net".into()),
+        from_me: false,
+        push_name: None,
+        timestamp: 2,
+        content: Content::text("forged"),
+        status: Delivery::None,
+        quoted: None,
+        reactions: Vec::new(),
+        mentions: Vec::new(),
+        forwarded: false,
+        thumbnail: None,
+        raw: Vec::new(),
+        poll_secret: None,
+        poll_votes: Vec::new(),
+    });
+    let (filed, committed) = worker.apply_history(
+        ParsedHistory {
+            chats: vec![conversation],
+            push_names: Vec::new(),
+            lids: Vec::new(),
+            stickers: Vec::new(),
+        },
+        false,
+    );
+    assert!(!committed);
+    assert!(filed.is_empty());
+    worker.answer_older(filed, Some("request".into()));
+    assert_eq!(
+        worker.older.pending_older.get(chat).unwrap().received_count,
+        0
+    );
+    assert_eq!(worker.archive.ephemeral_expiration(chat).unwrap(), None);
+    assert_eq!(
+        worker.archive.message(chat, "collision").unwrap().unwrap(),
+        original
+    );
+    assert!(
+        events
+            .try_iter()
+            .any(|event| matches!(event, Event::RefreshTranscript))
+    );
+}
+
+#[test]
+fn group_message_id_collision_emits_no_attacker_projection() {
+    let (mut worker, events, _, _) = worker();
+    let chat = "1-2@g.us";
+    let mut original = crate::archive::tests::message(chat, "same", 1, false);
+    original.sender = "alice@s.whatsapp.net".into();
+    worker.store_message(original.clone(), Some(b"original".to_vec()), None);
+    events.try_iter().for_each(drop);
+    let mut attacker = original.clone();
+    attacker.sender = "bob@s.whatsapp.net".into();
+    attacker.content = Content::text("forged");
+    worker.store_message(attacker, Some(b"forged".to_vec()), None);
+    assert!(
+        !events
+            .try_iter()
+            .any(|event| matches!(event, Event::Messages { .. } | Event::Incoming { .. }))
+    );
+    assert_eq!(
+        worker.archive.message(chat, "same").unwrap().unwrap(),
+        original
+    );
+}
 
 #[tokio::test]
 async fn contact_sharing_rejects_read_only_chats_without_completing_a_composer_send() {
@@ -142,6 +775,40 @@ fn fallback_names_read_as_phones_or_ids() {
 }
 
 #[test]
+fn attachment_mimes_follow_the_file_extension() {
+    for (name, mime) in [
+        ("photo.jpg", "image/jpeg"),
+        ("photo.JPEG", "image/jpeg"),
+        ("image.png", "image/png"),
+        ("sticker.webp", "image/webp"),
+        ("loop.gif", "image/gif"),
+        ("clip.mp4", "video/mp4"),
+        ("clip.webm", "video/webm"),
+        ("audio.ogg", "audio/ogg"),
+        ("voice.opus", "audio/ogg"),
+        ("song.mp3", "audio/mpeg"),
+        ("memo.m4a", "audio/m4a"),
+        ("report.pdf", "application/pdf"),
+        ("bundle.zip", "application/zip"),
+        (
+            "letter.docx",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ),
+        ("notes.txt", "text/plain"),
+        ("contact.vcf", "text/x-vcard"),
+        ("package.rpm", "application/x-rpm"),
+        ("package.RPM", "application/x-rpm"),
+        ("event.ics", "text/calendar"),
+        ("script.js", "text/javascript"),
+        ("raw.cr2", "image/x-canon-cr2"),
+        ("blob.zaptide-unknown", "application/octet-stream"),
+        ("no-extension", "application/octet-stream"),
+    ] {
+        assert_eq!(outbound::attachment_mime(Path::new(name)), mime, "{name}");
+    }
+}
+
+#[test]
 fn media_paths_keep_document_names_and_map_mimes() {
     let dir = Path::new("/cache");
     assert_eq!(
@@ -156,10 +823,195 @@ fn media_paths_keep_document_names_and_map_mimes() {
             "application/pdf",
             Some("tax return.pdf")
         ),
-        PathBuf::from("/cache/ABC-tax_return.pdf")
+        PathBuf::from("/cache/ABC-0b617fa3-tax_return.pdf")
     );
     assert_eq!(extension_for("audio/ogg; codecs=opus", None), "ogg");
     assert_eq!(extension_for("application/x-unknown", None), "x-unknown");
+}
+
+#[test]
+fn media_paths_drop_unsafe_sender_extensions() {
+    let dir = Path::new("/cache");
+    let path = |name: &str| {
+        outbound::media_path(
+            dir,
+            "1@s.whatsapp.net",
+            "ABC",
+            "application/pdf",
+            Some(name),
+        )
+    };
+    let extension = |name: &str| {
+        path(name)
+            .extension()
+            .map(|extension| extension.to_string_lossy().into_owned())
+    };
+    assert_eq!(
+        path("x.\u{202e}fdp"),
+        PathBuf::from("/cache/ABC-0b617fa3-x.pdf")
+    );
+    assert_eq!(path("a.ex e"), PathBuf::from("/cache/ABC-0b617fa3-a.pdf"));
+    assert_eq!(extension("report.PDF").as_deref(), Some("pdf"));
+    assert_eq!(extension("archive.tar7z123").as_deref(), Some("tar7z123"));
+    assert_eq!(extension("archive.toolongext").as_deref(), Some("pdf"));
+    assert_eq!(extension("report.").as_deref(), Some("pdf"));
+    assert_eq!(extension("...").as_deref(), Some("pdf"));
+    assert_eq!(extension(".").as_deref(), Some("pdf"));
+    assert_eq!(extension("").as_deref(), Some("pdf"));
+    assert_eq!(extension("a.b/../c.sh").as_deref(), Some("sh"));
+    for name in [
+        "x.\u{202e}fdp",
+        "a.ex e",
+        "a.e\u{301}xe",
+        "a.ex\0e",
+        "a.pdf\n",
+    ] {
+        let path = path(name);
+        let file_name = path.file_name().unwrap().to_str().unwrap();
+        assert!(
+            file_name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte)),
+            "{name:?} became {file_name:?}"
+        );
+        assert_eq!(path.parent(), Some(dir));
+    }
+}
+
+#[test]
+fn the_same_message_id_in_two_chats_gets_two_files() {
+    let dir = Path::new("/cache");
+    let first = outbound::media_path(
+        dir,
+        "1@s.whatsapp.net",
+        "ABC",
+        "application/pdf",
+        Some("invoice.pdf"),
+    );
+    let second = outbound::media_path(
+        dir,
+        "2@s.whatsapp.net",
+        "ABC",
+        "application/pdf",
+        Some("invoice.pdf"),
+    );
+    assert_ne!(first, second);
+    assert_eq!(
+        first,
+        outbound::media_path(
+            dir,
+            "1@s.whatsapp.net",
+            "ABC",
+            "application/pdf",
+            Some("invoice.pdf"),
+        )
+    );
+}
+
+#[test]
+fn promoting_a_download_never_replaces_an_existing_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let destination = dir.path().join("ABC-0b617fa3-invoice.pdf");
+    std::fs::write(&destination, b"first").unwrap();
+    let staged = dir.path().join(".download-1.tmp");
+    std::fs::write(&staged, b"second").unwrap();
+
+    let promoted = outbound::promote_download(&staged, &destination, None).unwrap();
+
+    assert_eq!(promoted, dir.path().join("ABC-0b617fa3-invoice-1.pdf"));
+    assert_eq!(std::fs::read(&destination).unwrap(), b"first");
+    assert_eq!(std::fs::read(&promoted).unwrap(), b"second");
+    assert!(!staged.exists());
+
+    let staged = dir.path().join(".download-2.tmp");
+    std::fs::write(&staged, b"third").unwrap();
+    let again = outbound::promote_download(&staged, &destination, None).unwrap();
+    assert_eq!(again, dir.path().join("ABC-0b617fa3-invoice-2.pdf"));
+    assert_eq!(std::fs::read(&again).unwrap(), b"third");
+
+    let fresh = dir.path().join("1_s_whatsapp_net-XYZ.jpg");
+    let staged = dir.path().join(".download-3.tmp");
+    std::fs::write(&staged, b"fourth").unwrap();
+    assert_eq!(
+        outbound::promote_download(&staged, &fresh, None).unwrap(),
+        fresh
+    );
+    assert_eq!(std::fs::read(&fresh).unwrap(), b"fourth");
+
+    let staged = dir.path().join(".download-4.tmp");
+    std::fs::write(&staged, b"fifth").unwrap();
+    assert_eq!(
+        outbound::promote_download(&staged, &fresh, Some(&fresh)).unwrap(),
+        fresh
+    );
+    assert_eq!(std::fs::read(&fresh).unwrap(), b"fifth");
+    assert!(!dir.path().join("1_s_whatsapp_net-XYZ-1.jpg").exists());
+}
+
+#[test]
+fn promoting_replaces_only_the_messages_own_numbered_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let destination = dir.path().join("ABC-0b617fa3-invoice.pdf");
+    let own = dir.path().join("ABC-0b617fa3-invoice-1.pdf");
+    std::fs::write(&destination, b"another message").unwrap();
+    std::fs::write(&own, b"old copy").unwrap();
+    let staged = dir.path().join(".download-1.tmp");
+    std::fs::write(&staged, b"new copy").unwrap();
+
+    assert_eq!(
+        outbound::promote_download(&staged, &destination, Some(&own)).unwrap(),
+        own
+    );
+    assert_eq!(std::fs::read(&own).unwrap(), b"new copy");
+    assert_eq!(std::fs::read(&destination).unwrap(), b"another message");
+
+    for unrelated in [
+        dir.path().join("ABC-0b617fa3-invoice-x.pdf"),
+        dir.path().join("ABC-0b617fa3-invoice-.pdf"),
+        dir.path().join("ABC-0b617fa3-invoice-2.txt"),
+        dir.path().join("other").join("ABC-0b617fa3-invoice-2.pdf"),
+        dir.path().join("XYZ-0b617fa3-invoice-2.pdf"),
+    ] {
+        let staged = dir.path().join(".download-2.tmp");
+        std::fs::write(&staged, b"third").unwrap();
+        let promoted = outbound::promote_download(&staged, &destination, Some(&unrelated)).unwrap();
+        assert_ne!(promoted, unrelated, "{unrelated:?}");
+        assert!(promoted.starts_with(dir.path()));
+        std::fs::remove_file(promoted).unwrap();
+    }
+}
+
+#[test]
+fn long_document_names_are_capped() {
+    let name = format!("{}.pdf", "n".repeat(400));
+    let path = outbound::media_path(
+        Path::new("/cache"),
+        "1@s.whatsapp.net",
+        "ABC",
+        "application/pdf",
+        Some(&name),
+    );
+    let file_name = path.file_name().unwrap().to_str().unwrap();
+    assert_eq!(file_name, format!("ABC-0b617fa3-{}.pdf", "n".repeat(120)));
+    assert!(file_name.len() < 200);
+}
+
+#[test]
+fn long_ids_and_chats_are_capped() {
+    let id = "I".repeat(300);
+    let chat = format!("{}@g.us", "9".repeat(300));
+    let dir = Path::new("/cache");
+    let named = outbound::media_path(dir, &chat, &id, "application/pdf", Some("a.pdf"));
+    let tag = named.file_name().unwrap().to_str().unwrap()[65..73].to_owned();
+    assert_eq!(named, dir.join(format!("{}-{tag}-a.pdf", "I".repeat(64))));
+    let unnamed = outbound::media_path(dir, &chat, &id, "image/jpeg", None);
+    assert_eq!(
+        unnamed,
+        dir.join(format!("{}-{}.jpg", "9".repeat(64), "I".repeat(64)))
+    );
+    for path in [named, unnamed] {
+        assert!(path.file_name().unwrap().len() < 255 - 8);
+    }
 }
 
 #[test]
@@ -577,6 +1429,29 @@ fn classification_covers_text_and_media() {
     ));
     assert_eq!(thumbnail_of(&place), Some(vec![0xff, 0xd8, 1]));
     assert_eq!(classify(&wa::Message::default()), None);
+}
+
+#[test]
+fn ingest_keeps_only_small_jpeg_png_and_webp_thumbnails() {
+    let image_with = |thumbnail: Vec<u8>| wa::Message {
+        image_message: whatsapp_rust::prelude::MessageField::some(wa::message::ImageMessage {
+            jpeg_thumbnail: Some(thumbnail),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+    let webp = b"RIFF\x10\0\0\0WEBPVP8 ".to_vec();
+    assert_eq!(thumbnail_of(&image_with(png.clone())), Some(png));
+    assert_eq!(thumbnail_of(&image_with(webp.clone())), Some(webp));
+
+    let tiff = b"II*\0\x08\0\0\0".to_vec();
+    let svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>".to_vec();
+    let mut oversized = vec![0xff, 0xd8, 0xff, 0xe0];
+    oversized.resize(crate::native_media::MAX_INLINE_THUMBNAIL_BYTES + 1, 0);
+    for rejected in [tiff, svg, oversized, b"garbage".to_vec()] {
+        assert_eq!(thumbnail_of(&image_with(rejected)), None);
+    }
 }
 
 #[test]
@@ -1035,6 +1910,7 @@ fn backfill_does_not_advance_checkpoint_when_a_row_write_fails() {
 fn mentions_missing_from_the_message_are_recovered_for_known_people_only() {
     let (mut worker, _, _, _) = worker();
     worker
+        .identity
         .lid_to_pn
         .insert("15581".to_owned(), "5511912345678".to_owned());
     let mut message = crate::archive::tests::message("group@g.us", "M1", 10, false);
@@ -1053,7 +1929,7 @@ fn mentions_missing_from_the_message_are_recovered_for_known_people_only() {
     }
     // Once they have, the name they go by is attached for the tooltip,
     // found under the phone id even though the text carries the LID.
-    worker.contacts.insert(
+    worker.identity.contacts.insert(
         "5511912345678@s.whatsapp.net".to_owned(),
         Contact {
             id: "5511912345678@s.whatsapp.net".to_owned(),
@@ -1152,9 +2028,9 @@ fn send_failure_text_is_generic_and_does_not_include_protocol_details() {
 /// Puts the worker where a fresh archive starts: lock state has not been read
 /// from the phone yet, so private content waits for the grace period.
 fn unconfirmed(worker: &mut Worker) {
-    worker.privacy_ready = false;
-    worker.privacy_confirmed = false;
-    worker.privacy_reveal_at = Some(Instant::now() + PRIVACY_GRACE);
+    worker.privacy.privacy_ready = false;
+    worker.privacy.privacy_confirmed = false;
+    worker.privacy.privacy_reveal_at = Some(Instant::now() + PRIVACY_GRACE);
 }
 
 #[test]
@@ -1167,8 +2043,8 @@ fn privacy_recovery_hides_content_until_a_successful_replay() {
     assert!(events.try_recv().is_err());
     worker.archive.set_locked_at(PEER, true, 100).unwrap();
     worker.preferences_recovered(0, true, true);
-    assert!(worker.privacy_ready);
-    assert!(worker.privacy_confirmed);
+    assert!(worker.privacy.privacy_ready);
+    assert!(worker.privacy.privacy_confirmed);
     assert_eq!(
         worker
             .archive
@@ -1198,9 +2074,9 @@ fn failed_privacy_recovery_shows_known_state_and_keeps_retrying() {
     worker.archive.ensure_chat(PEER, "Fixture").unwrap();
     worker.archive.set_locked_at(PEER, true, 100).unwrap();
     worker.preferences_recovered(0, false, false);
-    assert!(worker.privacy_ready);
-    assert!(!worker.privacy_confirmed);
-    assert!(worker.privacy_retry > Instant::now());
+    assert!(worker.privacy.privacy_ready);
+    assert!(!worker.privacy.privacy_confirmed);
+    assert!(worker.privacy.privacy_retry > Instant::now());
     assert!(
         worker
             .archive
@@ -1231,18 +2107,18 @@ fn failed_privacy_recovery_shows_known_state_and_keeps_retrying() {
     );
     // A second failure warns no further.
     worker.preferences_recovered(0, false, false);
-    assert_eq!(worker.privacy_attempts, 2);
+    assert_eq!(worker.privacy.privacy_attempts, 2);
 }
 
 #[test]
 fn stale_privacy_recovery_cannot_expose_a_different_linked_account() {
     let (mut worker, events, _, _) = worker();
-    worker.privacy_ready = false;
-    worker.privacy_recovering = true;
-    worker.privacy_generation = 1;
+    worker.privacy.privacy_ready = false;
+    worker.privacy.privacy_recovering = true;
+    worker.privacy.privacy_generation = 1;
     worker.preferences_recovered(0, true, true);
-    assert!(!worker.privacy_ready);
-    assert!(worker.privacy_recovering);
+    assert!(!worker.privacy.privacy_ready);
+    assert!(worker.privacy.privacy_recovering);
     assert!(events.try_recv().is_err());
     assert!(
         worker
@@ -1260,8 +2136,8 @@ fn partial_settings_recovery_confirms_locks_but_retries_next_start() {
     let (mut worker, _events, _, _) = worker();
     unconfirmed(&mut worker);
     worker.preferences_recovered(0, true, false);
-    assert!(worker.privacy_ready);
-    assert!(worker.privacy_confirmed);
+    assert!(worker.privacy.privacy_ready);
+    assert!(worker.privacy.privacy_confirmed);
     assert!(
         worker
             .archive
@@ -1280,12 +2156,12 @@ fn unconfirmed_privacy_shows_content_after_the_grace_period() {
     unconfirmed(&mut worker);
     worker.archive.ensure_chat(PEER, "Fixture").unwrap();
     worker.reveal_unconfirmed_after_grace();
-    assert!(!worker.privacy_ready);
+    assert!(!worker.privacy.privacy_ready);
     assert!(events.try_recv().is_err());
-    worker.privacy_reveal_at = Some(Instant::now());
+    worker.privacy.privacy_reveal_at = Some(Instant::now());
     worker.reveal_unconfirmed_after_grace();
-    assert!(worker.privacy_ready);
-    assert!(worker.privacy_reveal_at.is_none());
+    assert!(worker.privacy.privacy_ready);
+    assert!(worker.privacy.privacy_reveal_at.is_none());
     assert!(
         events
             .try_iter()
@@ -1306,11 +2182,11 @@ fn transcript_reads_withheld_during_privacy_recovery_are_answered_once_shown() {
         worker.archive.insert_message(&row, None).unwrap();
     }
     unconfirmed(&mut worker);
-    worker.load_chat(GROUP.into(), None);
-    worker.load_chat(GROUP.into(), Some((300, "third".into())));
+    worker.load_chat(GROUP.into(), None, 1);
+    worker.load_chat(GROUP.into(), Some((300, "third".into())), 2);
     worker.load_until(GROUP.into(), "first".into(), (200, "second".into()));
     // Asking twice keeps one read.
-    worker.load_chat(GROUP.into(), None);
+    worker.load_chat(GROUP.into(), None, 1);
     assert!(
         !events
             .try_iter()
@@ -1341,7 +2217,7 @@ fn transcript_reads_withheld_during_privacy_recovery_are_answered_once_shown() {
             (vec!["first".into()], true),
         ]
     );
-    assert!(worker.withheld_pages.is_empty());
+    assert!(worker.privacy.withheld_pages.is_empty());
 }
 
 /// A collection the server keeps refusing is not rebuilt every few seconds.
@@ -1378,7 +2254,7 @@ async fn regular_high_failure_does_not_block_lock_recovery() {
     .await;
     worker.preferences_recovered(0, locks, complete);
     assert!(
-        worker.privacy_confirmed,
+        worker.privacy.privacy_confirmed,
         "healthy lock sync must finish independently"
     );
     let chats = events
@@ -1410,10 +2286,10 @@ fn pairing_wait_does_not_reveal_unconfirmed_content() {
         pair_code: None,
         pairing_phone: None,
     };
-    worker.privacy_reveal_at = Some(Instant::now());
+    worker.privacy.privacy_reveal_at = Some(Instant::now());
     worker.reveal_unconfirmed_after_grace();
     assert!(
-        !worker.privacy_ready,
+        !worker.privacy.privacy_ready,
         "pairing must not consume the recovery grace"
     );
     assert!(
@@ -1432,26 +2308,26 @@ fn privacy_recovery_after_pairing_starts_a_full_grace() {
         pair_code: None,
         pairing_phone: None,
     };
-    worker.privacy_reveal_at = Some(Instant::now());
+    worker.privacy.privacy_reveal_at = Some(Instant::now());
     worker.reveal_unconfirmed_after_grace();
     assert!(!worker.begin_privacy_recovery());
     worker.status = LinkStatus::Connected;
     let started = Instant::now();
     assert!(worker.begin_privacy_recovery());
-    let deadline = worker.privacy_reveal_at.unwrap();
+    let deadline = worker.privacy.privacy_reveal_at.unwrap();
     assert!(deadline >= started + PRIVACY_GRACE);
     assert!(
         !worker.begin_privacy_recovery(),
         "an active attempt must not restart the clock"
     );
-    assert_eq!(worker.privacy_reveal_at, Some(deadline));
+    assert_eq!(worker.privacy.privacy_reveal_at, Some(deadline));
 }
 
 #[test]
 fn existing_archive_can_reveal_after_grace_while_offline() {
     let (mut worker, events, _, _) = worker();
     unconfirmed(&mut worker);
-    worker.privacy_snapshot = true;
+    worker.privacy.privacy_snapshot = true;
     worker.status = LinkStatus::Disconnected {
         reason: "fixture".into(),
     };
@@ -1459,10 +2335,10 @@ fn existing_archive_can_reveal_after_grace_while_offline() {
         .archive
         .ensure_chat("fixture@s.whatsapp.net", "Fixture")
         .unwrap();
-    worker.privacy_reveal_at = Some(Instant::now());
+    worker.privacy.privacy_reveal_at = Some(Instant::now());
     worker.reveal_unconfirmed_after_grace();
-    assert!(worker.privacy_ready);
-    assert!(!worker.privacy_confirmed);
+    assert!(worker.privacy.privacy_ready);
+    assert!(!worker.privacy.privacy_confirmed);
     assert!(
         events
             .try_iter()
@@ -1474,15 +2350,15 @@ fn existing_archive_can_reveal_after_grace_while_offline() {
 fn fresh_link_pending_recovery_keeps_grace_across_reconnect() {
     let (mut worker, _, _, _) = worker();
     unconfirmed(&mut worker);
-    worker.privacy_reveal_at = None;
+    worker.privacy.privacy_reveal_at = None;
     assert!(worker.begin_privacy_recovery());
-    worker.privacy_reveal_at = Some(Instant::now());
+    worker.privacy.privacy_reveal_at = Some(Instant::now());
     worker.status = LinkStatus::Disconnected {
         reason: "fixture".into(),
     };
     worker.reveal_unconfirmed_after_grace();
     assert!(
-        !worker.privacy_ready,
+        !worker.privacy.privacy_ready,
         "a fresh link must not reveal while offline"
     );
     worker.status = LinkStatus::Connected;
@@ -1492,10 +2368,10 @@ fn fresh_link_pending_recovery_keeps_grace_across_reconnect() {
     );
     worker.reveal_unconfirmed_after_grace();
     assert!(
-        worker.privacy_ready,
+        worker.privacy.privacy_ready,
         "reconnect must retain the stalled recovery fallback"
     );
-    assert!(!worker.privacy_confirmed);
+    assert!(!worker.privacy.privacy_confirmed);
 }
 
 #[tokio::test]
@@ -1514,9 +2390,9 @@ async fn regular_low_failure_remains_unconfirmed_when_regular_high_succeeds() {
     })
     .await;
     worker.preferences_recovered(0, locks, complete);
-    assert!(worker.privacy_ready);
-    assert!(!worker.privacy_confirmed);
-    assert_eq!(worker.privacy_attempts, 1);
+    assert!(worker.privacy.privacy_ready);
+    assert!(!worker.privacy.privacy_confirmed);
+    assert_eq!(worker.privacy.privacy_attempts, 1);
     assert!(
         worker
             .archive
@@ -1545,9 +2421,9 @@ async fn fresh_link_recovers_only_locks_incrementally() {
 fn partial_settings_recovery_warns_once_about_stale_settings() {
     let (mut worker, events, _, _) = worker();
     unconfirmed(&mut worker);
-    worker.privacy_snapshot = true;
+    worker.privacy.privacy_snapshot = true;
     worker.preferences_recovered(0, true, false);
-    assert!(worker.privacy_confirmed);
+    assert!(worker.privacy.privacy_confirmed);
     assert_eq!(
         events
             .try_iter()
@@ -1801,6 +2677,39 @@ fn millisecond_timestamps_are_normalised() {
     assert_eq!(seconds(-1), 0);
 }
 
+#[test]
+fn worker_constructor_uses_archive_privacy_and_default_presence() {
+    for confirmed in [false, true] {
+        let archive = Archive::in_memory().expect("archive");
+        if confirmed {
+            archive
+                .set_meta("chat_privacy_ready_v1", "complete")
+                .unwrap();
+        }
+        let (events, _) = std::sync::mpsc::channel();
+        let (commands, _) = mpsc::unbounded_channel();
+        let (wa_sender, wa_events) = mpsc::unbounded_channel();
+        let root = std::env::temp_dir().join("zaptide-constructor-test");
+        let worker = Worker::new(WorkerParts {
+            dirs: AppDirs::under(&root),
+            events,
+            commands,
+            waker: Arc::new(crate::backend::Waker),
+            archive,
+            wa_sender,
+            wa_events,
+        });
+        assert_eq!(worker.privacy.privacy_ready, confirmed);
+        assert_eq!(worker.privacy.privacy_confirmed, confirmed);
+        assert!(!worker.privacy.privacy_snapshot);
+        assert!(worker.privacy.privacy_reveal_at.is_none());
+        assert_eq!(*worker.presence_wish.borrow(), Default::default());
+        assert!(worker.identity.me_pn.is_none());
+        assert!(worker.group_info.group_info_queue.is_empty());
+        assert!(worker.older.pending_older.is_empty());
+    }
+}
+
 pub(in crate::backend::worker) fn worker() -> (
     Worker,
     std::sync::mpsc::Receiver<Event>,
@@ -1812,70 +2721,68 @@ pub(in crate::backend::worker) fn worker() -> (
     let (wa_sender, wa_events) = mpsc::unbounded_channel();
     let (_test_wa_sender, test_wa_events) = mpsc::unbounded_channel();
     let root = std::env::temp_dir().join(format!("zaptide-worker-test-{}", std::process::id()));
-    let worker = Worker {
-        privacy_ready: true,
-        privacy_confirmed: true,
-        privacy_snapshot: false,
-        privacy_reveal_at: None,
-        privacy_attempts: 0,
-        privacy_warned: false,
-        privacy_recovering: false,
-        privacy_generation: 0,
-        privacy_retry: Instant::now(),
-        withheld_pages: Vec::new(),
+    let mut worker = Worker::new(WorkerParts {
         dirs: AppDirs::under(&root),
         events,
         commands,
         waker: Arc::new(crate::backend::Waker),
         archive: Archive::in_memory().expect("archive"),
-        client: None,
-        handle: None,
         wa_sender,
         wa_events,
-        me_pn: Some("15550001111@s.whatsapp.net".into()),
-        me_lid: None,
-        me_name: None,
-        me_about: None,
-        lid_to_pn: HashMap::new(),
-        contacts: HashMap::new(),
-        status: LinkStatus::Connected,
-        session_generation: 0,
-        session_generation_shared: Arc::new(AtomicU64::new(0)),
-        forward_tails: HashMap::new(),
-        avatar_generations: HashMap::new(),
-        session_cache_lock: Arc::new(tokio::sync::Mutex::new(())),
-        pairing_phone: None,
-        pair_code: None,
-        pair_request_id: 0,
-        archive_cleanup_failed: false,
-        qr: None,
-        syncing: false,
-        sync_deadline: None,
-        group_info_requested: HashSet::new(),
-        group_info_queue: std::collections::VecDeque::new(),
-        group_info_tries: HashMap::new(),
-        group_info_retry: Vec::new(),
-        presence_subscribed: HashSet::new(),
-        pending_older: HashMap::new(),
-        next_older_request_id: 0,
-        older_warned: HashSet::new(),
-        pending_avatars: HashMap::new(),
-        sticker_fetches: HashSet::new(),
-        sticker_downloads: HashSet::new(),
-        deferred_downloads: Vec::new(),
-        next_attachment_batch: 0,
-        read_sync: ReadSync::default(),
-        poll_decrypting: 0,
-        poll_history: Default::default(),
-        answer_sends: HashMap::new(),
-        pending_revokes: HashMap::new(),
-        next_revoke_attempt: 0,
-        poll_sending: HashSet::new(),
-        presence_wish: tokio::sync::watch::Sender::new(Default::default()),
-        calls: Default::default(),
-        retention: Default::default(),
-    };
+    });
+    worker.privacy.privacy_ready = true;
+    worker.privacy.privacy_confirmed = true;
+    worker.identity.me_pn = Some("15550001111@s.whatsapp.net".into());
+    worker.status = LinkStatus::Connected;
+
     (worker, events_rx, inbox, test_wa_events)
+}
+
+#[tokio::test]
+async fn sticker_updates_coalesce_until_flush_and_explicit_refresh_is_immediate() {
+    let (mut worker, events, _inbox, _wa) = worker();
+    for _ in 0..3 {
+        worker.apply_history(
+            history::ParsedHistory {
+                chats: vec![],
+                push_names: vec![],
+                lids: vec![],
+                stickers: vec![wa::StickerMetadata::default()],
+            },
+            false,
+        );
+        worker
+            .handle_command(Command::StickerFetched {
+                hash: "fixture".into(),
+                session_generation: worker.session_generation,
+                result: Err("fixture".into()),
+            })
+            .await;
+    }
+    assert!(
+        !events
+            .try_iter()
+            .any(|event| matches!(event, Event::Stickers { .. }))
+    );
+    worker.flush_stickers();
+    worker.flush_stickers();
+    assert_eq!(
+        events
+            .try_iter()
+            .filter(|event| matches!(event, Event::Stickers { .. }))
+            .count(),
+        1
+    );
+    worker.stickers_dirty = true;
+    worker.handle_command(Command::RecentStickers).await;
+    worker.flush_stickers();
+    assert_eq!(
+        events
+            .try_iter()
+            .filter(|event| matches!(event, Event::Stickers { .. }))
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -1884,9 +2791,11 @@ async fn older_failure_from_expired_attempt_does_not_finish_newer_request() {
     let chat = "1@s.whatsapp.net".to_owned();
     let older_attempt = 40;
     let newer_attempt = 41;
-    worker.pending_older.insert(
+    worker.older.pending_older.insert(
         chat.clone(),
         PendingOlder {
+            request: 1,
+            queued: None,
             request_id: newer_attempt,
             asked: Instant::now(),
             before: (200, "new-boundary".to_owned()),
@@ -1908,6 +2817,7 @@ async fn older_failure_from_expired_attempt_does_not_finish_newer_request() {
 
     assert_eq!(
         worker
+            .older
             .pending_older
             .get(&chat)
             .map(|request| request.request_id),
@@ -1920,9 +2830,11 @@ async fn older_failure_from_expired_attempt_does_not_finish_newer_request() {
 fn late_history_response_id_does_not_finish_newer_same_chat_request() {
     let (mut worker, events, _inbox, _wa) = worker();
     let chat = "1@s.whatsapp.net".to_owned();
-    worker.pending_older.insert(
+    worker.older.pending_older.insert(
         chat.clone(),
         PendingOlder {
+            request: 1,
+            queued: None,
             request_id: 41,
             asked: Instant::now(),
             before: (200, "new-boundary".to_owned()),
@@ -1940,6 +2852,7 @@ fn late_history_response_id_does_not_finish_newer_same_chat_request() {
 
     assert_eq!(
         worker
+            .older
             .pending_older
             .get(&chat)
             .map(|request| request.request_id),
@@ -1952,9 +2865,11 @@ fn late_history_response_id_does_not_finish_newer_same_chat_request() {
 fn history_response_before_send_completion_is_correlated_later() {
     let (mut worker, events, _inbox, _wa) = worker();
     let chat = "1@s.whatsapp.net".to_owned();
-    worker.pending_older.insert(
+    worker.older.pending_older.insert(
         chat.clone(),
         PendingOlder {
+            request: 1,
+            queued: None,
             request_id: 42,
             asked: Instant::now(),
             before: (200, "boundary".to_owned()),
@@ -1973,12 +2888,12 @@ fn history_response_before_send_completion_is_correlated_later() {
         vec![(chat.clone(), 2, Some(false))],
         Some("matching-protocol-id".to_owned()),
     );
-    assert!(worker.pending_older.contains_key(&chat));
+    assert!(worker.older.pending_older.contains_key(&chat));
     assert!(events.try_recv().is_err());
 
     worker.older_request_started(chat.clone(), 42, "matching-protocol-id".to_owned());
 
-    assert!(!worker.pending_older.contains_key(&chat));
+    assert!(!worker.older.pending_older.contains_key(&chat));
     assert!(matches!(
         events.try_recv(),
         Ok(Event::Messages { older: true, .. })
@@ -1990,9 +2905,11 @@ fn history_response_before_send_completion_is_correlated_later() {
 fn multi_chunk_history_waits_for_transfer_completion_before_finishing_request() {
     let (mut worker, events, _inbox, _wa) = worker();
     let chat = "1@s.whatsapp.net".to_owned();
-    worker.pending_older.insert(
+    worker.older.pending_older.insert(
         chat.clone(),
         PendingOlder {
+            request: 1,
+            queued: None,
             request_id: 43,
             asked: Instant::now(),
             before: (200, "boundary".to_owned()),
@@ -2009,6 +2926,7 @@ fn multi_chunk_history_waits_for_transfer_completion_before_finishing_request() 
     );
     assert_eq!(
         worker
+            .older
             .pending_older
             .get(&chat)
             .map(|request| request.received_count),
@@ -2020,7 +2938,7 @@ fn multi_chunk_history_waits_for_transfer_completion_before_finishing_request() 
         vec![(chat.clone(), 30, Some(true))],
         Some("multi-chunk-request".to_owned()),
     );
-    assert!(!worker.pending_older.contains_key(&chat));
+    assert!(!worker.older.pending_older.contains_key(&chat));
     assert!(matches!(
         events.try_recv(),
         Ok(Event::Messages { older: true, .. })
@@ -2029,6 +2947,335 @@ fn multi_chunk_history_waits_for_transfer_completion_before_finishing_request() 
         events.try_recv(),
         Ok(Event::OlderFetched { more: true, .. })
     ));
+}
+
+#[test]
+fn failed_history_commit_keeps_older_request_retryable() {
+    let (mut worker, events, _, _) = worker();
+    let chat = "1@s.whatsapp.net".to_owned();
+    worker.archive.ensure_chat(&chat, "Fixture").unwrap();
+    worker.archive.execute_batch_for_test(
+        "CREATE TRIGGER rollback_history BEFORE UPDATE ON chats BEGIN SELECT RAISE(ROLLBACK, 'synthetic rollback'); END;",
+    ).unwrap();
+    worker.older.pending_older.insert(
+        chat.clone(),
+        PendingOlder {
+            request: 1,
+            queued: None,
+            request_id: 44,
+            asked: Instant::now(),
+            before: (200, "boundary".to_owned()),
+            protocol_id: Some("request".to_owned()),
+            received_count: 0,
+            more_on_phone: None,
+            early_responses: HashMap::new(),
+        },
+    );
+    let mut conversation = parse_conversation(wa::Conversation {
+        id: chat.clone(),
+        ..Default::default()
+    });
+    conversation.ephemeral_expiration = Some(1);
+    conversation.more_on_phone = Some(false);
+    let (filed, committed) = worker.apply_history(
+        ParsedHistory {
+            chats: vec![conversation],
+            push_names: Vec::new(),
+            lids: Vec::new(),
+            stickers: Vec::new(),
+        },
+        false,
+    );
+    assert!(!committed);
+    assert!(filed.is_empty());
+    worker.answer_older(filed, Some("request".to_owned()));
+    let request = worker.older.pending_older.get(&chat).unwrap();
+    assert_eq!(request.received_count, 0);
+    assert_eq!(request.more_on_phone, None);
+    assert!(
+        !events
+            .try_iter()
+            .any(|event| matches!(event, Event::OlderFetched { .. }))
+    );
+}
+
+#[test]
+fn history_commit_failure_restores_identity_contacts_and_defers_requests() {
+    const LID: &str = "123456@lid";
+    const PN: &str = "15550002222@s.whatsapp.net";
+    const GROUP: &str = "123-456@g.us";
+    let (mut worker, events, _, _) = worker();
+    worker.archive.execute_batch_for_test(
+        "PRAGMA foreign_keys = ON;
+         CREATE TABLE synthetic_parent (id INTEGER PRIMARY KEY);
+         CREATE TABLE synthetic_child (parent INTEGER REFERENCES synthetic_parent(id) DEFERRABLE INITIALLY DEFERRED);
+         CREATE TRIGGER synthetic_commit_failure AFTER INSERT ON chats
+         BEGIN INSERT INTO synthetic_child VALUES (1); END;",
+    ).unwrap();
+    let history = || ParsedHistory {
+        chats: vec![
+            parse_conversation(wa::Conversation {
+                id: LID.into(),
+                display_name: Some("Synthetic Contact".into()),
+                ..Default::default()
+            }),
+            parse_conversation(wa::Conversation {
+                id: GROUP.into(),
+                ..Default::default()
+            }),
+        ],
+        push_names: vec![(LID.into(), "Synthetic Push".into())],
+        lids: vec![(LID.into(), PN.into())],
+        stickers: vec![wa::StickerMetadata::default()],
+    };
+    let (filed, committed) = worker.apply_history(history(), true);
+    assert!(!committed);
+    assert!(filed.is_empty());
+    assert!(worker.archive.lids().unwrap().is_empty());
+    assert!(worker.archive.contacts().unwrap().is_empty());
+    assert!(worker.archive.chat(PN).unwrap().is_none());
+    assert!(worker.archive.chat(GROUP).unwrap().is_none());
+    assert!(worker.identity.lid_to_pn.is_empty());
+    assert!(worker.identity.contacts.is_empty());
+    assert!(!worker.stickers_dirty);
+    worker.flush_stickers();
+    assert!(worker.group_info.group_info_queue.is_empty());
+    assert!(worker.group_info.group_info_requested.is_empty());
+    assert_eq!(worker.poll_decrypting, 0);
+    assert_eq!(worker.canonical_str(LID), LID);
+    assert!(
+        !events
+            .try_iter()
+            .any(|event| matches!(event, Event::Contacts(_) | Event::Stickers { .. }))
+    );
+
+    worker
+        .archive
+        .execute_batch_for_test("DROP TRIGGER synthetic_commit_failure;")
+        .unwrap();
+    let ingest = |worker: &mut Worker, id: &str| {
+        let message = Arc::new(wa::Message {
+            conversation: Some("Synthetic message".into()),
+            ..Default::default()
+        });
+        let info = MessageInfo {
+            id: id.into(),
+            source: MessageSource {
+                chat: LID.parse().unwrap(),
+                sender: LID.parse().unwrap(),
+                ..Default::default()
+            },
+            timestamp: whatsapp_rust::wacore::time::from_secs(10).unwrap(),
+            ..Default::default()
+        };
+        worker.ingest(&message, &info);
+    };
+    ingest(&mut worker, "before");
+    assert!(worker.archive.message(LID, "before").unwrap().is_some());
+
+    let (filed, committed) = worker.apply_history(history(), true);
+    assert!(committed);
+    assert!(worker.stickers_dirty);
+    assert_eq!(filed.len(), 2);
+    assert_eq!(worker.canonical_str(LID), PN);
+    assert_eq!(worker.archive.lids().unwrap().len(), 1);
+    ingest(&mut worker, "after");
+    assert!(worker.archive.message(PN, "after").unwrap().is_some());
+    assert_eq!(
+        worker
+            .identity
+            .contacts
+            .get(PN)
+            .unwrap()
+            .push_name
+            .as_deref(),
+        Some("Synthetic Push")
+    );
+    assert_eq!(
+        worker
+            .group_info
+            .group_info_queue
+            .iter()
+            .filter(|id| *id == GROUP)
+            .count(),
+        1
+    );
+    worker.apply_history(history(), true);
+    assert_eq!(
+        worker
+            .group_info
+            .group_info_queue
+            .iter()
+            .filter(|id| *id == GROUP)
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn history_unwind_restores_identity_contacts_archive_and_events() {
+    const LID: &str = "123456@lid";
+    const PN: &str = "15550002222@s.whatsapp.net";
+    const GROUP: &str = "123-456@g.us";
+    let (mut worker, events, _, _) = worker();
+    let history = || ParsedHistory {
+        chats: vec![parse_conversation(wa::Conversation {
+            id: GROUP.into(),
+            ..Default::default()
+        })],
+        push_names: vec![(LID.into(), "Synthetic Push".into())],
+        lids: vec![(LID.into(), PN.into())],
+        stickers: Vec::new(),
+    };
+    history::PANIC_AFTER_HISTORY_IDENTITIES.with(|flag| flag.set(true));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        worker.apply_history(history(), true);
+    }));
+    assert!(result.is_err());
+    assert!(worker.archive.lids().unwrap().is_empty());
+    assert!(worker.archive.contacts().unwrap().is_empty());
+    assert!(worker.archive.chat(GROUP).unwrap().is_none());
+    assert!(worker.identity.lid_to_pn.is_empty());
+    assert!(worker.identity.contacts.is_empty());
+    assert!(worker.group_info.group_info_requested.is_empty());
+    assert!(worker.group_info.group_info_queue.is_empty());
+    assert_eq!(worker.poll_decrypting, 0);
+    assert!(events.try_recv().is_err());
+    assert_eq!(worker.canonical_str(LID), LID);
+    assert!(worker.apply_history(history(), true).1);
+    assert_eq!(worker.canonical_str(LID), PN);
+    assert_eq!(
+        worker
+            .identity
+            .contacts
+            .get(PN)
+            .unwrap()
+            .push_name
+            .as_deref(),
+        Some("Synthetic Push")
+    );
+    assert_eq!(
+        worker
+            .group_info
+            .group_info_queue
+            .iter()
+            .filter(|id| *id == GROUP)
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn receipt_identity_guard_restores_on_unwind() {
+    const LID: &str = "123456@lid";
+    const PN: &str = "15550002222@s.whatsapp.net";
+    let (mut worker, events, _, _) = worker();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut batch = worker.begin_batch();
+        batch.protect_state(false);
+        batch.learn_pair(&LID.parse().unwrap(), &PN.parse().unwrap());
+        assert_eq!(batch.canonical_str(LID), PN);
+        panic!("synthetic receipt panic");
+    }));
+    assert!(result.is_err());
+    assert!(worker.archive.lids().unwrap().is_empty());
+    assert_eq!(worker.canonical_str(LID), LID);
+    assert!(events.try_recv().is_err());
+}
+
+#[test]
+fn receipt_commit_failure_does_not_publish_learned_identity() {
+    const LID: &str = "123456@lid";
+    const PN: &str = "15550002222@s.whatsapp.net";
+    let (mut worker, _, _, _) = worker();
+    worker.archive.execute_batch_for_test(
+        "PRAGMA foreign_keys = ON;
+         CREATE TABLE synthetic_parent (id INTEGER PRIMARY KEY);
+         CREATE TABLE synthetic_child (parent INTEGER REFERENCES synthetic_parent(id) DEFERRABLE INITIALLY DEFERRED);
+         CREATE TRIGGER synthetic_commit_failure AFTER INSERT ON lids
+         BEGIN INSERT INTO synthetic_child VALUES (1); END;",
+    ).unwrap();
+    let receipt = wa_events::Receipt::builder()
+        .message_ids(Vec::new())
+        .source(MessageSource {
+            chat: LID.parse().unwrap(),
+            sender: LID.parse().unwrap(),
+            sender_alt: Some(PN.parse().unwrap()),
+            ..Default::default()
+        })
+        .timestamp(whatsapp_rust::wacore::time::now_utc())
+        .r#type(ReceiptType::Delivered)
+        .offline(false)
+        .build();
+    worker.on_receipt(&receipt);
+    assert!(worker.archive.lids().unwrap().is_empty());
+    assert_eq!(worker.canonical_str(LID), LID);
+    worker
+        .archive
+        .execute_batch_for_test("DROP TRIGGER synthetic_commit_failure;")
+        .unwrap();
+    worker.on_receipt(&receipt);
+    assert_eq!(worker.archive.lids().unwrap().len(), 1);
+    assert_eq!(worker.canonical_str(LID), PN);
+}
+
+#[test]
+fn history_commit_failure_keeps_pending_revoke_retryable() {
+    let (mut worker, _, _, _) = worker();
+    let chat = "fixture@s.whatsapp.net";
+    worker.archive.ensure_chat(chat, "Fixture").unwrap();
+    worker
+        .archive
+        .insert_message(&crate::archive::tests::message(chat, "M", 1, true), None)
+        .unwrap();
+    worker.begin_revoke(chat, "M").unwrap().unwrap();
+    worker.archive.execute_batch_for_test(
+        "PRAGMA foreign_keys = ON;
+         CREATE TABLE synthetic_parent (id INTEGER PRIMARY KEY);
+         CREATE TABLE synthetic_child (parent INTEGER REFERENCES synthetic_parent(id) DEFERRABLE INITIALLY DEFERRED);
+         CREATE TRIGGER synthetic_commit_failure AFTER INSERT ON chats
+         BEGIN INSERT INTO synthetic_child VALUES (1); END;",
+    ).unwrap();
+    let history = || {
+        let mut direct = parse_conversation(wa::Conversation {
+            id: chat.into(),
+            ..Default::default()
+        });
+        direct.revoked.push(super::history::HistoryRevoke {
+            id: "revoke-event".into(),
+            target: "M".into(),
+            sender: None,
+            from_me: false,
+        });
+        ParsedHistory {
+            chats: vec![
+                direct,
+                parse_conversation(wa::Conversation {
+                    id: "123-456@g.us".into(),
+                    ..Default::default()
+                }),
+            ],
+            push_names: Vec::new(),
+            lids: Vec::new(),
+            stickers: Vec::new(),
+        }
+    };
+    assert!(!worker.apply_history(history(), true).1);
+    assert!(
+        worker
+            .pending_revokes
+            .contains_key(&(chat.into(), "M".into()))
+    );
+    worker
+        .archive
+        .execute_batch_for_test("DROP TRIGGER synthetic_commit_failure;")
+        .unwrap();
+    assert!(worker.apply_history(history(), true).1);
+    assert!(
+        !worker
+            .pending_revokes
+            .contains_key(&(chat.into(), "M".into()))
+    );
 }
 
 #[tokio::test]
@@ -2077,7 +3324,12 @@ async fn confirmed_revoke_cannot_be_undone_by_failed_request() {
                 id: chat.into(),
                 ..Default::default()
             });
-            conversation.revoked.push("message".into());
+            conversation.revoked.push(super::history::HistoryRevoke {
+                id: "revoke".into(),
+                target: "message".into(),
+                sender: None,
+                from_me: true,
+            });
             worker.apply_history(
                 ParsedHistory {
                     chats: vec![conversation],
@@ -2404,6 +3656,9 @@ async fn archive_read_failure_preserves_download_until_revalidation() {
             assert!(
                 matches!(events.try_recv(), Ok(Event::Media { result: Ok(path), .. }) if path == destination)
             );
+            assert!(events.try_recv().is_err());
+            assert!(worker.stickers_dirty);
+            worker.flush_stickers();
             assert!(
                 matches!(events.try_recv(), Ok(Event::Stickers { recent, .. }) if recent.contains(&destination))
             );
@@ -2505,7 +3760,9 @@ async fn stale_download_does_not_release_replacement_picker_request() {
             std::fs::write(&old_staged, b"obsolete sticker bytes").unwrap();
             Ok(old_staged.clone())
         } else {
-            Err("obsolete download failure".to_owned())
+            Err(DownloadFailure::Other(
+                "obsolete download failure".to_owned(),
+            ))
         };
 
         worker
@@ -2533,7 +3790,9 @@ async fn stale_download_does_not_release_replacement_picker_request() {
             std::fs::write(&current_staged, b"current sticker bytes").unwrap();
             Ok(current_staged.clone())
         } else {
-            Err("current download failure".to_owned())
+            Err(DownloadFailure::Other(
+                "current download failure".to_owned(),
+            ))
         };
         worker
             .handle_command(Command::Downloaded {
@@ -2556,10 +3815,13 @@ async fn stale_download_does_not_release_replacement_picker_request() {
             );
         } else {
             assert!(
-                matches!(events.try_recv(), Ok(Event::Media { result: Err(error), .. }) if error == "current download failure")
+                matches!(events.try_recv(), Ok(Event::Media { result: Err(error), .. }) if error == DownloadFailure::Other("current download failure".to_owned()))
             );
             assert!(!destination.exists());
         }
+        assert!(events.try_recv().is_err());
+        assert!(worker.stickers_dirty);
+        worker.flush_stickers();
         assert!(
             matches!(events.try_recv(), Ok(Event::Stickers { recent, .. }) if recent.contains(&destination) == current_success)
         );
@@ -2605,9 +3867,11 @@ fn logout_clears_history_sync_deadlines_requests_and_warnings() {
     let chat = "1@s.whatsapp.net".to_owned();
     worker.syncing = true;
     worker.sync_deadline = Some(Instant::now());
-    worker.pending_older.insert(
+    worker.older.pending_older.insert(
         chat.clone(),
         PendingOlder {
+            request: 1,
+            queued: None,
             request_id: 1,
             asked: Instant::now(),
             before: (100, "boundary".to_owned()),
@@ -2617,14 +3881,14 @@ fn logout_clears_history_sync_deadlines_requests_and_warnings() {
             early_responses: HashMap::new(),
         },
     );
-    worker.older_warned.insert(chat);
+    worker.older.older_warned.insert(chat);
 
     worker.clear_history_sync_state();
 
     assert!(!worker.syncing);
     assert!(worker.sync_deadline.is_none());
-    assert!(worker.pending_older.is_empty());
-    assert!(worker.older_warned.is_empty());
+    assert!(worker.older.pending_older.is_empty());
+    assert!(worker.older.older_warned.is_empty());
     assert!(matches!(events.try_recv(), Ok(Event::Syncing(false))));
 }
 
@@ -2650,24 +3914,38 @@ pub(super) mod receipt_tests {
         worker.request_group_info("1-1@g.us", false);
         worker.request_group_info("2-2@g.us", false);
         worker.request_group_info("1-1@g.us", false);
-        assert_eq!(worker.group_info_queue.len(), 2, "asked once each");
+        assert_eq!(
+            worker.group_info.group_info_queue.len(),
+            2,
+            "asked once each"
+        );
         // Forced requests go to the front.
         worker.request_group_info("1-1@g.us", true);
         assert_eq!(
-            worker.group_info_queue.front().map(String::as_str),
+            worker
+                .group_info
+                .group_info_queue
+                .front()
+                .map(String::as_str),
             Some("1-1@g.us")
         );
         // Without a client, processing schedules a retry.
         worker.pump_group_info();
-        assert!(worker.group_info_queue.is_empty() || worker.group_info_retry.len() >= 2);
+        assert!(
+            worker.group_info.group_info_queue.is_empty()
+                || worker.group_info.group_info_retry.len() >= 2
+        );
         // Permanent failures are not requeued.
-        worker.group_info_retry.clear();
+        worker.group_info.group_info_retry.clear();
         worker.handle_failed_group("gone@g.us".to_owned(), true);
-        assert!(worker.group_info_retry.is_empty());
+        assert!(worker.group_info.group_info_retry.is_empty());
         // Retry transient failures after their delay.
         worker.handle_failed_group("busy@g.us".to_owned(), false);
-        assert_eq!(worker.group_info_retry.len(), 1);
-        assert_eq!(worker.group_info_tries.get("busy@g.us"), Some(&1));
+        assert_eq!(worker.group_info.group_info_retry.len(), 1);
+        assert_eq!(
+            worker.group_info.group_info_tries.get("busy@g.us"),
+            Some(&1)
+        );
     }
 
     #[test]
@@ -2848,6 +4126,39 @@ pub(super) mod receipt_tests {
             .r#type(kind)
             .offline(false)
             .build()
+    }
+
+    #[test]
+    fn a_receipt_sends_its_changed_rows_in_one_event_before_the_chat() {
+        let (mut worker, events, _inbox, _wa) = worker();
+        worker.archive.ensure_chat(PEER, "Peer").unwrap();
+        for (id, timestamp) in [("first", 100), ("second", 200), ("third", 300)] {
+            worker.store_message(own_message(id, timestamp), None, None);
+        }
+        events.try_iter().for_each(drop);
+
+        worker.on_receipt(&receipt(PEER, &["second", "third"], ReceiptType::Read));
+
+        let emitted = events.try_iter().collect::<Vec<_>>();
+        assert!(
+            !emitted
+                .iter()
+                .any(|event| matches!(event, Event::MessageUpdated(_)))
+        );
+        let [Event::MessagesUpdated(updated), Event::ChatUpdated(chat)] = emitted.as_slice() else {
+            panic!("expected one batch of rows, then the chat");
+        };
+        assert_eq!(chat.id, PEER);
+        let ids = updated
+            .iter()
+            .map(|message| message.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, ["second", "third", "first"]);
+        assert!(
+            updated
+                .iter()
+                .all(|message| message.status == Delivery::Read)
+        );
     }
 
     #[test]
@@ -3033,6 +4344,61 @@ pub(super) mod receipt_tests {
         assert_eq!(stored.reactions[0].emoji, "🏆");
         assert!(!stored.reactions[0].from_me);
         assert_eq!(stored.reactions[0].sender, reactor);
+    }
+
+    #[test]
+    fn a_history_chunk_sends_its_new_names_in_one_event() {
+        let group = "123-456@g.us";
+        let first = "12025550101@s.whatsapp.net";
+        let second = "12025550102@s.whatsapp.net";
+        let entry = |id: &str, sender: &str| {
+            let mut entry = history_entry(
+                group,
+                id,
+                false,
+                Some(sender),
+                wa::Message::text("hi"),
+                Vec::new(),
+                None,
+            );
+            if let Some(info) = entry.message.as_option_mut() {
+                info.push_name = Some(format!("Pushed {sender}"));
+            }
+            entry
+        };
+        let parsed = parse_conversation(wa::Conversation {
+            id: group.into(),
+            messages: vec![entry("a", first), entry("b", second), entry("c", first)],
+            ..Default::default()
+        });
+        let (mut worker, events, _inbox, _wa) = worker();
+        worker.apply_history(
+            ParsedHistory {
+                chats: vec![parsed],
+                push_names: vec![(PEER.into(), "Peer".into())],
+                lids: Vec::new(),
+                stickers: Vec::new(),
+            },
+            true,
+        );
+        let contacts = events
+            .try_iter()
+            .filter_map(|event| match event {
+                Event::Contacts(contacts) => Some(contacts),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(contacts.len(), 1, "one event for the whole chunk");
+        let mut ids = contacts[0]
+            .iter()
+            .map(|contact| contact.id.as_str())
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        assert_eq!(ids, [first, second, PEER]);
+        assert_eq!(
+            worker.identity.contacts[first].push_name.as_deref(),
+            Some(format!("Pushed {first}").as_str())
+        );
     }
 
     #[test]
@@ -3233,7 +4599,7 @@ pub(super) mod receipt_tests {
         let (mut worker, events, _inbox, _wa) = worker();
         let device = ME.replacen('@', ":2@", 1);
         let own_lid = "9000001@lid";
-        worker.me_lid = Some(own_lid.into());
+        worker.identity.me_lid = Some(own_lid.into());
         for (chat, sender) in [ME, PEER, "123-456@g.us"]
             .into_iter()
             .flat_map(|chat| [ME, device.as_str(), own_lid, PEER].map(|sender| (chat, sender)))
@@ -3328,7 +4694,7 @@ pub(super) mod receipt_tests {
         };
         worker.polish(&mut message);
         assert_eq!(message.sender_name.as_deref(), Some("~pushed"));
-        worker.contacts.insert(
+        worker.identity.contacts.insert(
             PEER.into(),
             Contact {
                 id: PEER.into(),
@@ -3734,7 +5100,7 @@ pub(super) mod receipt_tests {
         let (mut worker, _events, _inbox, _wa) = worker();
         let group = "123-456@g.us";
         worker.archive.ensure_chat(group, "Original group").unwrap();
-        worker.group_info_requested.insert(group.into());
+        worker.group_info.group_info_requested.insert(group.into());
         worker.session_generation = 1;
 
         worker
@@ -3760,7 +5126,7 @@ pub(super) mod receipt_tests {
             worker.archive.chat(group).unwrap().unwrap().name,
             "Original group"
         );
-        assert!(worker.group_info_requested.contains(group));
+        assert!(worker.group_info.group_info_requested.contains(group));
     }
 
     #[test]
@@ -4061,4 +5427,854 @@ mod stars {
         worker.set_starred(PEER.to_owned(), "UNKNOWN".to_owned(), true);
         assert!(changes(&events).is_empty());
     }
+}
+
+#[tokio::test]
+async fn shutdown_drains_queued_whatsapp_events_up_to_limit() {
+    let (mut worker, _, _, _) = worker();
+    let group = "123-456@g.us";
+    let update = wa_events::GroupUpdate::builder()
+        .group_jid(group.parse().unwrap())
+        .timestamp(whatsapp_rust::wacore::time::from_secs(200).unwrap())
+        .is_lid_addressing_mode(false)
+        .action(Box::new(
+            whatsapp_rust::wacore::stanza::groups::GroupNotificationAction::Ephemeral {
+                expiration: 86_400,
+                trigger: None,
+            },
+        ))
+        .build();
+    worker
+        .wa_sender
+        .send(RuntimeEvent::WhatsApp(Arc::new(
+            wa_events::Event::GroupUpdate(update),
+        )))
+        .unwrap();
+    for _ in 0..256 {
+        worker
+            .wa_sender
+            .send(RuntimeEvent::PreferencesRecovered {
+                generation: u64::MAX,
+                locks: false,
+                complete: false,
+            })
+            .unwrap();
+    }
+    worker.drain_shutdown_events().await;
+    assert_eq!(
+        worker
+            .archive
+            .chat(group)
+            .unwrap()
+            .unwrap()
+            .ephemeral_expiration,
+        Some(86_400)
+    );
+    assert_eq!(worker.wa_events.len(), 1);
+}
+
+mod maintenance {
+    use super::*;
+
+    const PEER: &str = "fixture@s.whatsapp.net";
+
+    fn stale_archive(worker: &mut Worker, count: usize) {
+        worker.archive.ensure_chat(PEER, "Fixture").unwrap();
+        for n in 0..count {
+            let raw = wa::Message {
+                conversation: Some(format!("derived {n}")),
+                ..Default::default()
+            };
+            let mut row =
+                crate::archive::tests::message(PEER, &format!("M{n}"), 10 + n as i64, false);
+            row.content = Content::text("stale");
+            worker
+                .archive
+                .insert_message(&row, Some(&raw.encode_to_vec()))
+                .unwrap();
+        }
+        worker.archive.set_meta("derived", "5").unwrap();
+    }
+
+    #[test]
+    #[ignore]
+    fn synthetic_backfill_70k_benchmark() {
+        let (mut worker, _, _, _) = worker();
+        stale_archive(&mut worker, 70_000);
+        let started = Instant::now();
+        worker.backfill();
+        eprintln!("synthetic 70000-row backfill: {:?}", started.elapsed());
+        assert_eq!(derived(&worker).as_deref(), Some(DERIVED_VERSION));
+    }
+
+    #[test]
+    fn version_gate_and_unchanged_rows_do_not_write_again() {
+        let (mut worker, _, _, _) = worker();
+        stale_archive(&mut worker, 2);
+        worker.backfill();
+        assert!(worker.start_backfill().is_none());
+        worker
+            .archive
+            .execute_batch_for_test(
+                "CREATE TRIGGER reject_unchanged BEFORE UPDATE ON messages
+             BEGIN SELECT RAISE(ABORT, 'unexpected synthetic update'); END;",
+            )
+            .unwrap();
+        worker.archive.set_meta("derived", "5").unwrap();
+        worker.archive.set_meta(DERIVED_CURSOR, "5:0").unwrap();
+        let mut pass = worker.start_backfill().unwrap();
+        while !worker.backfill_step(&mut pass, 1) {}
+        assert_eq!(pass.updated, 0);
+        assert_eq!(pass.failed, 0);
+        assert_eq!(derived(&worker).as_deref(), Some(DERIVED_VERSION));
+        assert!(worker.start_backfill().is_none());
+    }
+
+    fn row(worker: &Worker, n: usize) -> Message {
+        worker
+            .archive
+            .message(PEER, &format!("M{n}"))
+            .unwrap()
+            .unwrap()
+    }
+
+    fn derived(worker: &Worker) -> Option<String> {
+        worker.archive.meta("derived").unwrap()
+    }
+
+    fn ephemeral_update(group: &str) -> RuntimeEvent {
+        let update = wa_events::GroupUpdate::builder()
+            .group_jid(group.parse().unwrap())
+            .timestamp(whatsapp_rust::wacore::time::from_secs(200).unwrap())
+            .is_lid_addressing_mode(false)
+            .action(Box::new(
+                whatsapp_rust::wacore::stanza::groups::GroupNotificationAction::Ephemeral {
+                    expiration: 86_400,
+                    trigger: None,
+                },
+            ))
+            .build();
+        RuntimeEvent::WhatsApp(Arc::new(wa_events::Event::GroupUpdate(update)))
+    }
+
+    fn ephemeral(worker: &Worker, group: &str) -> Option<u32> {
+        worker
+            .archive
+            .chat(group)
+            .unwrap()
+            .and_then(|chat| chat.ephemeral_expiration)
+    }
+
+    #[test]
+    fn backfill_in_steps_matches_a_single_pass() {
+        let (mut single, _, _, _) = worker();
+        let (mut stepped, _, _, _) = worker();
+        for worker in [&mut single, &mut stepped] {
+            stale_archive(worker, 7);
+            worker
+                .archive
+                .set_content(PEER, "M5", &Content::Revoked, false)
+                .unwrap();
+        }
+        let mut pass = single.start_backfill().unwrap();
+        assert!(!single.backfill_step(&mut pass, usize::MAX));
+        assert!(single.backfill_step(&mut pass, usize::MAX));
+        let mut pass = stepped.start_backfill().unwrap();
+        let mut steps = 1;
+        while !stepped.backfill_step(&mut pass, 2) {
+            steps += 1;
+        }
+        assert_eq!(steps, 5);
+        let all = |worker: &Worker| worker.archive.messages(PEER, None, 100).unwrap();
+        assert_eq!(all(&stepped), all(&single));
+        assert_eq!(row(&stepped, 6).content, Content::text("derived 6"));
+        assert_eq!(row(&stepped, 5).content, Content::Revoked);
+        assert_eq!(derived(&stepped), derived(&single));
+        assert_eq!(derived(&stepped).as_deref(), Some(DERIVED_VERSION));
+    }
+
+    #[test]
+    fn live_changes_between_backfill_steps_survive() {
+        let (mut worker, _, _, _) = worker();
+        stale_archive(&mut worker, 5);
+        let mut pass = worker.start_backfill().unwrap();
+        assert!(!worker.backfill_step(&mut pass, 1));
+        assert_eq!(row(&worker, 0).content, Content::text("derived 0"));
+        assert_eq!(row(&worker, 1).content, Content::text("stale"));
+
+        worker
+            .archive
+            .set_content(PEER, "M0", &Content::text("edited first"), true)
+            .unwrap();
+        worker
+            .archive
+            .set_content(PEER, "M2", &Content::text("edited later"), true)
+            .unwrap();
+        worker
+            .archive
+            .set_reaction(PEER, "M3", "friend@s.whatsapp.net", false, "👍")
+            .unwrap();
+        worker.confirm_revoke(PEER, "M4");
+
+        while !worker.backfill_step(&mut pass, 1) {
+            assert_eq!(derived(&worker).as_deref(), Some("5"));
+        }
+        assert_eq!(derived(&worker).as_deref(), Some(DERIVED_VERSION));
+        assert_eq!(row(&worker, 0).content, Content::text("edited first"));
+        assert_eq!(row(&worker, 1).content, Content::text("derived 1"));
+        assert_eq!(row(&worker, 2).content, Content::text("edited later"));
+        let reacted = row(&worker, 3);
+        assert_eq!(reacted.content, Content::text("derived 3"));
+        assert_eq!(reacted.reactions.len(), 1);
+        assert_eq!(reacted.reactions[0].emoji, "👍");
+        assert_eq!(row(&worker, 4).content, Content::Revoked);
+    }
+
+    #[test]
+    fn media_relocation_in_steps_repairs_moved_and_missing_files() {
+        use whatsapp_rust::prelude::MessageField;
+        let root = tempfile::tempdir().unwrap();
+        let (mut worker, events, _, _) = worker();
+        worker.dirs = AppDirs::under(root.path());
+        worker.archive.ensure_chat(PEER, "Fixture").unwrap();
+        let image = wa::Message {
+            image_message: MessageField::some(wa::message::ImageMessage {
+                direct_path: Some("/media/path".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let present = root.path().join("present.jpg");
+        std::fs::write(&present, b"").unwrap();
+        let cache = worker.dirs.media_cache_dir();
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(cache.join("moved.jpg"), b"").unwrap();
+        let gone = root.path().join("gone");
+        for (id, path) in [
+            ("PRESENT", present.clone()),
+            ("MOVED", gone.join("moved.jpg")),
+            ("TEXT", PathBuf::new()),
+            ("MISSING", gone.join("missing.jpg")),
+        ] {
+            let mut row = crate::archive::tests::message(PEER, id, 10, false);
+            if !path.as_os_str().is_empty() {
+                row.content = classify(&image).unwrap();
+                row.content.media_mut().unwrap().path = Some(path);
+            }
+            worker.archive.insert_message(&row, None).unwrap();
+        }
+        let mut relocation = Relocation::default();
+        let mut steps = 1;
+        while !worker.relocate_step(&mut relocation, 1) {
+            steps += 1;
+        }
+        assert_eq!(steps, 5);
+        let path = |id| {
+            worker
+                .archive
+                .message(PEER, id)
+                .unwrap()
+                .unwrap()
+                .content
+                .media()
+                .and_then(|media| media.path.clone())
+        };
+        assert_eq!(path("PRESENT"), Some(present));
+        assert_eq!(path("MOVED"), Some(cache.join("moved.jpg")));
+        assert_eq!(path("MISSING"), None);
+        assert_eq!((relocation.moved, relocation.forgotten), (1, 1));
+        assert!(
+            events
+                .try_iter()
+                .any(|event| matches!(event, Event::RefreshTranscript))
+        );
+    }
+
+    #[test]
+    fn a_finished_re_derive_refreshes_the_open_transcript() {
+        let (mut worker, events, _, _) = worker();
+        stale_archive(&mut worker, 3);
+        worker.backfill();
+        assert!(
+            events
+                .try_iter()
+                .any(|event| matches!(event, Event::RefreshTranscript))
+        );
+
+        worker.start_maintenance();
+        while worker.maintenance.is_some() {
+            worker.maintain();
+        }
+        assert!(
+            !events
+                .try_iter()
+                .any(|event| matches!(event, Event::RefreshTranscript))
+        );
+    }
+
+    #[test]
+    fn an_interrupted_re_derive_resumes_from_its_saved_position() {
+        let (mut worker, _, _, _) = worker();
+        stale_archive(&mut worker, 5);
+        let mut pass = worker.start_backfill().unwrap();
+        assert!(!worker.backfill_step(&mut pass, 2));
+        let saved = pass.after;
+        worker
+            .archive
+            .set_content(PEER, "M0", &Content::text("stale"), false)
+            .unwrap();
+
+        let mut resumed = worker.start_backfill().unwrap();
+        assert_eq!(resumed.after, saved);
+        while !worker.backfill_step(&mut resumed, 2) {}
+        assert_eq!(derived(&worker).as_deref(), Some(DERIVED_VERSION));
+        assert_eq!(row(&worker, 0).content, Content::text("stale"));
+        assert_eq!(row(&worker, 1).content, Content::text("derived 1"));
+        assert_eq!(row(&worker, 4).content, Content::text("derived 4"));
+
+        worker.archive.set_meta("derived", "5").unwrap();
+        worker
+            .archive
+            .set_meta(DERIVED_CURSOR, &format!("5:{saved}"))
+            .unwrap();
+        assert_eq!(worker.start_backfill().unwrap().after, 0);
+    }
+
+    #[test]
+    fn a_failed_row_freezes_the_saved_position_before_it() {
+        let (mut worker, _, _, _) = worker();
+        stale_archive(&mut worker, 5);
+        worker
+            .archive
+            .execute_batch_for_test(
+                "CREATE TRIGGER reject_m3 BEFORE UPDATE ON messages WHEN OLD.id = 'M3'
+                 BEGIN SELECT RAISE(ABORT, 'synthetic update failure'); END;",
+            )
+            .unwrap();
+        let mut pass = worker.start_backfill().unwrap();
+        assert!(!worker.backfill_step(&mut pass, 2));
+        let before_failure = format!("{DERIVED_VERSION}:{}", pass.after);
+        while !worker.backfill_step(&mut pass, 2) {}
+        assert_eq!(pass.failed, 1);
+        assert_eq!(
+            worker.archive.meta(DERIVED_CURSOR).unwrap(),
+            Some(before_failure)
+        );
+        assert_eq!(derived(&worker).as_deref(), Some("5"));
+        assert_eq!(row(&worker, 3).content, Content::text("stale"));
+        assert_eq!(row(&worker, 4).content, Content::text("derived 4"));
+
+        worker
+            .archive
+            .execute_batch_for_test("DROP TRIGGER reject_m3;")
+            .unwrap();
+        worker.backfill();
+        assert_eq!(row(&worker, 3).content, Content::text("derived 3"));
+        assert_eq!(derived(&worker).as_deref(), Some(DERIVED_VERSION));
+    }
+
+    #[test]
+    fn a_rolled_back_maintenance_batch_does_not_advance_the_cursor() {
+        let (mut worker, _, _, _) = worker();
+        stale_archive(&mut worker, 2);
+        worker
+            .archive
+            .execute_batch_for_test(
+                "CREATE TRIGGER rollback_m1 BEFORE UPDATE ON messages WHEN OLD.id = 'M1'
+             BEGIN SELECT RAISE(ROLLBACK, 'synthetic rollback'); END;",
+            )
+            .unwrap();
+        let mut pass = worker.start_backfill().unwrap();
+        assert!(!worker.backfill_step(&mut pass, 2));
+        assert_eq!(worker.archive.meta(DERIVED_CURSOR).unwrap(), None);
+        assert_eq!(row(&worker, 0).content, Content::text("stale"));
+        assert_eq!(row(&worker, 1).content, Content::text("stale"));
+        assert_eq!(pass.updated, 0);
+        worker
+            .archive
+            .execute_batch_for_test("DROP TRIGGER rollback_m1;")
+            .unwrap();
+        worker.backfill();
+        assert_eq!(row(&worker, 0).content, Content::text("derived 0"));
+        assert_eq!(row(&worker, 1).content, Content::text("derived 1"));
+        assert_eq!(derived(&worker).as_deref(), Some(DERIVED_VERSION));
+    }
+
+    #[tokio::test]
+    async fn a_stream_of_events_cannot_starve_maintenance() {
+        let (mut worker, _, mut inbox, _) = worker();
+        stale_archive(&mut worker, MAINTENANCE_BATCH + 1);
+        let mut tick = tokio::time::interval(Duration::from_secs(5));
+        tick.tick().await;
+        worker.start_maintenance();
+        for _ in 0..=MAINTENANCE_DEFERRALS {
+            worker
+                .wa_sender
+                .send(RuntimeEvent::PreferencesRecovered {
+                    generation: u64::MAX,
+                    locks: false,
+                    complete: false,
+                })
+                .unwrap();
+        }
+        for _ in 0..=MAINTENANCE_DEFERRALS {
+            assert!(worker.turn(&mut inbox, &mut tick).await);
+        }
+        assert_eq!(worker.wa_events.len(), 1);
+        match worker.maintenance {
+            Some(Maintenance::Backfill(ref pass)) => assert!(pass.after > 0),
+            _ => panic!("backfill should still be pending"),
+        }
+    }
+
+    #[tokio::test]
+    async fn queued_event_is_handled_before_the_next_maintenance_step() {
+        let group = "123-456@g.us";
+        let (mut worker, _, mut inbox, _) = worker();
+        stale_archive(&mut worker, MAINTENANCE_BATCH * 2 + 1);
+        let mut tick = tokio::time::interval(Duration::from_secs(5));
+        tick.tick().await;
+        worker.start_maintenance();
+        let cursor = |worker: &Worker| match worker.maintenance {
+            Some(Maintenance::Backfill(ref pass)) => pass.after,
+            _ => panic!("backfill should still be pending"),
+        };
+
+        assert!(worker.turn(&mut inbox, &mut tick).await);
+        let after_first_step = cursor(&worker);
+        assert!(after_first_step > 0);
+
+        worker.wa_sender.send(ephemeral_update(group)).unwrap();
+        assert!(worker.turn(&mut inbox, &mut tick).await);
+        assert_eq!(ephemeral(&worker, group), Some(86_400));
+        assert_eq!(cursor(&worker), after_first_step);
+        assert_eq!(derived(&worker).as_deref(), Some("5"));
+
+        while worker.maintenance.is_some() {
+            assert!(worker.turn(&mut inbox, &mut tick).await);
+        }
+        assert_eq!(derived(&worker).as_deref(), Some(DERIVED_VERSION));
+        assert_eq!(
+            row(&worker, MAINTENANCE_BATCH * 2).content,
+            Content::text(format!("derived {}", MAINTENANCE_BATCH * 2))
+        );
+    }
+
+    #[tokio::test]
+    async fn shutdown_during_maintenance_still_drains_queued_events() {
+        let group = "123-456@g.us";
+        let (mut worker, _, mut inbox, _) = worker();
+        stale_archive(&mut worker, MAINTENANCE_BATCH + 1);
+        let mut tick = tokio::time::interval(Duration::from_secs(5));
+        tick.tick().await;
+        worker.start_maintenance();
+        assert!(worker.turn(&mut inbox, &mut tick).await);
+
+        worker.commands.send(Command::Shutdown).unwrap();
+        worker.wa_sender.send(ephemeral_update(group)).unwrap();
+        while worker.turn(&mut inbox, &mut tick).await {}
+        worker.drain_shutdown_events().await;
+        assert_eq!(ephemeral(&worker, group), Some(86_400));
+        assert!(worker.maintenance.is_some());
+        assert_eq!(derived(&worker).as_deref(), Some("5"));
+    }
+}
+
+#[test]
+fn batch_events_reach_the_window_only_after_their_rows_commit() {
+    let (mut worker, events, _, _) = worker();
+    let chat = "1@s.whatsapp.net";
+    let mut batch = worker.begin_batch();
+    let nested = batch.begin_batch();
+    nested
+        .archive
+        .insert_message(
+            &crate::archive::tests::message(chat, "kept", 1, false),
+            None,
+        )
+        .unwrap();
+    nested.emit(Event::Info("kept".into()));
+    assert!(nested.finish());
+    assert!(
+        events.try_recv().is_err(),
+        "held until the outer batch commits"
+    );
+    assert!(batch.finish());
+    assert!(matches!(events.try_recv(), Ok(Event::Info(text)) if text == "kept"));
+    assert!(worker.archive.message(chat, "kept").unwrap().is_some());
+
+    let batch = worker.begin_batch();
+    batch
+        .archive
+        .insert_message(
+            &crate::archive::tests::message(chat, "lost", 2, false),
+            None,
+        )
+        .unwrap();
+    batch.emit(Event::Info("lost".into()));
+    // As SQLite does after a disk-full or I/O error inside a transaction.
+    batch.archive.execute_batch_for_test("ROLLBACK").unwrap();
+    batch
+        .archive
+        .insert_message(
+            &crate::archive::tests::message(chat, "autocommitted", 3, false),
+            None,
+        )
+        .unwrap();
+    assert!(!batch.finish());
+    assert!(matches!(events.try_recv(), Ok(Event::Chats(_))));
+    assert!(matches!(events.try_recv(), Ok(Event::RefreshTranscript)));
+    assert!(events.try_recv().is_err());
+    assert!(worker.archive.message(chat, "lost").unwrap().is_none());
+    assert!(
+        worker
+            .archive
+            .message(chat, "autocommitted")
+            .unwrap()
+            .is_some()
+    );
+    worker.emit(Event::Info("after".into()));
+    assert!(matches!(events.try_recv(), Ok(Event::Info(text)) if text == "after"));
+}
+
+#[test]
+fn abandoned_batch_rolls_back_and_releases_events() {
+    let (mut worker, events, _, _) = worker();
+    let chat = "1@s.whatsapp.net";
+    {
+        let batch = worker.begin_batch();
+        batch
+            .archive
+            .insert_message(
+                &crate::archive::tests::message(chat, "lost", 1, false),
+                None,
+            )
+            .unwrap();
+        batch.emit(Event::Info("lost".into()));
+    }
+    assert!(worker.archive.message(chat, "lost").unwrap().is_none());
+    assert!(events.try_recv().is_err());
+    worker.emit(Event::Info("after".into()));
+    assert!(matches!(events.try_recv(), Ok(Event::Info(text)) if text == "after"));
+}
+
+#[test]
+fn backfill_preserves_edited_content_from_before_restart() {
+    const PEER: &str = "fixture@s.whatsapp.net";
+    let (mut worker, _, _, _) = worker();
+    worker.archive.ensure_chat(PEER, "Fixture").unwrap();
+    let raw = wa::Message {
+        conversation: Some("before edit".into()),
+        ..Default::default()
+    };
+    let row = crate::archive::tests::message(PEER, "EDITED", 10, false);
+    worker
+        .archive
+        .insert_message(&row, Some(&raw.encode_to_vec()))
+        .unwrap();
+    worker
+        .archive
+        .set_content(PEER, "EDITED", &Content::text("after edit"), true)
+        .unwrap();
+    worker.archive.set_meta("derived", "3").unwrap();
+    worker.backfill();
+    let result = worker.archive.message(PEER, "EDITED").unwrap().unwrap();
+    assert_eq!(result.content, Content::text("after edit"));
+}
+
+#[test]
+fn backfill_refreshes_edited_image_metadata_without_losing_edit() {
+    const PEER: &str = "fixture@s.whatsapp.net";
+    let (mut worker, _, _, _) = worker();
+    worker.archive.ensure_chat(PEER, "Fixture").unwrap();
+    let mut thumbnail = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::new_rgb8(1, 1)
+        .write_to(&mut thumbnail, image::ImageFormat::Png)
+        .unwrap();
+    let thumbnail = thumbnail.into_inner();
+    let raw = wa::Message {
+        image_message: MessageField::some(wa::message::ImageMessage {
+            caption: Some("before edit".into()),
+            jpeg_thumbnail: Some(thumbnail.clone()),
+            context_info: MessageField::some(wa::ContextInfo {
+                is_forwarded: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    assert_eq!(thumbnail_of(&raw), Some(thumbnail.clone()));
+    let mut row = crate::archive::tests::message(PEER, "IMAGE", 10, false);
+    row.content = classify(&raw).unwrap();
+    if let Content::Image { caption, .. } = &mut row.content {
+        *caption = Some("after edit".into());
+    }
+    row.edited = true;
+    row.mentions = vec![MentionRef {
+        user: "123".into(),
+        id: "123@s.whatsapp.net".into(),
+        name: None,
+    }];
+    row.thumbnail = Some(vec![9]);
+    worker
+        .archive
+        .insert_message(&row, Some(&raw.encode_to_vec()))
+        .unwrap();
+    worker.archive.set_meta("derived", "3").unwrap();
+    worker.backfill();
+    let result = worker.archive.message(PEER, "IMAGE").unwrap().unwrap();
+    assert_eq!(result.content, row.content);
+    assert_eq!(result.mentions, row.mentions);
+    assert_eq!(result.thumbnail, Some(thumbnail));
+    assert!(result.forwarded);
+}
+
+#[test]
+fn backfill_rejects_unsupported_edited_image_thumbnail_and_keeps_existing() {
+    const PEER: &str = "fixture@s.whatsapp.net";
+    let (mut worker, _, _, _) = worker();
+    worker.archive.ensure_chat(PEER, "Fixture").unwrap();
+    let raw = wa::Message {
+        image_message: MessageField::some(wa::message::ImageMessage {
+            jpeg_thumbnail: Some(vec![1, 2, 3]),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    assert_eq!(thumbnail_of(&raw), None);
+    let mut row = crate::archive::tests::message(PEER, "IMAGE", 10, false);
+    row.content = classify(&raw).unwrap();
+    row.edited = true;
+    row.thumbnail = Some(vec![9]);
+    worker
+        .archive
+        .insert_message(&row, Some(&raw.encode_to_vec()))
+        .unwrap();
+    worker.archive.set_meta("derived", "3").unwrap();
+    worker.backfill();
+    let result = worker.archive.message(PEER, "IMAGE").unwrap().unwrap();
+    assert_eq!(result.thumbnail, row.thumbnail);
+    assert_eq!(result.content, row.content);
+}
+
+#[test]
+fn backfill_leaves_revoked_rows_untouched() {
+    const PEER: &str = "fixture@s.whatsapp.net";
+    let (mut worker, _, _, _) = worker();
+    worker.archive.ensure_chat(PEER, "Fixture").unwrap();
+    let raw = wa::Message {
+        image_message: MessageField::some(wa::message::ImageMessage {
+            jpeg_thumbnail: Some(vec![1, 2, 3]),
+            context_info: MessageField::some(wa::ContextInfo {
+                is_forwarded: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let mut row = crate::archive::tests::message(PEER, "REVOKED", 10, false);
+    row.content = Content::Revoked;
+    row.thumbnail = Some(vec![9]);
+    worker
+        .archive
+        .insert_message(&row, Some(&raw.encode_to_vec()))
+        .unwrap();
+    worker.archive.set_meta("derived", "3").unwrap();
+    worker.backfill();
+    assert_eq!(
+        worker.archive.message(PEER, "REVOKED").unwrap().unwrap(),
+        row
+    );
+}
+
+#[test]
+fn history_chunk_chat_emission_keeps_completion_and_errors() {
+    assert!(!emit_after_history_chunk(false, false, None));
+    assert!(!emit_after_history_chunk(false, false, Some(99)));
+    assert!(emit_after_history_chunk(false, false, Some(100)));
+    assert!(emit_after_history_chunk(false, true, None));
+    assert!(emit_after_history_chunk(true, false, None));
+}
+
+#[tokio::test]
+async fn history_chunk_emits_only_on_completion_on_demand_or_error() {
+    let (mut worker, events, _, _) = worker();
+    let chunk = |sync_type, progress| {
+        wa_events::LazyHistorySync::new(
+            vec![0x78, 0x9c, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01].into(),
+            0,
+            sync_type,
+            None,
+            progress,
+        )
+    };
+    worker.on_history_sync(&chunk(0, Some(50))).await;
+    assert!(
+        !events
+            .try_iter()
+            .any(|event| matches!(event, Event::Chats(_)))
+    );
+    assert!(worker.sync_deadline.is_some());
+    worker.on_history_sync(&chunk(0, Some(100))).await;
+    assert!(
+        events
+            .try_iter()
+            .any(|event| matches!(event, Event::Chats(_)))
+    );
+    worker.on_history_sync(&chunk(ON_DEMAND, None)).await;
+    assert!(
+        events
+            .try_iter()
+            .any(|event| matches!(event, Event::Chats(_)))
+    );
+    let invalid = wa_events::LazyHistorySync::new(vec![1, 2, 3].into(), 0, 0, None, None);
+    worker.on_history_sync(&invalid).await;
+    let events: Vec<_> = events.try_iter().collect();
+    assert!(events.iter().any(|event| matches!(event, Event::Error(_))));
+    assert!(events.iter().any(|event| matches!(event, Event::Chats(_))));
+}
+
+#[test]
+fn transcript_correlation_coalesces_older_requests_without_relabeling_inflight() {
+    let (mut worker, events, _inbox, _wa) = worker();
+    let chat = "1@s.whatsapp.net".to_owned();
+    worker.older.pending_older.insert(
+        chat.clone(),
+        PendingOlder {
+            request: 10,
+            queued: None,
+            request_id: 42,
+            asked: Instant::now(),
+            before: (200, "old-boundary".to_owned()),
+            protocol_id: Some("protocol".to_owned()),
+            received_count: 0,
+            more_on_phone: None,
+            early_responses: HashMap::new(),
+        },
+    );
+    worker.fetch_older(chat.clone(), 11, Some((200, "old-boundary".into())));
+    worker.fetch_older(chat.clone(), 12, Some((300, "new-boundary".into())));
+    let pending = worker.older.pending_older.get(&chat).unwrap();
+    assert_eq!(pending.request, 10);
+    assert_eq!(pending.queued, Some((12, (300, "new-boundary".into()))));
+    worker.answer_older(
+        vec![(chat.clone(), 1, Some(false))],
+        Some("protocol".to_owned()),
+    );
+    assert!(matches!(
+        events.try_recv(),
+        Ok(Event::Messages {
+            request: Some(10),
+            ..
+        })
+    ));
+    assert!(matches!(
+        events.try_recv(),
+        Ok(Event::OlderFetched {
+            request: 10,
+            more: false,
+            ..
+        })
+    ));
+    assert!(matches!(
+        events.try_recv(),
+        Ok(Event::Messages {
+            request: Some(12),
+            ..
+        })
+    ));
+    assert!(matches!(
+        events.try_recv(),
+        Ok(Event::OlderFetched {
+            request: 12,
+            more: false,
+            ..
+        })
+    ));
+    assert!(events.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn transcript_correlation_queued_older_retries_after_failure() {
+    let (mut worker, events, _inbox, _wa) = worker();
+    let chat = "1@s.whatsapp.net".to_owned();
+    worker.older.pending_older.insert(
+        chat.clone(),
+        PendingOlder {
+            request: 10,
+            queued: Some((12, (200, "boundary".into()))),
+            request_id: 42,
+            asked: Instant::now(),
+            before: (200, "boundary".into()),
+            protocol_id: None,
+            received_count: 0,
+            more_on_phone: None,
+            early_responses: HashMap::new(),
+        },
+    );
+    worker
+        .handle_command(Command::OlderFailed {
+            session_generation: worker.session_generation,
+            request_id: 42,
+            chat,
+            error: "synthetic".into(),
+        })
+        .await;
+    assert!(matches!(
+        events.try_recv(),
+        Ok(Event::OlderFetched {
+            request: 10,
+            more: true,
+            ..
+        })
+    ));
+    assert!(matches!(
+        events.try_recv(),
+        Ok(Event::OlderFetched {
+            request: 12,
+            more: true,
+            ..
+        })
+    ));
+    assert!(matches!(events.try_recv(), Ok(Event::Error(_))));
+}
+
+#[test]
+fn transcript_correlation_queued_older_retries_after_timeout() {
+    let (mut worker, events, _inbox, _wa) = worker();
+    let chat = "1@s.whatsapp.net".to_owned();
+    worker.older.pending_older.insert(
+        chat,
+        PendingOlder {
+            request: 10,
+            queued: Some((12, (200, "boundary".into()))),
+            request_id: 42,
+            asked: Instant::now() - PHONE_PATIENCE - Duration::from_secs(1),
+            before: (200, "boundary".into()),
+            protocol_id: None,
+            received_count: 0,
+            more_on_phone: None,
+            early_responses: HashMap::new(),
+        },
+    );
+    worker.expire_older_requests();
+    assert!(matches!(
+        events.try_recv(),
+        Ok(Event::OlderFetched {
+            request: 10,
+            more: true,
+            ..
+        })
+    ));
+    assert!(matches!(
+        events.try_recv(),
+        Ok(Event::OlderFetched {
+            request: 12,
+            more: true,
+            ..
+        })
+    ));
+    assert!(matches!(events.try_recv(), Ok(Event::Error(_))));
 }

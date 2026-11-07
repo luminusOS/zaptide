@@ -38,7 +38,8 @@ impl NativeApplication {
         let chat = self
             .active_chat
             .as_deref()
-            .and_then(|id| self.chat_snapshots.iter().find(|chat| chat.id == id));
+            .and_then(|id| self.chat_snapshots.iter().find(|chat| chat.id == id))
+            .map(std::rc::Rc::as_ref);
         ComposerState {
             active: self.active_chat.is_some() && self.message_selection.is_none(),
             recording: self.recording_active(),

@@ -69,6 +69,16 @@ RUSTDOCFLAGS='-D warnings' cargo doc --locked --no-deps
 git diff --check
 ```
 
+When a pull request touches `Cargo.toml`, `Cargo.lock` or `deny.toml`, the
+Dependencies workflow runs
+[cargo-deny](https://github.com/EmbarkStudios/cargo-deny) against the RustSec
+database. It also runs when those files change on `main`, and weekly. To run it
+locally:
+
+```sh
+cargo deny check --warn unmaintained advisories bans sources
+```
+
 Add a focused regression test for a bug fix and confirm it fails before the fix.
 Do not skip tests, weaken lints, or suppress errors just to make checks pass.
 Display-dependent tests are ignored by the default suite; run affected ones

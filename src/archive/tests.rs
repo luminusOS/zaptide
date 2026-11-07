@@ -27,6 +27,90 @@ pub(crate) fn message(chat: &str, id: &str, timestamp: i64, from_me: bool) -> Me
 }
 
 #[test]
+fn group_message_id_collision_keeps_first_sender_and_content() {
+    let archive = Archive::in_memory().unwrap();
+    let chat = "1-2@g.us";
+    archive.ensure_chat(chat, "Group").unwrap();
+    let mut original = message(chat, "collision", 1, false);
+    original.sender = "alice@s.whatsapp.net".into();
+    original.content = Content::Image {
+        caption: Some("original".into()),
+        media: crate::model::Media {
+            mime: "image/jpeg".into(),
+            size: 12,
+            width: None,
+            height: None,
+            path: Some("/synthetic/image.jpg".into()),
+            state: Default::default(),
+        },
+    };
+    original.reactions.push(crate::model::Reaction {
+        sender: "alice@s.whatsapp.net".into(),
+        from_me: false,
+        emoji: "👍".into(),
+    });
+    original.mentions.push(crate::model::MentionRef {
+        user: "alice".into(),
+        id: original.sender.clone(),
+        name: None,
+    });
+    archive
+        .insert_message(&original, Some(b"original raw"))
+        .unwrap();
+    let mut attacker = original.clone();
+    attacker.sender = "bob@s.whatsapp.net".into();
+    attacker.content = Content::text("forged");
+    archive
+        .insert_message(&attacker, Some(b"forged raw"))
+        .unwrap();
+    let stored = archive.message(chat, "collision").unwrap().unwrap();
+    assert_eq!(stored.sender, original.sender);
+    assert_eq!(stored.content, original.content);
+    assert_eq!(stored.reactions, original.reactions);
+    assert_eq!(stored.mentions, original.mentions);
+    assert_eq!(
+        archive.raw(chat, "collision").unwrap(),
+        Some(b"original raw".to_vec())
+    );
+}
+
+#[test]
+fn group_message_id_same_sender_and_known_alias_update() {
+    let archive = Archive::in_memory().unwrap();
+    let chat = "1-2@g.us";
+    let mut original = message(chat, "same", 1, false);
+    original.sender = "123@lid".into();
+    archive.insert_message(&original, None).unwrap();
+    archive.put_lid("123", "456").unwrap();
+    let mut replay = original.clone();
+    replay.sender = "456@s.whatsapp.net".into();
+    replay.content = Content::text("updated");
+    replay.status = Delivery::Read;
+    archive.insert_message(&replay, None).unwrap();
+    let stored = archive.message(chat, "same").unwrap().unwrap();
+    assert_eq!(stored.content, replay.content);
+    assert_eq!(stored.status, Delivery::Read);
+}
+
+#[test]
+fn group_message_id_own_echo_merges_delivery_and_preserves_edit() {
+    let archive = Archive::in_memory().unwrap();
+    let chat = "1-2@g.us";
+    let mut sent = message(chat, "own", 1, true);
+    archive.insert_message(&sent, Some(b"same raw")).unwrap();
+    archive
+        .set_content(chat, "own", &Content::text("edited"), true)
+        .unwrap();
+    sent.sender = "self@lid".into();
+    sent.status = Delivery::Read;
+    archive.insert_message(&sent, Some(b"same raw")).unwrap();
+    let stored = archive.message(chat, "own").unwrap().unwrap();
+    assert_eq!(stored.content, Content::text("edited"));
+    assert!(stored.edited);
+    assert_eq!(stored.status, Delivery::Read);
+}
+
+#[test]
 fn migrations_add_columns_to_an_older_archive() {
     let connection = Connection::open_in_memory().expect("opens");
     connection
@@ -109,8 +193,9 @@ fn group_info_is_kept() {
         .expect("info");
     let row = archive.chat(chat).expect("chat").expect("exists");
     assert_eq!(row.name, "Rust Berlin");
-    assert_eq!(row.participants, vec!["a@s.whatsapp.net"]);
+    assert_eq!(row.participants.as_ref(), ["a@s.whatsapp.net"]);
     assert!(row.read_only);
+    assert_eq!(archive.chats().expect("list"), vec![row]);
     archive
         .set_group_info(chat, None, &[], false)
         .expect("info");
@@ -1005,5 +1090,163 @@ fn history_replay_preserves_revocation_and_matching_download_path() {
     assert_eq!(
         stored.content.media().and_then(|media| media.path.clone()),
         None
+    );
+}
+
+#[test]
+fn derived_fields_are_not_written_over_a_row_changed_after_it_was_read() {
+    let archive = Archive::in_memory().unwrap();
+    let chat = "fixture@s.whatsapp.net";
+    archive.ensure_chat(chat, "Fixture").unwrap();
+    for id in ["KEEP", "EDIT", "RAW"] {
+        archive
+            .insert_message(&message(chat, id, 10, false), Some(b"raw"))
+            .unwrap();
+    }
+    let sources = archive.derived_sources(0, 10).unwrap();
+    assert_eq!(sources.len(), 3);
+    assert_eq!(
+        archive.derived_sources(sources[0].rowid, 10).unwrap().len(),
+        2
+    );
+    archive
+        .set_content(chat, "EDIT", &Content::text("edited"), true)
+        .unwrap();
+    let mut replaced = message(chat, "RAW", 10, false);
+    replaced.content = Content::text("replayed");
+    archive
+        .insert_message(&replaced, Some(b"newer raw"))
+        .unwrap();
+
+    let derived = Content::text("derived");
+    let results = sources
+        .iter()
+        .map(|source| {
+            archive
+                .set_derived_if_unchanged(source, &derived, &[], None, false)
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(results, [true, false, false]);
+    let content = |id| archive.message(chat, id).unwrap().unwrap().content;
+    assert_eq!(content("KEEP"), derived);
+    assert_eq!(content("EDIT"), Content::text("edited"));
+    assert_eq!(content("RAW"), Content::text("replayed"));
+}
+
+#[test]
+fn derived_fields_do_not_overwrite_newer_projection_metadata() {
+    let archive = Archive::in_memory().unwrap();
+    let chat = "fixture@s.whatsapp.net";
+    archive.ensure_chat(chat, "Fixture").unwrap();
+    archive
+        .insert_message(&message(chat, "M", 10, false), Some(b"synthetic raw"))
+        .unwrap();
+    let source = archive.derived_sources(0, 1).unwrap().pop().unwrap();
+    archive
+        .execute_batch_for_test(
+            "UPDATE messages SET thumbnail = X'010203', forwarded = 1 WHERE id = 'M';",
+        )
+        .unwrap();
+    assert!(
+        !archive
+            .set_derived_if_unchanged(&source, &Content::text("stale"), &[], None, false)
+            .unwrap()
+    );
+    let current = archive.message(chat, "M").unwrap().unwrap();
+    assert_eq!(current.thumbnail, Some(vec![1, 2, 3]));
+    assert!(current.forwarded);
+    assert_ne!(current.content, Content::text("stale"));
+}
+
+#[test]
+fn only_an_identical_raw_body_keeps_a_revocation() {
+    let archive = Archive::in_memory().expect("opens");
+    let chat = "1@s.whatsapp.net";
+    let content = |id| archive.message(chat, id).unwrap().unwrap().content;
+    for (id, replayed) in [
+        ("without", None),
+        ("prefix", Some(&b"revoked ra"[..])),
+        ("longer", Some(&b"revoked raw!"[..])),
+    ] {
+        let row = message(chat, id, 100, false);
+        archive.insert_message(&row, Some(b"revoked raw")).unwrap();
+        archive
+            .set_content(chat, id, &Content::Revoked, false)
+            .unwrap();
+        archive.insert_message(&row, replayed).unwrap();
+        assert_eq!(content(id), row.content, "{id}");
+    }
+    assert_eq!(
+        archive.raw(chat, "without").unwrap().as_deref(),
+        Some(&b"revoked raw"[..])
+    );
+}
+
+#[test]
+fn a_batch_commits_together_and_a_failed_row_fails_alone() {
+    let archive = Archive::in_memory().expect("opens");
+    let chat = "1@s.whatsapp.net";
+    archive
+        .execute_batch_for_test(
+            "CREATE TRIGGER reject_bad BEFORE INSERT ON messages WHEN NEW.id = 'bad'
+             BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END;",
+        )
+        .unwrap();
+    archive.begin_batch().unwrap();
+    archive
+        .insert_message(&message(chat, "one", 1, false), None)
+        .unwrap();
+    assert!(
+        archive
+            .insert_message(&message(chat, "bad", 2, false), None)
+            .is_err()
+    );
+    archive
+        .insert_message(&message(chat, "two", 3, false), None)
+        .unwrap();
+    archive.commit_batch().unwrap();
+    let ids = archive
+        .messages(chat, None, 10)
+        .unwrap()
+        .into_iter()
+        .map(|row| row.id)
+        .collect::<Vec<_>>();
+    assert_eq!(ids, ["one", "two"]);
+
+    archive.begin_batch().unwrap();
+    archive
+        .insert_message(&message(chat, "three", 4, false), None)
+        .unwrap();
+    archive.rollback_batch();
+    assert!(archive.message(chat, "three").unwrap().is_none());
+}
+
+#[test]
+fn receipts_keep_their_own_transaction_inside_a_batch() {
+    let archive = Archive::in_memory().expect("opens");
+    let group = "1@g.us";
+    archive.ensure_chat(group, "Group").unwrap();
+    archive
+        .insert_message(&message(group, "m", 1, true), None)
+        .unwrap();
+    archive.begin_batch().unwrap();
+    archive
+        .snapshot_group_recipients(group, "m", &["a@lid".into()])
+        .unwrap();
+    assert!(
+        archive
+            .snapshot_group_recipients(group, "missing", &["a@lid".into()])
+            .is_err()
+    );
+    assert!(
+        archive
+            .group_receipt(group, "m", "a@lid", Delivery::Read, 5)
+            .unwrap()
+    );
+    archive.commit_batch().unwrap();
+    assert_eq!(
+        archive.message(group, "m").unwrap().unwrap().status,
+        Delivery::Read
     );
 }

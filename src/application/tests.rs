@@ -1,6 +1,60 @@
 use super::*;
 
 #[test]
+fn transcript_correlation_unsolicited_messages_do_not_settle_pending_pagination() {
+    let mut requests = TranscriptRequests::default();
+    let phone = requests.older(true);
+    let mut complete = true;
+    let mut loading = true;
+    assert!(requests.messages(true, None, false, false, &mut complete, &mut loading));
+    assert!(complete && loading);
+    assert_eq!(requests.older, Some(phone));
+    assert!(requests.messages(true, Some(phone), true, false, &mut complete, &mut loading));
+    assert!(!complete && loading);
+    assert_eq!(requests.older, Some(phone));
+    assert!(requests.older_fetched(true, phone, false, &mut complete, &mut loading));
+    assert!(complete && !loading);
+    assert_eq!(requests.older, None);
+
+    let archive = requests.older(false);
+    loading = true;
+    assert!(requests.messages(true, None, true, false, &mut complete, &mut loading));
+    assert!(complete && loading);
+    assert_eq!(requests.older, Some(archive));
+    assert!(requests.messages(
+        true,
+        Some(archive),
+        true,
+        false,
+        &mut complete,
+        &mut loading
+    ));
+    assert!(!complete && !loading);
+    assert_eq!(requests.older, None);
+
+    let initial = requests.reload();
+    complete = true;
+    loading = true;
+    assert!(requests.messages(true, None, false, false, &mut complete, &mut loading));
+    assert!(complete && loading);
+    assert_eq!(requests.initial, Some(initial));
+    assert!(requests.messages(
+        true,
+        Some(initial),
+        false,
+        false,
+        &mut complete,
+        &mut loading
+    ));
+    assert!(!complete && !loading);
+    assert_eq!(requests.initial, None);
+
+    loading = true;
+    assert!(requests.messages(true, None, false, true, &mut complete, &mut loading));
+    assert!(complete && !loading);
+}
+
+#[test]
 fn avatar_texture_cache_tracks_shared_path_ownership() {
     let mut cache = std::collections::HashMap::from([
         (std::path::PathBuf::from("/synthetic/avatar-a.png"), 1),
@@ -963,4 +1017,92 @@ fn translucent_sidebar_requires_linked_expanded_layout() {
     assert!(translucent_sidebar_active(&enabled, true, false));
     let disabled = crate::settings::Settings::default();
     assert!(!translucent_sidebar_active(&disabled, true, false));
+}
+
+#[test]
+fn transcript_correlation_rejects_stale_pages_and_completion_after_refresh() {
+    let mut requests = super::TranscriptRequests::default();
+    let first = requests.reload();
+    let old_older = requests.older(true);
+    let refreshed = requests.reload();
+    let mut complete = false;
+    let mut loading = false;
+    assert!(!requests.messages(true, Some(first), false, true, &mut complete, &mut loading));
+    assert!(!requests.messages(
+        true,
+        Some(old_older),
+        true,
+        true,
+        &mut complete,
+        &mut loading
+    ));
+    assert!(requests.messages(
+        true,
+        Some(refreshed),
+        false,
+        true,
+        &mut complete,
+        &mut loading
+    ));
+    let new_older = requests.older(true);
+    loading = true;
+    assert!(!requests.older_fetched(true, old_older, false, &mut complete, &mut loading));
+    assert!(complete && loading);
+    assert!(!requests.messages(
+        true,
+        Some(old_older),
+        true,
+        false,
+        &mut complete,
+        &mut loading
+    ));
+    assert!(complete && loading);
+    assert!(requests.messages(
+        true,
+        Some(new_older),
+        true,
+        false,
+        &mut complete,
+        &mut loading
+    ));
+    assert!(!complete && loading);
+    assert!(requests.older_fetched(true, new_older, false, &mut complete, &mut loading));
+    assert!(complete && !loading);
+}
+
+#[test]
+fn transcript_correlation_same_chat_reload_and_account_switch() {
+    let mut requests = super::TranscriptRequests::default();
+    let before_switch = requests.reload();
+    let after_switch = requests.reload();
+    let mut complete = false;
+    let mut loading = true;
+    assert!(!requests.messages(
+        false,
+        Some(before_switch),
+        false,
+        true,
+        &mut complete,
+        &mut loading
+    ));
+    assert!(!requests.messages(
+        true,
+        Some(before_switch),
+        false,
+        true,
+        &mut complete,
+        &mut loading
+    ));
+    assert!(!complete && loading);
+    assert!(requests.messages(
+        true,
+        Some(after_switch),
+        false,
+        true,
+        &mut complete,
+        &mut loading
+    ));
+    assert!(complete && !loading);
+    assert!(requests.messages(true, None, false, false, &mut complete, &mut loading));
+    assert!(!complete);
 }

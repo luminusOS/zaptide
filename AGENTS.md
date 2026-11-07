@@ -46,10 +46,21 @@ protocol. These notes are for coding agents and new contributors.
   privacy-id mappings. WhatsApp replays history once, at link time, so the
   archive is the only copy. It keeps each message's raw protobuf because
   the keys to fetch an attachment live in it. `src/archive/encryption.rs` opens
-  the archive with SQLCipher and a random key stored in the OS keyring. Plaintext
+  the archive with SQLCipher and a random key stored in the OS keyring through
+  oo7 (`archive/secrets.rs`): the Secret portal's file keyring inside Flatpak,
+  the Secret Service (any collection, never duplicated) outside. Inside
+  Flatpak a key missing from the file keyring is copied once from the Secret
+  Service where older builds kept it and read back from disk before use; that
+  old item is only read, never written or deleted. All keyring work runs in
+  order on one keyring thread; the GTK thread only waits, for at most two
+  minutes, on the one-time key copy when the legacy layout moves. Plaintext
   migration checkpoints the old WAL and verifies an encrypted staging file before
   atomic replacement. A locked or missing key stops linking; never fall back to
   a disposable archive. Tests use fixtures and mock credentials only.
+  `backend/worker/device_store.rs` encrypts whatsapp-rust's `session.db` the
+  same way, with an HKDF key derived from the folder's archive key (no second
+  keyring item), applied by a connection hook on every pooled connection. A new
+  key is only created while neither database in the folder is encrypted.
 - `src/model.rs` holds the app's own types. Views never touch a protobuf;
   the worker translates in `classify()` and `parse_conversation()`.
 - Poll creation, voting, and decryption use whatsapp-rust's `Client::polls()`.
@@ -72,8 +83,8 @@ protocol. These notes are for coding agents and new contributors.
   self-updater.
 - `src/theme/custom.rs` scans local JSON palettes off the UI thread, caching the
   last usable choice in settings, with shared Spotifast palettes embedded as
-  defaults. On Linux filesystem notifications reload the catalog without a
-  repaint timer. `reload-themes` uses the single-instance channel without
+  defaults. Filesystem notifications reload the catalog without a repaint
+  timer. `reload-themes` uses the single-instance channel without
   opening a window.
 - `src/native_theme.rs` turns a palette into GTK CSS; structural styling lives
   beside `apply_theme` in `src/application.rs`. Use libadwaita style classes and

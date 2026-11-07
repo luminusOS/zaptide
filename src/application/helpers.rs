@@ -215,16 +215,16 @@ pub(super) fn convert_premultiplied_bgra_to_rgba(pixels: &mut [u8]) {
     }
 }
 
-pub(super) fn sanitized_error_feedback(error: &str) -> &'static str {
+pub(super) fn sanitized_error_feedback(error: &str) -> String {
     let error = error.to_ascii_lowercase();
     if error.contains("timeout") || error.contains("timed out") || error.contains("connect") {
-        "Connection failed. Check your network and try again."
+        gettext("Connection failed. Check your network and try again.")
     } else if error.contains("permission") || error.contains("denied") {
-        "Permission denied. Check access and try again."
+        gettext("Permission denied. Check access and try again.")
     } else if error.contains("disk") || error.contains("storage") || error.contains("space") {
-        "Storage operation failed. Check available disk space."
+        gettext("Storage operation failed. Check available disk space.")
     } else {
-        "Action failed. Check connection and try again."
+        gettext("Action failed. Check connection and try again.")
     }
 }
 

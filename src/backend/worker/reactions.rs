@@ -149,10 +149,10 @@ impl Worker {
 
     fn alt_jid(&self, jid: &Jid) -> Option<Jid> {
         if jid.is_lid() {
-            let pn = self.lid_to_pn.get(jid.user_base())?;
+            let pn = self.identity.lid_to_pn.get(jid.user_base())?;
             format!("{pn}@s.whatsapp.net").parse().ok()
         } else {
-            self.lid_to_pn.iter().find_map(|(lid, pn)| {
+            self.identity.lid_to_pn.iter().find_map(|(lid, pn)| {
                 (*pn == jid.user_base())
                     .then(|| format!("{lid}@lid").parse().ok())
                     .flatten()

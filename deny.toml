@@ -1,0 +1,21 @@
+# CI runs `cargo deny check --warn unmaintained advisories bans sources`:
+# cargo-deny has no warn level for unmaintained advisories in this file, and
+# they should be reported without failing the build. Licences are not
+# checked because the project is moving to a GPL-family licence that accepts
+# every dependency licence in use.
+
+[graph]
+all-features = true
+
+[advisories]
+yanked = "warn"
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = ["https://github.com/oxidezap/whatsapp-rust"]

@@ -24,9 +24,9 @@ use decode::{
     input_frame_limit, read_audio, try_acquire_decode_job,
 };
 
+pub use recorder::Recorder;
 #[cfg(test)]
 use recorder::record_with;
-pub use recorder::{Recorder, recording_path};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum State {

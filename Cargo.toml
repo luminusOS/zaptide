@@ -70,8 +70,13 @@ tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"
 # SQLCipher encrypts the archive; the device store shares the same library.
 # Bundle OpenSSL so all release platforms use the same encryption provider.
 rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"] }
-keyring-core = "1"
+# Keys the device store's pooled connections. Already included through whatsapp-rust.
+diesel = { version = "2.3", default-features = false, features = ["sqlite"] }
 getrandom = "0.4"
+# Keyring: the Secret portal's file keyring inside a sandbox, the Secret
+# Service outside. OpenSSL is the one SQLCipher already links, so no second
+# crypto stack comes with it.
+oo7 = { version = "0.6", default-features = false, features = ["tokio", "openssl_crypto"] }
 zeroize = "1"
 rand = "0.10"
 qrcode = { version = "0.14", default-features = false }
@@ -82,7 +87,10 @@ ureq = { version = "3", default-features = false, features = ["rustls"] }
 url = "2"
 jiff = "0.2"
 # MIME detection for attachments.
-mime_guess2 = "2"
+mime_guess = "2"
+# Promotes downloads with renameat2(RENAME_NOREPLACE). Already in the tree
+# through tempfile, polling and async-io.
+rustix = { version = "1.1", default-features = false, features = ["std", "fs"] }
 
 opus = "0.4"
 ogg = "0.9"
@@ -93,8 +101,6 @@ gstreamer-video = "0.25"
 async-channel = "2"
 # Loads photos through GNOME's sandboxed image loaders (glycin-loaders).
 glycin = { version = "4", default-features = false, features = ["gdk4", "tokio"] }
-notify = "8.2"
-zbus-secret-service-keyring-store = { version = "1.0.1", features = ["rt-tokio-crypto-rust"] }
 # XDG desktop portals over the zbus and tokio already in the tree. Only the
 # portals the app uses are enabled; no windowing or PipeWire bindings.
 ashpd = { version = "0.13", default-features = false, features = ["tokio", "background", "camera", "settings"] }
@@ -102,9 +108,9 @@ ashpd = { version = "0.13", default-features = false, features = ["tokio", "back
 futures-util = { version = "0.3", default-features = false }
 # Tray icon: StatusNotifierItem with its menu over com.canonical.dbusmenu.
 ksni = { version = "0.3", default-features = false, features = ["tokio", "blocking"] }
+tempfile = "3"
 
 [dev-dependencies]
-tempfile = "3"
 # Encodes oversized clipboard images in portal tests. Already included through image.
 png = "0.18"
 

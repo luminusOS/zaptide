@@ -77,7 +77,7 @@ impl Worker {
                 self.pump_poll_votes();
                 self.renew_presence();
                 if let Some(client) = self.client.clone() {
-                    let me = self.me_pn.clone().and_then(|pn| Self::jid_of(&pn));
+                    let me = self.identity.me_pn.clone().and_then(|pn| Self::jid_of(&pn));
                     let commands = self.commands.clone();
                     let session_generation = self.session_generation;
                     tokio::spawn(async move {
@@ -321,8 +321,9 @@ impl Worker {
                 self.invalidate_avatar_generations(&id);
                 {
                     let _cache_guard = self.session_cache_lock.lock().await;
-                    let _ = std::fs::remove_file(self.avatar_file(&id, false));
-                    let _ = std::fs::remove_file(self.avatar_file(&id, true));
+                    for full in [false, true] {
+                        self.remove_avatar_files(&id, full);
+                    }
                 }
                 if update.removed {
                     self.emit(Event::Avatar {
@@ -341,7 +342,7 @@ impl Worker {
                 }
             }
             E::SelfPushNameUpdated(update) => {
-                self.me_name = Some(update.new_name.clone());
+                self.identity.me_name = Some(update.new_name.clone());
                 let _ = self.archive.set_meta("me_name", &update.new_name);
                 self.emit_profile();
                 self.renew_presence();

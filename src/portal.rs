@@ -3,10 +3,29 @@
 //! ashpd keeps one session bus connection for the whole process, and a
 //! connection stops working when the runtime that opened it is dropped. One
 //! runtime that lives as long as the process keeps it usable from any thread.
+//! This module also owns sandbox detection, [`sandboxed`].
 
+use std::ffi::OsStr;
 use std::future::Future;
-use std::sync::LazyLock;
 use std::sync::mpsc;
+use std::sync::{LazyLock, OnceLock};
+
+/// True inside a Flatpak, where portals are the way out of the sandbox. Either
+/// sign counts: the info file Flatpak mounts, as GLib checks, or a non-empty
+/// `FLATPAK_ID`.
+pub fn sandboxed() -> bool {
+    static SANDBOXED: OnceLock<bool> = OnceLock::new();
+    *SANDBOXED.get_or_init(|| {
+        is_sandboxed(
+            std::path::Path::new("/.flatpak-info").exists(),
+            std::env::var_os("FLATPAK_ID").as_deref(),
+        )
+    })
+}
+
+fn is_sandboxed(flatpak_info_exists: bool, flatpak_id: Option<&OsStr>) -> bool {
+    flatpak_info_exists || flatpak_id.is_some_and(|id| !id.is_empty())
+}
 
 fn runtime() -> &'static tokio::runtime::Runtime {
     static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
@@ -39,6 +58,18 @@ pub fn run<T: Send + 'static>(future: impl Future<Output = T> + Send + 'static) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
+
+    #[test]
+    fn a_flatpak_is_sandboxed_by_its_info_file_or_its_id() {
+        assert!(is_sandboxed(true, None));
+        assert!(is_sandboxed(
+            false,
+            Some(OsStr::new("dev.luminusos.ZapTide"))
+        ));
+        assert!(!is_sandboxed(false, None));
+        assert!(!is_sandboxed(false, Some(&OsString::new())));
+    }
 
     #[test]
     fn a_result_comes_back_from_any_thread() {

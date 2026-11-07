@@ -20,6 +20,20 @@ pub const MAX_THUMBNAIL_DIMENSION: u32 = 8_192;
 pub const MAX_THUMBNAIL_PIXELS: u64 = 32 * 1024 * 1024;
 /// Maximum edge length of generated thumbnail pixels.
 pub const MAX_THUMBNAIL_EDGE: u32 = 512;
+/// Maximum encoded bytes kept from a message's embedded thumbnail.
+pub const MAX_INLINE_THUMBNAIL_BYTES: usize = 256 * 1024;
+/// Maximum encoded bytes read from a saved profile picture.
+pub const MAX_AVATAR_FILE_BYTES: usize = 4 * 1024 * 1024;
+/// Maximum edge length of an embedded message thumbnail. Embedded thumbnails
+/// and profile pictures decode on the GTK thread, so they get tighter bounds
+/// than file previews.
+pub const MAX_INLINE_THUMBNAIL_DIMENSION: u32 = 1_024;
+/// Maximum decoded pixels of an embedded message thumbnail.
+pub const MAX_INLINE_THUMBNAIL_PIXELS: u64 = 1024 * 1024;
+/// Maximum edge length of a saved profile picture.
+pub const MAX_AVATAR_DIMENSION: u32 = 2_048;
+/// Maximum decoded pixels of a saved profile picture.
+pub const MAX_AVATAR_PIXELS: u64 = 4 * 1024 * 1024;
 
 /// Still-image bytes or explicit placeholder for content this helper will not decode.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -53,46 +67,140 @@ pub enum ThumbnailPlaceholder {
     TooLarge,
 }
 
-/// Decode a still image under encoded-size, dimension, allocation, and output bounds.
-/// Animated images and video intentionally return placeholders rather than decoding frames.
+/// Decode a still JPEG, PNG, or WebP image under encoded-size, dimension,
+/// allocation, and output bounds. Other formats, animated images, and video
+/// intentionally return placeholders rather than decoding frames.
 pub fn decode_thumbnail(bytes: &[u8]) -> ThumbnailResult {
     if bytes.len() > MAX_THUMBNAIL_INPUT_BYTES {
         return ThumbnailResult::Placeholder(ThumbnailPlaceholder::TooLarge);
     }
-
-    let limits = image_limits();
-    let dimension_reader = match image::ImageReader::new(Cursor::new(bytes)).with_guessed_format() {
-        Ok(reader) => reader,
-        Err(_) => return ThumbnailResult::Placeholder(ThumbnailPlaceholder::DecodeFailed),
-    };
-    let Ok((width, height)) = dimension_reader.into_dimensions() else {
+    let Some(format) = inline_image_format(bytes) else {
         return ThumbnailResult::Placeholder(ThumbnailPlaceholder::DecodeFailed);
     };
+    match decode_bounded(bytes, format, MAX_THUMBNAIL_DIMENSION, MAX_THUMBNAIL_PIXELS) {
+        Ok(decoded) => rgba_result(
+            decoded
+                .thumbnail(MAX_THUMBNAIL_EDGE, MAX_THUMBNAIL_EDGE)
+                .to_rgba8(),
+        ),
+        Err(placeholder) => ThumbnailResult::Placeholder(placeholder),
+    }
+}
+
+/// The still format of an embedded thumbnail, recognised by its magic bytes:
+/// JPEG, PNG, or WebP, the formats WhatsApp clients embed.
+pub fn inline_image_format(bytes: &[u8]) -> Option<image::ImageFormat> {
+    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        Some(image::ImageFormat::Jpeg)
+    } else if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some(image::ImageFormat::Png)
+    } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+        Some(image::ImageFormat::WebP)
+    } else {
+        None
+    }
+}
+
+/// Whether an embedded message thumbnail is small enough, and in a format
+/// worth keeping in the archive.
+pub fn is_inline_thumbnail(bytes: &[u8]) -> bool {
+    // Ingest only screens out other formats, so it accepts the bare two-byte
+    // JPEG start of image. Decoding forces the format from the full
+    // signature, and that is the real guard.
+    bytes.len() <= MAX_INLINE_THUMBNAIL_BYTES
+        && (bytes.starts_with(&[0xff, 0xd8]) || inline_image_format(bytes).is_some())
+}
+
+/// Decode a message's embedded thumbnail at its own size, refusing anything
+/// but small JPEG, PNG, or WebP images.
+pub fn decode_inline_thumbnail(bytes: &[u8]) -> ThumbnailResult {
+    decode_inline(
+        bytes,
+        MAX_INLINE_THUMBNAIL_BYTES,
+        MAX_INLINE_THUMBNAIL_DIMENSION,
+        MAX_INLINE_THUMBNAIL_PIXELS,
+    )
+}
+
+/// Decode a saved profile picture at its own size under the same rules as
+/// embedded thumbnails, with larger bounds; the file comes from WhatsApp's
+/// servers.
+pub fn decode_avatar_file(path: &std::path::Path) -> ThumbnailResult {
+    use std::io::Read;
+
+    let mut bytes = Vec::new();
+    let read = std::fs::File::open(path).and_then(|file| {
+        file.take(MAX_AVATAR_FILE_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+    });
+    if read.is_err() {
+        return ThumbnailResult::Placeholder(ThumbnailPlaceholder::DecodeFailed);
+    }
+    decode_inline(
+        &bytes,
+        MAX_AVATAR_FILE_BYTES,
+        MAX_AVATAR_DIMENSION,
+        MAX_AVATAR_PIXELS,
+    )
+}
+
+fn decode_inline(
+    bytes: &[u8],
+    max_bytes: usize,
+    max_dimension: u32,
+    max_pixels: u64,
+) -> ThumbnailResult {
+    if bytes.len() > max_bytes {
+        return ThumbnailResult::Placeholder(ThumbnailPlaceholder::TooLarge);
+    }
+    let Some(format) = inline_image_format(bytes) else {
+        return ThumbnailResult::Placeholder(ThumbnailPlaceholder::DecodeFailed);
+    };
+    match decode_bounded(bytes, format, max_dimension, max_pixels) {
+        Ok(decoded) => rgba_result(decoded.into_rgba8()),
+        Err(placeholder) => ThumbnailResult::Placeholder(placeholder),
+    }
+}
+
+/// Reads the header first so a huge image is refused before the decoder
+/// allocates pixels for it. The header read gets the same limits: a PNG
+/// inflates its iCCP profile while reading the header.
+fn decode_bounded(
+    bytes: &[u8],
+    format: image::ImageFormat,
+    max_dimension: u32,
+    max_pixels: u64,
+) -> Result<image::DynamicImage, ThumbnailPlaceholder> {
+    let reader = || {
+        let mut reader = image::ImageReader::with_format(Cursor::new(bytes), format);
+        reader.limits(limits(max_dimension, max_pixels));
+        reader
+    };
+    let (width, height) = reader().into_dimensions().map_err(placeholder_for)?;
     let pixels = u64::from(width).checked_mul(u64::from(height));
     if width == 0
         || height == 0
-        || width > MAX_THUMBNAIL_DIMENSION
-        || height > MAX_THUMBNAIL_DIMENSION
-        || pixels.is_none_or(|pixels| pixels > MAX_THUMBNAIL_PIXELS)
+        || width > max_dimension
+        || height > max_dimension
+        || pixels.is_none_or(|pixels| pixels > max_pixels)
     {
-        return ThumbnailResult::Placeholder(ThumbnailPlaceholder::TooLarge);
+        return Err(ThumbnailPlaceholder::TooLarge);
     }
+    reader().decode().map_err(placeholder_for)
+}
 
-    let mut reader = match image::ImageReader::new(Cursor::new(bytes)).with_guessed_format() {
-        Ok(reader) => reader,
-        Err(_) => return ThumbnailResult::Placeholder(ThumbnailPlaceholder::DecodeFailed),
-    };
-    reader.limits(limits);
-    let Ok(decoded) = reader.decode() else {
-        return ThumbnailResult::Placeholder(ThumbnailPlaceholder::DecodeFailed);
-    };
-    let thumbnail = decoded
-        .thumbnail(MAX_THUMBNAIL_EDGE, MAX_THUMBNAIL_EDGE)
-        .to_rgba8();
+fn placeholder_for(error: image::ImageError) -> ThumbnailPlaceholder {
+    match error {
+        image::ImageError::Limits(_) => ThumbnailPlaceholder::TooLarge,
+        _ => ThumbnailPlaceholder::DecodeFailed,
+    }
+}
+
+fn rgba_result(image: image::RgbaImage) -> ThumbnailResult {
     ThumbnailResult::Image(DecodedThumbnail {
-        width: thumbnail.width(),
-        height: thumbnail.height(),
-        rgba: thumbnail.into_raw(),
+        width: image.width(),
+        height: image.height(),
+        rgba: image.into_raw(),
     })
 }
 
@@ -504,10 +612,14 @@ impl DecodeTicket {
 }
 
 pub(crate) fn image_limits() -> image::Limits {
+    limits(MAX_THUMBNAIL_DIMENSION, MAX_THUMBNAIL_PIXELS)
+}
+
+fn limits(max_dimension: u32, max_pixels: u64) -> image::Limits {
     let mut limits = image::Limits::default();
-    limits.max_image_width = Some(MAX_THUMBNAIL_DIMENSION);
-    limits.max_image_height = Some(MAX_THUMBNAIL_DIMENSION);
-    limits.max_alloc = Some(MAX_THUMBNAIL_PIXELS.saturating_mul(4));
+    limits.max_image_width = Some(max_dimension);
+    limits.max_image_height = Some(max_dimension);
+    limits.max_alloc = Some(max_pixels.saturating_mul(4));
     limits
 }
 
@@ -586,6 +698,128 @@ mod tests {
         assert_eq!(
             decode_thumbnail(&oversized),
             ThumbnailResult::Placeholder(ThumbnailPlaceholder::TooLarge)
+        );
+    }
+
+    fn encoded(width: u32, height: u32, format: image::ImageFormat) -> Vec<u8> {
+        let image = image::RgbaImage::from_pixel(width, height, image::Rgba([9, 80, 160, 255]));
+        let mut encoded = Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(image)
+            .to_rgb8()
+            .write_to(&mut encoded, format)
+            .unwrap();
+        encoded.into_inner()
+    }
+
+    #[test]
+    fn inline_thumbnails_decode_at_their_own_size() {
+        for format in [
+            image::ImageFormat::Jpeg,
+            image::ImageFormat::Png,
+            image::ImageFormat::WebP,
+        ] {
+            let ThumbnailResult::Image(thumbnail) =
+                decode_inline_thumbnail(&encoded(72, 40, format))
+            else {
+                panic!("expected decoded {format:?} thumbnail");
+            };
+            assert_eq!((thumbnail.width, thumbnail.height), (72, 40));
+            assert_eq!(thumbnail.rgba.len(), 72 * 40 * 4);
+        }
+    }
+
+    #[test]
+    fn hostile_inline_thumbnails_give_placeholders() {
+        let tiff = b"II*\0\x08\0\0\0\x01\0\0\x01\x03\0\x01\0\0\0\x01\0\0\0\0\0\0\0".to_vec();
+        let garbage: Vec<u8> = (0..4_096_u32)
+            .map(|index| (index.wrapping_mul(2_654_435_761) >> 13) as u8)
+            .collect();
+        let mut fake_jpeg = vec![0xff, 0xd8, 0xff, 0xe0];
+        fake_jpeg.extend_from_slice(&garbage);
+        let mut bare_start_of_image = vec![0xff, 0xd8];
+        bare_start_of_image.extend_from_slice(&garbage);
+        let gif = encoded(4, 4, image::ImageFormat::Gif);
+        for bytes in [
+            tiff,
+            garbage,
+            fake_jpeg,
+            bare_start_of_image,
+            gif,
+            Vec::new(),
+        ] {
+            assert_eq!(
+                decode_inline_thumbnail(&bytes),
+                ThumbnailResult::Placeholder(ThumbnailPlaceholder::DecodeFailed)
+            );
+            assert_eq!(
+                decode_thumbnail(&bytes),
+                ThumbnailResult::Placeholder(ThumbnailPlaceholder::DecodeFailed)
+            );
+        }
+
+        let wide = encoded(60_000, 1, image::ImageFormat::Png);
+        assert!(wide.len() <= MAX_INLINE_THUMBNAIL_BYTES);
+        assert_eq!(
+            decode_inline_thumbnail(&wide),
+            ThumbnailResult::Placeholder(ThumbnailPlaceholder::TooLarge)
+        );
+        let over_thumbnail_edge = encoded(
+            MAX_INLINE_THUMBNAIL_DIMENSION + 1,
+            1,
+            image::ImageFormat::Png,
+        );
+        assert_eq!(
+            decode_inline_thumbnail(&over_thumbnail_edge),
+            ThumbnailResult::Placeholder(ThumbnailPlaceholder::TooLarge)
+        );
+        let header_only = &wide[..8 + 8 + 13 + 4];
+        assert!(matches!(
+            decode_inline_thumbnail(header_only),
+            ThumbnailResult::Placeholder(_)
+        ));
+
+        let mut oversized = encoded(8, 8, image::ImageFormat::Jpeg);
+        oversized.resize(MAX_INLINE_THUMBNAIL_BYTES + 1, 0);
+        assert!(!is_inline_thumbnail(&oversized));
+        assert_eq!(
+            decode_inline_thumbnail(&oversized),
+            ThumbnailResult::Placeholder(ThumbnailPlaceholder::TooLarge)
+        );
+    }
+
+    #[test]
+    fn avatar_files_decode_under_inline_bounds() {
+        let directory = tempfile::tempdir().unwrap();
+        let avatar = directory.path().join("avatar.jpg");
+        std::fs::write(&avatar, encoded(96, 96, image::ImageFormat::Jpeg)).unwrap();
+        assert!(matches!(
+            decode_avatar_file(&avatar),
+            ThumbnailResult::Image(DecodedThumbnail {
+                width: 96,
+                height: 96,
+                ..
+            })
+        ));
+
+        let huge = directory.path().join("huge.png");
+        std::fs::write(
+            &huge,
+            encoded(MAX_AVATAR_DIMENSION + 1, 2, image::ImageFormat::Png),
+        )
+        .unwrap();
+        assert_eq!(
+            decode_avatar_file(&huge),
+            ThumbnailResult::Placeholder(ThumbnailPlaceholder::TooLarge)
+        );
+        let tiff = directory.path().join("avatar.tiff");
+        std::fs::write(&tiff, b"MM\0*\0\0\0\x08").unwrap();
+        assert_eq!(
+            decode_avatar_file(&tiff),
+            ThumbnailResult::Placeholder(ThumbnailPlaceholder::DecodeFailed)
+        );
+        assert_eq!(
+            decode_avatar_file(&directory.path().join("missing.jpg")),
+            ThumbnailResult::Placeholder(ThumbnailPlaceholder::DecodeFailed)
         );
     }
 

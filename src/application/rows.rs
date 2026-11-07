@@ -295,21 +295,21 @@ impl RelmListItem for MessageRow {
         root.append(&row);
         let menu_target: MenuTarget = std::rc::Rc::default();
         let link_target = menu_target.clone();
-        body.connect_activate_link(move |_, uri| {
-            // A mention with no chat to open only carries a tooltip.
-            if uri == crate::safety::MENTION_SCHEME {
-                return gtk::glib::Propagation::Stop;
+        body.connect_activate_link(move |label, uri| {
+            match crate::safety::link_activation(uri) {
+                crate::safety::LinkActivation::Chat(phone) => {
+                    if let Some((_, sender)) = link_target.borrow().clone() {
+                        sender.input(Input::NewContact {
+                            phone: phone.to_owned(),
+                            name: None,
+                        });
+                    }
+                }
+                crate::safety::LinkActivation::Web(url) => {
+                    crate::native_media_widgets::open_web_link(label, &url);
+                }
+                crate::safety::LinkActivation::Ignore => {}
             }
-            let (Some(phone), Some((_, sender))) = (
-                crate::safety::chat_link_number(uri),
-                link_target.borrow().clone(),
-            ) else {
-                return gtk::glib::Propagation::Proceed;
-            };
-            sender.input(Input::NewContact {
-                phone: phone.to_owned(),
-                name: None,
-            });
             gtk::glib::Propagation::Stop
         });
         // Double-clicking code selects and copies the whole span, not one word.

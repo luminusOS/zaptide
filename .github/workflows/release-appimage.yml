@@ -12,20 +12,16 @@ jobs:
   appimage-x86_64:
     name: Build AppImage (x86_64)
     runs-on: ubuntu-24.04
-    container: archlinux:latest
+    container: docker.io/library/archlinux:latest@sha256:ece6c971fec3c532fd508bce299a446deaf469feecbfe7c353e995bc1a5e7bba
     timeout-minutes: 90
     steps:
       - name: Git for checkout
-        run: pacman -Syu --noconfirm git
+        run: |
+          pacman -Sy --noconfirm archlinux-keyring
+          pacman -Syu --noconfirm git
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            /root/.cargo/registry
-            target
-          key: appimage-arch-${{ hashFiles('Cargo.lock') }}
       - name: Build AppImage
         env:
           VERSION: ${{ github.ref_name }}
@@ -54,7 +50,7 @@ jobs:
   appimage-aarch64:
     name: Build AppImage (aarch64)
     runs-on: ubuntu-24.04-arm
-    container: registry.fedoraproject.org/fedora:45
+    container: registry.fedoraproject.org/fedora:45@sha256:f5afe36c8ddb2aa5333597e900f53c5ed0267d9ebb27be765dc8ec2633aa1648
     timeout-minutes: 90
     steps:
       - name: Git for checkout

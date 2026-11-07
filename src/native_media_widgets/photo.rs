@@ -52,7 +52,7 @@ fn media_frame(
     if let Some(texture) = message
         .thumbnail
         .as_deref()
-        .and_then(|bytes| gdk::Texture::from_bytes(&glib::Bytes::from(bytes)).ok())
+        .and_then(inline_thumbnail_texture)
     {
         picture.set_paintable(Some(&texture));
     }
