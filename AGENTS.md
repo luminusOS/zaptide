@@ -37,6 +37,23 @@ protocol. These notes are for coding agents and new contributors.
   `Bot`, the message archive, downloads, and profile pictures. The two
   sides talk only through `Command` (interface to runtime) and `Event`
   (runtime to interface); every event wakes the window through `Waker`.
+  Operation implementations live under `src/backend/worker/`; the parent retains
+  shared state, batch invariants and orchestration. Startup maintenance connects
+  first and yields between 256-row steps. Preserve commit-delayed events and
+  protected in-memory rollback state when moving archive operations.
+  Account completions use `Command::Completed(Completion { generation, done })`:
+  keep the central session guard separate from operation-specific generations.
+  A finished media sweep clears its running slot before stale-result rejection.
+  Stale or failed-enqueue results discard only owned staging paths and notify
+  waiting batch callbacks; never add cleanup `Drop` to cloneable payloads.
+- `application::OpenChatState` centralizes conversation reset state, but each
+  caller retains its cleanup ordering. Leaving an account preserves starred
+  messages; complete chat reset clears them. Keep request-token invalidation
+  and callback ownership intact.
+- Viewer implementation modules live under `src/native_media_widgets/viewer/`;
+  attachment, selection and theme helpers live under `src/application/`.
+  Resource permits in `src/shared_resource.rs` use distinct counters for distinct
+  workloads. Sharing a helper must not merge those limits.
 - The window owns the account's online presence (`src/application/presence.rs`,
   `backend/worker/presence.rs`): WhatsApp holds the phone's notifications while
   ZapTide is online. The bot uses `PresencePolicy::Manual`; reverting to

@@ -138,4 +138,10 @@ Calls add the `rtc-*` crates (DTLS, SCTP and data channels), which are still 0.2
 
 - **Keyring**: inside the sandbox oo7 keeps the archive keys in its own file keyring, `~/.var/app/dev.luminusos.ZapTide/data/keyrings/default.keyring`. That file is encrypted with a per-app secret that the Secret portal (`org.freedesktop.portal.Secret`) stores in the host keyring (GNOME Keyring, KWallet), so a backup or a move to another machine needs the file and the host keyring together. On a desktop without a Secret portal backend the keys stay in the host Secret Service, as outside the sandbox. Outside the sandbox nothing is migrated: keys are found in any Secret Service collection and created in the default one only when no item exists. Builds before oo7 stored the keys in the host Secret Service, so on first start ZapTide copies each missing key from there, reads the copy back, and leaves the original in place. Reading that original needs `--talk-name=org.freedesktop.secrets`, which is why both manifests still grant it. A later release drops the grant once existing installs have migrated; desktops without a Secret portal will then need one.
 
+  Synthetic credential and migration tests do not establish real-daemon or
+  Flatpak migration acceptance. That acceptance still requires a user-operated
+  test account, including the applicable capture checks. Keep the legacy
+  Secret Service permission until that migration window is deliberately closed;
+  closing superseded implementation PRs does not complete those manual checks.
+
 - **Tray icon**: GNOME shows StatusNotifierItem only with an extension such as AppIndicator.
