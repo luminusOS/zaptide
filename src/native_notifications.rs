@@ -550,13 +550,7 @@ fn bus_call(
 pub fn activation_token() -> Result<String, getrandom::Error> {
     let mut bytes = [0_u8; 16];
     getrandom::fill(&mut bytes)?;
-    let mut token = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        use std::fmt::Write as _;
-        // Writing to a String cannot fail.
-        let _ = write!(token, "{byte:02x}");
-    }
-    Ok(token)
+    Ok(hex::encode(bytes))
 }
 
 #[cfg(test)]
