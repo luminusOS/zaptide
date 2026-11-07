@@ -74,7 +74,7 @@ fn shared(body: Vec<u8>) -> Body {
 async fn a_streamed_download_lands_in_the_staging_file_chunk_by_chunk() {
     let directory = tempfile::tempdir().unwrap();
     let dir = directory.path().join("media");
-    let staging = download_staging_path(&dir);
+    let staging = download_staging_path(&dir).expect("synthetic staging entropy");
     let generation = AtomicU64::new(3);
     let lock = tokio::sync::Mutex::new(());
     let chunk = |index: usize| vec![(index % 251) as u8; 4096];
@@ -103,7 +103,7 @@ async fn a_streamed_download_lands_in_the_staging_file_chunk_by_chunk() {
 async fn a_verified_library_download_streams_the_plaintext_to_disk() {
     let directory = tempfile::tempdir().unwrap();
     let dir = directory.path().to_owned();
-    let staging = download_staging_path(&dir);
+    let staging = download_staging_path(&dir).expect("synthetic staging entropy");
     let generation = AtomicU64::new(1);
     let lock = tokio::sync::Mutex::new(());
     let plaintext: Vec<u8> = (0..200_000u32).map(|n| (n * 7 % 256) as u8).collect();
@@ -123,7 +123,7 @@ async fn a_verified_library_download_streams_the_plaintext_to_disk() {
 async fn a_download_that_fails_verification_leaves_no_file_behind() {
     let directory = tempfile::tempdir().unwrap();
     let dir = directory.path().to_owned();
-    let staging = download_staging_path(&dir);
+    let staging = download_staging_path(&dir).expect("synthetic staging entropy");
     let generation = AtomicU64::new(1);
     let lock = tokio::sync::Mutex::new(());
     let plaintext = vec![0x42; 100_000];
@@ -152,7 +152,7 @@ async fn a_cdn_refusal_keeps_its_status_through_the_staging_file() {
 
     for (status, reupload) in [(404, true), (410, true), (500, false)] {
         let downloader = downloader_answering(status, shared(Vec::new()));
-        let staging = download_staging_path(dir);
+        let staging = download_staging_path(dir).expect("synthetic staging entropy");
         let result =
             stream_session_cache_file(dir, &staging, 1, &generation, &lock, |file| async {
                 downloader.download_to_writer(&params, file).await
@@ -175,7 +175,7 @@ async fn a_cdn_refusal_keeps_its_status_through_the_staging_file() {
 async fn dropping_a_download_future_removes_its_partial_file() {
     let directory = tempfile::tempdir().unwrap();
     let dir = directory.path();
-    let staging = download_staging_path(dir);
+    let staging = download_staging_path(dir).expect("synthetic staging entropy");
     let generation = AtomicU64::new(1);
     let lock = tokio::sync::Mutex::new(());
     let (started, ready) = tokio::sync::oneshot::channel();
@@ -204,7 +204,7 @@ async fn dropping_a_download_future_removes_its_partial_file() {
 async fn a_failed_stream_removes_what_it_wrote() {
     let directory = tempfile::tempdir().unwrap();
     let dir = directory.path().to_owned();
-    let staging = download_staging_path(&dir);
+    let staging = download_staging_path(&dir).expect("synthetic staging entropy");
     let generation = AtomicU64::new(1);
     let lock = tokio::sync::Mutex::new(());
 
@@ -231,7 +231,7 @@ async fn a_failed_stream_removes_what_it_wrote() {
 async fn an_account_change_while_streaming_discards_the_file() {
     let directory = tempfile::tempdir().unwrap();
     let dir = directory.path().to_owned();
-    let staging = download_staging_path(&dir);
+    let staging = download_staging_path(&dir).expect("synthetic staging entropy");
     let generation = AtomicU64::new(1);
     let lock = tokio::sync::Mutex::new(());
 
@@ -253,7 +253,7 @@ async fn an_account_change_while_streaming_discards_the_file() {
 async fn a_stale_stream_does_not_recreate_a_cleared_cache() {
     let directory = tempfile::tempdir().unwrap();
     let dir = directory.path().join("media");
-    let staging = download_staging_path(&dir);
+    let staging = download_staging_path(&dir).expect("synthetic staging entropy");
     let generation = AtomicU64::new(9);
     let lock = tokio::sync::Mutex::new(());
     let mut fetched = false;
@@ -309,7 +309,7 @@ async fn streaming_a_large_download_keeps_peak_memory_flat() {
     }));
     let generation = AtomicU64::new(1);
     let lock = tokio::sync::Mutex::new(());
-    let staging = download_staging_path(&dir);
+    let staging = download_staging_path(&dir).expect("synthetic staging entropy");
 
     let before = peak_resident_kib();
     let result = stream_session_cache_file(&dir, &staging, 1, &generation, &lock, |file| async {

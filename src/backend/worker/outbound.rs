@@ -768,10 +768,7 @@ pub(super) fn media_path(
 /// digest of their chat to keep two chats from sharing a cache file.
 fn chat_tag(chat: &str) -> String {
     use sha2::{Digest, Sha256};
-    Sha256::digest(chat.as_bytes())[..4]
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    hex::encode(&Sha256::digest(chat.as_bytes())[..4])
 }
 
 const PROMOTION_ATTEMPTS: usize = 100;
@@ -891,9 +888,17 @@ pub(super) fn attachment_mime(path: &Path) -> String {
 /// Keep staging names short and independent for overlapping downloads, even
 /// when both attempts fetch the same message payload. Stay in the destination
 /// directory so promotion can use an atomic rename.
-pub(super) fn download_staging_path(dir: &Path) -> PathBuf {
-    let token = rand::random::<u128>();
-    dir.join(format!(".download-{token:032x}.tmp"))
+pub(super) fn download_staging_path(dir: &Path) -> Result<PathBuf, getrandom::Error> {
+    download_staging_path_with(dir, |bytes| getrandom::fill(bytes))
+}
+
+fn download_staging_path_with<E>(
+    dir: &Path,
+    fill: impl FnOnce(&mut [u8; 16]) -> Result<(), E>,
+) -> Result<PathBuf, E> {
+    let mut bytes = [0; 16];
+    fill(&mut bytes)?;
+    Ok(dir.join(format!(".download-{}.tmp", hex::encode(bytes))))
 }
 
 /// Staging files untouched for this long belong to a download that was
@@ -1853,6 +1858,27 @@ impl Worker {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn chat_tag_golden_lowercase_digest_prefix() {
+        assert_eq!(super::chat_tag("abc"), "ba7816bf");
+    }
+    #[test]
+    fn staging_entropy_golden_and_failure() {
+        let dir = std::path::Path::new("/synthetic");
+        let path = super::download_staging_path_with(dir, |bytes| {
+            *bytes = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 255];
+            Ok::<(), &str>(())
+        })
+        .unwrap();
+        assert_eq!(
+            path,
+            dir.join(".download-000102030405060708090a0b0c0d0eff.tmp")
+        );
+        assert_eq!(
+            super::download_staging_path_with(dir, |_| Err::<(), _>("entropy unavailable")),
+            Err("entropy unavailable")
+        );
+    }
     use super::*;
 
     #[tokio::test]
@@ -2117,7 +2143,7 @@ mod tests {
     fn staging_names_match_only_the_generated_pattern() {
         let dir = Path::new("/cache");
         for _ in 0..32 {
-            let staged = download_staging_path(dir);
+            let staged = download_staging_path(dir).expect("synthetic staging entropy");
             assert!(is_staging_name(staged.file_name().unwrap()), "{staged:?}");
         }
         let temporary = tempfile::tempdir().unwrap();
@@ -2146,14 +2172,14 @@ mod tests {
         std::fs::create_dir(&dir).unwrap();
         let hour = Duration::from_secs(60 * 60);
 
-        let stale = download_staging_path(&dir);
+        let stale = download_staging_path(&dir).expect("synthetic staging entropy");
         std::fs::write(&stale, b"interrupted").unwrap();
         aged(&stale, 2 * hour);
 
         let stale_upload = upload_staging_file(&dir).unwrap();
         aged(stale_upload.path(), 2 * hour);
 
-        let recent = download_staging_path(&dir);
+        let recent = download_staging_path(&dir).expect("synthetic staging entropy");
         std::fs::write(&recent, b"still streaming").unwrap();
         aged(&recent, Duration::from_secs(10 * 60));
 
@@ -2167,7 +2193,7 @@ mod tests {
         let outside = root.path().join("outside.pdf");
         std::fs::write(&outside, b"outside").unwrap();
         aged(&outside, 48 * hour);
-        let link = download_staging_path(&dir);
+        let link = download_staging_path(&dir).expect("synthetic staging entropy");
         std::os::unix::fs::symlink(&outside, &link).unwrap();
         let old = rustix::fs::Timespec {
             tv_sec: (std::time::SystemTime::now() - 48 * hour)
@@ -2187,14 +2213,14 @@ mod tests {
         )
         .unwrap();
 
-        let nested_dir = download_staging_path(&dir);
+        let nested_dir = download_staging_path(&dir).expect("synthetic staging entropy");
         std::fs::create_dir(&nested_dir).unwrap();
-        let nested = download_staging_path(&nested_dir);
+        let nested = download_staging_path(&nested_dir).expect("synthetic staging entropy");
         std::fs::write(&nested, b"nested").unwrap();
         aged(&nested, 48 * hour);
         let subdir = dir.join("sub");
         std::fs::create_dir(&subdir).unwrap();
-        let in_subdir = download_staging_path(&subdir);
+        let in_subdir = download_staging_path(&subdir).expect("synthetic staging entropy");
         std::fs::write(&in_subdir, b"nested").unwrap();
         aged(&in_subdir, 48 * hour);
 

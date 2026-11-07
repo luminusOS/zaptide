@@ -43,6 +43,7 @@ path = "src/main.rs"
 [dependencies]
 gettext-rs = { version = "0.8", features = ["gettext-system"] }
 anyhow = "1"
+hex = "0.4"
 # Hashes saved stickers by content. Already included through wacore.
 sha2 = "0.11"
 # Already in the tree through rustls; used for the locked-chat code verifier.

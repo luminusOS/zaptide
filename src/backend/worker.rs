@@ -298,7 +298,7 @@ fn sticker_hash(sha256: Option<&[u8]>, enc_sha256: Option<&[u8]>) -> Option<Stri
     let bytes = sha256
         .filter(|bytes| !bytes.is_empty())
         .or(enc_sha256.filter(|bytes| !bytes.is_empty()))?;
-    Some(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+    Some(hex::encode(bytes))
 }
 
 fn archive_cleanup_markers(dirs: &AppDirs) -> [PathBuf; 3] {

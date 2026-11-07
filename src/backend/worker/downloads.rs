@@ -1,5 +1,39 @@
 use super::*;
 
+async fn download_with_reupload<T, F, Fut, R, Retry, U>(
+    downloadable: T,
+    retry_allowed: bool,
+    fetch: F,
+    reupload: R,
+    mut refreshed: U,
+) -> Result<PathBuf, DownloadFailure>
+where
+    F: Fn(T) -> Fut,
+    Fut: Future<Output = Result<PathBuf, StagedDownload<anyhow::Error>>>,
+    R: FnOnce() -> Retry,
+    Retry: Future<Output = Option<String>>,
+    U: FnMut(String) -> Option<T>,
+{
+    let error = match fetch(downloadable).await {
+        Ok(path) => return Ok(path),
+        Err(StagedDownload::Local(error)) => return Err(DownloadFailure::Other(error)),
+        Err(StagedDownload::Fetch(error)) => error,
+    };
+    if !retry_allowed || !failures::needs_reupload(&error) {
+        return Err(failures::download_failure(&error));
+    }
+    let Some(direct_path) = reupload().await else {
+        return Err(DownloadFailure::Expired);
+    };
+    let Some(again) = refreshed(direct_path) else {
+        return Err(failures::download_failure(&error));
+    };
+    fetch(again).await.map_err(|error| match error {
+        StagedDownload::Fetch(error) => failures::download_failure(&error),
+        StagedDownload::Local(error) => DownloadFailure::Other(error),
+    })
+}
+
 impl Worker {
     pub(super) async fn retry_deferred_downloads(&mut self, now: Instant) {
         // Take one batch so a still-failing read cannot retry in a tight loop.
@@ -172,10 +206,11 @@ impl Worker {
             let fetch = |downloadable: Box<dyn Downloadable>| {
                 let client = client.clone();
                 let dir = dir.clone();
-                let path = download_staging_path(&dir);
                 let session_generation_shared = session_generation_shared.clone();
                 let session_cache_lock = session_cache_lock.clone();
                 async move {
+                    let path = download_staging_path(&dir)
+                        .map_err(|error| StagedDownload::Local(error.to_string()))?;
                     stream_session_cache_file(
                         &dir,
                         &path,
@@ -187,48 +222,31 @@ impl Worker {
                     .await
                 }
             };
-            let result = match fetch(downloadable).await {
-                Ok(path) => Ok(path),
-                Err(StagedDownload::Local(error)) => Err(DownloadFailure::Other(error)),
-                Err(StagedDownload::Fetch(error)) => {
-                    let expired = failures::needs_reupload(&error);
-                    match (&jid, expired && !media_key.is_empty()) {
-                        (Some(jid), true) => {
-                            // Ask the phone to re-upload expired media, then retry once.
-                            let request = MediaReuploadRequest {
-                                msg_id: &id,
-                                chat_jid: jid,
-                                media_key: &media_key,
-                                is_from_me,
-                                participant: participant.as_ref(),
-                            };
-                            match client.media_reupload().request(&request).await {
-                                Ok(MediaRetryResult::Success { direct_path }) => {
-                                    match refreshed(direct_path) {
-                                        Some(again) => {
-                                            fetch(again).await.map_err(|error| match error {
-                                                StagedDownload::Fetch(error) => {
-                                                    failures::download_failure(&error)
-                                                }
-                                                StagedDownload::Local(error) => {
-                                                    DownloadFailure::Other(error)
-                                                }
-                                            })
-                                        }
-                                        None => Err(failures::download_failure(&error)),
-                                    }
-                                }
-                                Ok(_) => Err(DownloadFailure::Expired),
-                                Err(_error) => {
-                                    log::info!("media re-upload was not granted");
-                                    Err(DownloadFailure::Expired)
-                                }
-                            }
+            let result = download_with_reupload(
+                downloadable,
+                jid.is_some() && !media_key.is_empty(),
+                fetch,
+                || async {
+                    let jid = jid.as_ref()?;
+                    let request = MediaReuploadRequest {
+                        msg_id: &id,
+                        chat_jid: jid,
+                        media_key: &media_key,
+                        is_from_me,
+                        participant: participant.as_ref(),
+                    };
+                    match client.media_reupload().request(&request).await {
+                        Ok(MediaRetryResult::Success { direct_path }) => Some(direct_path),
+                        Ok(_) => None,
+                        Err(_error) => {
+                            log::info!("media re-upload was not granted");
+                            None
                         }
-                        _ => Err(failures::download_failure(&error)),
                     }
-                }
-            };
+                },
+                &mut refreshed,
+            )
+            .await;
             let _ = Completion {
                 generation: session_generation,
                 done: Done::Downloaded {
@@ -241,5 +259,156 @@ impl Worker {
             }
             .send(&commands);
         });
+    }
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::*;
+    use std::cell::Cell;
+    use whatsapp_rust::http::HttpStatusError;
+
+    #[tokio::test]
+    async fn successful_initial_download_never_requests_reupload() {
+        let requests = Cell::new(0);
+        let result = download_with_reupload(
+            0,
+            true,
+            |_| async { Ok(PathBuf::from("synthetic")) },
+            || {
+                requests.set(requests.get() + 1);
+                async { Some("fresh".to_owned()) }
+            },
+            |_| Some(1),
+        )
+        .await;
+        assert_eq!(result, Ok(PathBuf::from("synthetic")));
+        assert_eq!(requests.get(), 0);
+    }
+
+    #[tokio::test]
+    async fn reupload_branch_matrix_preserves_attempt_counts() {
+        for (status, allowed, request_ok, refresh_ok, expected_fetches, expected_requests) in [
+            (403, true, true, true, 2, 1),
+            (404, true, true, true, 2, 1),
+            (410, true, true, true, 2, 1),
+            (404, true, false, true, 1, 1),
+            (410, true, true, false, 1, 1),
+            (500, true, true, true, 1, 0),
+            (403, false, true, true, 1, 0),
+        ] {
+            let fetches = Cell::new(0);
+            let requests = Cell::new(0);
+            let result = download_with_reupload(
+                0,
+                allowed,
+                |_| {
+                    let n = fetches.get();
+                    fetches.set(n + 1);
+                    async move {
+                        if n == 0 {
+                            Err(StagedDownload::Fetch(anyhow::Error::new(HttpStatusError {
+                                status,
+                            })))
+                        } else {
+                            Ok(PathBuf::from("synthetic"))
+                        }
+                    }
+                },
+                || {
+                    requests.set(requests.get() + 1);
+                    async move { request_ok.then(|| "fresh".to_owned()) }
+                },
+                |_| refresh_ok.then_some(1),
+            )
+            .await;
+            assert_eq!(fetches.get(), expected_fetches, "{status}");
+            assert_eq!(requests.get(), expected_requests, "{status}");
+            assert_eq!(result.is_ok(), expected_fetches == 2);
+            if status == 404 && !request_ok {
+                assert_eq!(result, Err(DownloadFailure::Expired));
+            }
+            if status == 410 && !refresh_ok {
+                assert_eq!(
+                    result,
+                    Err(failures::download_failure(&anyhow::Error::new(
+                        HttpStatusError { status }
+                    )))
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn reupload_does_not_retry_local_errors_or_retry_twice() {
+        for local_first in [true, false] {
+            let fetches = Cell::new(0);
+            let requests = Cell::new(0);
+            let result = download_with_reupload(
+                0,
+                true,
+                |_| {
+                    let n = fetches.get();
+                    fetches.set(n + 1);
+                    async move {
+                        if local_first || n > 0 {
+                            Err(StagedDownload::Local("synthetic local failure".to_owned()))
+                        } else {
+                            Err(StagedDownload::Fetch(anyhow::Error::new(HttpStatusError {
+                                status: 403,
+                            })))
+                        }
+                    }
+                },
+                || {
+                    requests.set(requests.get() + 1);
+                    async { Some("fresh".to_owned()) }
+                },
+                |_| Some(1),
+            )
+            .await;
+            assert_eq!(
+                result,
+                Err(DownloadFailure::Other("synthetic local failure".to_owned()))
+            );
+            assert_eq!(fetches.get(), if local_first { 1 } else { 2 });
+            assert_eq!(requests.get(), if local_first { 0 } else { 1 });
+        }
+    }
+
+    #[tokio::test]
+    async fn reupload_retry_failure_is_classified_without_another_request() {
+        for status in [404, 410, 500] {
+            let fetches = Cell::new(0);
+            let requests = Cell::new(0);
+            let result = download_with_reupload(
+                0,
+                true,
+                |_| {
+                    let n = fetches.get();
+                    fetches.set(n + 1);
+                    async move {
+                        let code = if n == 0 { 403 } else { status };
+                        Err(StagedDownload::Fetch(anyhow::Error::new(HttpStatusError {
+                            status: code,
+                        })))
+                    }
+                },
+                || {
+                    requests.set(requests.get() + 1);
+                    async { Some("fresh".to_owned()) }
+                },
+                |_| Some(1),
+            )
+            .await;
+            assert_eq!(
+                result,
+                Err(failures::download_failure(&anyhow::Error::new(
+                    HttpStatusError { status }
+                )))
+            );
+            assert_eq!(fetches.get(), 2);
+            assert_eq!(requests.get(), 1);
+        }
     }
 }
