@@ -128,7 +128,7 @@ fn contained_file(root: &Path, path: &Path) -> Option<PathBuf> {
 static HELD: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
 fn held() -> std::sync::MutexGuard<'static, Vec<PathBuf>> {
-    HELD.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    crate::shared_resource::lock(&HELD)
 }
 
 /// Keeps files from being cleaned up while it lives: a viewer showing them or

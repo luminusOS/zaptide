@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use gtk4::glib;
 
 use crate::notifier::{EventDrain, EventNotifier};
+use crate::shared_resource::lock;
 
 type Callback = Arc<dyn Fn() + Send + Sync>;
 type CallbackState = Arc<Mutex<Option<Callback>>>;
@@ -39,15 +40,13 @@ impl GlibEventDrain {
             };
             context.invoke(move || {
                 let ready = {
-                    let drain = drain.lock().unwrap_or_else(|p| p.into_inner());
+                    let drain = lock(&drain);
                     drain.try_begin_scheduled_drain(generation)
                 };
                 if ready {
                     // Hold this lock through invocation so close cannot return while a callback
                     // that may touch component state remains in flight.
-                    if let Some(callback) =
-                        callback.lock().unwrap_or_else(|p| p.into_inner()).as_ref()
-                    {
+                    if let Some(callback) = lock(&callback).as_ref() {
                         callback();
                     }
                 }
@@ -58,11 +57,8 @@ impl GlibEventDrain {
 
     /// Invalidates pending callbacks before application state is disposed.
     pub fn close(&self) {
-        self.callback
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .take();
-        self.drain.lock().unwrap_or_else(|p| p.into_inner()).close();
+        lock(&self.callback).take();
+        lock(&self.drain).close();
     }
 }
 
@@ -93,8 +89,7 @@ mod tests {
         let observed_thread = Arc::clone(&callback_thread);
         let _adapter = GlibEventDrain::install(&notifier, drain, context.clone(), move || {
             observed.fetch_add(1, Ordering::Relaxed);
-            *observed_thread.lock().unwrap_or_else(|p| p.into_inner()) =
-                Some(thread::current().id());
+            *lock(&observed_thread) = Some(thread::current().id());
         });
 
         let producer = notifier.clone();
@@ -108,10 +103,7 @@ mod tests {
             context.iteration(true);
         }
         assert_eq!(calls.load(Ordering::Relaxed), 1);
-        assert_eq!(
-            *callback_thread.lock().unwrap_or_else(|p| p.into_inner()),
-            Some(expected_thread)
-        );
+        assert_eq!(*lock(&callback_thread), Some(expected_thread));
     }
 
     #[test]
