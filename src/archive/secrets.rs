@@ -126,9 +126,7 @@ fn jobs() -> Result<&'static Mutex<mpsc::Sender<Job>>> {
 }
 
 fn queue(job: Job) -> Result<()> {
-    jobs()?
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+    crate::shared_resource::lock(jobs()?)
         .send(job)
         .map_err(|_| anyhow!("The OS keyring thread stopped"))
 }
