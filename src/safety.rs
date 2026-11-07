@@ -1,14 +1,25 @@
 //! Validation at the boundary between message content and desktop handlers.
 
+#[cfg(test)]
+thread_local! {
+    static PARSE_BYTES: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+fn parse_url(value: &str) -> Result<url::Url, url::ParseError> {
+    #[cfg(test)]
+    PARSE_BYTES.with(|bytes| bytes.set(bytes.get().map(|total| total + value.len())));
+    url::Url::parse(value)
+}
+
 /// Preview metadata may supply a bare host, but never a desktop URI scheme.
 pub fn preview_url(value: &str) -> Option<String> {
     if value.chars().any(char::is_control) || value.contains('\\') {
         return None;
     }
     let value = value.trim();
-    let url = match url::Url::parse(value) {
+    let url = match parse_url(value) {
         Ok(url) => url,
-        Err(_) => url::Url::parse(&format!("https://{value}")).ok()?,
+        Err(_) => parse_url(&format!("https://{value}")).ok()?,
     };
     (matches!(url.scheme(), "http" | "https") && url.host_str().is_some()).then(|| url.to_string())
 }
@@ -102,6 +113,7 @@ struct LinkScan {
     index: usize,
     whitespace: usize,
     unsafe_char: usize,
+    question: usize,
     counted: usize,
     balance: isize,
     word: Option<WordTail>,
@@ -208,9 +220,8 @@ pub fn web_link_spans(text: &str) -> impl Iterator<Item = std::ops::Range<usize>
 
 /// Link at `index` in `text`: its byte length, target, and optional tooltip.
 ///
-/// Finding where a candidate ends is linear in `text`, but a `www.` or
-/// `whatsapp://` candidate that is then rejected was still parsed as a URL up
-/// to that end, so a long word of such candidates costs quadratic time.
+/// Finding where a candidate ends is linear in `text`, but rejected `www.`
+/// candidates and WhatsApp candidates containing `?` may still take quadratic time.
 fn link_at(
     text: &str,
     index: usize,
@@ -234,7 +245,15 @@ fn link_at(
     let len = end - index;
     let link = &rest[..len];
     if link.starts_with("whatsapp://") {
-        let digits = whatsapp_number(&url::Url::parse(link).ok()?)?;
+        // A WhatsApp chat requires a query, whose delimiter cannot be percent-encoded.
+        if !resume_search(&mut scan.question, text.len(), index, |at| {
+            text.as_bytes()[at] == b'?'
+        })
+        .is_some_and(|at| at < end)
+        {
+            return None;
+        }
+        let digits = whatsapp_number(&parse_url(link).ok()?)?;
         return Some((
             len,
             format!("{CHAT_SCHEME}{digits}"),
@@ -247,7 +266,7 @@ fn link_at(
         return None;
     }
     let url = preview_url(link)?;
-    match whatsapp_number(&url::Url::parse(&url).ok()?) {
+    match whatsapp_number(&parse_url(&url).ok()?) {
         Some(digits) => Some((
             len,
             format!("{CHAT_SCHEME}{digits}"),
@@ -1016,6 +1035,48 @@ mod tests {
             }
             out.push_str(&esc(&text[plain..]));
         }
+    }
+
+    #[test]
+    fn whatsapp_certificate_matches_reference() {
+        for text in [
+            "whatsapp://send%3Fphone=1234567",
+            "whatsapp://send?%70hone=%31%32%33%34%35%36%37",
+            "whatsapp://x@send?phone=1234567",
+            "whatsapp://send#fragment?phone=1234567",
+            "whatsapp://send?phone=1234567#fragment",
+            "whatsapp://[::1]?phone=1234567",
+            "whatsapp://é?phone=1234567",
+            "(whatsapp://x(whatsapp://send?phone=1234567)).?!",
+            "whatsapp://send?phone=1234567).?!",
+            "whatsapp://send\t?phone=1234567",
+        ] {
+            let mut expected = String::new();
+            quadratic::render(text, &[], true, &mut expected);
+            assert_eq!(linkify_markup(text), expected, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn whatsapp_parse_work_is_bounded_without_question_mark() {
+        let mut whatsapp_work = Vec::new();
+        for candidate in ["whatsapp://x1234567(", "www.a:bad1234567("] {
+            for count in [1_000, 2_000, 4_000] {
+                let text = candidate.repeat(count);
+                super::PARSE_BYTES.with(|bytes| bytes.set(Some(0)));
+                let started = std::time::Instant::now();
+                assert_eq!(linkify_markup(&text), text);
+                let elapsed = started.elapsed();
+                let work = super::PARSE_BYTES.with(|bytes| bytes.replace(None).unwrap());
+                eprintln!("{candidate:?} x{count}: {work} parse bytes, {elapsed:?}");
+                if candidate.starts_with("whatsapp:") {
+                    whatsapp_work.push(work);
+                } else {
+                    assert!(work > 0);
+                }
+            }
+        }
+        assert_eq!(whatsapp_work, [0, 0, 0]);
     }
 
     #[test]
