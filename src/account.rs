@@ -668,6 +668,38 @@ mod tests {
     }
 
     #[test]
+    fn account_switches_preserve_each_chat_lock_verifier_and_hint() {
+        let dir = tempfile::tempdir().unwrap();
+        let one_path = dir.path().join("one.json");
+        let two_path = dir.path().join("two.json");
+        let one = AccountSettings {
+            chat_lock_code_hash: Some("first-salt$first-hash".into()),
+            chat_lock_hint_dismissed: true,
+            ..Default::default()
+        };
+        let two = AccountSettings {
+            chat_lock_code_hash: Some("second-salt$second-hash".into()),
+            chat_lock_hint_dismissed: false,
+            ..Default::default()
+        };
+        one.save(&one_path).unwrap();
+        two.save(&two_path).unwrap();
+        let mut current = crate::settings::Settings::default();
+        for (path, expected) in [(&one_path, &one), (&two_path, &two), (&one_path, &one)] {
+            AccountSettings::load_or(path, &current).apply_to(&mut current);
+            current.send_typing = !current.send_typing;
+            let saved = AccountSettings::from_settings(&current);
+            saved.save(path).unwrap();
+            let loaded = AccountSettings::load_or(path, &current);
+            assert_eq!(loaded.chat_lock_code_hash, expected.chat_lock_code_hash);
+            assert_eq!(
+                loaded.chat_lock_hint_dismissed,
+                expected.chat_lock_hint_dismissed
+            );
+        }
+    }
+
+    #[test]
     fn label_prefers_name_then_phone() {
         let mut entry = AccountEntry {
             id: AccountId(4),

@@ -394,7 +394,6 @@ impl NativeApplication {
             send_read_receipts: self.settings.send_read_receipts,
             send_typing: self.settings.send_typing,
             link_previews: self.settings.link_previews,
-            chat_lock_configured: self.settings.chat_lock_code_hash.is_some(),
         };
         let input_sender = sender.clone();
         let setting_sender = sender.clone();

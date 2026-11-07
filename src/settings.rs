@@ -258,6 +258,46 @@ mod tests {
     }
 
     #[test]
+    fn legacy_chat_lock_code_migrates_and_survives_a_settings_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{"chat_lock_code":"2468","chat_lock_hint_dismissed":true}"#,
+        )
+        .unwrap();
+        let mut settings = Settings::load(&path);
+        assert!(settings.chat_lock_code.is_none());
+        let verifier = settings.chat_lock_code_hash.clone().unwrap();
+        let (salt, hash) = verifier.split_once('$').unwrap();
+        assert!(
+            ring::pbkdf2::verify(
+                ring::pbkdf2::PBKDF2_HMAC_SHA256,
+                CHAT_LOCK_ROUNDS,
+                &hex::decode(salt).unwrap(),
+                b"2468",
+                &hex::decode(hash).unwrap(),
+            )
+            .is_ok()
+        );
+        settings.send_typing = false;
+        settings.save(&path).unwrap();
+        let loaded = Settings::load(&path);
+        assert_eq!(
+            loaded.chat_lock_code_hash.as_deref(),
+            Some(verifier.as_str())
+        );
+        assert!(loaded.chat_lock_hint_dismissed);
+        let stored: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert!(
+            stored
+                .get("chat_lock_code")
+                .is_none_or(serde_json::Value::is_null)
+        );
+    }
+
+    #[test]
     fn unknown_and_missing_fields_are_tolerated() {
         let parsed: Settings =
             serde_json::from_str(r#"{"theme":"light","future_field":1}"#).expect("parses");
