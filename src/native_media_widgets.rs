@@ -1,9 +1,6 @@
 //! Reusable GTK widgets for message media and decorations.
 
-use std::{
-    sync::atomic::{AtomicUsize, Ordering},
-    thread,
-};
+use std::{sync::atomic::AtomicUsize, thread};
 
 use relm4::adw::{self, prelude::AdwDialogExt};
 use relm4::gtk::{self, gdk, glib, prelude::*};
@@ -19,22 +16,17 @@ use crate::{
 const MAX_ACTIVE_THUMBNAIL_DECODES: usize = 2;
 static ACTIVE_THUMBNAIL_DECODES: AtomicUsize = AtomicUsize::new(0);
 
-struct ThumbnailDecodePermit;
+struct ThumbnailDecodePermit {
+    _permit: crate::shared_resource::Permit<'static>,
+}
 
 impl ThumbnailDecodePermit {
     fn acquire() -> Option<Self> {
-        ACTIVE_THUMBNAIL_DECODES
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
-                (active < MAX_ACTIVE_THUMBNAIL_DECODES).then_some(active + 1)
-            })
-            .ok()
-            .map(|_| Self)
-    }
-}
-
-impl Drop for ThumbnailDecodePermit {
-    fn drop(&mut self) {
-        ACTIVE_THUMBNAIL_DECODES.fetch_sub(1, Ordering::AcqRel);
+        crate::shared_resource::Permit::acquire(
+            &ACTIVE_THUMBNAIL_DECODES,
+            MAX_ACTIVE_THUMBNAIL_DECODES,
+        )
+        .map(|permit| Self { _permit: permit })
     }
 }
 
