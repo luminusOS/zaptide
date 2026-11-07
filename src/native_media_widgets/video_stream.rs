@@ -24,7 +24,7 @@ struct Mailbox {
 impl Mailbox {
     fn publish(mailbox: &Mutex<Self>, sample: gst::Sample) {
         let waker = {
-            let mut mailbox = mailbox.lock().unwrap_or_else(|e| e.into_inner());
+            let mut mailbox = crate::shared_resource::lock(mailbox);
             if mailbox.closed {
                 return;
             }
@@ -300,7 +300,7 @@ impl VideoStream {
                 async move {
                     loop {
                         let sample = std::future::poll_fn(|cx| {
-                            let mut mailbox = mailbox.lock().unwrap_or_else(|e| e.into_inner());
+                            let mut mailbox = crate::shared_resource::lock(&mailbox);
                             if mailbox.closed {
                                 Poll::Ready(None)
                             } else if let Some(sample) = mailbox.sample.take() {
@@ -360,7 +360,7 @@ impl VideoStream {
             return;
         }
         {
-            let mut mailbox = imp.mailbox.lock().unwrap_or_else(|e| e.into_inner());
+            let mut mailbox = crate::shared_resource::lock(&imp.mailbox);
             mailbox.closed = true;
             mailbox.sample = None;
             mailbox.waker = None;

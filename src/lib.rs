@@ -40,6 +40,7 @@ pub(crate) mod portal;
 pub(crate) mod safety;
 pub mod services;
 pub mod settings;
+mod shared_resource;
 pub(crate) mod theme;
 pub(crate) mod util;
 pub mod voice;
