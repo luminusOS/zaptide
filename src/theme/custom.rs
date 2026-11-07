@@ -457,7 +457,8 @@ mod custom_theme_tests {
 
     #[test]
     fn discovery_sorts_valid_files_and_skips_invalid_files() {
-        let dir = std::env::temp_dir().join(format!("zaptide-themes-{}", rand::random::<u64>()));
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("themes");
         assert!(discover(&dir, None).themes.is_empty());
         std::fs::create_dir_all(&dir).unwrap();
         for (name, text) in [
@@ -476,14 +477,12 @@ mod custom_theme_tests {
                 .collect::<Vec<_>>(),
             ["a.json", "z.json"]
         );
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn reads_are_bounded_and_cannot_escape_to_other_files() {
-        let root =
-            std::env::temp_dir().join(format!("zaptide-theme-bounds-{}", rand::random::<u64>()));
-        let dir = root.join("themes");
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("themes");
         std::fs::create_dir_all(&dir).unwrap();
         let mut boundary = vec![b' '; MAX_FILE_BYTES as usize];
         boundary[..2].copy_from_slice(b"{}");
@@ -496,7 +495,7 @@ mod custom_theme_tests {
         std::fs::write(dir.join("too-large.json"), boundary).unwrap();
         std::fs::write(dir.join("invalid-utf8.json"), [0xff, 0xfe]).unwrap();
         std::fs::create_dir(dir.join("directory.json")).unwrap();
-        std::fs::write(root.join("outside.json"), b"{}").unwrap();
+        std::fs::write(root.path().join("outside.json"), b"{}").unwrap();
         for filename in [
             "too-large.json",
             "invalid-utf8.json",
@@ -508,7 +507,8 @@ mod custom_theme_tests {
             assert!(read_theme(&dir, filename).is_err(), "{filename}");
         }
         {
-            std::os::unix::fs::symlink(root.join("outside.json"), dir.join("link.json")).unwrap();
+            std::os::unix::fs::symlink(root.path().join("outside.json"), dir.join("link.json"))
+                .unwrap();
             assert!(read_theme(&dir, "link.json").is_err());
             assert!(
                 discover(&dir, Some("link.json"))
@@ -517,14 +517,12 @@ mod custom_theme_tests {
                     .all(|theme| theme.filename != "link.json")
             );
         }
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn catalog_limits_keep_the_saved_selection_without_an_arbitrary_partial_listing() {
-        let dir =
-            std::env::temp_dir().join(format!("zaptide-theme-catalog-{}", rand::random::<u64>()));
-        std::fs::create_dir(&dir).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().to_path_buf();
         for index in 0..MAX_THEMES + 1 {
             std::fs::write(dir.join(format!("{index:03}.json")), b"{}").unwrap();
         }
@@ -551,7 +549,6 @@ mod custom_theme_tests {
             ["selected.json"]
         );
         assert!(loaded.problem.unwrap().contains("512"));
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     fn wait_for(context: &gtk4::glib::MainContext, mut done: impl FnMut() -> bool, what: &str) {
