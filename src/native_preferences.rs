@@ -69,7 +69,6 @@ pub struct AccountPreferences {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PrivacyPreferences {
     pub send_read_receipts: bool,
-    pub chat_lock_configured: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -116,7 +115,6 @@ impl From<&Settings> for NativePreferences {
             },
             privacy: PrivacyPreferences {
                 send_read_receipts: settings.send_read_receipts,
-                chat_lock_configured: settings.chat_lock_code_hash.is_some(),
             },
             notifications: NotificationPreferences {
                 enabled: settings.notifications,
@@ -844,54 +842,6 @@ pub(crate) fn set_accessible_label(
     widget.update_property(&[gtk4::accessible::Property::Label(label)]);
 }
 
-pub(crate) fn present_secret_entry(
-    parent: &impl gtk4::prelude::IsA<gtk4::Widget>,
-    heading: &str,
-    body: &str,
-    accessible_name: &str,
-    on_save: impl Fn(String) + 'static,
-) {
-    use gtk4::prelude::*;
-    use libadwaita::prelude::*;
-
-    let entry = gtk4::PasswordEntry::new();
-    entry.set_show_peek_icon(false);
-    set_accessible_label(&entry, accessible_name);
-    let alert = libadwaita::AlertDialog::new(Some(heading), Some(body));
-    alert.set_extra_child(Some(&entry));
-    alert.set_focus(Some(&entry));
-    alert.add_response("cancel", &gettext("Cancel"));
-    alert.add_response("save", &gettext("Save"));
-    alert.set_close_response("cancel");
-    alert.set_default_response(Some("save"));
-    alert.set_response_enabled("save", false);
-    {
-        let alert = alert.downgrade();
-        entry.connect_changed(move |entry| {
-            if let Some(alert) = alert.upgrade() {
-                alert.set_response_enabled("save", !entry.text().is_empty());
-            }
-        });
-    }
-    let entry_ref = entry.downgrade();
-    alert.connect_response(None, move |_, response| {
-        let value = entry_ref
-            .upgrade()
-            .and_then(|entry| secret_value_for_response(response, entry.text().as_str()));
-        if let Some(entry) = entry_ref.upgrade() {
-            entry.set_text("");
-        }
-        if let Some(value) = value {
-            on_save(value);
-        }
-    });
-    alert.present(Some(parent));
-}
-
-fn secret_value_for_response(response: &str, value: &str) -> Option<String> {
-    (response == "save" && !value.is_empty()).then(|| value.to_owned())
-}
-
 fn add_numeric_row(
     group: &libadwaita::PreferencesGroup,
     title: &str,
@@ -1158,17 +1108,6 @@ mod tests {
         assert_eq!(settings.zoom, 2.0);
         assert_eq!(settings.voice_speed, 1.5);
         assert!(settings.chat_lock_code_hash.is_none());
-    }
-
-    #[test]
-    fn secret_dialog_requires_save_and_rejects_empty_lock_codes() {
-        assert_eq!(secret_value_for_response("cancel", "private"), None);
-        assert_eq!(secret_value_for_response("close", "private"), None);
-        assert_eq!(secret_value_for_response("save", ""), None);
-        assert_eq!(
-            secret_value_for_response("save", "private").as_deref(),
-            Some("private")
-        );
     }
 
     #[test]

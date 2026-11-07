@@ -184,8 +184,10 @@ pick the app. Very long sender file names are shortened in the download folder.
 Previews contact websites directly while composing, without proxies or redirects.
 Private/reserved destinations are blocked. Disable previews per account or remove one.
 
-Stored chats remain available with a notice if phone settings cannot be read;
-locked chats stay locked until those settings arrive.
+Stored chats remain available with a notice if phone settings cannot be read.
+Chats locked on your phone stay hidden in ZapTide, including their calls and starred
+messages. Manage chat locks on your phone; ZapTide does not offer a lock code or
+an option to open locked chats.
 
 ## Limitations
 
