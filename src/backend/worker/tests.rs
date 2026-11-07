@@ -280,6 +280,34 @@ mod previews;
 mod session;
 mod synthetic_archive;
 
+fn stored(worker: &Worker, chat: &str, id: &str) -> crate::model::Message {
+    worker.archive.message(chat, id).unwrap().unwrap()
+}
+
+fn emitted(events: &std::sync::mpsc::Receiver<Event>) -> Vec<Event> {
+    events.try_iter().collect()
+}
+
+macro_rules! assert_emitted {
+    ($events:expr, $pattern:pat $(if $guard:expr)?) => {
+        assert!($events.iter().any(|event| matches!(event, $pattern $(if $guard)?)))
+    };
+}
+
+fn wa_text(text: &str) -> wa::Message {
+    wa::Message {
+        conversation: Some(text.into()),
+        ..Default::default()
+    }
+}
+
+fn wa_image(image: wa::message::ImageMessage) -> wa::Message {
+    wa::Message {
+        image_message: MessageField::some(image),
+        ..Default::default()
+    }
+}
+
 fn group_message_id_info(sender: &str) -> MessageInfo {
     MessageInfo {
         id: "collision".into(),
@@ -459,16 +487,10 @@ fn group_message_id_sender_alt_cannot_poison_colliding_envelope() {
         .unwrap();
     let mut info = group_message_id_info("222@lid");
     info.source.sender_alt = Some("111@s.whatsapp.net".parse().unwrap());
-    let raw = Arc::new(wa::Message {
-        conversation: Some("forged".into()),
-        ..Default::default()
-    });
+    let raw = Arc::new(wa_text("forged"));
     worker.ingest(&raw, &info);
     worker.ingest_undecryptable(&info);
-    assert_eq!(
-        worker.archive.message(chat, "collision").unwrap().unwrap(),
-        original
-    );
+    assert_eq!(stored(&worker, chat, "collision"), original);
     assert_eq!(
         worker.archive.raw(chat, "collision").unwrap(),
         Some(b"original".to_vec())
@@ -511,12 +533,7 @@ fn group_message_id_sender_alt_cannot_poison_colliding_envelope() {
             .any(|(lid, _)| lid == "333")
     );
     assert_eq!(
-        worker
-            .archive
-            .message(chat, "collision")
-            .unwrap()
-            .unwrap()
-            .content,
+        stored(&worker, chat, "collision").content,
         Content::text("forged")
     );
 }
@@ -527,13 +544,7 @@ fn group_message_id_new_message_learns_sender_alt() {
     let mut info = group_message_id_info("222@lid");
     info.id = "new".into();
     info.source.sender_alt = Some("111@s.whatsapp.net".parse().unwrap());
-    worker.ingest(
-        &Arc::new(wa::Message {
-            conversation: Some("new".into()),
-            ..Default::default()
-        }),
-        &info,
-    );
+    worker.ingest(&Arc::new(wa_text("new")), &info);
     assert_eq!(
         worker.identity.lid_to_pn.get("222").map(String::as_str),
         Some("111")
@@ -591,10 +602,7 @@ fn group_message_id_history_mapping_cannot_authorize_same_chunk_collision() {
         false,
     );
     assert!(committed);
-    assert_eq!(
-        worker.archive.message(chat, "collision").unwrap().unwrap(),
-        original
-    );
+    assert_eq!(stored(&worker, chat, "collision"), original);
     assert_eq!(
         worker.archive.raw(chat, "collision").unwrap(),
         Some(b"original".to_vec())
@@ -656,10 +664,7 @@ fn group_message_id_collision_blocks_live_reaction_poll_and_protocol() {
         protocol_message: MessageField::some(wa::message::ProtocolMessage {
             key: key(),
             r#type: Some(wa::message::protocol_message::Type::MESSAGE_EDIT),
-            edited_message: MessageField::some(wa::Message {
-                conversation: Some("forged edit".into()),
-                ..Default::default()
-            }),
+            edited_message: MessageField::some(wa_text("forged edit")),
             ..Default::default()
         }),
         ..Default::default()
@@ -667,25 +672,13 @@ fn group_message_id_collision_blocks_live_reaction_poll_and_protocol() {
     for raw in [reaction.clone(), poll, revoke, edit] {
         worker.ingest(&Arc::new(raw), &group_message_id_info("222@s.whatsapp.net"));
     }
-    assert_eq!(
-        worker.archive.message(chat, "target").unwrap().unwrap(),
-        target
-    );
+    assert_eq!(stored(&worker, chat, "target"), target);
     assert!(worker.archive.pending_poll_votes(10).unwrap().is_empty());
     worker.ingest(
         &Arc::new(reaction),
         &group_message_id_info("111@s.whatsapp.net"),
     );
-    assert_eq!(
-        worker
-            .archive
-            .message(chat, "target")
-            .unwrap()
-            .unwrap()
-            .reactions
-            .len(),
-        1
-    );
+    assert_eq!(stored(&worker, chat, "target").reactions.len(), 1);
 }
 
 #[test]
@@ -758,10 +751,7 @@ fn group_message_id_collision_blocks_history_reaction_poll_and_revoke() {
         false,
     );
     assert!(committed);
-    assert_eq!(
-        worker.archive.message(chat, "target").unwrap().unwrap(),
-        target
-    );
+    assert_eq!(stored(&worker, chat, "target"), target);
     assert!(worker.archive.pending_poll_votes(10).unwrap().is_empty());
 }
 
@@ -777,21 +767,10 @@ fn group_message_id_lookup_error_retries_live_after_archive_recovery() {
         .archive
         .execute_batch_for_test("ALTER TABLE lids RENAME TO lids_unavailable")
         .unwrap();
-    let raw = Arc::new(wa::Message {
-        conversation: Some("replayed".into()),
-        ..Default::default()
-    });
+    let raw = Arc::new(wa_text("replayed"));
     worker.ingest(&raw, &group_message_id_info("222@s.whatsapp.net"));
     assert_eq!(worker.deferred_incoming.len(), 1);
-    assert_eq!(
-        worker
-            .archive
-            .message(chat, "collision")
-            .unwrap()
-            .unwrap()
-            .content,
-        original.content
-    );
+    assert_eq!(stored(&worker, chat, "collision").content, original.content);
     worker
         .archive
         .execute_batch_for_test("ALTER TABLE lids_unavailable RENAME TO lids")
@@ -799,12 +778,7 @@ fn group_message_id_lookup_error_retries_live_after_archive_recovery() {
     worker.retry_deferred_incoming();
     assert!(worker.deferred_incoming.is_empty());
     assert_eq!(
-        worker
-            .archive
-            .message(chat, "collision")
-            .unwrap()
-            .unwrap()
-            .content,
+        stored(&worker, chat, "collision").content,
         Content::text("replayed")
     );
 }
@@ -874,10 +848,7 @@ fn group_message_id_lookup_error_rolls_back_history_and_keeps_request_retryable(
         0
     );
     assert_eq!(worker.archive.ephemeral_expiration(chat).unwrap(), None);
-    assert_eq!(
-        worker.archive.message(chat, "collision").unwrap().unwrap(),
-        original
-    );
+    assert_eq!(stored(&worker, chat, "collision"), original);
     assert!(
         events
             .try_iter()
@@ -902,10 +873,7 @@ fn group_message_id_collision_emits_no_attacker_projection() {
             .try_iter()
             .any(|event| matches!(event, Event::Messages { .. } | Event::Incoming { .. }))
     );
-    assert_eq!(
-        worker.archive.message(chat, "same").unwrap().unwrap(),
-        original
-    );
+    assert_eq!(stored(&worker, chat, "same"), original);
 }
 
 #[tokio::test]
@@ -921,8 +889,8 @@ async fn contact_sharing_rejects_read_only_chats_without_completing_a_composer_s
             quoting: None,
         })
         .await;
-    let emitted: Vec<_> = events.try_iter().collect();
-    assert!(emitted.iter().any(|event| matches!(event, Event::Error(_))));
+    let emitted: Vec<_> = emitted(&events);
+    assert_emitted!(emitted, Event::Error(_));
     assert!(
         !emitted
             .iter()
@@ -966,35 +934,15 @@ async fn contact_delivery_updates_only_its_own_row_and_never_finishes_a_text_sen
             },
         }))
         .await;
-    assert_eq!(
-        worker
-            .archive
-            .message(CHAT, "CONTACT")
-            .unwrap()
-            .unwrap()
-            .status,
-        Delivery::Sent
-    );
-    assert_eq!(
-        worker
-            .archive
-            .message(CHAT, "TEXT")
-            .unwrap()
-            .unwrap()
-            .status,
-        Delivery::Pending
-    );
-    let emitted: Vec<_> = events.try_iter().collect();
+    assert_eq!(stored(&worker, CHAT, "CONTACT").status, Delivery::Sent);
+    assert_eq!(stored(&worker, CHAT, "TEXT").status, Delivery::Pending);
+    let emitted: Vec<_> = emitted(&events);
     assert!(
         !emitted
             .iter()
             .any(|event| matches!(event, Event::Sent { .. }))
     );
-    assert!(
-        emitted
-            .iter()
-            .any(|event| matches!(event, Event::Info(info) if info == "Contact sent"))
-    );
+    assert_emitted!(emitted, Event::Info(info) if info == "Contact sent");
     worker
         .handle_command(Command::Completed(Completion {
             generation: worker.session_generation.wrapping_add(1),
@@ -1006,15 +954,7 @@ async fn contact_delivery_updates_only_its_own_row_and_never_finishes_a_text_sen
             },
         }))
         .await;
-    assert_eq!(
-        worker
-            .archive
-            .message(CHAT, "CONTACT")
-            .unwrap()
-            .unwrap()
-            .status,
-        Delivery::Sent
-    );
+    assert_eq!(stored(&worker, CHAT, "CONTACT").status, Delivery::Sent);
 }
 
 #[tokio::test]
@@ -1041,7 +981,7 @@ async fn deleted_contact_completion_cannot_complete_a_later_text_send() {
                 .try_iter()
                 .any(|event| matches!(event, Event::Sent { .. }))
         );
-        assert_eq!(worker.archive.message(CHAT, "TEXT").unwrap().unwrap(), text);
+        assert_eq!(stored(&worker, CHAT, "TEXT"), text);
     }
 }
 
@@ -1807,7 +1747,7 @@ async fn newsletter_sends_are_rejected_before_reaching_the_client() {
             link_preview: None,
         })
         .await;
-    let emitted: Vec<_> = events.try_iter().collect();
+    let emitted: Vec<_> = emitted(&events);
     assert_eq!(
             emitted
                 .iter()
@@ -1874,15 +1814,7 @@ async fn button_answer_marks_only_on_success_and_removes_failed_reply() {
         .insert("ANSWER".into(), (PEER.into(), "BUTTONS".into()));
     worker.handle_command(sent("ANSWER", None)).await;
     assert!(worker.answer_sends.is_empty());
-    assert_eq!(
-        worker
-            .archive
-            .message(PEER, "BUTTONS")
-            .unwrap()
-            .unwrap()
-            .content,
-        buttons(Some("a"))
-    );
+    assert_eq!(stored(&worker, PEER, "BUTTONS").content, buttons(Some("a")));
     // A new attempt fails: remove only the failed answer, retaining the
     // previously acknowledged selection on the original message.
     worker
@@ -1901,15 +1833,7 @@ async fn button_answer_marks_only_on_success_and_removes_failed_reply() {
     worker
         .handle_command(sent("ANSWER2", Some("offline")))
         .await;
-    assert_eq!(
-        worker
-            .archive
-            .message(PEER, "BUTTONS")
-            .unwrap()
-            .unwrap()
-            .content,
-        buttons(None)
-    );
+    assert_eq!(stored(&worker, PEER, "BUTTONS").content, buttons(None));
     assert!(worker.archive.message(PEER, "ANSWER2").unwrap().is_none());
     // Neither result reaches the composer's pending-send bookkeeping.
     assert!(
@@ -1961,58 +1885,16 @@ async fn interrupted_answer_is_recovered_without_deleting_other_quoted_messages(
         )
         .unwrap();
     worker.recover_interrupted_answers();
-    assert_eq!(
-        worker
-            .archive
-            .message(PEER, "PARENT")
-            .unwrap()
-            .unwrap()
-            .content
-            .answer(),
-        None
-    );
-    assert_eq!(
-        worker
-            .archive
-            .message(PEER, "REPLY")
-            .unwrap()
-            .unwrap()
-            .status,
-        Delivery::Failed
-    );
+    assert_eq!(stored(&worker, PEER, "PARENT").content.answer(), None);
+    assert_eq!(stored(&worker, PEER, "REPLY").status, Delivery::Failed);
     assert!(worker.archive.message(PEER, "NORMAL").unwrap().is_some());
-    assert_eq!(
-        worker
-            .archive
-            .message(PEER, "NORMAL")
-            .unwrap()
-            .unwrap()
-            .status,
-        Delivery::Pending
-    );
+    assert_eq!(stored(&worker, PEER, "NORMAL").status, Delivery::Pending);
     // A server echo of the same id is stronger evidence than the local
     // interrupted-send state and restores the selection.
     answer.status = Delivery::Sent;
     worker.store_message(answer, Some(response.encode_to_vec()), None);
-    assert_eq!(
-        worker
-            .archive
-            .message(PEER, "PARENT")
-            .unwrap()
-            .unwrap()
-            .content
-            .answer(),
-        Some("a")
-    );
-    assert_eq!(
-        worker
-            .archive
-            .message(PEER, "REPLY")
-            .unwrap()
-            .unwrap()
-            .status,
-        Delivery::Sent
-    );
+    assert_eq!(stored(&worker, PEER, "PARENT").content.answer(), Some("a"));
+    assert_eq!(stored(&worker, PEER, "REPLY").status, Delivery::Sent);
     worker
         .answer_sends
         .insert("REPLY".into(), (PEER.into(), "PARENT".into()));
@@ -2027,20 +1909,8 @@ async fn interrupted_answer_is_recovered_without_deleting_other_quoted_messages(
             },
         }))
         .await;
-    assert_eq!(
-        worker
-            .archive
-            .message(PEER, "REPLY")
-            .unwrap()
-            .unwrap()
-            .status,
-        Delivery::Sent
-    );
-    let reopened = worker
-        .archive
-        .message(PEER, "PARENT")
-        .unwrap()
-        .unwrap()
+    assert_eq!(stored(&worker, PEER, "REPLY").status, Delivery::Sent);
+    let reopened = stored(&worker, PEER, "PARENT")
         .content
         .with_answer(None)
         .unwrap();
@@ -2049,16 +1919,7 @@ async fn interrupted_answer_is_recovered_without_deleting_other_quoted_messages(
         .set_content(PEER, "PARENT", &reopened, false)
         .unwrap();
     worker.reconcile_confirmed_answers();
-    assert_eq!(
-        worker
-            .archive
-            .message(PEER, "PARENT")
-            .unwrap()
-            .unwrap()
-            .content
-            .answer(),
-        Some("a")
-    );
+    assert_eq!(stored(&worker, PEER, "PARENT").content.answer(), Some("a"));
 }
 
 #[test]
@@ -2092,16 +1953,7 @@ fn confirmed_answer_is_reconciled_when_question_arrives_later() {
         answered: None,
     };
     worker.store_message(parent, None, None);
-    assert_eq!(
-        worker
-            .archive
-            .message(PEER, "PARENT")
-            .unwrap()
-            .unwrap()
-            .content
-            .answer(),
-        Some("a")
-    );
+    assert_eq!(stored(&worker, PEER, "PARENT").content.answer(), Some("a"));
 }
 
 #[test]
@@ -2128,12 +1980,7 @@ fn version_three_archive_rederives_unsupported_buttons() {
     worker.archive.set_meta("derived", "3").unwrap();
     worker.backfill();
     assert!(matches!(
-        worker
-            .archive
-            .message(PEER, "OLD")
-            .unwrap()
-            .unwrap()
-            .content,
+        stored(&worker, PEER, "OLD").content,
         Content::Buttons { .. }
     ));
     assert_eq!(
@@ -2188,12 +2035,7 @@ fn backfill_does_not_advance_checkpoint_when_a_row_write_fails() {
         Some("6")
     );
     assert!(matches!(
-        worker
-            .archive
-            .message(PEER, "OLD")
-            .unwrap()
-            .unwrap()
-            .content,
+        stored(&worker, PEER, "OLD").content,
         Content::Buttons { .. }
     ));
 }
@@ -2261,7 +2103,7 @@ async fn empty_id_send_failure_completes_once_without_exposing_details() {
         }))
         .await;
 
-    let emitted: Vec<_> = events.try_iter().collect();
+    let emitted: Vec<_> = emitted(&events);
     assert_eq!(
             emitted
                 .iter()
@@ -2379,7 +2221,7 @@ fn failed_privacy_recovery_shows_known_state_and_keeps_retrying() {
             .unwrap()
             .is_none()
     );
-    let events: Vec<_> = events.try_iter().collect();
+    let events: Vec<_> = emitted(&events);
     let chats = events
         .iter()
         .find_map(|event| match event {
@@ -3681,7 +3523,7 @@ async fn confirmed_revoke_cannot_be_undone_by_failed_request() {
                 },
             }))
             .await;
-        let stored = worker.archive.message(chat, "message").unwrap().unwrap();
+        let stored = stored(&worker, chat, "message");
         assert_eq!(stored.content, Content::Revoked, "history={from_history}");
     }
 }
@@ -3723,15 +3565,7 @@ async fn revoke_completion_is_scoped_to_its_attempt_and_session() {
             }))
             .await;
         assert!(events.try_recv().is_err());
-        assert_eq!(
-            worker
-                .archive
-                .message(chat, "message")
-                .unwrap()
-                .unwrap()
-                .content,
-            Content::Revoked
-        );
+        assert_eq!(stored(&worker, chat, "message").content, Content::Revoked);
         assert_eq!(worker.pending_revokes.len(), 1);
     }
 
@@ -3748,15 +3582,7 @@ async fn revoke_completion_is_scoped_to_its_attempt_and_session() {
         .await;
     assert!(worker.pending_revokes.is_empty());
     assert!(events.try_recv().is_err());
-    assert_eq!(
-        worker
-            .archive
-            .message(chat, "message")
-            .unwrap()
-            .unwrap()
-            .content,
-        Content::Revoked
-    );
+    assert_eq!(stored(&worker, chat, "message").content, Content::Revoked);
 }
 
 #[tokio::test]
@@ -3841,7 +3667,7 @@ async fn simultaneous_download_completions_for_same_attachment_both_succeed() {
         b"synthetic image bytes"
     );
     assert!(staged.iter().all(|path| !path.exists()));
-    let stored = worker.archive.message(chat, id).unwrap().unwrap();
+    let stored = stored(&worker, chat, id);
     assert_eq!(
         stored.content.media().unwrap().path.as_ref(),
         Some(&destination)
@@ -4470,7 +4296,7 @@ pub(super) mod receipt_tests {
 
         worker.on_receipt(&receipt(PEER, &["second", "third"], ReceiptType::Read));
 
-        let emitted = events.try_iter().collect::<Vec<_>>();
+        let emitted = emitted(&events);
         assert!(
             !emitted
                 .iter()
@@ -4528,8 +4354,7 @@ pub(super) mod receipt_tests {
             receipt.source.is_group = true;
             worker.on_receipt(&receipt);
         };
-        let status =
-            |worker: &Worker, id| worker.archive.message(group, id).unwrap().unwrap().status;
+        let status = |worker: &Worker, id| stored(worker, group, id).status;
         send(&mut worker, PEER_LID, ReceiptType::Read);
         send(&mut worker, ME, ReceiptType::Read);
         send(&mut worker, "12025550999@s.whatsapp.net", ReceiptType::Read);
@@ -6019,11 +5844,7 @@ mod maintenance {
         }
         assert_eq!(steps, 5);
         let path = |id| {
-            worker
-                .archive
-                .message(PEER, id)
-                .unwrap()
-                .unwrap()
+            stored(&worker, PEER, id)
                 .content
                 .media()
                 .and_then(|media| media.path.clone())
@@ -6327,7 +6148,7 @@ fn backfill_preserves_edited_content_from_before_restart() {
         .unwrap();
     worker.archive.set_meta("derived", "3").unwrap();
     worker.backfill();
-    let result = worker.archive.message(PEER, "EDITED").unwrap().unwrap();
+    let result = stored(&worker, PEER, "EDITED");
     assert_eq!(result.content, Content::text("after edit"));
 }
 
@@ -6341,18 +6162,15 @@ fn backfill_refreshes_edited_image_metadata_without_losing_edit() {
         .write_to(&mut thumbnail, image::ImageFormat::Png)
         .unwrap();
     let thumbnail = thumbnail.into_inner();
-    let raw = wa::Message {
-        image_message: MessageField::some(wa::message::ImageMessage {
-            caption: Some("before edit".into()),
-            jpeg_thumbnail: Some(thumbnail.clone()),
-            context_info: MessageField::some(wa::ContextInfo {
-                is_forwarded: Some(true),
-                ..Default::default()
-            }),
+    let raw = wa_image(wa::message::ImageMessage {
+        caption: Some("before edit".into()),
+        jpeg_thumbnail: Some(thumbnail.clone()),
+        context_info: MessageField::some(wa::ContextInfo {
+            is_forwarded: Some(true),
             ..Default::default()
         }),
         ..Default::default()
-    };
+    });
     assert_eq!(thumbnail_of(&raw), Some(thumbnail.clone()));
     let mut row = crate::archive::tests::message(PEER, "IMAGE", 10, false);
     row.content = classify(&raw).unwrap();
@@ -6372,7 +6190,7 @@ fn backfill_refreshes_edited_image_metadata_without_losing_edit() {
         .unwrap();
     worker.archive.set_meta("derived", "3").unwrap();
     worker.backfill();
-    let result = worker.archive.message(PEER, "IMAGE").unwrap().unwrap();
+    let result = stored(&worker, PEER, "IMAGE");
     assert_eq!(result.content, row.content);
     assert_eq!(result.mentions, row.mentions);
     assert_eq!(result.thumbnail, Some(thumbnail));
@@ -6384,13 +6202,10 @@ fn backfill_rejects_unsupported_edited_image_thumbnail_and_keeps_existing() {
     const PEER: &str = "fixture@s.whatsapp.net";
     let (mut worker, _, _, _) = worker();
     worker.archive.ensure_chat(PEER, "Fixture").unwrap();
-    let raw = wa::Message {
-        image_message: MessageField::some(wa::message::ImageMessage {
-            jpeg_thumbnail: Some(vec![1, 2, 3]),
-            ..Default::default()
-        }),
+    let raw = wa_image(wa::message::ImageMessage {
+        jpeg_thumbnail: Some(vec![1, 2, 3]),
         ..Default::default()
-    };
+    });
     assert_eq!(thumbnail_of(&raw), None);
     let mut row = crate::archive::tests::message(PEER, "IMAGE", 10, false);
     row.content = classify(&raw).unwrap();
@@ -6402,7 +6217,7 @@ fn backfill_rejects_unsupported_edited_image_thumbnail_and_keeps_existing() {
         .unwrap();
     worker.archive.set_meta("derived", "3").unwrap();
     worker.backfill();
-    let result = worker.archive.message(PEER, "IMAGE").unwrap().unwrap();
+    let result = stored(&worker, PEER, "IMAGE");
     assert_eq!(result.thumbnail, row.thumbnail);
     assert_eq!(result.content, row.content);
 }
@@ -6412,17 +6227,14 @@ fn backfill_leaves_revoked_rows_untouched() {
     const PEER: &str = "fixture@s.whatsapp.net";
     let (mut worker, _, _, _) = worker();
     worker.archive.ensure_chat(PEER, "Fixture").unwrap();
-    let raw = wa::Message {
-        image_message: MessageField::some(wa::message::ImageMessage {
-            jpeg_thumbnail: Some(vec![1, 2, 3]),
-            context_info: MessageField::some(wa::ContextInfo {
-                is_forwarded: Some(true),
-                ..Default::default()
-            }),
+    let raw = wa_image(wa::message::ImageMessage {
+        jpeg_thumbnail: Some(vec![1, 2, 3]),
+        context_info: MessageField::some(wa::ContextInfo {
+            is_forwarded: Some(true),
             ..Default::default()
         }),
         ..Default::default()
-    };
+    });
     let mut row = crate::archive::tests::message(PEER, "REVOKED", 10, false);
     row.content = Content::Revoked;
     row.thumbnail = Some(vec![9]);
@@ -6432,10 +6244,7 @@ fn backfill_leaves_revoked_rows_untouched() {
         .unwrap();
     worker.archive.set_meta("derived", "3").unwrap();
     worker.backfill();
-    assert_eq!(
-        worker.archive.message(PEER, "REVOKED").unwrap().unwrap(),
-        row
-    );
+    assert_eq!(stored(&worker, PEER, "REVOKED"), row);
 }
 
 #[test]
@@ -6480,9 +6289,9 @@ async fn history_chunk_emits_only_on_completion_on_demand_or_error() {
     );
     let invalid = wa_events::LazyHistorySync::new(vec![1, 2, 3].into(), 0, 0, None, None);
     worker.on_history_sync(&invalid).await;
-    let events: Vec<_> = events.try_iter().collect();
-    assert!(events.iter().any(|event| matches!(event, Event::Error(_))));
-    assert!(events.iter().any(|event| matches!(event, Event::Chats(_))));
+    let events: Vec<_> = emitted(&events);
+    assert_emitted!(events, Event::Error(_));
+    assert_emitted!(events, Event::Chats(_));
 }
 
 #[test]

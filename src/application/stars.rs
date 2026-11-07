@@ -24,7 +24,12 @@ fn starred_toast() -> adw::Toast {
 
 impl NativeApplication {
     pub(super) fn toggle_selected_star(&mut self) {
-        let Some((chat, id)) = self.active_chat.clone().zip(self.selected_message_id()) else {
+        let Some((chat, id)) = self
+            .open_chat
+            .active_chat
+            .clone()
+            .zip(self.selected_message_id())
+        else {
             return;
         };
         let starred = !self.starred.contains(&id);
@@ -34,7 +39,7 @@ impl NativeApplication {
     }
 
     pub(super) fn star_changed(&mut self, chat: &str, id: String, starred: bool, local: bool) {
-        if self.active_chat.as_deref() != Some(chat) {
+        if self.open_chat.active_chat.as_deref() != Some(chat) {
             return;
         }
         let changed = if starred {
@@ -51,17 +56,17 @@ impl NativeApplication {
     }
 
     pub(super) fn starred_ids_loaded(&mut self, chat: &str, ids: Vec<String>) {
-        if self.active_chat.as_deref() != Some(chat) {
+        if self.open_chat.active_chat.as_deref() != Some(chat) {
             return;
         }
         self.starred = ids.into_iter().collect();
-        if !self.message_ids.is_empty() {
+        if !self.open_chat.message_ids.is_empty() {
             self.rebuild_message_rows(false);
         }
     }
 
     pub(super) fn show_starred(&self) {
-        if let (Some(backend), Some(chat)) = (&self.backend, self.active_chat.clone()) {
+        if let (Some(backend), Some(chat)) = (&self.backend, self.open_chat.active_chat.clone()) {
             backend.send(crate::backend::Command::LoadStarred(chat));
         }
     }
@@ -95,7 +100,7 @@ impl NativeApplication {
     /// Scrolls to a starred message of the open chat, loading older history
     /// first when it is not on screen.
     pub(super) fn open_starred(&mut self, chat: String, id: String) {
-        if self.active_chat.as_deref() != Some(chat.as_str()) {
+        if self.open_chat.active_chat.as_deref() != Some(chat.as_str()) {
             return;
         }
         self.pending_quote_navigation = Some((chat.clone(), id));
@@ -112,7 +117,7 @@ impl NativeApplication {
         if target_chat != chat {
             return;
         }
-        if self.message_ids.contains(&target_id) {
+        if self.open_chat.message_ids.contains(&target_id) {
             self.pending_quote_navigation = None;
             self.jump_needs_history = false;
             self.scroll_message_into_view(&target_id);
@@ -122,9 +127,10 @@ impl NativeApplication {
             return;
         }
         let oldest = self
+            .open_chat
             .message_ids
             .first()
-            .and_then(|id| self.message_snapshots.get(id))
+            .and_then(|id| self.open_chat.message_snapshots.get(id))
             .map(|message| (message.timestamp, message.id.clone()));
         match (&self.backend, oldest) {
             (Some(backend), Some(before)) => backend.send(crate::backend::Command::LoadUntil {

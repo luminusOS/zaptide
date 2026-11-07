@@ -171,7 +171,7 @@ impl NativeApplication {
 
     /// Saves the shared preferences, and the active account's own ones.
     pub(super) fn save_settings(&mut self) -> std::io::Result<()> {
-        self.settings.last_chat = self.active_chat.clone();
+        self.settings.last_chat = self.open_chat.active_chat.clone();
         self.settings.save(&self.settings_path)?;
         if self.legacy_layout {
             return Ok(());
@@ -624,24 +624,12 @@ impl NativeApplication {
             }
         }
         self.contact_share_generation = self.contact_share_generation.wrapping_add(1);
-        self.audio.media.stop_playback();
-        self.audio.playing_audio = None;
-        self.audio.waveform_queue.clear();
-        if let Some(cancel) = self.audio.waveform_cancel.take() {
-            cancel.store(true, std::sync::atomic::Ordering::Release);
-        }
-        self.audio.audio_waveforms.clear();
-        self.audio.waveform_attempted.clear();
-        self.audio.audio_errors.clear();
-        self.audio.audio_registry.borrow_mut().clear();
-        self.active_chat = None;
+        self.reset_open_chat_state();
         self.transcript_requests.initial = None;
         self.transcript_requests.older = None;
         self.chat_ids.clear();
         self.reset_chat_filters(false);
-        self.message_ids.clear();
-        self.message_snapshots.clear();
-        self.editable_messages.clear();
+        self.open_chat.reset_messages();
         self.messages.clear();
         self.presence.clear();
         self.typing.clear();
@@ -650,9 +638,9 @@ impl NativeApplication {
         self.composer = crate::native_composer::NativeComposerState::default();
         self.composer_buffer.set_text("");
         self.draft.clear();
-        self.editing = None;
-        self.reply_to = None;
-        self.pending_edit = None;
+        self.open_chat.editing = None;
+        self.open_chat.reply_to = None;
+        self.open_chat.pending_edit = None;
         self.pending_composer_request = None;
         self.pending_send = None;
         self.audio.voice_send_pending = false;
@@ -669,8 +657,8 @@ impl NativeApplication {
         self.history_complete = false;
         self.loading_older = false;
         self.recent_messages_pending = false;
-        self.transcript.clear();
-        self.pending_transcript.clear();
+        self.open_chat.transcript.clear();
+        self.open_chat.pending_transcript.clear();
         self.message_menu.popdown();
         if let Some((picker, _)) = &self.sticker_picker {
             picker.popdown();

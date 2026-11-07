@@ -16,7 +16,7 @@ impl NativeApplication {
             Input::SidebarShown(shown) => self.sidebar_visible = shown,
             // Collapsing keeps an open conversation on screen; widening resets.
             Input::SplitCollapsed(collapsed) => {
-                self.sidebar_visible = !collapsed || self.active_chat.is_none();
+                self.sidebar_visible = !collapsed || self.open_chat.active_chat.is_none();
                 self.sync_translucent_sidebar();
             }
             Input::ShowPreferences => {
@@ -247,7 +247,7 @@ impl NativeApplication {
                 }
             }
             Input::LoadOlder => {
-                let Some(chat) = self.active_chat.clone() else {
+                let Some(chat) = self.open_chat.active_chat.clone() else {
                     return;
                 };
                 if self.loading_older {
@@ -264,6 +264,7 @@ impl NativeApplication {
                         chat: chat.clone(),
                         request,
                         before: self
+                            .open_chat
                             .message_snapshots
                             .values()
                             .filter(|message| message.chat == chat)
@@ -271,6 +272,7 @@ impl NativeApplication {
                             .map(|message| (message.timestamp, message.id.clone())),
                     });
                 } else if let Some(oldest) = self
+                    .open_chat
                     .message_snapshots
                     .values()
                     .filter(|message| message.chat == chat)
@@ -443,6 +445,7 @@ impl NativeApplication {
             }
             Input::ShowChatInfo => {
                 if let Some(chat) = self
+                    .open_chat
                     .active_chat
                     .as_ref()
                     .and_then(|id| self.chat_snapshots.iter().find(|chat| &chat.id == id))
@@ -587,21 +590,23 @@ impl NativeApplication {
             }
             Input::ShowMessageMenu { id, x, y } => self.show_message_menu(id, x, y, &sender),
             Input::SelectMessage(position) => {
-                if self.active_chat.is_none() {
+                if self.open_chat.active_chat.is_none() {
                     return;
                 }
                 if self.message_selection.is_some() {
                     self.toggle_message_selection(position);
                     return;
                 }
-                let Some(message) = self.message_ids.get(position as usize) else {
+                let Some(message) = self.open_chat.message_ids.get(position as usize) else {
                     return;
                 };
                 self.audio.selected_voice_message = self
+                    .open_chat
                     .message_snapshots
                     .get(message)
                     .and_then(|message| self.project_voice(message).map(|_| message.id.clone()));
                 self.audio.selected_voice = self
+                    .open_chat
                     .message_snapshots
                     .get(message)
                     .and_then(|message| self.project_voice(message));
@@ -612,7 +617,7 @@ impl NativeApplication {
                 }
             }
             Input::OpenQuotedOf(id) => {
-                if let Some(message) = self.message_snapshots.get(&id).cloned() {
+                if let Some(message) = self.open_chat.message_snapshots.get(&id).cloned() {
                     self.open_quoted(message);
                 }
             }
@@ -696,7 +701,7 @@ impl NativeApplication {
                 if let Some((popover, _)) = self.sticker_picker.take() {
                     popover.popdown();
                 }
-                if let (Some(chat), Some(backend)) = (&self.active_chat, &self.backend) {
+                if let (Some(chat), Some(backend)) = (&self.open_chat.active_chat, &self.backend) {
                     backend.send(crate::backend::Command::SendSticker {
                         chat: chat.clone(),
                         path,
@@ -705,6 +710,7 @@ impl NativeApplication {
             }
             Input::InsertMention => {
                 let participants = self
+                    .open_chat
                     .active_chat
                     .as_deref()
                     .and_then(|chat| self.chat_snapshots.iter().find(|known| known.id == chat))
@@ -732,6 +738,7 @@ impl NativeApplication {
             }
             Input::InsertMentionId(participant) => {
                 let label = self
+                    .open_chat
                     .active_chat
                     .as_deref()
                     .and_then(|chat| self.chat_snapshots.iter().find(|known| known.id == chat))
@@ -750,6 +757,7 @@ impl NativeApplication {
             }
             Input::SelectMention(candidate) => {
                 let known = self
+                    .open_chat
                     .active_chat
                     .as_deref()
                     .and_then(|chat| self.chat_snapshots.iter().find(|known| known.id == chat))
@@ -894,6 +902,7 @@ impl NativeApplication {
                 }
                 crate::native_media::NativeMediaAction::Open(path) => {
                     if let Some(id) = self
+                        .open_chat
                         .message_snapshots
                         .values()
                         .find(|message| {
@@ -926,7 +935,7 @@ impl NativeApplication {
                     .filter(|chat| {
                         forwardable_chat(chat)
                             && !chat.archived
-                            && self.active_chat.as_ref() != Some(&chat.id)
+                            && self.open_chat.active_chat.as_ref() != Some(&chat.id)
                     })
                     .cloned()
                     .collect();
@@ -939,7 +948,7 @@ impl NativeApplication {
                     Some(1) => self
                         .message_selection
                         .as_ref()
-                        .and_then(|selection| self.message_snapshots.get(&selection[0]))
+                        .and_then(|selection| self.open_chat.message_snapshots.get(&selection[0]))
                         .map(crate::model::Message::summary)
                         .unwrap_or_default(),
                     Some(count) => format!("{count} messages"),
@@ -958,9 +967,12 @@ impl NativeApplication {
             }
             Input::ForwardSelected(destination) => self.forward_selected(destination),
             Input::StartSelection => {
-                let position = self
-                    .selected_message_id()
-                    .and_then(|id| self.message_ids.iter().position(|known| *known == id));
+                let position = self.selected_message_id().and_then(|id| {
+                    self.open_chat
+                        .message_ids
+                        .iter()
+                        .position(|known| *known == id)
+                });
                 self.message_selection = Some(Vec::new());
                 match position {
                     Some(position) => self.toggle_message_selection(position as u32),

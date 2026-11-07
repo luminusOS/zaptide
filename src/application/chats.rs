@@ -69,7 +69,7 @@ impl NativeApplication {
         {
             self.sidebar_visible = false;
         }
-        if self.active_chat.as_deref() != Some(&chat) {
+        if self.open_chat.active_chat.as_deref() != Some(&chat) {
             self.cancel_portal_requests();
             self.audio.media.stop_playback();
             self.audio.playing_audio = None;
@@ -83,8 +83,9 @@ impl NativeApplication {
             self.audio.audio_registry.borrow_mut().clear();
         }
         self.notifications.clear_chat(self.active_account, &chat);
-        if let Some(previous) = self.active_chat.as_deref() {
+        if let Some(previous) = self.open_chat.active_chat.as_deref() {
             if self
+                .open_chat
                 .editing
                 .as_ref()
                 .is_some_and(|(editing_chat, _)| editing_chat == previous)
@@ -98,11 +99,11 @@ impl NativeApplication {
         }
         self.chat_projection.select(chat.clone());
         self.chats.selection_model.set_selected(position);
-        self.active_chat = Some(chat.clone());
+        self.open_chat.active_chat = Some(chat.clone());
         self.mark_open_chat();
-        self.reply_to = None;
-        self.editing = None;
-        self.pending_edit = None;
+        self.open_chat.reply_to = None;
+        self.open_chat.editing = None;
+        self.open_chat.pending_edit = None;
         self.draft = self.composer.draft(&chat).to_owned();
         self.composer_buffer.set_text(&self.draft);
         self.messages.clear();
@@ -116,13 +117,13 @@ impl NativeApplication {
         self.recent_messages_pending = false;
         self.history_complete = false;
         self.loading_older = false;
-        self.message_ids.clear();
+        self.open_chat.message_ids.clear();
         self.message_selection = None;
         self.starred.clear();
-        self.message_snapshots.clear();
-        self.editable_messages.clear();
-        self.transcript.clear();
-        self.pending_transcript.clear();
+        self.open_chat.message_snapshots.clear();
+        self.open_chat.editable_messages.clear();
+        self.open_chat.transcript.clear();
+        self.open_chat.pending_transcript.clear();
         self.audio.selected_voice = None;
         self.audio.selected_voice_message = None;
         self.page_title = self
@@ -292,7 +293,8 @@ impl NativeApplication {
     pub(super) fn selected_chat(&self) -> Option<&crate::model::Chat> {
         // The projection refreshes on a throttled flush and hides filtered-out
         // chats, so it can still name the previous chat right after opening one.
-        self.active_chat
+        self.open_chat
+            .active_chat
             .as_ref()
             .and_then(|id| self.chat_snapshots.iter().find(|chat| &chat.id == id))
             .map(std::rc::Rc::as_ref)
@@ -320,7 +322,7 @@ impl NativeApplication {
         }
         self.chat_snapshots = chats;
         self.chats_dirty = true;
-        if self.active_chat.as_deref().is_some_and(|id| {
+        if self.open_chat.active_chat.as_deref().is_some_and(|id| {
             self.chat_snapshots
                 .iter()
                 .find(|chat| chat.id == id)
@@ -341,7 +343,7 @@ impl NativeApplication {
         let index = self
             .chat_snapshots
             .partition_point(|known| known.last_activity >= chat.last_activity);
-        if self.leaves_section(&chat) && self.active_chat.as_deref() == Some(&chat.id) {
+        if self.leaves_section(&chat) && self.open_chat.active_chat.as_deref() == Some(&chat.id) {
             self.clear_active_chat();
         }
         self.chat_snapshots.insert(index, std::rc::Rc::new(chat));
@@ -363,7 +365,7 @@ impl NativeApplication {
         if !self.window.is_active() {
             return;
         }
-        let Some(chat) = self.active_chat.as_deref() else {
+        let Some(chat) = self.open_chat.active_chat.as_deref() else {
             return;
         };
         if self
@@ -382,7 +384,7 @@ impl NativeApplication {
     /// Moves the open-chat mark without rebuilding the list: rows between
     /// the old and new open chat would be recreated, losing scroll and focus.
     pub(super) fn mark_open_chat(&self) {
-        let open = self.active_chat.as_deref();
+        let open = self.open_chat.active_chat.as_deref();
         for (position, id) in self.chat_ids.iter().enumerate() {
             if let Some(item) = self.chats.get(position as u32) {
                 let is_open = open == Some(id.as_str());
@@ -422,7 +424,7 @@ impl NativeApplication {
         let mut rows = Vec::new();
         for chat in self.chat_projection.visible() {
             self.chat_ids.push(chat.id.clone());
-            let open = self.active_chat.as_deref() == Some(chat.id.as_str());
+            let open = self.open_chat.active_chat.as_deref() == Some(chat.id.as_str());
             rows.push(chat_row(chat, self.avatars.get(&chat.id).cloned(), open));
         }
         self.chat_targets
