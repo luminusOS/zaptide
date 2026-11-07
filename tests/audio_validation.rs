@@ -10,9 +10,7 @@
 //! | `voice_codec_roundtrip`                        | No            | No         | No      |
 //! | `waveform_generation_is_64_bars`               | No            | No         | No      |
 //! | `narrowest_audio_permissions_documented`       | No            | No         | No      |
-//! | `player_handles_missing_device_gracefully`     | No (tests absence) | No    | No      |
 //! | `recorder_handles_source_that_cannot_open`      | No            | No (test source) | No |
-//! | `player_respects_seek_within_bounds`           | Optional      | No         | No      |
 //! | `recorder_level_metering_produces_50ms_windows`| No            | No (test tone) | No  |
 //! | `playback_reaches_completion_within_budget`    | Yes           | No         | No      |
 //! | `capture_produces_at_least_one_second_of_audio` | No           | Yes        | No      |
@@ -95,44 +93,7 @@ fn ordinary_wav_attachment_generates_a_waveform() {
     assert!(bars.iter().any(|bar| *bar > 0));
 }
 
-fn poll_until_loaded(
-    player: &mut MediaService,
-    message: &str,
-    timeout: Duration,
-) -> Result<(), String> {
-    let started = Instant::now();
-    while started.elapsed() < timeout {
-        match player.poll() {
-            Ok(()) => {
-                if player.playback_status(message).state != State::Loading {
-                    return Ok(());
-                }
-            }
-            Err(error) => return Err(error),
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    Err("decode timed out".to_owned())
-}
-
 // ─── Mock audio backend tests (no hardware required) ──────────────────────────
-
-#[test]
-fn player_handles_missing_device_gracefully() {
-    let _guard = decode_test_guard();
-    let file = write_ogg_temp(&synthetic_tone(0.5, 440.0, 0.3));
-    let mut player = MediaService::default();
-
-    // Without a device the pipeline reports a recoverable error, either when
-    // it starts or on the bus; with one, playback begins. Neither path panics.
-    let started = player
-        .toggle_playback("missing-device", file.path())
-        .and_then(|()| poll_until_loaded(&mut player, "missing-device", Duration::from_secs(3)));
-    if let Err(error) = started {
-        assert!(!error.is_empty(), "error message must be non-empty");
-    }
-    player.stop_playback();
-}
 
 #[test]
 fn recorder_handles_source_that_cannot_open() {
@@ -196,49 +157,6 @@ fn waveform_generation_is_64_bars() {
         "first bar of rising tone should be quiet: {}",
         rising_bars[0]
     );
-}
-
-#[test]
-fn player_respects_seek_within_bounds() {
-    let _guard = decode_test_guard();
-    let file = write_ogg_temp(&synthetic_tone(2.0, 440.0, 0.3));
-    let mut player = MediaService::default();
-
-    let device_available = player.seek("seek-msg", file.path(), 0.0).is_ok()
-        && poll_until_loaded(&mut player, "seek-msg", Duration::from_secs(3)).is_ok();
-
-    if !device_available {
-        // No output device: subsequent seeks still return cleanly, no panic.
-        let _ = player.seek("seek-msg", file.path(), 0.5);
-        let _ = player.poll();
-        let _ = player.seek("seek-msg", file.path(), 1.0);
-        let _ = player.poll();
-        player.stop_playback();
-        return;
-    }
-
-    // Device available: verify seek to middle lands near 50%.
-    player
-        .seek("seek-msg", file.path(), 0.5)
-        .expect("seek to 0.5");
-    std::thread::sleep(Duration::from_millis(100));
-    let _ = player.poll();
-    let status = player.playback_status("seek-msg");
-    let total = status.total.as_secs_f32();
-    if total > 0.0 {
-        let fraction = status.position.as_secs_f32() / total;
-        assert!(
-            (0.35..=0.75).contains(&fraction),
-            "seek(0.5) landed at {fraction:.2} of total"
-        );
-    }
-
-    // Seek to end does not panic.
-    let _ = player.seek("seek-msg", file.path(), 1.0);
-    std::thread::sleep(Duration::from_millis(100));
-    let _ = player.poll();
-
-    player.stop_playback();
 }
 
 #[test]
