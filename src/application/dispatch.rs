@@ -1,12 +1,669 @@
 use super::*;
 use crate::i18n::gettext;
 
+#[cfg(test)]
+mod filter_transition_tests {
+    use super::ChatFilterInput;
+    use crate::native_chat_list::{ArchiveFilter, ChatKindFilter, ChatListFilters, MutedFilter};
+
+    #[test]
+    fn boolean_filter_transitions_are_independent() {
+        let mut filters = ChatListFilters::default();
+        ChatFilterInput::Unread(true).apply(&mut filters);
+        ChatFilterInput::Pinned(true).apply(&mut filters);
+        ChatFilterInput::Archived(true).apply(&mut filters);
+        ChatFilterInput::Muted(true).apply(&mut filters);
+        assert_eq!(
+            filters,
+            ChatListFilters {
+                unread_only: true,
+                pinned_only: true,
+                archive: ArchiveFilter::Only,
+                muted: MutedFilter::Only,
+                ..Default::default()
+            }
+        );
+        ChatFilterInput::Unread(false).apply(&mut filters);
+        ChatFilterInput::Archived(false).apply(&mut filters);
+        assert_eq!(
+            filters,
+            ChatListFilters {
+                pinned_only: true,
+                muted: MutedFilter::Only,
+                ..Default::default()
+            }
+        );
+        ChatFilterInput::Pinned(false).apply(&mut filters);
+        ChatFilterInput::Muted(false).apply(&mut filters);
+        assert_eq!(filters, ChatListFilters::default());
+    }
+
+    #[test]
+    fn kind_transitions_preserve_other_filters_and_repair_conflicting_flags() {
+        let mut filters = ChatListFilters {
+            unread_only: true,
+            pinned_only: true,
+            private_only: true,
+            groups_only: true,
+            archive: ArchiveFilter::Only,
+            muted: MutedFilter::Only,
+        };
+        for (kind, private_only, groups_only) in [
+            (ChatKindFilter::Private, true, false),
+            (ChatKindFilter::Groups, false, true),
+            (ChatKindFilter::All, false, false),
+            (ChatKindFilter::All, false, false),
+        ] {
+            ChatFilterInput::Kind(kind).apply(&mut filters);
+            assert_eq!(
+                filters,
+                ChatListFilters {
+                    unread_only: true,
+                    pinned_only: true,
+                    private_only,
+                    groups_only,
+                    archive: ArchiveFilter::Only,
+                    muted: MutedFilter::Only,
+                }
+            );
+        }
+    }
+}
+
 mod attachments;
 mod backend_events;
 pub(super) use backend_events::drain_hidden;
 pub(super) use backend_events::poll_error_message;
 
+impl ChatFilterInput {
+    fn apply(self, filters: &mut crate::native_chat_list::ChatListFilters) {
+        use crate::native_chat_list::{ArchiveFilter, MutedFilter};
+        match self {
+            Self::Unread(enabled) => filters.unread_only = enabled,
+            Self::Pinned(enabled) => filters.pinned_only = enabled,
+            Self::Archived(enabled) => {
+                filters.archive = if enabled {
+                    ArchiveFilter::Only
+                } else {
+                    ArchiveFilter::Exclude
+                };
+            }
+            Self::Muted(enabled) => {
+                filters.muted = if enabled {
+                    MutedFilter::Only
+                } else {
+                    MutedFilter::All
+                };
+            }
+            Self::Kind(kind) => kind.apply(filters),
+        }
+    }
+}
+
 impl NativeApplication {
+    fn show_preferences(&mut self, sender: ComponentSender<Self>) {
+        let preferences = crate::native_preferences::NativePreferences::from(&self.settings);
+        let theme_choices: Vec<_> = self
+            .theme_catalog
+            .picker_themes()
+            .map(|theme| theme.filename.clone())
+            .collect();
+        let input_sender = sender.clone();
+        let dialog = crate::native_preferences::NativePreferencesDialog::new(
+            &preferences,
+            &theme_choices,
+            move || input_sender.input(Input::ApplyPreferences),
+        );
+        dialog.present(&self.window);
+        let input_sender = sender.clone();
+        dialog
+            .open_themes_folder_button()
+            .connect_clicked(move |_| input_sender.input(Input::OpenThemesFolder));
+        self.preferences = Some(dialog);
+    }
+
+    fn show_about(&mut self) {
+        let about = adw::AboutDialog::builder()
+                .application_name("ZapTide")
+                .application_icon("dev.luminusos.ZapTide")
+                .version(env!("CARGO_PKG_VERSION"))
+                .developer_name("LuminusOS")
+                .developers(["LuminusOS"])
+                .comments(
+                    "A native WhatsApp client for Linux, built with Rust, GTK4, and libadwaita.\n\nZapTide is an independent project and is not affiliated with or endorsed by WhatsApp or Meta.",
+                )
+                .website(env!("CARGO_PKG_HOMEPAGE"))
+                .issue_url(concat!(env!("CARGO_PKG_REPOSITORY"), "/issues"))
+                .license_type(gtk::License::MitX11)
+                .copyright("© 2026 LuminusOS")
+                .debug_info(format!(
+                    "ZapTide {}\nGTK {}.{}.{}\nlibadwaita {}.{}.{}",
+                    env!("CARGO_PKG_VERSION"),
+                    gtk::major_version(),
+                    gtk::minor_version(),
+                    gtk::micro_version(),
+                    adw::major_version(),
+                    adw::minor_version(),
+                    adw::micro_version(),
+                ))
+                .debug_info_filename("zaptide-debug-info.txt")
+                .build();
+        about.present(Some(&self.window));
+    }
+
+    fn show_shortcuts(&mut self) {
+        let (send, newline) = if self.enter_sends.get() {
+            ("Return", "<Shift>Return")
+        } else {
+            ("<Control>Return", "Return")
+        };
+        let dialog = adw::ShortcutsDialog::new();
+        for (title, items) in [
+            (
+                gettext("General"),
+                vec![
+                    (gettext("Close window"), CLOSE_ACCELERATOR),
+                    (gettext("Quit"), QUIT_ACCELERATOR),
+                ],
+            ),
+            (
+                gettext("Chat List"),
+                vec![
+                    (gettext("Previous chat"), "Up"),
+                    (gettext("Next chat"), "Down"),
+                    (gettext("Open chat"), "Return"),
+                ],
+            ),
+            (
+                gettext("Composer"),
+                vec![
+                    (gettext("Send message"), send),
+                    (gettext("New line"), newline),
+                ],
+            ),
+            (
+                gettext("Messages"),
+                vec![
+                    (gettext("Open message menu"), "Menu <Shift>F10"),
+                    (gettext("Copy selected text"), "<Control>c"),
+                ],
+            ),
+            (
+                gettext("Media viewer"),
+                vec![
+                    (gettext("Previous photo"), "Left"),
+                    (gettext("Next photo"), "Right"),
+                    (gettext("Zoom in"), "<Control>plus"),
+                    (gettext("Zoom out"), "<Control>minus"),
+                    (gettext("Fit to window"), "<Control>0"),
+                    (gettext("Actual size"), "<Control>1"),
+                ],
+            ),
+        ] {
+            let section = adw::ShortcutsSection::new(Some(&title));
+            for (item, accelerator) in &items {
+                section.add(adw::ShortcutsItem::new(item, accelerator));
+            }
+            dialog.add(section);
+        }
+        dialog.present(Some(&self.window));
+    }
+
+    fn apply_preferences(&mut self) {
+        if let Some(dialog) = &self.preferences {
+            let changes = dialog.take_changes();
+            let errors = dialog.take_errors();
+            let custom_theme_changed = changes.iter().any(|change| {
+                change.settings_field() == crate::native_preferences::SettingsField::CustomTheme
+            });
+            for change in changes {
+                self.apply_preference_change(change);
+            }
+            if custom_theme_changed {
+                self.sync_custom_theme_selection();
+                if self.save_settings().is_err() {
+                    self.status = gettext("Could not save preferences");
+                    self.toast(&gettext("Could not save preferences"));
+                }
+            }
+            if !errors.is_empty() {
+                self.status = gettext("Preference value is invalid");
+                self.toast(&gettext("Preference value is invalid"));
+            }
+            self.apply_runtime_settings();
+        }
+    }
+
+    fn start_backend(&mut self) {
+        self.sync_media_retention();
+        if let Some(startup) = self.backend.as_mut().and_then(Backend::take_startup) {
+            let _ = startup.send(());
+            self.status = gettext("Starting backend");
+        }
+        for session in self.accounts.values_mut() {
+            if let Some(startup) = session.backend.as_mut().and_then(Backend::take_startup) {
+                let _ = startup.send(());
+            }
+        }
+    }
+
+    fn load_older(&mut self) {
+        let Some(chat) = self.open_chat.active_chat.clone() else {
+            return;
+        };
+        if self.loading_older {
+            return;
+        }
+        let Some(backend) = &self.backend else {
+            self.status = gettext("Backend unavailable");
+            return;
+        };
+        self.loading_older = true;
+        if self.history_complete {
+            let request = self.transcript_requests.older(true);
+            backend.send(crate::backend::Command::FetchOlder {
+                chat: chat.clone(),
+                request,
+                before: self
+                    .open_chat
+                    .message_snapshots
+                    .values()
+                    .filter(|message| message.chat == chat)
+                    .min_by_key(|message| (message.timestamp, message.id.as_str()))
+                    .map(|message| (message.timestamp, message.id.clone())),
+            });
+        } else if let Some(oldest) = self
+            .open_chat
+            .message_snapshots
+            .values()
+            .filter(|message| message.chat == chat)
+            .min_by_key(|message| (message.timestamp, message.id.as_str()))
+        {
+            let request = self.transcript_requests.older(false);
+            backend.send(crate::backend::Command::LoadChat {
+                chat: chat.clone(),
+                before: Some((oldest.timestamp, oldest.id.clone())),
+                request,
+            });
+        } else {
+            self.loading_older = false;
+        }
+    }
+
+    fn resumed(&mut self, sender: ComponentSender<Self>) {
+        for session in self.accounts.values() {
+            if let (true, Some(backend)) = (
+                super::accounts::reconnects_after_resume(&session.link),
+                &session.backend,
+            ) {
+                backend.send(crate::backend::Command::Reconnect);
+            }
+        }
+        let linked = super::accounts::reconnects_after_resume(&self.link);
+        if let (true, Some(backend)) = (linked, &self.backend) {
+            // The socket died with the suspend but may not know yet;
+            // reconnecting now brings the missed messages in.
+            backend.send(crate::backend::Command::Reconnect);
+            self.resuming = true;
+            self.resume_dropped = false;
+            self.status = gettext("Refreshing messages");
+            let input = sender.clone();
+            gtk::glib::timeout_add_local_once(RESUME_REFRESH_LIMIT, move || {
+                input.input(Input::ResumeSettled)
+            });
+        }
+    }
+
+    fn show_chat_info(&mut self, sender: ComponentSender<Self>) {
+        if let Some(chat) = self
+            .open_chat
+            .active_chat
+            .as_ref()
+            .and_then(|id| self.chat_snapshots.iter().find(|chat| &chat.id == id))
+        {
+            self.info_about = show_chat_info_dialog(
+                &self.window,
+                chat,
+                &self.contacts,
+                self.avatars.get(&chat.id).map(std::path::PathBuf::as_path),
+                self.presence.get(&chat.id).copied(),
+                (&self.chat_snapshots, &self.avatars),
+                &dialog_action_callback(&sender),
+            );
+            if self.info_about.is_some()
+                && let Some(backend) = &self.backend
+            {
+                backend.send(crate::backend::Command::ContactAbout {
+                    id: chat.id.clone(),
+                });
+            }
+        }
+    }
+
+    fn handle_tray_action(
+        &mut self,
+        action: crate::native_tray::TrayAction,
+        sender: ComponentSender<Self>,
+    ) {
+        use crate::native_tray::TrayAction;
+        match action {
+            TrayAction::ToggleWindow if self.window.is_visible() => self.window.set_visible(false),
+            TrayAction::ToggleWindow => self.window.present(),
+            TrayAction::NewChat => {
+                self.window.present();
+                sender.input(Input::ShowNewChat);
+            }
+            TrayAction::ToggleNotifications => {
+                self.settings.notifications = !self.settings.notifications;
+                if self.save_settings().is_err() {
+                    self.status = gettext("Could not save preferences");
+                }
+            }
+            TrayAction::Preferences => {
+                self.window.present();
+                sender.input(Input::ShowPreferences);
+            }
+            TrayAction::Quit => sender.input(Input::Quit),
+            TrayAction::Shown(shown) => {
+                self.tray_shown = shown;
+                // Without a tray there is no way back to a hidden window,
+                // unless the portal lists the app under Background Apps.
+                // GNOME turns the tray extension off while the screen is
+                // locked, which must not pull a hidden window back up.
+                if !shown && !crate::portal::sandboxed() {
+                    self.window.present();
+                }
+            }
+        }
+    }
+
+    fn new_contact(&mut self, phone: String, name: Option<String>, sender: ComponentSender<Self>) {
+        let Some(digits) = normalized_phone(&phone) else {
+            self.status = gettext("Enter valid phone number with country code");
+            self.toast(&gettext("Enter valid phone number with country code"));
+            return;
+        };
+        let name = name.filter(|name| !name.trim().is_empty());
+        // A phone number in a message: an existing chat needs no lookup.
+        let id = format!("{digits}@s.whatsapp.net");
+        if name.is_none() && self.chat_snapshots.iter().any(|chat| chat.id == id) {
+            sender.input(Input::OpenChatId(id));
+            return;
+        }
+        if let Some(backend) = &self.backend {
+            backend.send(crate::backend::Command::NewContact {
+                phone: digits,
+                first_name: name.clone(),
+                full_name: name,
+                to_phone: self.settings.save_contacts_to_phone,
+            });
+            self.status = gettext("Checking contact on WhatsApp");
+        } else {
+            self.status = gettext("Backend unavailable");
+        }
+    }
+
+    fn select_message(&mut self, position: u32) {
+        if self.open_chat.active_chat.is_none() {
+            return;
+        }
+        if self.message_selection.is_some() {
+            self.toggle_message_selection(position);
+            return;
+        }
+        let Some(message) = self.open_chat.message_ids.get(position as usize) else {
+            return;
+        };
+        self.audio.selected_voice_message = self
+            .open_chat
+            .message_snapshots
+            .get(message)
+            .and_then(|message| self.project_voice(message).map(|_| message.id.clone()));
+        self.audio.selected_voice = self
+            .open_chat
+            .message_snapshots
+            .get(message)
+            .and_then(|message| self.project_voice(message));
+    }
+
+    fn show_sticker_picker(&mut self, sender: ComponentSender<Self>) {
+        if let Some(backend) = &self.backend {
+            backend.send(crate::backend::Command::RecentStickers);
+        }
+        let anchor = self.composer_view.model().sticker_button();
+        // Anchored to the button, the popover flips above it near screen edges.
+        let popover = gtk::Popover::builder()
+            .position(gtk::PositionType::Top)
+            .css_classes(["zaptide-sticker-picker"])
+            .build();
+        popover.connect_closed(|popover| {
+            let popover = popover.clone();
+            gtk::glib::idle_add_local_once(move || popover.unparent());
+        });
+        let (content, stack) = sticker_picker_content(
+            &self.recent_stickers,
+            &self.favorite_stickers,
+            &dialog_action_callback(&sender),
+        );
+        popover.set_child(Some(&content));
+        popover.set_parent(&anchor);
+        popover.popup();
+        self.sticker_picker = Some((popover, stack));
+    }
+
+    fn show_mention_picker(&mut self, sender: ComponentSender<Self>) {
+        let participants = self
+            .open_chat
+            .active_chat
+            .as_deref()
+            .and_then(|chat| self.chat_snapshots.iter().find(|known| known.id == chat))
+            .map(|chat| chat.participants.to_vec())
+            .unwrap_or_default();
+        if participants.is_empty() {
+            return;
+        }
+        let mut people: Vec<_> = participants
+            .into_iter()
+            .enumerate()
+            .map(|(index, id)| {
+                let name = self.participant_label(&id, index);
+                let phone = crate::model::phone_of(&id).map(crate::util::phone);
+                (id, name, phone)
+            })
+            .collect();
+        people.sort_by_cached_key(|(_, name, _)| name.to_lowercase());
+        show_mention_dialog(
+            &self.window,
+            &dialog_action_callback(&sender),
+            people,
+            &self.avatars,
+        );
+    }
+
+    fn insert_mention_id(&mut self, participant: String) {
+        let label = self
+            .open_chat
+            .active_chat
+            .as_deref()
+            .and_then(|chat| self.chat_snapshots.iter().find(|known| known.id == chat))
+            .and_then(|chat| {
+                self.mention_labels(chat)
+                    .into_iter()
+                    .find(|candidate| candidate.id == participant)
+            })
+            .map(|candidate| candidate.label);
+        if let Some(label) = label {
+            let mut end = self.composer_buffer.end_iter();
+            self.insert_mention(&mut end, &label);
+            self.composer_buffer.place_cursor(&end);
+            self.focus_composer();
+        }
+    }
+
+    fn select_mention(&mut self, candidate: crate::native_composer::MentionCandidate) {
+        let known = self
+            .open_chat
+            .active_chat
+            .as_deref()
+            .and_then(|chat| self.chat_snapshots.iter().find(|known| known.id == chat))
+            .is_some_and(|chat| chat.participants.contains(&candidate.id));
+        let cursor = self.composer_buffer.iter_at_mark(
+            &self
+                .composer_buffer
+                .mark("insert")
+                .expect("insert mark exists"),
+        );
+        let before = self
+            .composer_buffer
+            .text(&self.composer_buffer.start_iter(), &cursor, true)
+            .to_string();
+        let after = self
+            .composer_buffer
+            .text(&cursor, &self.composer_buffer.end_iter(), true)
+            .to_string();
+        if known && let Some(query) = crate::native_composer::active_mention_query(&before) {
+            let prefix = &before[..before.len() - query.len() - 1];
+            let mut start = self.composer_buffer.start_iter();
+            start.forward_chars(prefix.chars().count() as i32);
+            let mut end = cursor;
+            end.forward_chars(
+                after
+                    .chars()
+                    .take_while(|character| !character.is_whitespace())
+                    .count() as i32,
+            );
+            self.composer_buffer.delete(&mut start, &mut end);
+            self.insert_mention(&mut start, &candidate.label);
+            self.composer_buffer.place_cursor(&start);
+            self.focus_composer();
+        }
+    }
+
+    fn show_forward(&mut self, sender: ComponentSender<Self>) {
+        let mut chats: Vec<_> = self
+            .chat_snapshots
+            .iter()
+            .filter(|chat| {
+                forwardable_chat(chat)
+                    && !chat.archived
+                    && self.open_chat.active_chat.as_ref() != Some(&chat.id)
+            })
+            .cloned()
+            .collect();
+        chats.sort_by_key(|chat| std::cmp::Reverse(chat.last_activity));
+        let summary = match self
+            .message_selection
+            .as_ref()
+            .map(|_| self.selected_rows())
+        {
+            Some(1) => self
+                .message_selection
+                .as_ref()
+                .and_then(|selection| self.open_chat.message_snapshots.get(&selection[0]))
+                .map(crate::model::Message::summary)
+                .unwrap_or_default(),
+            Some(count) => format!("{count} messages"),
+            None => self
+                .selected_message()
+                .map(crate::model::Message::summary)
+                .unwrap_or_default(),
+        };
+        show_forward_dialog(
+            &self.window,
+            &dialog_action_callback(&sender),
+            &summary,
+            chats,
+            &self.avatars,
+        );
+    }
+
+    fn confirm_delete(&mut self, everyone: bool, sender: ComponentSender<Self>) {
+        let dialog = adw::AlertDialog::builder()
+            .heading(gettext("Delete message?"))
+            .body(if everyone {
+                "Delete this message for everyone?"
+            } else {
+                "Delete this message for you?"
+            })
+            .build();
+        dialog.add_response("cancel", &gettext("Cancel"));
+        dialog.add_response("delete", &gettext("Delete"));
+        dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+        let input = sender.clone();
+        dialog.connect_response(None, move |_, response| {
+            if response == "delete" {
+                input.input(Input::ConfirmDelete(everyone));
+            }
+        });
+        dialog.present(Some(&self.window));
+    }
+
+    fn handle_media_action(
+        &mut self,
+        action: crate::native_media::NativeMediaAction,
+        sender: ComponentSender<Self>,
+    ) {
+        match action {
+            crate::native_media::NativeMediaAction::CopyContactPhone(number) => {
+                crate::native_portals::NativePortals::write_clipboard_text(
+                    &self.window.clipboard(),
+                    &number,
+                );
+                self.toast(&gettext("Phone number copied"));
+            }
+            crate::native_media::NativeMediaAction::OpenContact(contact) => {
+                self.open_contact(contact, &sender)
+            }
+            crate::native_media::NativeMediaAction::MessageContact { id, name } => {
+                if crate::contact_cards::ContactCard::from_saved(&id, &name).is_some() {
+                    sender.input(Input::StartChat { id, name });
+                }
+            }
+            crate::native_media::NativeMediaAction::Download { message, .. } => {
+                self.activate_attachment(&message)
+            }
+            crate::native_media::NativeMediaAction::AnswerButton {
+                chat,
+                message,
+                button,
+            } => {
+                if let Some(backend) = &self.backend {
+                    backend.send(crate::backend::Command::AnswerButton {
+                        chat,
+                        message,
+                        button,
+                    });
+                } else {
+                    self.status = gettext("Backend unavailable");
+                }
+            }
+            crate::native_media::NativeMediaAction::AnswerListRow { chat, message, row } => {
+                if let Some(backend) = &self.backend {
+                    backend.send(crate::backend::Command::AnswerListRow { chat, message, row });
+                } else {
+                    self.status = gettext("Backend unavailable");
+                }
+            }
+            crate::native_media::NativeMediaAction::Open(path) => {
+                if let Some(id) = self
+                    .open_chat
+                    .message_snapshots
+                    .values()
+                    .find(|message| {
+                        message
+                            .content
+                            .media()
+                            .and_then(|media| media.path.as_ref())
+                            == Some(&path)
+                    })
+                    .map(|message| message.id.clone())
+                {
+                    self.activate_attachment(&id);
+                }
+            }
+        }
+    }
+
     pub(super) fn handle_input(&mut self, input: Input, sender: ComponentSender<Self>) {
         match input {
             Input::WindowActivated => self.read_open_chat(),
@@ -19,27 +676,7 @@ impl NativeApplication {
                 self.sidebar_visible = !collapsed || self.open_chat.active_chat.is_none();
                 self.sync_translucent_sidebar();
             }
-            Input::ShowPreferences => {
-                let preferences =
-                    crate::native_preferences::NativePreferences::from(&self.settings);
-                let theme_choices: Vec<_> = self
-                    .theme_catalog
-                    .picker_themes()
-                    .map(|theme| theme.filename.clone())
-                    .collect();
-                let input_sender = sender.clone();
-                let dialog = crate::native_preferences::NativePreferencesDialog::new(
-                    &preferences,
-                    &theme_choices,
-                    move || input_sender.input(Input::ApplyPreferences),
-                );
-                dialog.present(&self.window);
-                let input_sender = sender.clone();
-                dialog
-                    .open_themes_folder_button()
-                    .connect_clicked(move |_| input_sender.input(Input::OpenThemesFolder));
-                self.preferences = Some(dialog);
-            }
+            Input::ShowPreferences => self.show_preferences(sender),
             Input::ShowProfile => self.show_profile(&sender),
             Input::SaveProfile(edit) => {
                 if let Some(backend) = &self.backend {
@@ -67,133 +704,14 @@ impl NativeApplication {
                     self.toast(&gettext("Could not open themes folder"));
                 }
             }
-            Input::ShowAbout => {
-                let about = adw::AboutDialog::builder()
-                    .application_name("ZapTide")
-                    .application_icon("dev.luminusos.ZapTide")
-                    .version(env!("CARGO_PKG_VERSION"))
-                    .developer_name("LuminusOS")
-                    .developers(["LuminusOS"])
-                    .comments(
-                        "A native WhatsApp client for Linux, built with Rust, GTK4, and libadwaita.\n\nZapTide is an independent project and is not affiliated with or endorsed by WhatsApp or Meta.",
-                    )
-                    .website(env!("CARGO_PKG_HOMEPAGE"))
-                    .issue_url(concat!(env!("CARGO_PKG_REPOSITORY"), "/issues"))
-                    .license_type(gtk::License::MitX11)
-                    .copyright("© 2026 LuminusOS")
-                    .debug_info(format!(
-                        "ZapTide {}\nGTK {}.{}.{}\nlibadwaita {}.{}.{}",
-                        env!("CARGO_PKG_VERSION"),
-                        gtk::major_version(),
-                        gtk::minor_version(),
-                        gtk::micro_version(),
-                        adw::major_version(),
-                        adw::minor_version(),
-                        adw::micro_version(),
-                    ))
-                    .debug_info_filename("zaptide-debug-info.txt")
-                    .build();
-                about.present(Some(&self.window));
-            }
-            Input::ShowShortcuts => {
-                let (send, newline) = if self.enter_sends.get() {
-                    ("Return", "<Shift>Return")
-                } else {
-                    ("<Control>Return", "Return")
-                };
-                let dialog = adw::ShortcutsDialog::new();
-                for (title, items) in [
-                    (
-                        gettext("General"),
-                        vec![
-                            (gettext("Close window"), CLOSE_ACCELERATOR),
-                            (gettext("Quit"), QUIT_ACCELERATOR),
-                        ],
-                    ),
-                    (
-                        gettext("Chat List"),
-                        vec![
-                            (gettext("Previous chat"), "Up"),
-                            (gettext("Next chat"), "Down"),
-                            (gettext("Open chat"), "Return"),
-                        ],
-                    ),
-                    (
-                        gettext("Composer"),
-                        vec![
-                            (gettext("Send message"), send),
-                            (gettext("New line"), newline),
-                        ],
-                    ),
-                    (
-                        gettext("Messages"),
-                        vec![
-                            (gettext("Open message menu"), "Menu <Shift>F10"),
-                            (gettext("Copy selected text"), "<Control>c"),
-                        ],
-                    ),
-                    (
-                        gettext("Media viewer"),
-                        vec![
-                            (gettext("Previous photo"), "Left"),
-                            (gettext("Next photo"), "Right"),
-                            (gettext("Zoom in"), "<Control>plus"),
-                            (gettext("Zoom out"), "<Control>minus"),
-                            (gettext("Fit to window"), "<Control>0"),
-                            (gettext("Actual size"), "<Control>1"),
-                        ],
-                    ),
-                ] {
-                    let section = adw::ShortcutsSection::new(Some(&title));
-                    for (item, accelerator) in &items {
-                        section.add(adw::ShortcutsItem::new(item, accelerator));
-                    }
-                    dialog.add(section);
-                }
-                dialog.present(Some(&self.window));
-            }
-            Input::ApplyPreferences => {
-                if let Some(dialog) = &self.preferences {
-                    let changes = dialog.take_changes();
-                    let errors = dialog.take_errors();
-                    let custom_theme_changed = changes.iter().any(|change| {
-                        change.settings_field()
-                            == crate::native_preferences::SettingsField::CustomTheme
-                    });
-                    for change in changes {
-                        self.apply_preference_change(change);
-                    }
-                    if custom_theme_changed {
-                        self.sync_custom_theme_selection();
-                        if self.save_settings().is_err() {
-                            self.status = gettext("Could not save preferences");
-                            self.toast(&gettext("Could not save preferences"));
-                        }
-                    }
-                    if !errors.is_empty() {
-                        self.status = gettext("Preference value is invalid");
-                        self.toast(&gettext("Preference value is invalid"));
-                    }
-                    self.apply_runtime_settings();
-                }
-            }
+            Input::ShowAbout => self.show_about(),
+            Input::ShowShortcuts => self.show_shortcuts(),
+            Input::ApplyPreferences => self.apply_preferences(),
             Input::ApplyAccountSetting(change) => {
                 self.apply_preference_change(change);
                 self.apply_runtime_settings();
             }
-            Input::StartBackend => {
-                self.sync_media_retention();
-                if let Some(startup) = self.backend.as_mut().and_then(Backend::take_startup) {
-                    let _ = startup.send(());
-                    self.status = gettext("Starting backend");
-                }
-                for session in self.accounts.values_mut() {
-                    if let Some(startup) = session.backend.as_mut().and_then(Backend::take_startup)
-                    {
-                        let _ = startup.send(());
-                    }
-                }
-            }
+            Input::StartBackend => self.start_backend(),
             Input::BackendReady(account) => {
                 backend_events::handle_backend_ready(self, account, sender)
             }
@@ -246,48 +764,7 @@ impl NativeApplication {
                     self.chat_projection.select(chat.clone());
                 }
             }
-            Input::LoadOlder => {
-                let Some(chat) = self.open_chat.active_chat.clone() else {
-                    return;
-                };
-                if self.loading_older {
-                    return;
-                }
-                let Some(backend) = &self.backend else {
-                    self.status = gettext("Backend unavailable");
-                    return;
-                };
-                self.loading_older = true;
-                if self.history_complete {
-                    let request = self.transcript_requests.older(true);
-                    backend.send(crate::backend::Command::FetchOlder {
-                        chat: chat.clone(),
-                        request,
-                        before: self
-                            .open_chat
-                            .message_snapshots
-                            .values()
-                            .filter(|message| message.chat == chat)
-                            .min_by_key(|message| (message.timestamp, message.id.as_str()))
-                            .map(|message| (message.timestamp, message.id.clone())),
-                    });
-                } else if let Some(oldest) = self
-                    .open_chat
-                    .message_snapshots
-                    .values()
-                    .filter(|message| message.chat == chat)
-                    .min_by_key(|message| (message.timestamp, message.id.as_str()))
-                {
-                    let request = self.transcript_requests.older(false);
-                    backend.send(crate::backend::Command::LoadChat {
-                        chat: chat.clone(),
-                        before: Some((oldest.timestamp, oldest.id.clone())),
-                        request,
-                    });
-                } else {
-                    self.loading_older = false;
-                }
-            }
+            Input::LoadOlder => self.load_older(),
             Input::OpenAccountChat(account, chat) => {
                 if account != self.active_account {
                     self.switch_account_with_restore(account, &sender, false);
@@ -314,22 +791,8 @@ impl NativeApplication {
                 self.chat_projection.set_query(query);
                 self.sync_chat_projection();
             }
-            Input::SetUnreadFilter(enabled) => {
-                self.chat_filters.unread_only = enabled;
-                self.chat_projection.set_filters(self.chat_filters);
-                self.sync_chat_projection();
-            }
-            Input::SetPinnedFilter(enabled) => {
-                self.chat_filters.pinned_only = enabled;
-                self.chat_projection.set_filters(self.chat_filters);
-                self.sync_chat_projection();
-            }
-            Input::SetArchivedFilter(enabled) => {
-                self.chat_filters.archive = if enabled {
-                    crate::native_chat_list::ArchiveFilter::Only
-                } else {
-                    crate::native_chat_list::ArchiveFilter::Exclude
-                };
+            Input::Filter(filter) => {
+                filter.apply(&mut self.chat_filters);
                 self.chat_projection.set_filters(self.chat_filters);
                 self.sync_chat_projection();
             }
@@ -345,20 +808,6 @@ impl NativeApplication {
             Input::CallAction(action) => self.call_action(action, &sender),
             Input::CallChoice(account, call, choice) => self.call_choice(account, &call, choice),
             Input::CallTick => self.call_tick(),
-            Input::SetMutedFilter(enabled) => {
-                self.chat_filters.muted = if enabled {
-                    crate::native_chat_list::MutedFilter::Only
-                } else {
-                    crate::native_chat_list::MutedFilter::All
-                };
-                self.chat_projection.set_filters(self.chat_filters);
-                self.sync_chat_projection();
-            }
-            Input::SetChatKindFilter(kind) => {
-                kind.apply(&mut self.chat_filters);
-                self.chat_projection.set_filters(self.chat_filters);
-                self.sync_chat_projection();
-            }
             Input::ToggleSelectedPin => {
                 if let Some(chat) = self.selected_chat().cloned()
                     && let Some(backend) = &self.backend
@@ -403,29 +852,7 @@ impl NativeApplication {
                     self.status = gettext("Reconnecting to WhatsApp");
                 }
             }
-            Input::Resumed => {
-                for session in self.accounts.values() {
-                    if let (true, Some(backend)) = (
-                        super::accounts::reconnects_after_resume(&session.link),
-                        &session.backend,
-                    ) {
-                        backend.send(crate::backend::Command::Reconnect);
-                    }
-                }
-                let linked = super::accounts::reconnects_after_resume(&self.link);
-                if let (true, Some(backend)) = (linked, &self.backend) {
-                    // The socket died with the suspend but may not know yet;
-                    // reconnecting now brings the missed messages in.
-                    backend.send(crate::backend::Command::Reconnect);
-                    self.resuming = true;
-                    self.resume_dropped = false;
-                    self.status = gettext("Refreshing messages");
-                    let input = sender.clone();
-                    gtk::glib::timeout_add_local_once(RESUME_REFRESH_LIMIT, move || {
-                        input.input(Input::ResumeSettled)
-                    });
-                }
-            }
+            Input::Resumed => self.resumed(sender),
             Input::ResumeSettled => self.resuming = false,
             Input::UnlinkConfirmed => {
                 if !self.legacy_layout {
@@ -443,31 +870,7 @@ impl NativeApplication {
                     self.status = gettext("Backend unavailable");
                 }
             }
-            Input::ShowChatInfo => {
-                if let Some(chat) = self
-                    .open_chat
-                    .active_chat
-                    .as_ref()
-                    .and_then(|id| self.chat_snapshots.iter().find(|chat| &chat.id == id))
-                {
-                    self.info_about = show_chat_info_dialog(
-                        &self.window,
-                        chat,
-                        &self.contacts,
-                        self.avatars.get(&chat.id).map(std::path::PathBuf::as_path),
-                        self.presence.get(&chat.id).copied(),
-                        (&self.chat_snapshots, &self.avatars),
-                        &dialog_action_callback(&sender),
-                    );
-                    if self.info_about.is_some()
-                        && let Some(backend) = &self.backend
-                    {
-                        backend.send(crate::backend::Command::ContactAbout {
-                            id: chat.id.clone(),
-                        });
-                    }
-                }
-            }
+            Input::ShowChatInfo => self.show_chat_info(sender),
             Input::ShowNewChat => show_new_chat_dialog(
                 &self.window,
                 &dialog_action_callback(&sender),
@@ -482,40 +885,7 @@ impl NativeApplication {
                 }
                 sender.input(Input::OpenChatId(id));
             }
-            Input::Tray(action) => {
-                use crate::native_tray::TrayAction;
-                match action {
-                    TrayAction::ToggleWindow if self.window.is_visible() => {
-                        self.window.set_visible(false)
-                    }
-                    TrayAction::ToggleWindow => self.window.present(),
-                    TrayAction::NewChat => {
-                        self.window.present();
-                        sender.input(Input::ShowNewChat);
-                    }
-                    TrayAction::ToggleNotifications => {
-                        self.settings.notifications = !self.settings.notifications;
-                        if self.save_settings().is_err() {
-                            self.status = gettext("Could not save preferences");
-                        }
-                    }
-                    TrayAction::Preferences => {
-                        self.window.present();
-                        sender.input(Input::ShowPreferences);
-                    }
-                    TrayAction::Quit => sender.input(Input::Quit),
-                    TrayAction::Shown(shown) => {
-                        self.tray_shown = shown;
-                        // Without a tray there is no way back to a hidden window,
-                        // unless the portal lists the app under Background Apps.
-                        // GNOME turns the tray extension off while the screen is
-                        // locked, which must not pull a hidden window back up.
-                        if !shown && !crate::portal::sandboxed() {
-                            self.window.present();
-                        }
-                    }
-                }
-            }
+            Input::Tray(action) => self.handle_tray_action(action, sender),
             Input::WindowVisibilityChanged => {}
             Input::PresenceChanged => {}
             Input::PresenceDue(due) => self.presence_watch.woke(due),
@@ -563,54 +933,9 @@ impl NativeApplication {
                     self.status = gettext("Backend unavailable");
                 }
             }
-            Input::NewContact { phone, name } => {
-                let Some(digits) = normalized_phone(&phone) else {
-                    self.status = gettext("Enter valid phone number with country code");
-                    self.toast(&gettext("Enter valid phone number with country code"));
-                    return;
-                };
-                let name = name.filter(|name| !name.trim().is_empty());
-                // A phone number in a message: an existing chat needs no lookup.
-                let id = format!("{digits}@s.whatsapp.net");
-                if name.is_none() && self.chat_snapshots.iter().any(|chat| chat.id == id) {
-                    sender.input(Input::OpenChatId(id));
-                    return;
-                }
-                if let Some(backend) = &self.backend {
-                    backend.send(crate::backend::Command::NewContact {
-                        phone: digits,
-                        first_name: name.clone(),
-                        full_name: name,
-                        to_phone: self.settings.save_contacts_to_phone,
-                    });
-                    self.status = gettext("Checking contact on WhatsApp");
-                } else {
-                    self.status = gettext("Backend unavailable");
-                }
-            }
+            Input::NewContact { phone, name } => self.new_contact(phone, name, sender),
             Input::ShowMessageMenu { id, x, y } => self.show_message_menu(id, x, y, &sender),
-            Input::SelectMessage(position) => {
-                if self.open_chat.active_chat.is_none() {
-                    return;
-                }
-                if self.message_selection.is_some() {
-                    self.toggle_message_selection(position);
-                    return;
-                }
-                let Some(message) = self.open_chat.message_ids.get(position as usize) else {
-                    return;
-                };
-                self.audio.selected_voice_message = self
-                    .open_chat
-                    .message_snapshots
-                    .get(message)
-                    .and_then(|message| self.project_voice(message).map(|_| message.id.clone()));
-                self.audio.selected_voice = self
-                    .open_chat
-                    .message_snapshots
-                    .get(message)
-                    .and_then(|message| self.project_voice(message));
-            }
+            Input::SelectMessage(position) => self.select_message(position),
             Input::OpenQuoted => {
                 if let Some(message) = self.selected_message().cloned() {
                     self.open_quoted(message);
@@ -657,30 +982,7 @@ impl NativeApplication {
                 let mut end = self.composer_buffer.end_iter();
                 self.composer_buffer.insert(&mut end, &emoji);
             }
-            Input::ShowStickerPicker => {
-                if let Some(backend) = &self.backend {
-                    backend.send(crate::backend::Command::RecentStickers);
-                }
-                let anchor = self.composer_view.model().sticker_button();
-                // Anchored to the button, the popover flips above it near screen edges.
-                let popover = gtk::Popover::builder()
-                    .position(gtk::PositionType::Top)
-                    .css_classes(["zaptide-sticker-picker"])
-                    .build();
-                popover.connect_closed(|popover| {
-                    let popover = popover.clone();
-                    gtk::glib::idle_add_local_once(move || popover.unparent());
-                });
-                let (content, stack) = sticker_picker_content(
-                    &self.recent_stickers,
-                    &self.favorite_stickers,
-                    &dialog_action_callback(&sender),
-                );
-                popover.set_child(Some(&content));
-                popover.set_parent(&anchor);
-                popover.popup();
-                self.sticker_picker = Some((popover, stack));
-            }
+            Input::ShowStickerPicker => self.show_sticker_picker(sender),
             Input::ShowPollCreator => {
                 show_poll_dialog(&self.window, &dialog_action_callback(&sender))
             }
@@ -708,92 +1010,9 @@ impl NativeApplication {
                     });
                 }
             }
-            Input::InsertMention => {
-                let participants = self
-                    .open_chat
-                    .active_chat
-                    .as_deref()
-                    .and_then(|chat| self.chat_snapshots.iter().find(|known| known.id == chat))
-                    .map(|chat| chat.participants.to_vec())
-                    .unwrap_or_default();
-                if participants.is_empty() {
-                    return;
-                }
-                let mut people: Vec<_> = participants
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, id)| {
-                        let name = self.participant_label(&id, index);
-                        let phone = crate::model::phone_of(&id).map(crate::util::phone);
-                        (id, name, phone)
-                    })
-                    .collect();
-                people.sort_by_cached_key(|(_, name, _)| name.to_lowercase());
-                show_mention_dialog(
-                    &self.window,
-                    &dialog_action_callback(&sender),
-                    people,
-                    &self.avatars,
-                );
-            }
-            Input::InsertMentionId(participant) => {
-                let label = self
-                    .open_chat
-                    .active_chat
-                    .as_deref()
-                    .and_then(|chat| self.chat_snapshots.iter().find(|known| known.id == chat))
-                    .and_then(|chat| {
-                        self.mention_labels(chat)
-                            .into_iter()
-                            .find(|candidate| candidate.id == participant)
-                    })
-                    .map(|candidate| candidate.label);
-                if let Some(label) = label {
-                    let mut end = self.composer_buffer.end_iter();
-                    self.insert_mention(&mut end, &label);
-                    self.composer_buffer.place_cursor(&end);
-                    self.focus_composer();
-                }
-            }
-            Input::SelectMention(candidate) => {
-                let known = self
-                    .open_chat
-                    .active_chat
-                    .as_deref()
-                    .and_then(|chat| self.chat_snapshots.iter().find(|known| known.id == chat))
-                    .is_some_and(|chat| chat.participants.contains(&candidate.id));
-                let cursor = self.composer_buffer.iter_at_mark(
-                    &self
-                        .composer_buffer
-                        .mark("insert")
-                        .expect("insert mark exists"),
-                );
-                let before = self
-                    .composer_buffer
-                    .text(&self.composer_buffer.start_iter(), &cursor, true)
-                    .to_string();
-                let after = self
-                    .composer_buffer
-                    .text(&cursor, &self.composer_buffer.end_iter(), true)
-                    .to_string();
-                if known && let Some(query) = crate::native_composer::active_mention_query(&before)
-                {
-                    let prefix = &before[..before.len() - query.len() - 1];
-                    let mut start = self.composer_buffer.start_iter();
-                    start.forward_chars(prefix.chars().count() as i32);
-                    let mut end = cursor;
-                    end.forward_chars(
-                        after
-                            .chars()
-                            .take_while(|character| !character.is_whitespace())
-                            .count() as i32,
-                    );
-                    self.composer_buffer.delete(&mut start, &mut end);
-                    self.insert_mention(&mut start, &candidate.label);
-                    self.composer_buffer.place_cursor(&start);
-                    self.focus_composer();
-                }
-            }
+            Input::InsertMention => self.show_mention_picker(sender),
+            Input::InsertMentionId(participant) => self.insert_mention_id(participant),
+            Input::SelectMention(candidate) => self.select_mention(candidate),
             Input::PasteClipboardImage => self.paste_clipboard_image(&sender),
             Input::AttachDropped(paths) => attachments::attach_dropped(self, paths),
             Input::ClipboardImageReady { chat, pixels } => {
@@ -859,65 +1078,7 @@ impl NativeApplication {
             Input::AudioWaveformReady { chat, id, bars } => {
                 self.waveform_ready(chat, id, bars, &sender);
             }
-            Input::MediaAction(action) => match action {
-                crate::native_media::NativeMediaAction::CopyContactPhone(number) => {
-                    crate::native_portals::NativePortals::write_clipboard_text(
-                        &self.window.clipboard(),
-                        &number,
-                    );
-                    self.toast(&gettext("Phone number copied"));
-                }
-                crate::native_media::NativeMediaAction::OpenContact(contact) => {
-                    self.open_contact(contact, &sender)
-                }
-                crate::native_media::NativeMediaAction::MessageContact { id, name } => {
-                    if crate::contact_cards::ContactCard::from_saved(&id, &name).is_some() {
-                        sender.input(Input::StartChat { id, name });
-                    }
-                }
-                crate::native_media::NativeMediaAction::Download { message, .. } => {
-                    self.activate_attachment(&message)
-                }
-                crate::native_media::NativeMediaAction::AnswerButton {
-                    chat,
-                    message,
-                    button,
-                } => {
-                    if let Some(backend) = &self.backend {
-                        backend.send(crate::backend::Command::AnswerButton {
-                            chat,
-                            message,
-                            button,
-                        });
-                    } else {
-                        self.status = gettext("Backend unavailable");
-                    }
-                }
-                crate::native_media::NativeMediaAction::AnswerListRow { chat, message, row } => {
-                    if let Some(backend) = &self.backend {
-                        backend.send(crate::backend::Command::AnswerListRow { chat, message, row });
-                    } else {
-                        self.status = gettext("Backend unavailable");
-                    }
-                }
-                crate::native_media::NativeMediaAction::Open(path) => {
-                    if let Some(id) = self
-                        .open_chat
-                        .message_snapshots
-                        .values()
-                        .find(|message| {
-                            message
-                                .content
-                                .media()
-                                .and_then(|media| media.path.as_ref())
-                                == Some(&path)
-                        })
-                        .map(|message| message.id.clone())
-                    {
-                        self.activate_attachment(&id);
-                    }
-                }
-            },
+            Input::MediaAction(action) => self.handle_media_action(action, sender),
             Input::ActivateSelectedAttachment => {
                 if let Some(id) = self.selected_message_id() {
                     self.activate_attachment(&id);
@@ -928,43 +1089,7 @@ impl NativeApplication {
                 self.message_target = Some(id);
                 self.react_selected(emoji);
             }
-            Input::ShowForward => {
-                let mut chats: Vec<_> = self
-                    .chat_snapshots
-                    .iter()
-                    .filter(|chat| {
-                        forwardable_chat(chat)
-                            && !chat.archived
-                            && self.open_chat.active_chat.as_ref() != Some(&chat.id)
-                    })
-                    .cloned()
-                    .collect();
-                chats.sort_by_key(|chat| std::cmp::Reverse(chat.last_activity));
-                let summary = match self
-                    .message_selection
-                    .as_ref()
-                    .map(|_| self.selected_rows())
-                {
-                    Some(1) => self
-                        .message_selection
-                        .as_ref()
-                        .and_then(|selection| self.open_chat.message_snapshots.get(&selection[0]))
-                        .map(crate::model::Message::summary)
-                        .unwrap_or_default(),
-                    Some(count) => format!("{count} messages"),
-                    None => self
-                        .selected_message()
-                        .map(crate::model::Message::summary)
-                        .unwrap_or_default(),
-                };
-                show_forward_dialog(
-                    &self.window,
-                    &dialog_action_callback(&sender),
-                    &summary,
-                    chats,
-                    &self.avatars,
-                );
-            }
+            Input::ShowForward => self.show_forward(sender),
             Input::ForwardSelected(destination) => self.forward_selected(destination),
             Input::StartSelection => {
                 let position = self.selected_message_id().and_then(|id| {
@@ -992,26 +1117,7 @@ impl NativeApplication {
             Input::ToggleSelectedStar => self.toggle_selected_star(),
             Input::ShowStarred => self.show_starred(),
             Input::OpenStarred { chat, id } => self.open_starred(chat, id),
-            Input::DeleteSelected(everyone) => {
-                let dialog = adw::AlertDialog::builder()
-                    .heading(gettext("Delete message?"))
-                    .body(if everyone {
-                        "Delete this message for everyone?"
-                    } else {
-                        "Delete this message for you?"
-                    })
-                    .build();
-                dialog.add_response("cancel", &gettext("Cancel"));
-                dialog.add_response("delete", &gettext("Delete"));
-                dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
-                let input = sender.clone();
-                dialog.connect_response(None, move |_, response| {
-                    if response == "delete" {
-                        input.input(Input::ConfirmDelete(everyone));
-                    }
-                });
-                dialog.present(Some(&self.window));
-            }
+            Input::DeleteSelected(everyone) => self.confirm_delete(everyone, sender),
             Input::ConfirmDelete(everyone) => self.delete_selected(everyone),
             Input::VoteOption(choice) => {
                 self.poll_choice = choice;
