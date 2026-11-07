@@ -106,13 +106,7 @@ pub(super) fn key_for(path: &Path) -> Result<Zeroizing<[u8; 32]>> {
 /// label contains a digest, never a user path, phone number or message data.
 fn identity_for(parent: &Path) -> Result<String> {
     let digest = Sha256::digest(parent.canonicalize()?.as_os_str().as_encoded_bytes());
-    Ok(format!(
-        "archive-{}",
-        digest
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>()
-    ))
+    Ok(format!("archive-{}", hex::encode(digest)))
 }
 
 /// The keyring identity of the archive at `path`, while its folder exists.
@@ -403,6 +397,19 @@ mod tests {
         fs::create_dir_all(one.parent().unwrap()).unwrap();
         fs::create_dir_all(two.parent().unwrap()).unwrap();
         let first = archive_key_identity(&one).unwrap();
+        let digest = Sha256::digest(
+            one.parent()
+                .unwrap()
+                .canonicalize()
+                .unwrap()
+                .as_os_str()
+                .as_encoded_bytes(),
+        );
+        let previous = digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        assert_eq!(first, format!("archive-{previous}"));
         assert_ne!(first, archive_key_identity(&two).unwrap());
         assert!(first.starts_with("archive-") && !first.contains('/'));
     }
