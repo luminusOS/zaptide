@@ -609,6 +609,15 @@ pub struct NativeApplication {
 }
 
 #[derive(Debug)]
+pub enum ChatFilterInput {
+    Unread(bool),
+    Pinned(bool),
+    Archived(bool),
+    Muted(bool),
+    Kind(crate::native_chat_list::ChatKindFilter),
+}
+
+#[derive(Debug)]
 pub enum Input {
     WindowMapped,
     WindowActivated,
@@ -631,11 +640,7 @@ pub enum Input {
     TranscriptAtEnd,
     LoadOlder,
     SearchChats(String),
-    SetUnreadFilter(bool),
-    SetPinnedFilter(bool),
-    SetChatKindFilter(crate::native_chat_list::ChatKindFilter),
-    SetArchivedFilter(bool),
-    SetMutedFilter(bool),
+    Filter(ChatFilterInput),
     ShowCalls(bool),
     SelectCall(usize),
     OpenCallChat,
@@ -1259,11 +1264,21 @@ impl SimpleComponent for NativeApplication {
             })
             .forward(sender.input_sender(), |output| match output {
                 SidebarOutput::SearchChats(query) => Input::SearchChats(query),
-                SidebarOutput::SetUnreadFilter(active) => Input::SetUnreadFilter(active),
-                SidebarOutput::SetPinnedFilter(active) => Input::SetPinnedFilter(active),
-                SidebarOutput::SetChatKindFilter(kind) => Input::SetChatKindFilter(kind),
-                SidebarOutput::SetArchivedFilter(active) => Input::SetArchivedFilter(active),
-                SidebarOutput::SetMutedFilter(active) => Input::SetMutedFilter(active),
+                SidebarOutput::SetUnreadFilter(active) => {
+                    Input::Filter(ChatFilterInput::Unread(active))
+                }
+                SidebarOutput::SetPinnedFilter(active) => {
+                    Input::Filter(ChatFilterInput::Pinned(active))
+                }
+                SidebarOutput::SetChatKindFilter(kind) => {
+                    Input::Filter(ChatFilterInput::Kind(kind))
+                }
+                SidebarOutput::SetArchivedFilter(active) => {
+                    Input::Filter(ChatFilterInput::Archived(active))
+                }
+                SidebarOutput::SetMutedFilter(active) => {
+                    Input::Filter(ChatFilterInput::Muted(active))
+                }
                 SidebarOutput::ShowCalls(active) => Input::ShowCalls(active),
                 SidebarOutput::SelectChat(account, chat) => Input::SelectChat(account, chat),
                 SidebarOutput::NewChat => Input::ShowNewChat,
