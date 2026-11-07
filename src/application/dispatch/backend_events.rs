@@ -104,12 +104,14 @@ pub(super) fn handle_backend_ready(
             }
 
             Event::RefreshTranscript => {
-                if let (Some(backend), Some(chat)) = (&app.backend, app.active_chat.clone()) {
-                    app.message_ids.clear();
-                    app.message_snapshots.clear();
-                    app.editable_messages.clear();
+                if let (Some(backend), Some(chat)) =
+                    (&app.backend, app.open_chat.active_chat.clone())
+                {
+                    app.open_chat.message_ids.clear();
+                    app.open_chat.message_snapshots.clear();
+                    app.open_chat.editable_messages.clear();
                     app.messages.clear();
-                    app.transcript.clear();
+                    app.open_chat.transcript.clear();
                     app.loading_older = false;
                     app.history_complete = false;
                     let request = app.transcript_requests.reload();
@@ -133,7 +135,7 @@ pub(super) fn handle_backend_ready(
                 request,
             } => {
                 if !app.transcript_requests.messages(
-                    app.active_chat.as_deref() == Some(&chat),
+                    app.open_chat.active_chat.as_deref() == Some(&chat),
                     request,
                     older,
                     complete,
@@ -152,7 +154,7 @@ pub(super) fn handle_backend_ready(
                 request,
             } => {
                 if app.transcript_requests.older_fetched(
-                    app.active_chat.as_deref() == Some(&chat),
+                    app.open_chat.active_chat.as_deref() == Some(&chat),
                     request,
                     more,
                     &mut app.history_complete,
@@ -233,12 +235,13 @@ pub(super) fn handle_backend_ready(
                         message: message.id.clone(),
                     });
                     if let Some(media) = app
+                        .open_chat
                         .message_snapshots
                         .get_mut(&message.id)
                         .and_then(|known| known.content.media_mut())
                     {
                         media.state = crate::model::MediaState::Downloading;
-                        app.pending_transcript.mark_rows();
+                        app.open_chat.pending_transcript.mark_rows();
                     }
                 }
                 let known = app
@@ -249,7 +252,7 @@ pub(super) fn handle_backend_ready(
                 if notification_should_show(
                     app.settings.notifications,
                     app.window.is_active(),
-                    app.active_chat.as_deref(),
+                    app.open_chat.active_chat.as_deref(),
                     &chat,
                     known,
                 ) {
@@ -299,7 +302,7 @@ pub(super) fn handle_backend_ready(
                                 .map(|known| known.name.clone())
                         })
                         .unwrap_or_else(|| "Someone".into());
-                    let shown = app.active_chat.as_deref() == Some(chat.as_str())
+                    let shown = app.open_chat.active_chat.as_deref() == Some(chat.as_str())
                         && !app.typing.contains_key(&chat);
                     app.typing
                         .insert(chat.clone(), (name, typing_sender.clone()));
@@ -346,8 +349,12 @@ pub(super) fn handle_backend_ready(
                 }
                 update_avatar_texture_reference(previous, path);
                 app.chats_dirty = true;
-                if sender_in_window(&app.message_ids, &app.message_snapshots, &id) {
-                    app.pending_transcript.mark_rows();
+                if sender_in_window(
+                    &app.open_chat.message_ids,
+                    &app.open_chat.message_snapshots,
+                    &id,
+                ) {
+                    app.open_chat.pending_transcript.mark_rows();
                 }
             }
             Event::ReceiptsPrivacy { disabled } => app.account_receipts_off = disabled,

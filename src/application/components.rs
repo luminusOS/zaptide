@@ -34,14 +34,15 @@ impl NativeApplication {
 
     fn composer_state(&self) -> ComposerState {
         let (context_title, context_preview) = self.composer_context();
-        let has_context = self.reply_to.is_some() || self.editing.is_some();
+        let has_context = self.open_chat.reply_to.is_some() || self.open_chat.editing.is_some();
         let chat = self
+            .open_chat
             .active_chat
             .as_deref()
             .and_then(|id| self.chat_snapshots.iter().find(|chat| chat.id == id))
             .map(std::rc::Rc::as_ref);
         ComposerState {
-            active: self.active_chat.is_some() && self.message_selection.is_none(),
+            active: self.open_chat.active_chat.is_some() && self.message_selection.is_none(),
             recording: self.recording_active(),
             recording_blink: self.recording_blink(),
             recording_time: self.recording_time(),
@@ -49,12 +50,14 @@ impl NativeApplication {
             context: has_context.then_some((context_title, context_preview)),
             attachment_count: self.pending_attachment_count(),
             attachment_paths: self
+                .open_chat
                 .active_chat
                 .as_ref()
                 .and_then(|chat| self.pending_attachments.get(chat))
                 .cloned()
                 .unwrap_or_default(),
             clipboard_preview: self
+                .open_chat
                 .active_chat
                 .as_ref()
                 .and_then(|chat| self.pending_clipboard_images.get(chat))
@@ -64,7 +67,7 @@ impl NativeApplication {
             mention_candidates: self.mention_candidates(chat),
             editable: !self.audio.voice_send_pending
                 && chat.is_some_and(crate::model::Chat::can_send),
-            editing: self.editing.is_some(),
+            editing: self.open_chat.editing.is_some(),
             draft_empty: self.draft.trim().is_empty(),
             can_send_voice: !self.recording_active()
                 && self.pending_send.is_none()
@@ -165,8 +168,8 @@ impl NativeApplication {
 
     fn sync_transcript_view(&self) {
         let state = TranscriptState {
-            active: self.active_chat.is_some(),
-            has_messages: !self.message_ids.is_empty(),
+            active: self.open_chat.active_chat.is_some(),
+            has_messages: !self.open_chat.message_ids.is_empty(),
             history_complete: self.history_complete,
             loading_older: self.loading_older,
             recent_messages_pending: self.recent_messages_pending,

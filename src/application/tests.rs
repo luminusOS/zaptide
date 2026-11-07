@@ -1,6 +1,125 @@
 use super::*;
 
 #[test]
+fn open_chat_state_reset_preserves_external_starred_and_request_correlation() {
+    let mut open = OpenChatState::default();
+    assert!(open.message_ids.is_empty());
+    assert!(open.message_snapshots.is_empty());
+    assert!(open.editable_messages.is_empty());
+
+    open.active_chat = Some("chat".into());
+    open.pending_edit = Some(("chat".into(), "message".into(), "edit".into()));
+    open.reply_to = Some(("chat".into(), "message".into()));
+    open.editing = Some(("chat".into(), "message".into()));
+    open.transcript
+        .push(crate::native_transcript::TranscriptRow {
+            header: "header".into(),
+            text: "text".into(),
+        });
+    open.pending_transcript.mark();
+    let message = grouping_message("message", "sender", true, 1);
+    open.message_ids.push(message.id.clone());
+    open.editable_messages
+        .insert(message.id.clone(), "draft edit".into());
+    open.message_snapshots.insert(message.id.clone(), message);
+    let starred = std::collections::HashSet::from(["message".to_owned()]);
+    let mut requests = TranscriptRequests::default();
+    let old = requests.reload();
+
+    open.reset();
+
+    assert!(open.message_ids.is_empty());
+    assert!(open.message_snapshots.is_empty());
+    assert!(open.editable_messages.is_empty());
+    assert!(open.active_chat.is_none());
+    assert!(open.pending_edit.is_none());
+    assert!(open.reply_to.is_none());
+    assert!(open.editing.is_none());
+    assert!(open.transcript.is_empty());
+    assert_eq!(open.pending_transcript, Default::default());
+    assert!(starred.contains("message"));
+    let new = requests.reload();
+    assert_ne!(old, new);
+    assert!(!requests.accepts(Some(old), false));
+    assert!(requests.accepts(Some(new), false));
+}
+
+#[test]
+fn open_chat_state_reset_messages_preserves_composer_and_transcript_state() {
+    let mut open = OpenChatState {
+        active_chat: Some("chat".into()),
+        pending_edit: Some(("chat".into(), "message".into(), "edit".into())),
+        reply_to: Some(("chat".into(), "message".into())),
+        editing: Some(("chat".into(), "message".into())),
+        ..Default::default()
+    };
+    let message = grouping_message("message", "sender", true, 1);
+    open.message_ids.push(message.id.clone());
+    open.editable_messages
+        .insert(message.id.clone(), "edit".into());
+    open.message_snapshots.insert(message.id.clone(), message);
+    open.transcript
+        .push(crate::native_transcript::TranscriptRow {
+            header: "header".into(),
+            text: "text".into(),
+        });
+    open.pending_transcript.mark();
+
+    open.reset_messages();
+
+    assert!(open.message_ids.is_empty());
+    assert!(open.message_snapshots.is_empty());
+    assert!(open.editable_messages.is_empty());
+    assert_eq!(open.active_chat.as_deref(), Some("chat"));
+    assert_eq!(open.pending_edit.as_ref().unwrap().2, "edit");
+    assert_eq!(open.reply_to.as_ref().unwrap().1, "message");
+    assert_eq!(open.editing.as_ref().unwrap().1, "message");
+    assert_eq!(open.transcript[0].text, "text");
+    assert_ne!(open.pending_transcript, Default::default());
+}
+
+#[test]
+fn audio_reset_for_chat_cancels_and_clears_only_chat_playback_state() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let key = ("chat".to_owned(), "message".to_owned());
+    let cancel = std::sync::Arc::new(AtomicBool::new(false));
+    let mut audio = AudioState {
+        selected_voice: None,
+        selected_voice_message: Some("selected".into()),
+        media: Default::default(),
+        audio_waveforms: [(key.clone(), vec![1, 2])].into(),
+        waveform_queue: [(key.0.clone(), key.1.clone(), "fixture".into())].into(),
+        waveform_busy: true,
+        waveform_cancel: Some(cancel.clone()),
+        waveform_attempted: [key.clone()].into(),
+        playing_audio: Some(key.1.clone()),
+        audio_errors: [(key.clone(), "error".into())].into(),
+        audio_registry: Default::default(),
+        voice_send_pending: true,
+        recording_meter: (),
+        played_voice: [key.clone()].into(),
+    };
+    audio.media.set_speed(1.5);
+
+    audio.reset_for_chat();
+
+    assert!(cancel.load(Ordering::Acquire));
+    assert!(audio.waveform_cancel.is_none());
+    assert!(audio.waveform_queue.is_empty());
+    assert!(audio.audio_waveforms.is_empty());
+    assert!(audio.waveform_attempted.is_empty());
+    assert!(audio.audio_errors.is_empty());
+    assert!(audio.audio_registry.borrow().is_empty());
+    assert!(audio.playing_audio.is_none());
+    assert!(audio.waveform_busy);
+    assert!(audio.voice_send_pending);
+    assert_eq!(audio.selected_voice_message.as_deref(), Some("selected"));
+    assert!(audio.played_voice.contains(&key));
+    assert_eq!(audio.media.speed(), 1.5);
+}
+
+#[test]
 fn transcript_correlation_unsolicited_messages_do_not_settle_pending_pagination() {
     let mut requests = TranscriptRequests::default();
     let phone = requests.older(true);
