@@ -73,6 +73,42 @@ impl Worker {
     }
 }
 
+impl Worker {
+    pub(super) fn on_contact_update(&mut self, update: &wa_events::ContactUpdate) {
+        if let (Some(lid), Some(pn)) = (&update.action.lid_jid, &update.action.pn_jid)
+            && let (Some(lid), Some(pn)) = (Self::jid_of(lid), Self::jid_of(pn))
+        {
+            self.learn_pair(&lid, &pn);
+        }
+        let id = self.canonical(&update.jid);
+        let name = update
+            .action
+            .full_name
+            .clone()
+            .or_else(|| update.action.first_name.clone())
+            .filter(|name| !name.is_empty());
+        let contact = self
+            .identity
+            .contacts
+            .entry(id.clone())
+            .or_insert_with(|| Contact {
+                id: id.clone(),
+                full_name: None,
+                push_name: None,
+            });
+        if contact.full_name == name {
+            return;
+        }
+        contact.full_name = name;
+        let contact = contact.clone();
+        if let Err(error) = self.archive.upsert_contact(&contact) {
+            log::warn!("could not save a contact: {error}");
+        }
+        self.emit(Event::Contacts(vec![contact]));
+        self.refresh_chat_name(&id);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
