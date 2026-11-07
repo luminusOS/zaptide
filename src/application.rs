@@ -178,6 +178,31 @@ struct TranscriptRequests {
     older_phone: bool,
 }
 
+#[derive(Default)]
+struct OpenChatState {
+    active_chat: Option<String>,
+    pending_edit: Option<(String, String, String)>,
+    reply_to: Option<(String, String)>,
+    editing: Option<(String, String)>,
+    message_ids: Vec<String>,
+    message_snapshots: std::collections::HashMap<String, crate::model::Message>,
+    editable_messages: std::collections::HashMap<String, String>,
+    transcript: Vec<crate::native_transcript::TranscriptRow>,
+    pending_transcript: conversation::PendingTranscript,
+}
+
+impl OpenChatState {
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    fn reset_messages(&mut self) {
+        self.message_ids.clear();
+        self.message_snapshots.clear();
+        self.editable_messages.clear();
+    }
+}
+
 impl TranscriptRequests {
     fn allocate(&mut self) -> u64 {
         self.next = self
@@ -385,7 +410,7 @@ type AudioRegistry = std::rc::Rc<
     >,
 >;
 
-struct AudioState {
+struct AudioState<M = crate::native_media_widgets::RecordingMeter> {
     selected_voice: Option<crate::native_voice::VoiceMessage>,
     selected_voice_message: Option<String>,
     media: crate::services::media::MediaService,
@@ -398,8 +423,23 @@ struct AudioState {
     audio_errors: std::collections::HashMap<(String, String), String>,
     audio_registry: AudioRegistry,
     voice_send_pending: bool,
-    recording_meter: crate::native_media_widgets::RecordingMeter,
+    recording_meter: M,
     played_voice: std::collections::HashSet<(String, String)>,
+}
+
+impl<M> AudioState<M> {
+    fn reset_for_chat(&mut self) {
+        self.media.stop_playback();
+        self.playing_audio = None;
+        self.waveform_queue.clear();
+        if let Some(cancel) = self.waveform_cancel.take() {
+            cancel.store(true, std::sync::atomic::Ordering::Release);
+        }
+        self.audio_waveforms.clear();
+        self.waveform_attempted.clear();
+        self.audio_errors.clear();
+        self.audio_registry.borrow_mut().clear();
+    }
 }
 
 /// True when `b` would render the same media as `a`. A sent sticker moves
@@ -496,17 +536,13 @@ pub struct NativeApplication {
     history_complete: bool,
     loading_older: bool,
     transcript_requests: TranscriptRequests,
-    message_ids: Vec<String>,
-    message_snapshots: std::collections::HashMap<String, crate::model::Message>,
+    open_chat: OpenChatState,
     pending_quote_navigation: Option<(String, String)>,
     /// The jump to a starred message still has to load older history.
     jump_needs_history: bool,
     /// Starred messages of the open chat.
     starred: std::collections::HashSet<String>,
     pointer_sender: ComponentSender<NativeApplication>,
-    editable_messages: std::collections::HashMap<String, String>,
-    transcript: Vec<crate::native_transcript::TranscriptRow>,
-    pending_transcript: conversation::PendingTranscript,
     audio: AudioState,
     /// About row of the open contact-info dialog, filled when the fetch returns.
     info_about: Option<(String, adw::ActionRow)>,
@@ -524,7 +560,6 @@ pub struct NativeApplication {
     sticker_packs: Vec<crate::model::StickerPack>,
     recent_stickers: Vec<std::path::PathBuf>,
     favorite_stickers: Vec<std::path::PathBuf>,
-    active_chat: Option<String>,
     draft: String,
     drafts: std::collections::HashMap<String, String>,
     composer: crate::native_composer::NativeComposerState,
@@ -538,9 +573,6 @@ pub struct NativeApplication {
     document_attachments: std::collections::HashSet<(String, std::path::PathBuf)>,
     pending_clipboard_images: std::collections::HashMap<String, ClipboardPixels>,
     pending_send: Option<PendingSend>,
-    pending_edit: Option<(String, String, String)>,
-    reply_to: Option<(String, String)>,
-    editing: Option<(String, String)>,
     account_receipts_off: bool,
     link: LinkStatus,
     syncing: bool,
@@ -833,15 +865,15 @@ impl SimpleComponent for NativeApplication {
                                     add_css_class: "flat",
                                     set_tooltip_text: Some(&gettext("Chat details")),
                                     #[watch]
-                                    set_can_target: model.active_chat.is_some(),
+                                    set_can_target: model.open_chat.active_chat.is_some(),
                                     #[watch]
-                                    set_can_focus: model.active_chat.is_some(),
+                                    set_can_focus: model.open_chat.active_chat.is_some(),
                                     connect_clicked => Input::ShowChatInfo,
                                     #[wrap(Some)]
                                     #[name = "conversation_title"]
                                     set_child = &adw::WindowTitle {
                                         #[watch]
-                                        set_title: if model.active_chat.is_some() { model.page_title.as_str() } else { "" },
+                                        set_title: if model.open_chat.active_chat.is_some() { model.page_title.as_str() } else { "" },
                                         #[watch]
                                         set_subtitle: &model.header_subtitle(),
                                     },
@@ -850,7 +882,7 @@ impl SimpleComponent for NativeApplication {
                                     set_icon_name: "view-more-symbolic",
                                     set_tooltip_text: Some(&gettext("Chat menu")),
                                     #[watch]
-                                    set_visible: model.active_chat.is_some(),
+                                    set_visible: model.open_chat.active_chat.is_some(),
                                     set_menu_model: Some(&model.chat_menu),
                                 },
                                 pack_end = &gtk::Button {
@@ -902,9 +934,9 @@ impl SimpleComponent for NativeApplication {
                                              // Crossfade keeps the child's height while hidden,
                                              // so the row is removed from layout when idle.
                                              #[watch]
-                                             set_visible: model.active_chat.as_ref().is_some_and(|chat| model.typing.contains_key(chat)),
+                                             set_visible: model.open_chat.active_chat.as_ref().is_some_and(|chat| model.typing.contains_key(chat)),
                                              #[watch]
-                                             set_reveal_child: model.active_chat.as_ref().is_some_and(|chat| model.typing.contains_key(chat)),
+                                             set_reveal_child: model.open_chat.active_chat.as_ref().is_some_and(|chat| model.typing.contains_key(chat)),
                                              #[wrap(Some)]
                                              set_child = &gtk::Box {
                                                  set_spacing: 8,
@@ -1323,15 +1355,11 @@ impl SimpleComponent for NativeApplication {
             history_complete: false,
             loading_older: false,
             transcript_requests: TranscriptRequests::default(),
-            message_ids: Vec::new(),
-            message_snapshots: std::collections::HashMap::new(),
+            open_chat: OpenChatState::default(),
             pending_quote_navigation: None,
             jump_needs_history: false,
             starred: std::collections::HashSet::new(),
             pointer_sender: sender.clone(),
-            editable_messages: std::collections::HashMap::new(),
-            transcript: Vec::new(),
-            pending_transcript: Default::default(),
             audio: AudioState {
                 selected_voice: None,
                 selected_voice_message: None,
@@ -1359,7 +1387,6 @@ impl SimpleComponent for NativeApplication {
             sticker_packs: Vec::new(),
             recent_stickers: Vec::new(),
             favorite_stickers: Vec::new(),
-            active_chat: None,
             draft: String::new(),
             drafts: std::collections::HashMap::new(),
             composer: crate::native_composer::NativeComposerState::default(),
@@ -1370,9 +1397,6 @@ impl SimpleComponent for NativeApplication {
             document_attachments: std::collections::HashSet::new(),
             pending_clipboard_images: std::collections::HashMap::new(),
             pending_send: None,
-            pending_edit: None,
-            reply_to: None,
-            editing: None,
             account_receipts_off: false,
             link: LinkStatus::Starting,
             syncing: false,
@@ -1605,7 +1629,7 @@ fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssPr
 
 impl NativeApplication {
     fn header_subtitle(&self) -> String {
-        let Some(chat) = &self.active_chat else {
+        let Some(chat) = &self.open_chat.active_chat else {
             return String::new();
         };
         if let Some((name, _)) = self.typing.get(chat) {
@@ -1619,7 +1643,8 @@ impl NativeApplication {
     }
 
     fn typing_label(&self) -> String {
-        self.active_chat
+        self.open_chat
+            .active_chat
             .as_ref()
             .and_then(|chat| self.typing.get(chat))
             .map(|(name, _)| format!("{name} is typing"))
@@ -1627,7 +1652,8 @@ impl NativeApplication {
     }
 
     fn typing_name(&self) -> String {
-        self.active_chat
+        self.open_chat
+            .active_chat
             .as_ref()
             .and_then(|chat| self.typing.get(chat))
             .map(|(name, _)| name.clone())
@@ -1635,7 +1661,7 @@ impl NativeApplication {
     }
 
     fn typing_avatar(&self) -> Option<gtk::gdk::Texture> {
-        let (_, sender) = self.typing.get(self.active_chat.as_ref()?)?;
+        let (_, sender) = self.typing.get(self.open_chat.active_chat.as_ref()?)?;
         dialogs::cached_texture(self.avatars.get(sender)?)
     }
 
@@ -1752,7 +1778,12 @@ impl NativeApplication {
     /// Scrolls to a message and selects it: the row takes focus, with its
     /// ring forced visible, and becomes the target of reply/copy actions.
     fn scroll_message_into_view(&mut self, id: &str) {
-        let Some(position) = self.message_ids.iter().position(|message| message == id) else {
+        let Some(position) = self
+            .open_chat
+            .message_ids
+            .iter()
+            .position(|message| message == id)
+        else {
             return;
         };
         self.message_target = Some(id.to_owned());
@@ -1797,7 +1828,7 @@ impl NativeApplication {
         if self.message_selection.is_some() {
             return;
         }
-        if !self.message_ids.contains(&id) {
+        if !self.open_chat.message_ids.contains(&id) {
             return;
         }
         let Some(parent) = self.message_menu.parent() else {
@@ -1878,7 +1909,7 @@ impl NativeApplication {
             respond.append(Some(&gettext("Copy Text")), Some("message.copy"));
         }
         respond.append(Some(&gettext("Reply")), Some("message.reply"));
-        if self.editable_messages.contains_key(&message.id) {
+        if self.open_chat.editable_messages.contains_key(&message.id) {
             respond.append(Some(&gettext("Edit")), Some("message.edit"));
         }
         respond.append(Some(&gettext("Forward…")), Some("message.forward"));
@@ -1942,7 +1973,7 @@ impl NativeApplication {
 
     fn selected_message(&self) -> Option<&crate::model::Message> {
         self.selected_message_id()
-            .and_then(|id| self.message_snapshots.get(&id))
+            .and_then(|id| self.open_chat.message_snapshots.get(&id))
     }
 
     fn selected_attachment(&self) -> Option<crate::native_attachments::AttachmentPresentation> {
@@ -1993,6 +2024,7 @@ impl NativeApplication {
             && self.pending_send.is_none()
             && !self.audio.voice_send_pending
             && self
+                .open_chat
                 .active_chat
                 .as_deref()
                 .and_then(|id| self.chat_snapshots.iter().find(|chat| chat.id == id))
@@ -2001,6 +2033,7 @@ impl NativeApplication {
 
     fn activate_attachment(&mut self, id: &str) {
         let Some(action) = self
+            .open_chat
             .message_snapshots
             .get(id)
             .and_then(crate::native_attachments::project)
@@ -2013,6 +2046,7 @@ impl NativeApplication {
         match action {
             crate::model::Action::Download { chat, message } => {
                 if let Some(media) = self
+                    .open_chat
                     .message_snapshots
                     .get_mut(&message)
                     .and_then(|message| message.content.media_mut())
@@ -2030,6 +2064,7 @@ impl NativeApplication {
             }
             crate::model::Action::OpenFile(path) => {
                 let content = self
+                    .open_chat
                     .message_snapshots
                     .get(id)
                     .map(|message| &message.content);
@@ -2068,7 +2103,12 @@ impl NativeApplication {
     }
 
     fn paste_clipboard_image(&mut self, sender: &ComponentSender<Self>) {
-        let Some(chat) = self.active_chat.clone().filter(|_| self.can_attach()) else {
+        let Some(chat) = self
+            .open_chat
+            .active_chat
+            .clone()
+            .filter(|_| self.can_attach())
+        else {
             return;
         };
         if !self.portal_requests.borrow().is_empty() {
@@ -2141,7 +2181,7 @@ impl NativeApplication {
     }
 
     fn stage_clipboard_image(&mut self, chat: String, pixels: ClipboardPixels) {
-        if self.active_chat.as_deref() != Some(&chat) || !self.can_attach() {
+        if self.open_chat.active_chat.as_deref() != Some(&chat) || !self.can_attach() {
             self.status = gettext("Choose an available conversation before pasting an image");
             return;
         }
@@ -2286,13 +2326,18 @@ impl NativeApplication {
     }
 
     fn refresh_message_row(&mut self, id: &str) {
-        if self.message_ids.iter().any(|known| known == id) {
+        if self.open_chat.message_ids.iter().any(|known| known == id) {
             self.rebuild_message_rows(false);
         }
     }
 
     fn react_selected(&mut self, emoji: String) {
-        let Some((chat, message)) = self.active_chat.clone().zip(self.selected_message_id()) else {
+        let Some((chat, message)) = self
+            .open_chat
+            .active_chat
+            .clone()
+            .zip(self.selected_message_id())
+        else {
             return;
         };
         if reaction_drawer::remember_reaction(&mut self.settings.recent_reactions, &emoji) {
@@ -2348,14 +2393,14 @@ impl NativeApplication {
             selection.retain(|id| !ids.contains(id));
         } else {
             selection.extend(ids);
-            let order = &self.message_ids;
+            let order = &self.open_chat.message_ids;
             selection.sort_by_cached_key(|id| order.iter().position(|known| known == id));
         }
         self.rebuild_message_rows(false);
     }
 
     fn forward_selected(&mut self, destinations: Vec<String>) {
-        let Some(source) = self.active_chat.clone() else {
+        let Some(source) = self.open_chat.active_chat.clone() else {
             return;
         };
         let messages = match self.message_selection.as_ref() {
@@ -2478,7 +2523,7 @@ impl NativeApplication {
     }
 
     fn create_poll(&mut self, draft: crate::model::PollDraft) {
-        let Some(chat) = self.active_chat.clone() else {
+        let Some(chat) = self.open_chat.active_chat.clone() else {
             return;
         };
         let Ok(draft) = draft.validated() else {
@@ -2561,7 +2606,7 @@ impl NativeApplication {
         else {
             return;
         };
-        for message in self.message_snapshots.values_mut() {
+        for message in self.open_chat.message_snapshots.values_mut() {
             if let crate::model::Content::Sticker { media, .. } = &mut message.content
                 && should_auto_download(Some(media))
             {
@@ -2580,10 +2625,11 @@ impl NativeApplication {
         id: &str,
         result: Result<std::path::PathBuf, crate::backend::DownloadFailure>,
     ) {
-        if self.active_chat.as_deref() != Some(chat) {
+        if self.open_chat.active_chat.as_deref() != Some(chat) {
             return;
         }
         let Some(media) = self
+            .open_chat
             .message_snapshots
             .get_mut(id)
             .and_then(|message| message.content.media_mut())
@@ -2611,7 +2657,7 @@ impl NativeApplication {
     }
 
     fn message_deleted(&mut self, chat: &str, id: &str) {
-        if self.active_chat.as_deref() != Some(chat) {
+        if self.open_chat.active_chat.as_deref() != Some(chat) {
             return;
         }
         // Deferred updates land first, so the deletion changes only its row.
@@ -2627,30 +2673,37 @@ impl NativeApplication {
             .audio_errors
             .remove(&(chat.to_owned(), id.to_owned()));
         self.audio.audio_registry.borrow_mut().remove(id);
-        let Some(position) = self.message_ids.iter().position(|known| known == id) else {
+        let Some(position) = self
+            .open_chat
+            .message_ids
+            .iter()
+            .position(|known| known == id)
+        else {
             return;
         };
-        self.message_ids.remove(position);
+        self.open_chat.message_ids.remove(position);
         if let Some(selection) = self.message_selection.as_mut() {
             selection.retain(|known| known != id);
         }
-        self.message_snapshots.remove(id);
-        self.editable_messages.remove(id);
+        self.open_chat.message_snapshots.remove(id);
+        self.open_chat.editable_messages.remove(id);
         self.rebuild_message_rows(false);
         if self
+            .open_chat
             .editing
             .as_ref()
             .is_some_and(|(_, editing_id)| editing_id == id)
         {
-            self.editing = None;
-            self.pending_edit = None;
+            self.open_chat.editing = None;
+            self.open_chat.pending_edit = None;
         }
         if self
+            .open_chat
             .reply_to
             .as_ref()
             .is_some_and(|(_, reply_id)| reply_id == id)
         {
-            self.reply_to = None;
+            self.open_chat.reply_to = None;
         }
         self.sync_transcript();
         if self.selected_message_id().is_none() {
@@ -2663,41 +2716,31 @@ impl NativeApplication {
     }
 
     fn clear_active_chat(&mut self) {
-        self.reset_open_chat_state();
+        self.clear_open_chat_state();
         self.pending_send = None;
         self.page_title = "Conversation unavailable".into();
         self.status = gettext("This chat is no longer available.");
     }
 
-    fn reset_open_chat_state(&mut self) {
+    fn clear_open_chat_state(&mut self) {
+        // Leaving an account screen intentionally retains its starred-message cache.
         self.starred.clear();
-        self.audio.media.stop_playback();
-        self.audio.playing_audio = None;
-        self.audio.waveform_queue.clear();
-        if let Some(cancel) = self.audio.waveform_cancel.take() {
-            cancel.store(true, std::sync::atomic::Ordering::Release);
-        }
-        self.audio.audio_waveforms.clear();
-        self.audio.waveform_attempted.clear();
-        self.audio.audio_errors.clear();
-        self.audio.audio_registry.borrow_mut().clear();
-        self.active_chat = None;
-        self.pending_edit = None;
-        self.reply_to = None;
-        self.editing = None;
-        self.message_ids.clear();
-        self.message_snapshots.clear();
-        self.editable_messages.clear();
-        self.transcript.clear();
-        self.pending_transcript.clear();
+        self.reset_open_chat_state();
+        self.open_chat.reset();
         self.audio.selected_voice = None;
         self.audio.selected_voice_message = None;
         self.messages.clear();
     }
 
+    fn reset_open_chat_state(&mut self) {
+        self.audio.reset_for_chat();
+        self.open_chat.active_chat = None;
+    }
+
     /// File names of the files staged for the open chat.
     fn pending_attachment_names(&self) -> Vec<String> {
-        self.active_chat
+        self.open_chat
+            .active_chat
             .as_ref()
             .and_then(|chat| self.pending_attachments.get(chat))
             .into_iter()
@@ -2713,11 +2756,13 @@ impl NativeApplication {
 
     fn pending_attachment_count(&self) -> usize {
         let files = self
+            .open_chat
             .active_chat
             .as_ref()
             .and_then(|chat| self.pending_attachments.get(chat))
             .map_or(0, Vec::len);
         let image = self
+            .open_chat
             .active_chat
             .as_ref()
             .is_some_and(|chat| self.pending_clipboard_images.contains_key(chat));

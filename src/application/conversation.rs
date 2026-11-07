@@ -32,9 +32,9 @@ impl NativeApplication {
     pub(super) fn press_escape(&mut self) -> EscapeAction {
         let action = EscapeAction::for_state(
             self.message_selection.is_some(),
-            self.editing.is_some(),
-            self.reply_to.is_some(),
-            self.active_chat.is_some(),
+            self.open_chat.editing.is_some(),
+            self.open_chat.reply_to.is_some(),
+            self.open_chat.active_chat.is_some(),
         );
         match action {
             EscapeAction::CancelSelection => {
@@ -53,13 +53,13 @@ impl NativeApplication {
     /// Returns to the empty home screen. The draft stays with the chat and
     /// nothing is marked read, since reading only follows the open chat.
     pub(super) fn close_chat(&mut self) {
-        let Some(chat) = self.active_chat.clone() else {
+        let Some(chat) = self.open_chat.active_chat.clone() else {
             return;
         };
         self.cancel_edit();
         self.cancel_reply();
         self.cancel_portal_requests();
-        self.reset_open_chat_state();
+        self.clear_open_chat_state();
         self.composer.cancel_context(&chat);
         self.chat_projection.clear_selection();
         self.chats
@@ -83,7 +83,7 @@ impl NativeApplication {
         let Some(quoted_id) = message.quoted.map(|quoted| quoted.id) else {
             return;
         };
-        if self.message_ids.contains(&quoted_id) {
+        if self.open_chat.message_ids.contains(&quoted_id) {
             self.scroll_message_into_view(&quoted_id);
         } else if let Some(backend) = &self.backend {
             self.pending_quote_navigation = Some((message.chat.clone(), quoted_id.clone()));
@@ -97,66 +97,76 @@ impl NativeApplication {
     }
 
     pub(super) fn reply_selected(&mut self) {
-        let Some((chat, message)) = self.active_chat.clone().zip(self.selected_message_id()) else {
+        let Some((chat, message)) = self
+            .open_chat
+            .active_chat
+            .clone()
+            .zip(self.selected_message_id())
+        else {
             return;
         };
         self.composer.begin_reply(&chat, message.clone());
-        self.reply_to = Some((chat, message));
-        self.editing = None;
+        self.open_chat.reply_to = Some((chat, message));
+        self.open_chat.editing = None;
         self.status = gettext("Replying to selected message");
         self.focus_composer();
     }
 
     pub(super) fn edit_selected(&mut self) {
-        if self.pending_edit.is_some() {
+        if self.open_chat.pending_edit.is_some() {
             self.status = gettext("Saving edit");
             return;
         }
-        let Some((chat, message)) = self.active_chat.clone().zip(self.selected_message_id()) else {
+        let Some((chat, message)) = self
+            .open_chat
+            .active_chat
+            .clone()
+            .zip(self.selected_message_id())
+        else {
             return;
         };
-        if let Some(text) = self.editable_messages.get(&message).cloned() {
-            self.editing = Some((chat.clone(), message.clone()));
-            self.reply_to = None;
+        if let Some(text) = self.open_chat.editable_messages.get(&message).cloned() {
+            self.open_chat.editing = Some((chat.clone(), message.clone()));
+            self.open_chat.reply_to = None;
             self.draft = text;
             self.composer.begin_edit(&chat, message, self.draft.clone());
             self.composer_buffer.set_text(&self.draft);
             self.status = gettext("Editing selected message");
             self.focus_composer();
         } else {
-            self.reply_to = Some((chat.clone(), message.clone()));
+            self.open_chat.reply_to = Some((chat.clone(), message.clone()));
             self.composer.begin_reply(&chat, message);
             self.composer.begin_reply(
-                &self.reply_to.as_ref().unwrap().0,
-                self.reply_to.as_ref().unwrap().1.clone(),
+                &self.open_chat.reply_to.as_ref().unwrap().0,
+                self.open_chat.reply_to.as_ref().unwrap().1.clone(),
             );
             self.status = gettext("Replying to selected message");
         }
     }
 
     pub(super) fn cancel_reply(&mut self) {
-        if let Some((chat, _)) = self.reply_to.take() {
+        if let Some((chat, _)) = self.open_chat.reply_to.take() {
             self.composer.cancel_context(&chat);
         }
     }
 
     pub(super) fn cancel_edit(&mut self) {
-        if self.editing.take().is_some()
-            && let Some(chat) = &self.active_chat
+        if self.open_chat.editing.take().is_some()
+            && let Some(chat) = &self.open_chat.active_chat
         {
             self.draft = self.drafts.get(chat).cloned().unwrap_or_default();
             self.composer.cancel_context(chat);
             self.composer.set_draft(chat, self.draft.clone());
             self.composer_buffer.set_text(&self.draft);
         }
-        self.pending_edit = None;
+        self.open_chat.pending_edit = None;
     }
 
     pub(super) fn draft_changed(&mut self, text: String, sender: &ComponentSender<Self>) {
         self.draft = text;
-        if let Some(chat) = &self.active_chat {
+        if let Some(chat) = &self.open_chat.active_chat {
             self.composer.set_draft(chat, self.draft.clone());
-            if self.editing.is_none() {
+            if self.open_chat.editing.is_none() {
                 self.drafts.insert(chat.clone(), self.draft.clone());
             }
             if self.settings.send_typing
@@ -186,6 +196,7 @@ impl NativeApplication {
     ) {
         // The draft keeps visible labels; only the backend gets `@<user>` tokens.
         let (wire, mentions) = self
+            .open_chat
             .active_chat
             .as_deref()
             .and_then(|chat| self.chat_snapshots.iter().find(|known| known.id == chat))
@@ -200,14 +211,14 @@ impl NativeApplication {
                 },
             );
         self.draft = text;
-        if let Some(chat) = &self.active_chat {
+        if let Some(chat) = &self.open_chat.active_chat {
             self.composer.set_draft(chat, self.draft.clone());
         }
         if self.pending_send.is_some() || self.voice_send_pending() {
             self.status = gettext("Waiting for previous message.");
             return;
         }
-        let Some(chat) = self.active_chat.clone() else {
+        let Some(chat) = self.open_chat.active_chat.clone() else {
             return;
         };
         let attachment_count = self.pending_attachment_count();
@@ -224,19 +235,19 @@ impl NativeApplication {
             return;
         }
         if let Some(backend) = &self.backend {
-            if attachment_count > 0 && self.editing.is_some() {
+            if attachment_count > 0 && self.open_chat.editing.is_some() {
                 self.status = gettext("Finish editing before sending attachments.");
                 return;
             }
-            if let Some((edit_chat, id)) = self.editing.as_ref()
+            if let Some((edit_chat, id)) = self.open_chat.editing.as_ref()
                 && edit_chat == &chat
             {
-                if self.pending_edit.is_some() {
+                if self.open_chat.pending_edit.is_some() {
                     self.status = gettext("Saving edit");
                     return;
                 }
                 self.pending_composer_request = self.composer.submit(&chat);
-                self.pending_edit = Some((chat.clone(), id.clone(), self.draft.clone()));
+                self.open_chat.pending_edit = Some((chat.clone(), id.clone(), self.draft.clone()));
                 backend.send(crate::backend::Command::EditText {
                     chat,
                     id: id.clone(),
@@ -247,6 +258,7 @@ impl NativeApplication {
                 return;
             }
             let quote = self
+                .open_chat
                 .reply_to
                 .as_ref()
                 .filter(|(reply_chat, _)| reply_chat == &chat)
@@ -324,46 +336,57 @@ impl NativeApplication {
         messages: Vec<crate::model::Message>,
         older: bool,
     ) {
-        if self.active_chat.as_deref() != Some(&chat) {
+        if self.open_chat.active_chat.as_deref() != Some(&chat) {
             return;
         }
         // Deferred updates land first, so this page changes only its own
         // rows, as when every update was drawn on arrival.
         self.flush_transcript();
-        let anchor = older.then(|| self.message_ids.first().cloned()).flatten();
+        let anchor = older
+            .then(|| self.open_chat.message_ids.first().cloned())
+            .flatten();
         let mut page_ids = std::collections::HashSet::new();
         let messages = messages
             .into_iter()
             .filter(|message| {
                 page_ids.insert(message.id.clone())
-                    && !self.message_snapshots.contains_key(&message.id)
+                    && !self.open_chat.message_snapshots.contains_key(&message.id)
             })
             .collect::<Vec<_>>();
         let live_messages_appended = !older && !messages.is_empty();
         if older {
             // One splice keeps a page of history linear instead of shifting
             // the whole window per message.
-            self.message_ids
+            self.open_chat
+                .message_ids
                 .splice(0..0, messages.iter().map(|message| message.id.clone()));
             for message in messages {
                 if let Some(text) = editable_text(&message) {
-                    self.editable_messages.insert(message.id.clone(), text);
+                    self.open_chat
+                        .editable_messages
+                        .insert(message.id.clone(), text);
                 }
-                self.message_snapshots.insert(message.id.clone(), message);
+                self.open_chat
+                    .message_snapshots
+                    .insert(message.id.clone(), message);
             }
         } else {
             for message in messages {
                 if let Some(text) = editable_text(&message) {
-                    self.editable_messages.insert(message.id.clone(), text);
+                    self.open_chat
+                        .editable_messages
+                        .insert(message.id.clone(), text);
                 }
-                self.message_ids.push(message.id.clone());
-                self.message_snapshots
+                self.open_chat.message_ids.push(message.id.clone());
+                self.open_chat
+                    .message_snapshots
                     .insert(message.id.clone(), message.clone());
             }
         }
-        for id in trim_message_window(&mut self.message_ids, older, ACTIVE_MESSAGE_LIMIT) {
-            self.editable_messages.remove(&id);
-            self.message_snapshots.remove(&id);
+        for id in trim_message_window(&mut self.open_chat.message_ids, older, ACTIVE_MESSAGE_LIMIT)
+        {
+            self.open_chat.editable_messages.remove(&id);
+            self.open_chat.message_snapshots.remove(&id);
         }
         self.download_missing_stickers();
         self.queue_waveforms();
@@ -371,7 +394,11 @@ impl NativeApplication {
         self.sync_transcript();
         if older
             && let Some(anchor) = anchor
-            && let Some(position) = self.message_ids.iter().position(|id| id == &anchor)
+            && let Some(position) = self
+                .open_chat
+                .message_ids
+                .iter()
+                .position(|id| id == &anchor)
         {
             let view = self.messages.view.clone();
             gtk::glib::idle_add_local_once(move || {
@@ -385,12 +412,12 @@ impl NativeApplication {
     pub(super) fn apply_transcript_change(&mut self, change: TranscriptChange) {
         let message_changed = absorb_transcript_change(
             &mut OpenTranscript {
-                active_chat: self.active_chat.as_deref(),
-                ids: &self.message_ids,
-                snapshots: &mut self.message_snapshots,
-                editable: &mut self.editable_messages,
+                active_chat: self.open_chat.active_chat.as_deref(),
+                ids: &self.open_chat.message_ids,
+                snapshots: &mut self.open_chat.message_snapshots,
+                editable: &mut self.open_chat.editable_messages,
                 contacts: &mut self.contacts,
-                pending: &mut self.pending_transcript,
+                pending: &mut self.open_chat.pending_transcript,
             },
             change,
         );
@@ -402,26 +429,27 @@ impl NativeApplication {
     /// Applies the transcript work a backend batch deferred. A rebuild for
     /// any other reason already covers it.
     pub(super) fn flush_transcript(&mut self) {
-        if self.pending_transcript.rows {
+        if self.open_chat.pending_transcript.rows {
             self.rebuild_message_rows(false);
         }
     }
 
     pub(super) fn edited(&mut self, chat: String, id: String, success: bool) {
-        if !is_edit_completion(self.pending_edit.as_ref(), &chat, &id) {
+        if !is_edit_completion(self.open_chat.pending_edit.as_ref(), &chat, &id) {
             return;
         }
-        self.pending_edit = None;
+        self.open_chat.pending_edit = None;
         if success {
             if let Some(request) = self.pending_composer_request.take() {
                 self.composer.complete_edit(&request);
             }
             if self
+                .open_chat
                 .editing
                 .as_ref()
                 .is_some_and(|editing| editing == &(chat.clone(), id.clone()))
             {
-                self.editing = None;
+                self.open_chat.editing = None;
                 self.draft = self.drafts.get(&chat).cloned().unwrap_or_default();
                 self.composer.cancel_context(&chat);
                 self.composer.set_draft(&chat, self.draft.clone());
@@ -496,7 +524,9 @@ impl NativeApplication {
                 self.pending_clipboard_images.remove(&chat);
             }
             let unchanged = self.drafts.get(&chat) == Some(&pending.text);
-            if unchanged && self.active_chat.as_deref() == Some(&chat) && self.draft == pending.text
+            if unchanged
+                && self.open_chat.active_chat.as_deref() == Some(&chat)
+                && self.draft == pending.text
             {
                 self.draft.clear();
                 self.composer_buffer.set_text("");
@@ -505,11 +535,12 @@ impl NativeApplication {
                 self.drafts.remove(&chat);
             }
             if self
+                .open_chat
                 .reply_to
                 .as_ref()
                 .is_some_and(|reply| Some(&reply.1) == pending.reply.as_ref())
             {
-                self.reply_to = None;
+                self.open_chat.reply_to = None;
             }
             self.status = gettext("Message sent");
         } else {
@@ -520,7 +551,7 @@ impl NativeApplication {
                 (false, true) => pending.text.clone(),
                 (false, false) => format!("{}\n{typed}", pending.text),
             };
-            if self.active_chat.as_deref() == Some(&chat) {
+            if self.open_chat.active_chat.as_deref() == Some(&chat) {
                 if !pending.text.is_empty() {
                     let merged = merge(&self.draft);
                     self.composer_buffer.set_text(&merged);
@@ -544,14 +575,19 @@ impl NativeApplication {
     /// Title and one-line preview for the bar above the composer: the message
     /// being edited, or the one being replied to and who wrote it.
     pub(super) fn composer_context(&self) -> (String, String) {
-        if let Some((_, id)) = &self.editing {
-            let preview = self.message_snapshots.get(id).map(|m| m.summary());
+        if let Some((_, id)) = &self.open_chat.editing {
+            let preview = self
+                .open_chat
+                .message_snapshots
+                .get(id)
+                .map(|m| m.summary());
             return ("Editing message".into(), preview.unwrap_or_default());
         }
         let Some(message) = self
+            .open_chat
             .reply_to
             .as_ref()
-            .and_then(|(_, id)| self.message_snapshots.get(id))
+            .and_then(|(_, id)| self.open_chat.message_snapshots.get(id))
         else {
             return ("Replying to message".into(), String::new());
         };
@@ -564,9 +600,10 @@ impl NativeApplication {
     }
 
     pub(super) fn can_attach(&self) -> bool {
-        self.editing.is_none()
+        self.open_chat.editing.is_none()
             && self.pending_send.is_none()
             && self
+                .open_chat
                 .active_chat
                 .as_deref()
                 .and_then(|id| self.chat_snapshots.iter().find(|chat| chat.id == id))
@@ -579,30 +616,39 @@ impl NativeApplication {
     }
 
     fn refresh_transcript_text(&mut self) {
-        self.transcript =
-            transcript_rows(&self.message_ids, &self.message_snapshots, &self.contacts);
-        self.pending_transcript.text = false;
+        self.open_chat.transcript = transcript_rows(
+            &self.open_chat.message_ids,
+            &self.open_chat.message_snapshots,
+            &self.contacts,
+        );
+        self.open_chat.pending_transcript.text = false;
     }
 
     pub(super) fn rebuild_message_rows(&mut self, live_messages_appended: bool) {
-        self.pending_transcript.rows = false;
-        let len = self.message_ids.len();
+        self.open_chat.pending_transcript.rows = false;
+        let len = self.open_chat.message_ids.len();
         let mut just_opened = false;
         if self.opened_unread > 0 && len > 0 {
             just_opened = true;
             let first_unread = len - self.opened_unread.min(len);
-            self.unread_marker = Some(self.message_ids[first_unread].clone());
+            self.unread_marker = Some(self.open_chat.message_ids[first_unread].clone());
             self.opened_unread = 0;
         }
         let unread = self
             .unread_marker
             .as_ref()
-            .and_then(|marker| self.message_ids.iter().position(|id| id == marker))
+            .and_then(|marker| {
+                self.open_chat
+                    .message_ids
+                    .iter()
+                    .position(|id| id == marker)
+            })
             .map_or(0, |position| len - position);
         let messages = self
+            .open_chat
             .message_ids
             .iter()
-            .filter_map(|id| self.message_snapshots.get(id).cloned())
+            .filter_map(|id| self.open_chat.message_snapshots.get(id).cloned())
             .collect::<Vec<_>>();
         let voice = |message: &crate::model::Message| self.project_voice(message);
         let (rows, unread_row) = message_rows(
@@ -639,7 +685,7 @@ impl NativeApplication {
         });
         let count = rows.len();
         let new_tail_arrived = old_len > 0
-            && old_last.as_ref() != self.message_ids.last()
+            && old_last.as_ref() != self.open_chat.message_ids.last()
             && new_messages_need_notice(at_bottom, live_messages_appended);
         // Rows that only changed (delivery, reactions, grouping) keep their
         // widget; replacing them re-creates it, which blanks media and shifts
@@ -692,7 +738,7 @@ impl NativeApplication {
                     Some(at) => scroll_to_unread(
                         &self.messages.view,
                         at as u32,
-                        self.message_ids[at].clone(),
+                        self.open_chat.message_ids[at].clone(),
                     ),
                     None => scroll_to_end(&self.messages.view),
                 }
@@ -700,7 +746,7 @@ impl NativeApplication {
                 glide_to_end(&self.messages.view);
                 // Only a new last message fades: older pages, separators and
                 // reactions leave the tail unchanged.
-                if let Some(id) = self.message_ids.last()
+                if let Some(id) = self.open_chat.message_ids.last()
                     && old_last.as_ref() != Some(id)
                 {
                     mark_arriving(id.clone());
@@ -735,10 +781,10 @@ impl NativeApplication {
     }
 
     pub(super) fn copy_transcript(&mut self) {
-        if self.pending_transcript.text {
+        if self.open_chat.pending_transcript.text {
             self.refresh_transcript_text();
         }
-        if let Some(text) = crate::native_transcript::copied_text(&self.transcript) {
+        if let Some(text) = crate::native_transcript::copied_text(&self.open_chat.transcript) {
             crate::native_portals::NativePortals::write_clipboard_text(
                 &self.window.clipboard(),
                 &text,
@@ -750,7 +796,7 @@ impl NativeApplication {
 
 /// Transcript work a backend batch defers to its end, so a burst of receipts
 /// or push names rebuilds the open conversation once instead of per event.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub(super) struct PendingTranscript {
     rows: bool,
     text: bool,
