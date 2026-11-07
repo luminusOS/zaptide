@@ -14,7 +14,7 @@ const SWEEP_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 pub(super) struct Retention {
     days: Option<u32>,
     next: Option<Instant>,
-    running: bool,
+    pub(super) running: bool,
 }
 
 impl Worker {
@@ -71,7 +71,6 @@ impl Worker {
                     .cloned()
                     .collect();
                 MediaSwept {
-                    session_generation,
                     cleared,
                     bytes: report.bytes,
                     failed: report.failed,
@@ -80,21 +79,20 @@ impl Worker {
             })
             .await
             .unwrap_or(MediaSwept {
-                session_generation,
                 cleared: Vec::new(),
                 bytes: 0,
                 failed: 0,
                 more: false,
             });
-            let _ = commands.send(Command::MediaSwept(swept));
+            let _ = Completion {
+                generation: session_generation,
+                done: Done::MediaSwept(swept),
+            }
+            .send(&commands);
         });
     }
 
     pub(super) fn media_swept(&mut self, swept: MediaSwept) {
-        self.retention.running = false;
-        if swept.session_generation != self.session_generation {
-            return;
-        }
         let mut forgotten = 0;
         for (chat, id, path) in &swept.cleared {
             // A download that finished meanwhile put a new file in the same place.
@@ -196,10 +194,16 @@ mod tests {
         worker.set_media_retention(Some(30));
         worker.retention.next = Some(Instant::now());
         worker.pump_media_retention();
-        let Some(Command::MediaSwept(swept)) = inbox.recv().await else {
+        let Some(
+            command @ Command::Completed(Completion {
+                done: Done::MediaSwept(_),
+                ..
+            }),
+        ) = inbox.recv().await
+        else {
             panic!("the cleanup reports back");
         };
-        worker.media_swept(swept);
+        worker.handle_command(command).await;
 
         assert!(!old.exists());
         assert!(recent.exists());
@@ -276,7 +280,6 @@ mod tests {
             .unwrap();
 
         worker.media_swept(MediaSwept {
-            session_generation: worker.session_generation,
             cleared: vec![(CHAT.into(), "again".into(), path.clone())],
             bytes: 0,
             failed: 0,

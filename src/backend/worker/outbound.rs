@@ -1147,15 +1147,18 @@ impl Worker {
                 match outcome {
                     Ok((row, raw)) => {
                         let (sent_tx, mut sent_rx) = tokio::sync::mpsc::unbounded_channel();
-                        let queued = commands
-                            .send(Command::OutboundBatch {
+                        let queued = Completion {
+                            generation: session_generation,
+                            done: Done::OutboundBatch {
                                 chat: chat.clone(),
-                                session_generation,
+
                                 row: Box::new(row),
                                 raw,
                                 sent: sent_tx,
-                            })
-                            .is_ok();
+                            },
+                        }
+                        .send(&commands)
+                        .is_ok();
                         let success = queued && sent_rx.recv().await.unwrap_or(false);
                         consume_attachment_reply(
                             success,
@@ -1164,26 +1167,34 @@ impl Worker {
                             &mut quoted,
                             &mut mentions,
                         );
-                        let _ = commands.send(Command::AttachmentCompleted {
-                            chat: chat.clone(),
-                            session_generation,
-                            batch,
-                            index,
-                            total,
-                            path,
-                            success,
-                        });
+                        let _ = Completion {
+                            generation: session_generation,
+                            done: Done::AttachmentCompleted {
+                                chat: chat.clone(),
+
+                                batch,
+                                index,
+                                total,
+                                path,
+                                success,
+                            },
+                        }
+                        .send(&commands);
                     }
                     Err(_) => {
-                        let _ = commands.send(Command::AttachmentCompleted {
-                            chat: chat.clone(),
-                            session_generation,
-                            batch,
-                            index,
-                            total,
-                            path,
-                            success: false,
-                        });
+                        let _ = Completion {
+                            generation: session_generation,
+                            done: Done::AttachmentCompleted {
+                                chat: chat.clone(),
+
+                                batch,
+                                index,
+                                total,
+                                path,
+                                success: false,
+                            },
+                        }
+                        .send(&commands);
                     }
                 }
             }
@@ -1237,20 +1248,28 @@ impl Worker {
             .await;
             match outcome {
                 Ok((row, raw)) => {
-                    let _ = commands.send(Command::Outbound {
-                        chat,
-                        session_generation,
-                        row: Box::new(row),
-                        raw,
-                    });
+                    let _ = Completion {
+                        generation: session_generation,
+                        done: Done::Outbound {
+                            chat,
+
+                            row: Box::new(row),
+                            raw,
+                        },
+                    }
+                    .send(&commands);
                 }
                 Err(error) => {
-                    let _ = commands.send(Command::Sent {
-                        chat,
-                        id: String::new(),
-                        session_generation,
-                        error: Some(format!("Could not send the picture: {error}")),
-                    });
+                    let _ = Completion {
+                        generation: session_generation,
+                        done: Done::Sent {
+                            chat,
+                            id: String::new(),
+
+                            error: Some(format!("Could not send the picture: {error}")),
+                        },
+                    }
+                    .send(&commands);
                 }
             }
         });
@@ -1308,20 +1327,28 @@ impl Worker {
             .await;
             match outcome {
                 Ok((row, raw)) => {
-                    let _ = commands.send(Command::Outbound {
-                        chat,
-                        session_generation,
-                        row: Box::new(row),
-                        raw,
-                    });
+                    let _ = Completion {
+                        generation: session_generation,
+                        done: Done::Outbound {
+                            chat,
+
+                            row: Box::new(row),
+                            raw,
+                        },
+                    }
+                    .send(&commands);
                 }
                 Err(error) => {
-                    let _ = commands.send(Command::Sent {
-                        chat,
-                        id: String::new(),
-                        session_generation,
-                        error: Some(format!("Could not send the voice message: {error}")),
-                    });
+                    let _ = Completion {
+                        generation: session_generation,
+                        done: Done::Sent {
+                            chat,
+                            id: String::new(),
+
+                            error: Some(format!("Could not send the voice message: {error}")),
+                        },
+                    }
+                    .send(&commands);
                 }
             }
         });
@@ -1398,21 +1425,29 @@ impl Worker {
             .await;
             match outcome {
                 Ok((row, raw)) => {
-                    let _ = commands.send(Command::Outbound {
-                        chat,
-                        session_generation,
-                        row: Box::new(row),
-                        raw,
-                    });
+                    let _ = Completion {
+                        generation: session_generation,
+                        done: Done::Outbound {
+                            chat,
+
+                            row: Box::new(row),
+                            raw,
+                        },
+                    }
+                    .send(&commands);
                 }
                 Err(error) => {
                     log::warn!("could not send the sticker: {error}");
-                    let _ = commands.send(Command::Sent {
-                        chat,
-                        id,
-                        session_generation,
-                        error: Some(sanitized_send_error().to_owned()),
-                    });
+                    let _ = Completion {
+                        generation: session_generation,
+                        done: Done::Sent {
+                            chat,
+                            id,
+
+                            error: Some(sanitized_send_error().to_owned()),
+                        },
+                    }
+                    .send(&commands);
                 }
             }
         });
@@ -1696,14 +1731,18 @@ impl Worker {
         tokio::spawn(async move {
             let result = client.edit_message(jid, id.clone(), message).await;
             let success = result.is_ok();
-            let _ = commands.send(Command::Edited {
-                chat: chat.clone(),
-                id,
-                session_generation,
-                success,
-                content,
-                mentions: mention_rows,
-            });
+            let _ = Completion {
+                generation: session_generation,
+                done: Done::Edited {
+                    chat: chat.clone(),
+                    id,
+
+                    success,
+                    content,
+                    mentions: mention_rows,
+                },
+            }
+            .send(&commands);
             if result.is_err()
                 && session_generation_shared.load(Ordering::Acquire) == session_generation
             {
@@ -1723,7 +1762,7 @@ impl Worker {
         row: Message,
         raw: Vec<u8>,
     ) {
-        if session_generation != self.session_generation || self.archive_cleanup_failed {
+        if self.archive_cleanup_failed {
             return;
         }
         // A sticker's pending row is already shown; fail it rather than
@@ -1774,7 +1813,7 @@ impl Worker {
         raw: Vec<u8>,
         sent: tokio::sync::mpsc::UnboundedSender<bool>,
     ) {
-        if session_generation != self.session_generation || self.archive_cleanup_failed {
+        if self.archive_cleanup_failed {
             let _ = sent.send(false);
             return;
         }

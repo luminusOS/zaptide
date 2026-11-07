@@ -109,22 +109,30 @@ impl Worker {
             .await;
             match fetched {
                 Ok(path) => {
-                    let _ = commands.send(Command::AvatarFetched {
-                        id,
-                        full,
-                        session_generation,
-                        avatar_generation,
-                        path,
-                    });
+                    let _ = Completion {
+                        generation: session_generation,
+                        done: Done::AvatarFetched {
+                            id,
+                            full,
+
+                            avatar_generation,
+                            path,
+                        },
+                    }
+                    .send(&commands);
                 }
                 Err(_error) => {
                     log::debug!("profile picture lookup failed");
-                    let _ = commands.send(Command::AvatarFailed {
-                        id,
-                        full,
-                        session_generation,
-                        avatar_generation,
-                    });
+                    let _ = Completion {
+                        generation: session_generation,
+                        done: Done::AvatarFailed {
+                            id,
+                            full,
+
+                            avatar_generation,
+                        },
+                    }
+                    .send(&commands);
                 }
             }
         });

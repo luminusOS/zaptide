@@ -129,12 +129,15 @@ impl Worker {
                 .is_err()
             {
                 log::info!("poll recovery: phone history request failed");
-                let _ = commands.send(Command::PollHistoryFailed {
-                    session_generation,
-                    chat,
-                    message: id,
-                    requested: now,
-                });
+                let _ = Completion {
+                    generation: session_generation,
+                    done: Done::PollHistoryFailed {
+                        chat,
+                        message: id,
+                        requested: now,
+                    },
+                }
+                .send(&commands);
             } else {
                 log::info!("poll recovery: phone history request sent");
             }
@@ -374,12 +377,15 @@ impl Worker {
             }
             .await
             .map_err(str::to_owned);
-            let _ = commands.send(Command::PollCreated {
-                session_generation,
-                chat,
-                draft,
-                result,
-            });
+            let _ = Completion {
+                generation: session_generation,
+                done: Done::PollCreated {
+                    chat,
+                    draft,
+                    result,
+                },
+            }
+            .send(&commands);
         });
     }
 
@@ -504,14 +510,17 @@ impl Worker {
                 .await
                 .map(|sent| sent.message_id)
                 .map_err(|_| "Could not send your vote. Please try again.".into());
-            let _ = commands.send(Command::PollVoted {
-                session_generation,
-                chat,
-                message: id,
-                choices,
-                at,
-                result,
-            });
+            let _ = Completion {
+                generation: session_generation,
+                done: Done::PollVoted {
+                    chat,
+                    message: id,
+                    choices,
+                    at,
+                    result,
+                },
+            }
+            .send(&commands);
         });
     }
 
@@ -679,11 +688,11 @@ impl Worker {
                 } else {
                     None
                 };
-                let _ = commands.send(Command::PollDecoded {
-                    session_generation,
-                    vote,
-                    choices,
-                });
+                let _ = Completion {
+                    generation: session_generation,
+                    done: Done::PollDecoded { vote, choices },
+                }
+                .send(&commands);
             });
         }
     }
@@ -752,21 +761,25 @@ mod tests {
         worker.poll_decrypting = 1;
 
         worker
-            .handle_command(Command::PollVoted {
-                session_generation: 0,
-                chat: "chat".into(),
-                message: "poll".into(),
-                choices: vec![1],
-                at: 40,
-                result: Ok("stale-vote".into()),
-            })
+            .handle_command(Command::Completed(Completion {
+                generation: 0,
+                done: Done::PollVoted {
+                    chat: "chat".into(),
+                    message: "poll".into(),
+                    choices: vec![1],
+                    at: 40,
+                    result: Ok("stale-vote".into()),
+                },
+            }))
             .await;
         worker
-            .handle_command(Command::PollDecoded {
-                session_generation: 0,
-                vote: pending,
-                choices: Some(vec![1]),
-            })
+            .handle_command(Command::Completed(Completion {
+                generation: 0,
+                done: Done::PollDecoded {
+                    vote: pending,
+                    choices: Some(vec![1]),
+                },
+            }))
             .await;
 
         let votes = worker.archive.poll_votes("chat", "poll").unwrap();
@@ -786,21 +799,23 @@ mod tests {
         let (mut worker, _events, _commands, _wa) = super::super::tests::worker();
         worker.session_generation = 1;
         worker
-            .handle_command(Command::PollCreated {
-                session_generation: 0,
-                chat: "chat".into(),
-                draft: PollDraft {
-                    question: "Stale poll?".into(),
-                    options: vec!["A".into(), "B".into()],
-                    multiple: true,
+            .handle_command(Command::Completed(Completion {
+                generation: 0,
+                done: Done::PollCreated {
+                    chat: "chat".into(),
+                    draft: PollDraft {
+                        question: "Stale poll?".into(),
+                        options: vec!["A".into(), "B".into()],
+                        multiple: true,
+                    },
+                    result: Ok(crate::backend::CreatedPoll {
+                        id: "stale-poll".into(),
+                        secret: vec![7; 32],
+                        creator: "15550001111@s.whatsapp.net".into(),
+                        recipients: Vec::new(),
+                    }),
                 },
-                result: Ok(crate::backend::CreatedPoll {
-                    id: "stale-poll".into(),
-                    secret: vec![7; 32],
-                    creator: "15550001111@s.whatsapp.net".into(),
-                    recipients: Vec::new(),
-                }),
-            })
+            }))
             .await;
 
         assert!(
@@ -882,7 +897,13 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert!(matches!(result, Command::PollDecoded { .. }));
+        assert!(matches!(
+            result,
+            Command::Completed(Completion {
+                generation: _,
+                done: Done::PollDecoded { .. }
+            })
+        ));
         worker.handle_command(result).await;
         worker.polish_poll(&mut row);
         let Content::Poll { state, .. } = row.content else {

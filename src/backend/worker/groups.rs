@@ -125,31 +125,34 @@ impl Worker {
                         }
                         participants.push(id);
                     }
-                    let _ = commands.send(Command::GroupInfo {
-                        session_generation,
-                        chat,
-                        name: (!metadata.subject.is_empty()).then(|| metadata.subject.clone()),
-                        participants,
-                        read_only: metadata.is_announcement && !admin,
-                        // GroupEphemeralSettings carries a trigger mode, not a
-                        // timestamp; a zero setting timestamp keeps later
-                        // authoritative updates (protocol messages) able to
-                        // override the value fetched here.
-                        ephemeral_expiration: metadata
-                            .ephemeral
-                            .as_ref()
-                            .and_then(|value| value.expiration),
-                        ephemeral_setting_timestamp: None,
-                    });
+                    let _ = Completion {
+                        generation: session_generation,
+                        done: Done::GroupInfo {
+                            chat,
+                            name: (!metadata.subject.is_empty()).then(|| metadata.subject.clone()),
+                            participants,
+                            read_only: metadata.is_announcement && !admin,
+                            // GroupEphemeralSettings carries a trigger mode, not a
+                            // timestamp; a zero setting timestamp keeps later
+                            // authoritative updates (protocol messages) able to
+                            // override the value fetched here.
+                            ephemeral_expiration: metadata
+                                .ephemeral
+                                .as_ref()
+                                .and_then(|value| value.expiration),
+                            ephemeral_setting_timestamp: None,
+                        },
+                    }
+                    .send(&commands);
                 }
                 Err(error) => {
                     let permanent = failures::group_lookup_is_final(&error);
                     log::warn!("could not fetch group metadata");
-                    let _ = commands.send(Command::GroupInfoFailed {
-                        session_generation,
-                        chat,
-                        permanent,
-                    });
+                    let _ = Completion {
+                        generation: session_generation,
+                        done: Done::GroupInfoFailed { chat, permanent },
+                    }
+                    .send(&commands);
                 }
             }
         });

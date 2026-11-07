@@ -1,4 +1,276 @@
 use super::*;
+use crate::backend::{Completion, Done};
+
+#[tokio::test]
+async fn completion_stale_media_sweep_releases_running_without_publishing() {
+    let (mut worker, events, _inbox, _wa) = worker();
+    worker.session_generation = 2;
+    worker.retention.running = true;
+    worker
+        .handle_command(Command::Completed(Completion {
+            generation: 1,
+            done: Done::MediaSwept(crate::backend::MediaSwept {
+                cleared: Vec::new(),
+                bytes: 0,
+                failed: 1,
+                more: false,
+            }),
+        }))
+        .await;
+    assert!(!worker.retention.running);
+    assert!(events.try_iter().next().is_none());
+}
+
+#[tokio::test]
+async fn completion_stale_download_removes_only_staged_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let staged = dir.path().join("staged");
+    let destination = dir.path().join("destination");
+    std::fs::write(&staged, b"staged").unwrap();
+    std::fs::write(&destination, b"existing").unwrap();
+    let (mut worker, events, _inbox, _wa) = worker();
+    worker.session_generation = 2;
+    worker
+        .handle_command(Command::Completed(Completion {
+            generation: 1,
+            done: Done::Downloaded {
+                chat: "chat".into(),
+                id: "id".into(),
+                raw_fingerprint: [0; 32],
+                destination: destination.clone(),
+                result: Ok(staged.clone()),
+            },
+        }))
+        .await;
+    assert!(!staged.exists());
+    assert_eq!(std::fs::read(destination).unwrap(), b"existing");
+    assert!(events.try_iter().next().is_none());
+}
+
+#[test]
+fn completion_send_failure_discards_owned_download_and_not_destination() {
+    let dir = tempfile::tempdir().unwrap();
+    let staged = dir.path().join("staged");
+    let destination = dir.path().join("destination");
+    std::fs::write(&staged, b"staged").unwrap();
+    std::fs::write(&destination, b"existing").unwrap();
+    let (sender, receiver) = mpsc::unbounded_channel();
+    drop(receiver);
+    assert!(
+        Completion {
+            generation: 1,
+            done: Done::Downloaded {
+                chat: "chat".into(),
+                id: "id".into(),
+                raw_fingerprint: [0; 32],
+                destination: destination.clone(),
+                result: Ok(staged.clone()),
+            }
+        }
+        .send(&sender)
+        .is_err()
+    );
+    assert!(!staged.exists());
+    assert_eq!(std::fs::read(destination).unwrap(), b"existing");
+}
+
+#[tokio::test]
+async fn completion_stale_callbacks_send_false_once() {
+    let (mut worker, events, _inbox, _wa) = worker();
+    worker.session_generation = 2;
+    let (sent, mut sent_result) = mpsc::unbounded_channel();
+    let (stored, mut stored_result) = mpsc::unbounded_channel();
+    let row = crate::archive::tests::message("chat", "id", 1, true);
+    for done in [
+        Done::OutboundBatch {
+            chat: "chat".into(),
+            row: Box::new(row),
+            raw: Vec::new(),
+            sent,
+        },
+        Done::GroupRecipients {
+            chat: "chat".into(),
+            id: "id".into(),
+            recipients: Vec::new(),
+            lids: Vec::new(),
+            stored,
+        },
+    ] {
+        worker
+            .handle_command(Command::Completed(Completion {
+                generation: 1,
+                done,
+            }))
+            .await;
+    }
+    assert_eq!(sent_result.try_recv(), Ok(false));
+    assert!(sent_result.try_recv().is_err());
+    assert_eq!(stored_result.try_recv(), Ok(false));
+    assert!(stored_result.try_recv().is_err());
+    assert!(events.try_iter().next().is_none());
+}
+
+#[test]
+fn completion_send_failure_notifies_callbacks_once() {
+    let (sender, receiver) = mpsc::unbounded_channel();
+    drop(receiver);
+    let (sent, mut sent_result) = mpsc::unbounded_channel();
+    let (stored, mut stored_result) = mpsc::unbounded_channel();
+    let row = crate::archive::tests::message("chat", "id", 1, true);
+    for done in [
+        Done::OutboundBatch {
+            chat: "chat".into(),
+            row: Box::new(row),
+            raw: Vec::new(),
+            sent,
+        },
+        Done::GroupRecipients {
+            chat: "chat".into(),
+            id: "id".into(),
+            recipients: Vec::new(),
+            lids: Vec::new(),
+            stored,
+        },
+    ] {
+        assert!(
+            Completion {
+                generation: 1,
+                done
+            }
+            .send(&sender)
+            .is_err()
+        );
+    }
+    assert_eq!(sent_result.try_recv(), Ok(false));
+    assert!(sent_result.try_recv().is_err());
+    assert_eq!(stored_result.try_recv(), Ok(false));
+    assert!(stored_result.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn completion_current_group_callback_follows_archived_audience() {
+    let (mut worker, _events, _inbox, _wa) = worker();
+    let chat = "123-456@g.us";
+    let peer = "12025550123@s.whatsapp.net";
+    worker.archive.ensure_chat(chat, "Synthetic").unwrap();
+    worker.store_message(
+        crate::archive::tests::message(chat, "id", 100, true),
+        None,
+        None,
+    );
+    let (stored, mut result) = mpsc::unbounded_channel();
+    worker
+        .handle_command(Command::Completed(Completion {
+            generation: worker.session_generation,
+            done: Done::GroupRecipients {
+                chat: chat.into(),
+                id: "id".into(),
+                recipients: vec![peer.into()],
+                lids: Vec::new(),
+                stored,
+            },
+        }))
+        .await;
+    assert_eq!(result.try_recv(), Ok(true));
+    assert!(result.try_recv().is_err());
+    assert!(
+        worker
+            .archive
+            .group_receipt(chat, "id", peer, Delivery::Read, 200)
+            .unwrap()
+    );
+    assert_eq!(
+        worker.archive.message(chat, "id").unwrap().unwrap().status,
+        Delivery::Read
+    );
+}
+
+#[tokio::test]
+async fn completion_contact_about_respects_session_generation() {
+    for generation in [1, 2] {
+        let (mut worker, events, _inbox, _wa) = worker();
+        worker.session_generation = 2;
+        worker
+            .handle_command(Command::Completed(Completion {
+                generation,
+                done: Done::ContactAboutFetched {
+                    id: "synthetic@s.whatsapp.net".into(),
+                    about: Some("synthetic about".into()),
+                },
+            }))
+            .await;
+        let event = events.try_recv();
+        if generation == 2 {
+            assert!(
+                matches!(event, Ok(Event::ContactAbout { id, about: Some(about) })
+                if id == "synthetic@s.whatsapp.net" && about == "synthetic about")
+            );
+        } else {
+            assert!(event.is_err());
+        }
+        assert!(events.try_iter().next().is_none());
+    }
+}
+
+#[tokio::test]
+async fn completion_attachment_progress_respects_session_generation() {
+    for generation in [1, 2] {
+        let (mut worker, events, _inbox, _wa) = worker();
+        worker.session_generation = 2;
+        worker
+            .handle_command(Command::Completed(Completion {
+                generation,
+                done: Done::AttachmentCompleted {
+                    chat: "synthetic@s.whatsapp.net".into(),
+                    batch: 17,
+                    index: 1,
+                    total: 3,
+                    path: PathBuf::from("synthetic-file"),
+                    success: true,
+                },
+            }))
+            .await;
+        let event = events.try_recv();
+        if generation == 2 {
+            assert!(matches!(event, Ok(Event::AttachmentCompleted {
+                chat, batch: 17, index: 1, total: 3, path, success: true,
+            }) if chat == "synthetic@s.whatsapp.net" && path == Path::new("synthetic-file")));
+        } else {
+            assert!(event.is_err());
+        }
+        assert!(events.try_iter().next().is_none());
+    }
+}
+
+#[tokio::test]
+async fn completion_rejects_stale_receipts_privacy() {
+    let (mut worker, events, _inbox, _wa) = worker();
+    worker.session_generation = 2;
+    worker
+        .handle_command(Command::Completed(Completion {
+            generation: 1,
+            done: Done::ReceiptsPrivacy { disabled: true },
+        }))
+        .await;
+    assert!(events.try_iter().next().is_none());
+}
+
+#[tokio::test]
+async fn completion_dispatches_current_receipts_privacy() {
+    let (mut worker, events, _inbox, _wa) = worker();
+    worker.session_generation = 2;
+    worker
+        .handle_command(Command::Completed(Completion {
+            generation: 2,
+            done: Done::ReceiptsPrivacy { disabled: true },
+        }))
+        .await;
+    assert!(matches!(
+        events.try_recv(),
+        Ok(Event::ReceiptsPrivacy { disabled: true })
+    ));
+    assert!(events.try_iter().next().is_none());
+}
 
 mod downloads;
 
@@ -684,12 +956,15 @@ async fn contact_delivery_updates_only_its_own_row_and_never_finishes_a_text_sen
     text.status = Delivery::Pending;
     worker.archive.insert_message(&text, None).unwrap();
     worker
-        .handle_command(Command::ContactSent {
-            chat: CHAT.into(),
-            id: "CONTACT".into(),
-            session_generation: worker.session_generation,
-            error: None,
-        })
+        .handle_command(Command::Completed(Completion {
+            generation: worker.session_generation,
+            done: Done::ContactSent {
+                chat: CHAT.into(),
+                id: "CONTACT".into(),
+
+                error: None,
+            },
+        }))
         .await;
     assert_eq!(
         worker
@@ -721,12 +996,15 @@ async fn contact_delivery_updates_only_its_own_row_and_never_finishes_a_text_sen
             .any(|event| matches!(event, Event::Info(info) if info == "Contact sent"))
     );
     worker
-        .handle_command(Command::ContactSent {
-            chat: CHAT.into(),
-            id: "CONTACT".into(),
-            session_generation: worker.session_generation.wrapping_add(1),
-            error: Some("fixture".into()),
-        })
+        .handle_command(Command::Completed(Completion {
+            generation: worker.session_generation.wrapping_add(1),
+            done: Done::ContactSent {
+                chat: CHAT.into(),
+                id: "CONTACT".into(),
+
+                error: Some("fixture".into()),
+            },
+        }))
         .await;
     assert_eq!(
         worker
@@ -748,12 +1026,15 @@ async fn deleted_contact_completion_cannot_complete_a_later_text_send() {
     worker.archive.insert_message(&text, None).unwrap();
     for error in [None, Some("fixture failure".to_owned())] {
         worker
-            .handle_command(Command::ContactSent {
-                chat: CHAT.into(),
-                id: "DELETED-CONTACT".into(),
-                session_generation: worker.session_generation,
-                error,
-            })
+            .handle_command(Command::Completed(Completion {
+                generation: worker.session_generation,
+                done: Done::ContactSent {
+                    chat: CHAT.into(),
+                    id: "DELETED-CONTACT".into(),
+
+                    error,
+                },
+            }))
             .await;
         assert!(
             !events
@@ -1502,11 +1783,14 @@ async fn a_failed_sticker_fetch_is_not_retried_in_the_same_session() {
     let (mut worker, _events, _, _) = worker();
     worker.sticker_fetches.insert("expired".into());
     worker
-        .handle_command(Command::StickerFetched {
-            hash: "expired".into(),
-            session_generation: worker.session_generation,
-            result: Err("gone".into()),
-        })
+        .handle_command(Command::Completed(Completion {
+            generation: worker.session_generation,
+            done: Done::StickerFetched {
+                hash: "expired".into(),
+
+                result: Err("gone".into()),
+            },
+        }))
         .await;
     assert!(worker.sticker_fetches.contains("expired"));
 }
@@ -1573,11 +1857,16 @@ async fn button_answer_marks_only_on_success_and_removes_failed_reply() {
         .insert_message(&answer, Some(&response.encode_to_vec()))
         .unwrap();
 
-    let sent = |id: &str, error: Option<&str>| Command::Sent {
-        chat: PEER.into(),
-        id: id.into(),
-        session_generation: 0,
-        error: error.map(str::to_owned),
+    let sent = |id: &str, error: Option<&str>| {
+        Command::Completed(Completion {
+            generation: 0,
+            done: Done::Sent {
+                chat: PEER.into(),
+                id: id.into(),
+
+                error: error.map(str::to_owned),
+            },
+        })
     };
     // Success keeps the answer recorded.
     worker
@@ -1728,12 +2017,15 @@ async fn interrupted_answer_is_recovered_without_deleting_other_quoted_messages(
         .answer_sends
         .insert("REPLY".into(), (PEER.into(), "PARENT".into()));
     worker
-        .handle_command(Command::Sent {
-            chat: PEER.into(),
-            id: "REPLY".into(),
-            session_generation: worker.session_generation,
-            error: Some("late error".into()),
-        })
+        .handle_command(Command::Completed(Completion {
+            generation: worker.session_generation,
+            done: Done::Sent {
+                chat: PEER.into(),
+                id: "REPLY".into(),
+
+                error: Some("late error".into()),
+            },
+        }))
         .await;
     assert_eq!(
         worker
@@ -1958,12 +2250,15 @@ fn mentions_missing_from_the_message_are_recovered_for_known_people_only() {
 async fn empty_id_send_failure_completes_once_without_exposing_details() {
     let (mut worker, events, _, _) = worker();
     worker
-        .handle_command(Command::Sent {
-            chat: "fixture@s.whatsapp.net".into(),
-            id: String::new(),
-            session_generation: 0,
-            error: Some("private body and credential".to_owned()),
-        })
+        .handle_command(Command::Completed(Completion {
+            generation: 0,
+            done: Done::Sent {
+                chat: "fixture@s.whatsapp.net".into(),
+                id: String::new(),
+
+                error: Some("private body and credential".to_owned()),
+            },
+        }))
         .await;
 
     let emitted: Vec<_> = events.try_iter().collect();
@@ -2752,11 +3047,14 @@ async fn sticker_updates_coalesce_until_flush_and_explicit_refresh_is_immediate(
             false,
         );
         worker
-            .handle_command(Command::StickerFetched {
-                hash: "fixture".into(),
-                session_generation: worker.session_generation,
-                result: Err("fixture".into()),
-            })
+            .handle_command(Command::Completed(Completion {
+                generation: worker.session_generation,
+                done: Done::StickerFetched {
+                    hash: "fixture".into(),
+
+                    result: Err("fixture".into()),
+                },
+            }))
             .await;
     }
     assert!(
@@ -2807,12 +3105,14 @@ async fn older_failure_from_expired_attempt_does_not_finish_newer_request() {
     );
 
     worker
-        .handle_command(Command::OlderFailed {
-            session_generation: worker.session_generation,
-            request_id: older_attempt,
-            chat: chat.clone(),
-            error: "synthetic stale failure".to_owned(),
-        })
+        .handle_command(Command::Completed(Completion {
+            generation: worker.session_generation,
+            done: Done::OlderFailed {
+                request_id: older_attempt,
+                chat: chat.clone(),
+                error: "synthetic stale failure".to_owned(),
+            },
+        }))
         .await;
 
     assert_eq!(
@@ -3290,13 +3590,15 @@ async fn failed_revoke_restores_the_optimistically_hidden_message() {
     while events.try_recv().is_ok() {}
 
     worker
-        .handle_command(Command::RevokeFinished {
-            session_generation: worker.session_generation,
-            attempt_id,
-            chat: chat.to_owned(),
-            message: "message".to_owned(),
-            success: false,
-        })
+        .handle_command(Command::Completed(Completion {
+            generation: worker.session_generation,
+            done: Done::RevokeFinished {
+                attempt_id,
+                chat: chat.to_owned(),
+                message: "message".to_owned(),
+                success: false,
+            },
+        }))
         .await;
 
     let restored = worker
@@ -3369,13 +3671,15 @@ async fn confirmed_revoke_cannot_be_undone_by_failed_request() {
             "confirmation invalidates rollback"
         );
         worker
-            .handle_command(Command::RevokeFinished {
-                session_generation: worker.session_generation,
-                attempt_id,
-                chat: chat.into(),
-                message: "message".into(),
-                success: false,
-            })
+            .handle_command(Command::Completed(Completion {
+                generation: worker.session_generation,
+                done: Done::RevokeFinished {
+                    attempt_id,
+                    chat: chat.into(),
+                    message: "message".into(),
+                    success: false,
+                },
+            }))
             .await;
         let stored = worker.archive.message(chat, "message").unwrap().unwrap();
         assert_eq!(stored.content, Content::Revoked, "history={from_history}");
@@ -3392,13 +3696,15 @@ async fn revoke_completion_is_scoped_to_its_attempt_and_session() {
     let first = worker.begin_revoke(chat, "message").unwrap().unwrap();
     assert!(worker.begin_revoke(chat, "message").unwrap().is_none());
     worker
-        .handle_command(Command::RevokeFinished {
-            session_generation: worker.session_generation,
-            attempt_id: first,
-            chat: chat.into(),
-            message: "message".into(),
-            success: false,
-        })
+        .handle_command(Command::Completed(Completion {
+            generation: worker.session_generation,
+            done: Done::RevokeFinished {
+                attempt_id: first,
+                chat: chat.into(),
+                message: "message".into(),
+                success: false,
+            },
+        }))
         .await;
     let retry = worker.begin_revoke(chat, "message").unwrap().unwrap();
     assert_ne!(first, retry);
@@ -3406,13 +3712,15 @@ async fn revoke_completion_is_scoped_to_its_attempt_and_session() {
 
     for (session_generation, attempt_id) in [(worker.session_generation, first), (1, retry)] {
         worker
-            .handle_command(Command::RevokeFinished {
-                session_generation,
-                attempt_id,
-                chat: chat.into(),
-                message: "message".into(),
-                success: false,
-            })
+            .handle_command(Command::Completed(Completion {
+                generation: session_generation,
+                done: Done::RevokeFinished {
+                    attempt_id,
+                    chat: chat.into(),
+                    message: "message".into(),
+                    success: false,
+                },
+            }))
             .await;
         assert!(events.try_recv().is_err());
         assert_eq!(
@@ -3428,13 +3736,15 @@ async fn revoke_completion_is_scoped_to_its_attempt_and_session() {
     }
 
     worker
-        .handle_command(Command::RevokeFinished {
-            session_generation: worker.session_generation,
-            attempt_id: retry,
-            chat: chat.into(),
-            message: "message".into(),
-            success: true,
-        })
+        .handle_command(Command::Completed(Completion {
+            generation: worker.session_generation,
+            done: Done::RevokeFinished {
+                attempt_id: retry,
+                chat: chat.into(),
+                message: "message".into(),
+                success: true,
+            },
+        }))
         .await;
     assert!(worker.pending_revokes.is_empty());
     assert!(events.try_recv().is_err());
@@ -3508,14 +3818,17 @@ async fn simultaneous_download_completions_for_same_attachment_both_succeed() {
     }
     for path in &staged {
         worker
-            .handle_command(Command::Downloaded {
-                chat: chat.to_owned(),
-                id: id.to_owned(),
-                session_generation: worker.session_generation,
-                raw_fingerprint: fingerprint,
-                destination: destination.clone(),
-                result: Ok(path.clone()),
-            })
+            .handle_command(Command::Completed(Completion {
+                generation: worker.session_generation,
+                done: Done::Downloaded {
+                    chat: chat.to_owned(),
+                    id: id.to_owned(),
+
+                    raw_fingerprint: fingerprint,
+                    destination: destination.clone(),
+                    result: Ok(path.clone()),
+                },
+            }))
             .await;
         assert!(matches!(
             events.try_recv(),
@@ -3571,14 +3884,17 @@ async fn archive_read_failure_preserves_download_until_revalidation() {
         assert!(worker.archive.raw(chat, id).is_err());
 
         worker
-            .handle_command(Command::Downloaded {
-                chat: chat.into(),
-                id: id.into(),
-                session_generation: worker.session_generation,
-                raw_fingerprint: fingerprint,
-                destination: destination.clone(),
-                result: Ok(staged.clone()),
-            })
+            .handle_command(Command::Completed(Completion {
+                generation: worker.session_generation,
+                done: Done::Downloaded {
+                    chat: chat.into(),
+                    id: id.into(),
+
+                    raw_fingerprint: fingerprint,
+                    destination: destination.clone(),
+                    result: Ok(staged.clone()),
+                },
+            }))
             .await;
 
         assert!(staged.exists(), "read errors must not discard valid bytes");
@@ -3697,14 +4013,17 @@ async fn stale_download_cannot_attach_file_to_replaced_message() {
         .unwrap();
 
     worker
-        .handle_command(Command::Downloaded {
-            chat: chat.to_owned(),
-            id: "message".to_owned(),
-            session_generation: worker.session_generation,
-            raw_fingerprint: message_raw_fingerprint(b"original raw"),
-            destination: destination.clone(),
-            result: Ok(staged.clone()),
-        })
+        .handle_command(Command::Completed(Completion {
+            generation: worker.session_generation,
+            done: Done::Downloaded {
+                chat: chat.to_owned(),
+                id: "message".to_owned(),
+
+                raw_fingerprint: message_raw_fingerprint(b"original raw"),
+                destination: destination.clone(),
+                result: Ok(staged.clone()),
+            },
+        }))
         .await;
 
     let stored = worker
@@ -3766,14 +4085,17 @@ async fn stale_download_does_not_release_replacement_picker_request() {
         };
 
         worker
-            .handle_command(Command::Downloaded {
-                chat: chat.into(),
-                id: id.into(),
-                session_generation: worker.session_generation,
-                raw_fingerprint: old_fingerprint,
-                destination: destination.clone(),
-                result: old_result,
-            })
+            .handle_command(Command::Completed(Completion {
+                generation: worker.session_generation,
+                done: Done::Downloaded {
+                    chat: chat.into(),
+                    id: id.into(),
+
+                    raw_fingerprint: old_fingerprint,
+                    destination: destination.clone(),
+                    result: old_result,
+                },
+            }))
             .await;
 
         assert!(
@@ -3795,14 +4117,17 @@ async fn stale_download_does_not_release_replacement_picker_request() {
             ))
         };
         worker
-            .handle_command(Command::Downloaded {
-                chat: chat.into(),
-                id: id.into(),
-                session_generation: worker.session_generation,
-                raw_fingerprint: current_fingerprint,
-                destination: destination.clone(),
-                result: current_result,
-            })
+            .handle_command(Command::Completed(Completion {
+                generation: worker.session_generation,
+                done: Done::Downloaded {
+                    chat: chat.into(),
+                    id: id.into(),
+
+                    raw_fingerprint: current_fingerprint,
+                    destination: destination.clone(),
+                    result: current_result,
+                },
+            }))
             .await;
 
         if current_success {
@@ -4029,14 +4354,17 @@ pub(super) mod receipt_tests {
             .expect("message");
 
         worker
-            .handle_command(Command::Edited {
-                chat: PEER.into(),
-                id: "edit".into(),
-                session_generation: 0,
-                success: false,
-                content: Content::text("new"),
-                mentions: Vec::new(),
-            })
+            .handle_command(Command::Completed(Completion {
+                generation: 0,
+                done: Done::Edited {
+                    chat: PEER.into(),
+                    id: "edit".into(),
+
+                    success: false,
+                    content: Content::text("new"),
+                    mentions: Vec::new(),
+                },
+            }))
             .await;
         let message = worker
             .archive
@@ -4051,14 +4379,17 @@ pub(super) mod receipt_tests {
         ));
 
         worker
-            .handle_command(Command::Edited {
-                chat: PEER.into(),
-                id: "edit".into(),
-                session_generation: 0,
-                success: true,
-                content: Content::text("new"),
-                mentions: Vec::new(),
-            })
+            .handle_command(Command::Completed(Completion {
+                generation: 0,
+                done: Done::Edited {
+                    chat: PEER.into(),
+                    id: "edit".into(),
+
+                    success: true,
+                    content: Content::text("new"),
+                    mentions: Vec::new(),
+                },
+            }))
             .await;
         let message = worker
             .archive
@@ -4952,13 +5283,15 @@ pub(super) mod receipt_tests {
         let now = Instant::now();
         let first_attempt = worker.read_sync.start(PEER, 100, now).unwrap();
         worker
-            .handle_command(Command::ReadSyncFinished {
-                session_generation: worker.session_generation,
-                attempt_id: first_attempt,
-                chat: PEER.into(),
-                through: 100,
-                success: false,
-            })
+            .handle_command(Command::Completed(Completion {
+                generation: worker.session_generation,
+                done: Done::ReadSyncFinished {
+                    attempt_id: first_attempt,
+                    chat: PEER.into(),
+                    through: 100,
+                    success: false,
+                },
+            }))
             .await;
         assert_eq!(
             worker.archive.pending_reads().unwrap(),
@@ -4979,13 +5312,15 @@ pub(super) mod receipt_tests {
             .start(PEER, 100, now + Duration::from_secs(31))
             .unwrap();
         worker
-            .handle_command(Command::ReadSyncFinished {
-                session_generation: worker.session_generation,
-                attempt_id: retry_attempt,
-                chat: PEER.into(),
-                through: 100,
-                success: true,
-            })
+            .handle_command(Command::Completed(Completion {
+                generation: worker.session_generation,
+                done: Done::ReadSyncFinished {
+                    attempt_id: retry_attempt,
+                    chat: PEER.into(),
+                    through: 100,
+                    success: true,
+                },
+            }))
             .await;
         assert_eq!(
             worker.archive.pending_reads().unwrap(),
@@ -4993,13 +5328,15 @@ pub(super) mod receipt_tests {
         );
         let final_attempt = worker.read_sync.start(PEER, 200, Instant::now()).unwrap();
         worker
-            .handle_command(Command::ReadSyncFinished {
-                session_generation: worker.session_generation,
-                attempt_id: final_attempt,
-                chat: PEER.into(),
-                through: 200,
-                success: true,
-            })
+            .handle_command(Command::Completed(Completion {
+                generation: worker.session_generation,
+                done: Done::ReadSyncFinished {
+                    attempt_id: final_attempt,
+                    chat: PEER.into(),
+                    through: 200,
+                    success: true,
+                },
+            }))
             .await;
         assert!(worker.archive.pending_reads().unwrap().is_empty());
         assert!(worker.read_sync.ready(Instant::now()));
@@ -5020,13 +5357,15 @@ pub(super) mod receipt_tests {
         assert_ne!(old_attempt, new_attempt);
 
         worker
-            .handle_command(Command::ReadSyncFinished {
-                session_generation: worker.session_generation,
-                attempt_id: old_attempt,
-                chat: PEER.into(),
-                through: 100,
-                success: true,
-            })
+            .handle_command(Command::Completed(Completion {
+                generation: worker.session_generation,
+                done: Done::ReadSyncFinished {
+                    attempt_id: old_attempt,
+                    chat: PEER.into(),
+                    through: 100,
+                    success: true,
+                },
+            }))
             .await;
 
         assert_eq!(
@@ -5045,13 +5384,15 @@ pub(super) mod receipt_tests {
         worker.session_generation = 1;
 
         worker
-            .handle_command(Command::ReadSyncFinished {
-                session_generation: 0,
-                attempt_id,
-                chat: PEER.into(),
-                through: 100,
-                success: true,
-            })
+            .handle_command(Command::Completed(Completion {
+                generation: 0,
+                done: Done::ReadSyncFinished {
+                    attempt_id,
+                    chat: PEER.into(),
+                    through: 100,
+                    success: true,
+                },
+            }))
             .await;
 
         assert_eq!(
@@ -5067,22 +5408,26 @@ pub(super) mod receipt_tests {
         worker.session_generation = 1;
 
         worker
-            .handle_command(Command::ContactChecked {
-                session_generation: 0,
-                phone: "15550002222".into(),
-                full_name: Some("Synthetic Contact".into()),
-                first_name: None,
-                to_phone: false,
-                registered: true,
-            })
+            .handle_command(Command::Completed(Completion {
+                generation: 0,
+                done: Done::ContactChecked {
+                    phone: "15550002222".into(),
+                    full_name: Some("Synthetic Contact".into()),
+                    first_name: None,
+                    to_phone: false,
+                    registered: true,
+                },
+            }))
             .await;
         worker
-            .handle_command(Command::ContactSaved {
-                session_generation: 0,
-                id: "15550002222@s.whatsapp.net".into(),
-                name: "Synthetic Contact".into(),
-                error: None,
-            })
+            .handle_command(Command::Completed(Completion {
+                generation: 0,
+                done: Done::ContactSaved {
+                    id: "15550002222@s.whatsapp.net".into(),
+                    name: "Synthetic Contact".into(),
+                    error: None,
+                },
+            }))
             .await;
 
         assert!(
@@ -5104,22 +5449,26 @@ pub(super) mod receipt_tests {
         worker.session_generation = 1;
 
         worker
-            .handle_command(Command::GroupInfo {
-                session_generation: 0,
-                chat: group.into(),
-                name: Some("Stale group name".into()),
-                participants: vec![ME.into()],
-                read_only: true,
-                ephemeral_expiration: Some(3600),
-                ephemeral_setting_timestamp: Some(10),
-            })
+            .handle_command(Command::Completed(Completion {
+                generation: 0,
+                done: Done::GroupInfo {
+                    chat: group.into(),
+                    name: Some("Stale group name".into()),
+                    participants: vec![ME.into()],
+                    read_only: true,
+                    ephemeral_expiration: Some(3600),
+                    ephemeral_setting_timestamp: Some(10),
+                },
+            }))
             .await;
         worker
-            .handle_command(Command::GroupInfoFailed {
-                session_generation: 0,
-                chat: group.into(),
-                permanent: true,
-            })
+            .handle_command(Command::Completed(Completion {
+                generation: 0,
+                done: Done::GroupInfoFailed {
+                    chat: group.into(),
+                    permanent: true,
+                },
+            }))
             .await;
 
         assert_eq!(
@@ -6215,12 +6564,14 @@ async fn transcript_correlation_queued_older_retries_after_failure() {
         },
     );
     worker
-        .handle_command(Command::OlderFailed {
-            session_generation: worker.session_generation,
-            request_id: 42,
-            chat,
-            error: "synthetic".into(),
-        })
+        .handle_command(Command::Completed(Completion {
+            generation: worker.session_generation,
+            done: Done::OlderFailed {
+                request_id: 42,
+                chat,
+                error: "synthetic".into(),
+            },
+        }))
         .await;
     assert!(matches!(
         events.try_recv(),
