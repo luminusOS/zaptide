@@ -229,14 +229,17 @@ impl Worker {
                     }
                 }
             };
-            let _ = commands.send(Command::Downloaded {
-                chat,
-                id,
-                session_generation,
-                raw_fingerprint,
-                destination,
-                result,
-            });
+            let _ = Completion {
+                generation: session_generation,
+                done: Done::Downloaded {
+                    chat,
+                    id,
+                    raw_fingerprint,
+                    destination,
+                    result,
+                },
+            }
+            .send(&commands);
         });
     }
 }

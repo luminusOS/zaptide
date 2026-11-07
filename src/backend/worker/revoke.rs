@@ -70,13 +70,16 @@ impl Worker {
                 .revoke_message(jid, &id, RevokeType::Sender)
                 .await
                 .is_ok();
-            let _ = commands.send(Command::RevokeFinished {
-                session_generation,
-                attempt_id,
-                chat,
-                message: id,
-                success,
-            });
+            let _ = Completion {
+                generation: session_generation,
+                done: Done::RevokeFinished {
+                    attempt_id,
+                    chat,
+                    message: id,
+                    success,
+                },
+            }
+            .send(&commands);
         });
     }
 }

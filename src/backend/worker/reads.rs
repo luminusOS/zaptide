@@ -63,13 +63,16 @@ impl Worker {
                         log::warn!("chat read-state sync timed out; keeping position queued");
                     }
                 }
-                let _ = commands.send(Command::ReadSyncFinished {
-                    session_generation,
-                    attempt_id,
-                    chat,
-                    through,
-                    success: outcome == ReadSyncOutcome::Success,
-                });
+                let _ = Completion {
+                    generation: session_generation,
+                    done: Done::ReadSyncFinished {
+                        attempt_id,
+                        chat,
+                        through,
+                        success: outcome == ReadSyncOutcome::Success,
+                    },
+                }
+                .send(&commands);
             });
             // Every read-state write uses regular_low. A queue of spawned tasks
             // would each retry the same broken collection before we can back off.

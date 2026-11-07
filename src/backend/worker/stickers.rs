@@ -55,11 +55,11 @@ impl Worker {
                     .await
                 }
                 .await;
-                let _ = commands.send(Command::StickerFetched {
-                    hash,
-                    session_generation,
-                    result,
-                });
+                let _ = Completion {
+                    generation: session_generation,
+                    done: Done::StickerFetched { hash, result },
+                }
+                .send(&commands);
             });
         }
         match self.archive.stickers_without_file(STICKER_FETCH_LIMIT) {

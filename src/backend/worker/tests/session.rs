@@ -39,12 +39,21 @@ fn logout_cleanup_removes_session_sidecars_and_account_caches() {
     assert!(saved_sticker.exists(), "user-saved stickers are user data");
 }
 
-#[test]
-fn stale_attachment_outbound_cannot_use_new_session_or_archive_content() {
+#[tokio::test]
+async fn stale_attachment_outbound_cannot_use_new_session_or_archive_content() {
     let (mut worker, events, _, _) = worker();
     worker.session_generation = 2;
     let row = crate::archive::tests::message("chat", "old-account-message", 1, true);
-    worker.outbound("chat".into(), 1, row, Vec::new());
+    worker
+        .handle_command(Command::Completed(Completion {
+            generation: 1,
+            done: Done::Outbound {
+                chat: "chat".into(),
+                row: Box::new(row),
+                raw: Vec::new(),
+            },
+        }))
+        .await;
 
     assert!(
         worker
@@ -56,13 +65,22 @@ fn stale_attachment_outbound_cannot_use_new_session_or_archive_content() {
     assert!(events.try_iter().next().is_none());
 
     let (sent, mut result) = mpsc::unbounded_channel();
-    worker.outbound_batch(
-        "chat".into(),
-        1,
-        crate::archive::tests::message("chat", "old-account-batch", 2, true),
-        Vec::new(),
-        sent,
-    );
+    worker
+        .handle_command(Command::Completed(Completion {
+            generation: 1,
+            done: Done::OutboundBatch {
+                chat: "chat".into(),
+                row: Box::new(crate::archive::tests::message(
+                    "chat",
+                    "old-account-batch",
+                    2,
+                    true,
+                )),
+                raw: Vec::new(),
+                sent,
+            },
+        }))
+        .await;
     assert_eq!(result.try_recv(), Ok(false));
     assert!(
         worker
@@ -79,14 +97,16 @@ async fn stale_contact_lookup_cannot_write_into_a_new_session() {
     worker.session_generation = 4;
 
     worker
-        .handle_command(Command::ContactChecked {
-            session_generation: 3,
-            phone: "15551234567".into(),
-            full_name: Some("Old account contact".into()),
-            first_name: Some("Old".into()),
-            to_phone: true,
-            registered: true,
-        })
+        .handle_command(Command::Completed(Completion {
+            generation: 3,
+            done: Done::ContactChecked {
+                phone: "15551234567".into(),
+                full_name: Some("Old account contact".into()),
+                first_name: Some("Old".into()),
+                to_phone: true,
+                registered: true,
+            },
+        }))
         .await;
 
     assert!(
@@ -105,18 +125,22 @@ async fn stale_contact_save_and_me_info_cannot_repopulate_new_session() {
     worker.session_generation = 7;
 
     worker
-        .handle_command(Command::ContactSaved {
-            session_generation: 6,
-            id: "15551234567@s.whatsapp.net".into(),
-            name: "Old account contact".into(),
-            error: None,
-        })
+        .handle_command(Command::Completed(Completion {
+            generation: 6,
+            done: Done::ContactSaved {
+                id: "15551234567@s.whatsapp.net".into(),
+                name: "Old account contact".into(),
+                error: None,
+            },
+        }))
         .await;
     worker
-        .handle_command(Command::MeInfo {
-            session_generation: 6,
-            about: Some("Old account status".into()),
-        })
+        .handle_command(Command::Completed(Completion {
+            generation: 6,
+            done: Done::MeInfo {
+                about: Some("Old account status".into()),
+            },
+        }))
         .await;
 
     assert!(
