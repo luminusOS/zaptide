@@ -2,6 +2,8 @@
 //! capture and decoding. The VoIP runtime moves the packets; this module only
 //! supplies and consumes raw audio and encoded video.
 
+use crate::shared_resource::lock;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -232,12 +234,6 @@ impl VideoSlots {
 pub struct VideoUpdate {
     pub remote: Option<Option<RgbaFrame>>,
     pub local: Option<Option<RgbaFrame>>,
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// The microphone, speaker, and optional video of one call.

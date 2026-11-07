@@ -1,7 +1,8 @@
 //! Microphone capture and live recording levels.
 
+use crate::shared_resource::lock;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use gst::prelude::*;
@@ -17,12 +18,6 @@ use crate::voice;
 const MICROPHONE: &str = "autoaudiosrc";
 
 type Outcome = Arc<Mutex<Option<Result<Vec<f32>, String>>>>;
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
 
 /// Records from the default microphone until told to stop.
 pub struct Recorder {

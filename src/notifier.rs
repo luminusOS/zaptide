@@ -1,5 +1,6 @@
 //! Coalesced cross-thread notification without a toolkit dependency.
 
+use crate::shared_resource::lock;
 use std::sync::{Arc, Mutex, mpsc};
 
 struct Shared {
@@ -53,7 +54,7 @@ impl EventNotifier {
     /// Schedules one main-context drain while work is pending.
     pub fn notify(&self) {
         let schedule = {
-            let mut state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
+            let mut state = lock(&self.shared.state);
             if state.closed || state.pending {
                 return;
             }
@@ -66,13 +67,7 @@ impl EventNotifier {
             }
             if state.scheduled {
                 None
-            } else if let Some(schedule) = self
-                .shared
-                .scheduler
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .clone()
-            {
+            } else if let Some(schedule) = lock(&self.shared.scheduler).clone() {
                 state.scheduled = true;
                 state.schedule_generation = state.schedule_generation.wrapping_add(1);
                 Some((schedule, state.schedule_generation))
@@ -92,13 +87,9 @@ impl EventNotifier {
     /// [`EventDrain::try_begin_scheduled_drain`] with its generation and capture application state
     /// weakly. It is never called while notifier state is locked.
     pub fn set_scheduler(&self, scheduler: impl Fn(u64) + Send + Sync + 'static) {
-        let mut state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
+        let mut state = lock(&self.shared.state);
         let scheduler: Scheduler = Arc::new(scheduler);
-        *self
-            .shared
-            .scheduler
-            .lock()
-            .unwrap_or_else(|p| p.into_inner()) = Some(Arc::clone(&scheduler));
+        *lock(&self.shared.scheduler) = Some(Arc::clone(&scheduler));
         let schedule_now = state.pending && !state.closed;
         if schedule_now {
             state.scheduled = true;
@@ -119,7 +110,7 @@ impl EventDrain {
     }
 
     fn try_begin(&self, generation: Option<u64>) -> bool {
-        let mut state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
+        let mut state = lock(&self.shared.state);
         if state.closed
             || !state.pending
             || generation.is_some_and(|generation| generation != state.schedule_generation)
@@ -139,16 +130,12 @@ impl EventDrain {
 
     /// Makes future notifications inert during application shutdown.
     pub fn close(&self) {
-        let mut state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
+        let mut state = lock(&self.shared.state);
         state.closed = true;
         state.pending = false;
         state.scheduled = false;
         state.schedule_generation = state.schedule_generation.wrapping_add(1);
-        *self
-            .shared
-            .scheduler
-            .lock()
-            .unwrap_or_else(|p| p.into_inner()) = None;
+        *lock(&self.shared.scheduler) = None;
         while self.wake.try_recv().is_ok() {}
     }
 }
@@ -163,23 +150,17 @@ mod tests {
         let old_generation = Arc::new(Mutex::new(None));
         let observed = Arc::clone(&old_generation);
         notifier.set_scheduler(move |generation| {
-            *observed.lock().unwrap_or_else(|p| p.into_inner()) = Some(generation);
+            *lock(&observed) = Some(generation);
         });
         notifier.notify();
-        let old_generation = old_generation
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .expect("first scheduler invoked");
+        let old_generation = lock(&old_generation).expect("first scheduler invoked");
 
         let new_generation = Arc::new(Mutex::new(None));
         let observed = Arc::clone(&new_generation);
         notifier.set_scheduler(move |generation| {
-            *observed.lock().unwrap_or_else(|p| p.into_inner()) = Some(generation);
+            *lock(&observed) = Some(generation);
         });
-        let new_generation = new_generation
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .expect("replacement scheduler invoked");
+        let new_generation = lock(&new_generation).expect("replacement scheduler invoked");
 
         assert_ne!(old_generation, new_generation);
         assert!(!drain.try_begin_scheduled_drain(old_generation));

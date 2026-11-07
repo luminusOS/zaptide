@@ -19,7 +19,7 @@ const SAMPLE_CAPACITY_CHUNK: usize = (4 * 1024 * 1024) / std::mem::size_of::<f32
 static ACTIVE_DECODE_JOBS: AtomicUsize = AtomicUsize::new(0);
 
 pub(super) struct DecodePermit {
-    active: &'static AtomicUsize,
+    _permit: crate::shared_resource::Permit<'static>,
 }
 
 impl DecodePermit {
@@ -28,22 +28,14 @@ impl DecodePermit {
     }
 
     fn acquire_from(active: &'static AtomicUsize, limit: usize) -> Option<Self> {
-        try_acquire_decode_job(active, limit).then(|| Self { active })
+        crate::shared_resource::Permit::acquire(active, limit)
+            .map(|permit| Self { _permit: permit })
     }
 }
 
+#[cfg(test)]
 pub(super) fn try_acquire_decode_job(active: &AtomicUsize, limit: usize) -> bool {
-    active
-        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
-            (count < limit).then(|| count + 1)
-        })
-        .is_ok()
-}
-
-impl Drop for DecodePermit {
-    fn drop(&mut self) {
-        self.active.fetch_sub(1, Ordering::AcqRel);
-    }
+    crate::shared_resource::try_acquire(active, limit)
 }
 
 /// Decodes a file to mono 48 kHz samples. OGG/Opus uses the voice codec; other
