@@ -5474,6 +5474,7 @@ dependencies = [
  "gstreamer-app",
  "gstreamer-video",
  "gtk4",
+ "hex",
  "image",
  "jiff",
  "ksni",
