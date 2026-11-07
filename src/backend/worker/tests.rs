@@ -1,4 +1,17 @@
 use super::*;
+
+#[test]
+fn sticker_hash_golden_leading_zero_and_fallback() {
+    assert_eq!(
+        sticker_hash(Some(&[0, 10, 255]), Some(&[9])),
+        Some("000aff".to_owned())
+    );
+    assert_eq!(
+        sticker_hash(Some(&[]), Some(&[0, 15])),
+        Some("000f".to_owned())
+    );
+    assert_eq!(sticker_hash(None, Some(&[])), None);
+}
 use crate::backend::{Completion, Done};
 
 #[tokio::test]
@@ -3592,7 +3605,7 @@ async fn downloaded_document_with_long_name_can_be_staged_and_saved() {
     let id = "A".repeat(32);
     let name = format!("{}.pdf", "x".repeat(160));
     let destination = media_path(directory.path(), chat, &id, "application/pdf", Some(&name));
-    let staged = download_staging_path(directory.path());
+    let staged = download_staging_path(directory.path()).expect("synthetic staging entropy");
     let generation = AtomicU64::new(0);
     let cache_lock = tokio::sync::Mutex::new(());
     let bytes = b"synthetic document bytes";
@@ -3637,7 +3650,9 @@ async fn simultaneous_download_completions_for_same_attachment_both_succeed() {
     worker.archive.insert_message(&message, Some(raw)).unwrap();
     let fingerprint = message_raw_fingerprint(raw);
     let destination = media_path(directory.path(), chat, id, "image/jpeg", None);
-    let staged = std::array::from_fn::<_, 2, _>(|_| download_staging_path(directory.path()));
+    let staged = std::array::from_fn::<_, 2, _>(|_| {
+        download_staging_path(directory.path()).expect("synthetic staging entropy")
+    });
     // Both writes finish before the worker processes either completion.
     for path in &staged {
         std::fs::write(path, b"synthetic image bytes").unwrap();
@@ -3700,7 +3715,7 @@ async fn archive_read_failure_preserves_download_until_revalidation() {
         worker.archive.ensure_chat(chat, "Fixture").unwrap();
         worker.archive.insert_message(&message, Some(raw)).unwrap();
         worker.sticker_downloads.insert(key.clone());
-        let staged = download_staging_path(directory.path());
+        let staged = download_staging_path(directory.path()).expect("synthetic staging entropy");
         let destination = directory.path().join("current.webp");
         std::fs::write(&staged, b"current sticker bytes").unwrap();
         worker.archive.execute_batch_for_test(
@@ -3816,7 +3831,7 @@ async fn archive_read_failure_preserves_download_until_revalidation() {
 async fn stale_download_cannot_attach_file_to_replaced_message() {
     let (mut worker, events, _inbox, _wa) = worker();
     let directory = tempfile::tempdir().unwrap();
-    let staged = download_staging_path(directory.path());
+    let staged = download_staging_path(directory.path()).expect("synthetic staging entropy");
     let destination = directory.path().join("current-media.jpg");
     std::fs::write(&staged, b"obsolete image bytes").unwrap();
     let chat = "1@s.whatsapp.net";
@@ -3900,7 +3915,8 @@ async fn stale_download_does_not_release_replacement_picker_request() {
         worker.sticker_downloads.insert(current_key.clone());
         worker.sticker_downloads.insert(old_key.clone());
         let destination = directory.path().join("current.webp");
-        let old_staged = download_staging_path(directory.path());
+        let old_staged =
+            download_staging_path(directory.path()).expect("synthetic staging entropy");
         let old_result = if stale_success {
             std::fs::write(&old_staged, b"obsolete sticker bytes").unwrap();
             Ok(old_staged.clone())
@@ -3933,7 +3949,8 @@ async fn stale_download_does_not_release_replacement_picker_request() {
         assert!(!old_staged.exists());
         assert!(!destination.exists());
 
-        let current_staged = download_staging_path(directory.path());
+        let current_staged =
+            download_staging_path(directory.path()).expect("synthetic staging entropy");
         let current_result = if current_success {
             std::fs::write(&current_staged, b"current sticker bytes").unwrap();
             Ok(current_staged.clone())
