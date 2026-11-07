@@ -406,7 +406,7 @@ impl NativeApplication {
     }
 
     pub(super) fn can_offer_call(&self) -> bool {
-        self.active_chat.as_ref().is_some_and(|id| {
+        self.open_chat.active_chat.as_ref().is_some_and(|id| {
             self.chat_snapshots
                 .iter()
                 .find(|chat| &chat.id == id)
@@ -452,7 +452,8 @@ impl NativeApplication {
         if !self.can_call() {
             return;
         }
-        let (Some(chat), Some(backend)) = (self.active_chat.clone(), &self.backend) else {
+        let (Some(chat), Some(backend)) = (self.open_chat.active_chat.clone(), &self.backend)
+        else {
             return;
         };
         backend.send(crate::backend::Command::StartCall { chat, video });
