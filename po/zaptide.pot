@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: zaptide\n"
 "Report-Msgid-Bugs-To: https://github.com/luminusOS/zaptide/issues\n"
-"POT-Creation-Date: 2026-11-04 17:50-0300\n"
+"POT-Creation-Date: 2026-11-04 23:42-0300\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -33,35 +33,35 @@ msgstr ""
 msgid "Preference value is invalid"
 msgstr ""
 
-#: src/application/audio.rs:240 src/application/audio.rs:489
+#: src/application/audio.rs:240 src/application/audio.rs:498
 msgid "Could not save voice playback speed"
 msgstr ""
 
-#: src/application/audio.rs:327
+#: src/application/audio.rs:326
 msgid "Downloading voice"
 msgstr ""
 
-#: src/application/audio.rs:333
+#: src/application/audio.rs:334
 msgid "Voice playback could not start."
 msgstr ""
 
-#: src/application/audio.rs:357
+#: src/application/audio.rs:359
 msgid "Voice playback could not seek"
 msgstr ""
 
-#: src/application/audio.rs:385
+#: src/application/audio.rs:394
 msgid "Recording canceled"
 msgstr ""
 
-#: src/application/audio.rs:407
+#: src/application/audio.rs:416
 msgid "Sending voice message"
 msgstr ""
 
-#: src/application/audio.rs:410
+#: src/application/audio.rs:419
 msgid "Could not record voice message"
 msgstr ""
 
-#: src/application/audio.rs:419
+#: src/application/audio.rs:428
 msgid "Audio playback could not continue."
 msgstr ""
 
@@ -1663,4 +1663,8 @@ msgstr ""
 #: src/native_preferences.rs:729
 #, rust-format
 msgid "Custom ({} days)"
+msgstr ""
+
+#: src/services/media.rs:27
+msgid "Playing faster needs the GStreamer scaletempo plugin (gst-plugins-good)"
 msgstr ""

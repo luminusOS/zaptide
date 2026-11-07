@@ -1,6 +1,7 @@
 use super::*;
 use std::io;
 use std::sync::Barrier;
+use std::time::Instant;
 
 #[test]
 fn speed_labels_match_the_button() {
@@ -10,84 +11,12 @@ fn speed_labels_match_the_button() {
 }
 
 #[test]
-fn cycling_wraps_through_every_speed() {
-    let mut player = Player::default();
-    assert_eq!(player.speed(), SPEEDS[0]);
-    assert_eq!(player.cycle_speed(), 1.5);
-    assert_eq!(player.cycle_speed(), 2.0);
-    assert_eq!(player.cycle_speed(), 1.0);
-    // A speed set by hand still cycles up to the next known one.
-    player.set_speed(1.75);
-    assert_eq!(player.cycle_speed(), 2.0);
-    assert_eq!(player.speed(), 2.0);
-}
-
-#[test]
-fn a_speed_still_building_keeps_the_queued_one() {
-    let samples = Arc::new(vec![0.0; 12]);
-    let one_and_a_half = Arc::new(vec![0.0; 8]);
-    let double = Arc::new(vec![0.0; 6]);
-    let loaded = Loaded {
-        message: "clip".to_owned(),
-        samples: Arc::clone(&samples),
-        buffer: Arc::clone(&one_and_a_half),
-        factor: 1.5,
-        base: Duration::ZERO,
-        paused: false,
-        done: false,
-    };
-    let mut stretches = vec![(1.5, Arc::clone(&one_and_a_half))];
-
-    let (buffer, factor) = Player::buffer_for(&loaded, &stretches, 2.0);
-    assert!(Arc::ptr_eq(&buffer, &one_and_a_half));
-    assert_eq!(factor, 1.5);
-
-    stretches.push((2.0, Arc::clone(&double)));
-    let (buffer, factor) = Player::buffer_for(&loaded, &stretches, 2.0);
-    assert!(Arc::ptr_eq(&buffer, &double));
-    assert_eq!(factor, 2.0);
-    // Both built speeds stay available when cycling back.
-    let (buffer, _) = Player::buffer_for(&loaded, &stretches, 1.5);
-    assert!(Arc::ptr_eq(&buffer, &one_and_a_half));
-    let (buffer, factor) = Player::buffer_for(&loaded, &stretches, 1.0);
-    assert!(Arc::ptr_eq(&buffer, &samples));
-    assert_eq!(factor, 1.0);
-}
-
-#[test]
 fn unusable_speeds_are_kept_in_range() {
-    let mut player = Player::default();
-    player.set_speed(f32::NAN);
-    assert_eq!(player.speed(), 1.0);
-    player.set_speed(f32::INFINITY);
-    assert_eq!(player.speed(), 1.0);
-    player.set_speed(50.0);
-    assert_eq!(player.speed(), 2.0);
-    player.set_speed(-3.0);
-    assert_eq!(player.speed(), 1.0);
-}
-
-#[test]
-fn going_back_to_one_x_cancels_the_outstanding_compression() {
-    let mut player = Player::default();
-    let cancelled = Arc::new(AtomicBool::new(false));
-    player.set_speed(2.0);
-    player.stretching = Some(Stretching {
-        factor: 2.0,
-        slot: Default::default(),
-        cancelled: Arc::clone(&cancelled),
-    });
-    player.set_speed(1.0);
-    assert!(player.stretching.is_none());
-    assert!(cancelled.load(Ordering::Relaxed));
-}
-
-#[test]
-fn missing_or_revoked_output_is_a_recoverable_error() {
-    let missing = open_device("No sound output", || Err::<(), _>("device missing"));
-    assert_eq!(missing.unwrap_err(), "No sound output: device missing");
-    let revoked = open_device("No sound output", || Err::<(), _>("permission revoked"));
-    assert_eq!(revoked.unwrap_err(), "No sound output: permission revoked");
+    assert_eq!(playable_speed(f32::NAN), 1.0);
+    assert_eq!(playable_speed(f32::INFINITY), 1.0);
+    assert_eq!(playable_speed(50.0), 2.0);
+    assert_eq!(playable_speed(-3.0), 1.0);
+    assert_eq!(playable_speed(1.75), 1.75);
 }
 
 #[test]
@@ -116,23 +45,6 @@ fn recorder_handles_unplug_and_cancellation_with_synthetic_samples() {
     })
     .unwrap_err();
     assert_eq!(error, "The microphone did not record any audio");
-}
-
-#[test]
-fn late_decode_completion_after_stop_is_discarded() {
-    let slot: Decoded = Default::default();
-    let mut player = Player::default();
-    player.decoding = Some(Decoding {
-        message: "old-message".to_owned(),
-        start: 0.0,
-        slot: Arc::clone(&slot),
-        cancelled: Arc::new(AtomicBool::new(false)),
-    });
-    let cancelled = Arc::clone(&player.decoding.as_ref().unwrap().cancelled);
-    player.stop();
-
-    assert!(!publish_decode(&slot, &cancelled, Ok((vec![0.5], vec![1]))));
-    assert!(slot.lock().unwrap().is_none());
 }
 
 #[test]
@@ -348,25 +260,6 @@ fn oversized_audio_input_is_rejected_before_allocation() {
 }
 
 #[test]
-fn an_unplugged_playback_sink_marks_clip_complete() {
-    let samples = Arc::new(vec![0.25; 480]);
-    let mut loaded = Loaded {
-        message: "clip".to_owned(),
-        buffer: Arc::clone(&samples),
-        samples,
-        factor: 1.0,
-        base: Duration::ZERO,
-        paused: false,
-        done: false,
-    };
-    // A synthetic sink reports empty when its device disappears mid-clip.
-    assert!(playback_ended(&mut loaded, true));
-    assert!(loaded.done);
-    assert_eq!(loaded.message, "clip");
-    assert!(!playback_ended(&mut loaded, true));
-}
-
-#[test]
 fn unsupported_or_corrupt_audio_returns_codec_error() {
     let path = std::env::temp_dir().join(format!(
         "zaptide-audio-invalid-{}-{}.bin",
@@ -390,82 +283,6 @@ fn opus_decode_preserves_voice_clip_samples() {
     assert!(!decoded.is_empty());
     assert!(decoded.len() <= MAX_AUDIO_SAMPLES);
     assert!(decoded.iter().any(|sample| sample.abs() > 0.01));
-}
-
-/// Plays a one-second test tone:
-/// `cargo test audio::tests::plays -- --ignored --nocapture`.
-#[test]
-#[ignore = "makes a sound on this machine"]
-fn plays_a_clip_on_this_machine() {
-    let dir = std::env::temp_dir();
-    let path = dir.join("zaptide-audio-test.ogg");
-    let tone: Vec<f32> = (0..voice::RATE)
-        .map(|i| (i as f32 * 330.0 * std::f32::consts::TAU / voice::RATE as f32).sin() * 0.3)
-        .collect();
-    std::fs::write(&path, voice::encode(&tone).expect("encodes")).expect("written");
-    let mut player = Player::default();
-    player.toggle("clip", &path).expect("starts decoding");
-    assert_eq!(player.status("clip").state, State::Loading);
-    let started = Instant::now();
-    let mut seen_playing = false;
-    while started.elapsed() < Duration::from_secs(3) {
-        player.poll().expect("plays");
-        let status = player.status("clip");
-        if status.state == State::Playing && status.position > Duration::from_millis(300) {
-            seen_playing = true;
-            eprintln!("playing at {:?} of {:?}", status.position, status.total);
-        }
-        if seen_playing && status.state == State::Idle {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(30));
-    }
-    assert!(seen_playing, "never heard it playing");
-    assert_eq!(player.status("clip").state, State::Idle, "ends on its own");
-    assert_eq!(player.bars("clip").map(<[u8]>::len), Some(voice::BARS));
-    let _ = std::fs::remove_file(path);
-}
-
-/// Plays a two-second tone at double speed and checks the position
-/// outruns the clock:
-/// `cargo test audio::tests::doubles -- --ignored --nocapture`.
-#[test]
-#[ignore = "makes a sound on this machine"]
-fn doubles_the_position_rate_on_this_machine() {
-    let dir = std::env::temp_dir();
-    let path = dir.join("zaptide-audio-speed-test.ogg");
-    let tone: Vec<f32> = (0..voice::RATE * 2)
-        .map(|i| (i as f32 * 330.0 * std::f32::consts::TAU / voice::RATE as f32).sin() * 0.3)
-        .collect();
-    std::fs::write(&path, voice::encode(&tone).expect("encodes")).expect("written");
-    let mut player = Player::default();
-    player.set_speed(2.0);
-    player.toggle("clip", &path).expect("starts decoding");
-    let started = Instant::now();
-    let mut seen: Vec<(Duration, Duration)> = Vec::new();
-    while started.elapsed() < Duration::from_secs(6) {
-        player.poll().expect("plays");
-        let status = player.status("clip");
-        // The clip starts at 1x while its compression builds; measure
-        // only after the compressed buffer has taken over.
-        if status.state == State::Playing && status.position > Duration::from_millis(600) {
-            seen.push((started.elapsed(), status.position));
-        }
-        if status.state == State::Idle && !seen.is_empty() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(30));
-    }
-    let (first_wall, first_position) = seen.first().expect("played");
-    let (last_wall, last_position) = seen.last().expect("played");
-    let wall = *last_wall - *first_wall;
-    let advanced = *last_position - *first_position;
-    assert!(wall > Duration::from_millis(200), "played for {wall:?}");
-    assert!(
-        advanced.as_secs_f32() >= 1.5 * wall.as_secs_f32(),
-        "position advanced {advanced:?} over {wall:?} of wall time"
-    );
-    let _ = std::fs::remove_file(path);
 }
 
 /// Records one second from the default microphone:

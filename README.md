@@ -177,6 +177,7 @@ locked chats stay locked until those settings arrive.
 
 Install Rust through rustup and the dependencies in [PACKAGING.md](PACKAGING.md).
 The toolchain is pinned. GTK 4.14+ and libadwaita 1.10+ are required; CI uses Fedora 45.
+Playing voice notes at 1.5x or 2x needs the GStreamer `scaletempo` plugin from gst-plugins-good.
 
 ```sh
 git clone https://github.com/luminusOS/zaptide.git
