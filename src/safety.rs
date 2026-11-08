@@ -109,7 +109,7 @@ const LINK_TRAILERS: &[u8] = b".,;:!?]\"'";
 /// time. Candidates are queried in increasing order, and those inside one word
 /// share its end and trailing punctuation, so nothing is rescanned per candidate.
 #[derive(Default)]
-struct LinkScan {
+pub(crate) struct LinkScan {
     index: usize,
     whitespace: usize,
     unsafe_char: usize,
@@ -143,7 +143,7 @@ impl LinkScan {
     ///
     /// `index` must not decrease between calls on the same `text`, and
     /// `text[index..]` must start with a letter.
-    fn link_end(&mut self, text: &str, index: usize) -> usize {
+    pub(crate) fn link_end(&mut self, text: &str, index: usize) -> usize {
         debug_assert!(index >= self.index, "link candidates must come in order");
         self.index = index;
         let end = resume_search(&mut self.whitespace, text.len(), index, |at| {
@@ -402,6 +402,8 @@ pub fn linkify_markup_with_mentions(text: &str, mentions: &[MentionLabel]) -> St
         .collect();
     let mut out = String::with_capacity(text.len());
     render(&text, mentions, true, &mut out);
+    #[cfg(test)]
+    crate::safety::stats::update(|s| s.output_bytes += out.len());
     out
 }
 
@@ -501,6 +503,7 @@ fn render(text: &str, mentions: &[MentionLabel], mut line_start: bool, out: &mut
     let (mut plain, mut index, mut boundary) = (0, 0, true);
     let mut closers = SpanClosers::default();
     let mut links = LinkScan::default();
+    let mut decisions = crate::safety::adapter::decisions(text);
     let mut web_links = web_link_spans(text).peekable();
     while let Some(c) = text[index..].chars().next() {
         let rest = &text[index..];
@@ -588,7 +591,7 @@ fn render(text: &str, mentions: &[MentionLabel], mut line_start: bool, out: &mut
                     .peek()
                     .filter(|span| span.start == index)
                     .map(|span| span.end);
-                link_at(text, index, &mut links, end)
+                batch_link_at(text, index, &mut links, end, &mut decisions)
             })
             .flatten()
         {
@@ -611,6 +614,57 @@ fn render(text: &str, mentions: &[MentionLabel], mut line_start: bool, out: &mut
         line_start = false;
     }
     out.push_str(&esc(&text[plain..]));
+}
+
+fn batch_link_at(
+    text: &str,
+    index: usize,
+    scan: &mut LinkScan,
+    web_end: Option<usize>,
+    decisions: &mut crate::safety::adapter::Verdicts,
+) -> Option<(usize, String, Option<&'static str>)> {
+    let rest = &text[index..];
+    if rest.starts_with('+') {
+        return link_at(text, index, scan, web_end);
+    }
+    let decision = decisions.get(index)?;
+    match decision {
+        crate::safety::adapter::Verdict::Reject => None,
+        crate::safety::adapter::Verdict::Unsupported => {
+            unreachable!("LinkScan candidate interval is covered by the provider")
+        }
+        crate::safety::adapter::Verdict::Chat { end, digits } => Some((
+            end - index,
+            format!("{CHAT_SCHEME}{digits}"),
+            Some("Message on WhatsApp"),
+        )),
+        crate::safety::adapter::Verdict::Web { end } => {
+            let link = &text[index..*end];
+            #[cfg(test)]
+            crate::safety::stats::update(|s| {
+                s.accepted_parser_bytes += link.len();
+                s.consumed_web_bytes += link.len();
+                s.consumed_web_links += 1;
+            });
+            let parsed = url::Url::parse(link)
+                .or_else(|_| {
+                    #[cfg(test)]
+                    crate::safety::stats::update(|s| s.accepted_parser_bytes += 8 + link.len());
+                    url::Url::parse(&format!("https://{link}"))
+                })
+                .expect("batch accepted URL must parse");
+            assert!(matches!(parsed.scheme(), "http" | "https") && parsed.host_str().is_some());
+            let target = parsed.to_string();
+            match whatsapp_number(&parsed) {
+                Some(digits) => Some((
+                    end - index,
+                    format!("{CHAT_SCHEME}{digits}"),
+                    Some("Message on WhatsApp"),
+                )),
+                None => Some((end - index, target, None)),
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1059,24 +1113,55 @@ mod tests {
 
     #[test]
     fn whatsapp_parse_work_is_bounded_without_question_mark() {
-        let mut whatsapp_work = Vec::new();
         for candidate in ["whatsapp://x1234567(", "www.a:bad1234567("] {
             for count in [1_000, 2_000, 4_000] {
                 let text = candidate.repeat(count);
+                crate::safety::stats::reset();
                 super::PARSE_BYTES.with(|bytes| bytes.set(Some(0)));
-                let started = std::time::Instant::now();
                 assert_eq!(linkify_markup(&text), text);
-                let elapsed = started.elapsed();
-                let work = super::PARSE_BYTES.with(|bytes| bytes.replace(None).unwrap());
-                eprintln!("{candidate:?} x{count}: {work} parse bytes, {elapsed:?}");
-                if candidate.starts_with("whatsapp:") {
-                    whatsapp_work.push(work);
-                } else {
-                    assert!(work > 0);
-                }
+                let original_parser_bytes =
+                    super::PARSE_BYTES.with(|bytes| bytes.replace(None).unwrap());
+                let w = crate::safety::stats::snapshot();
+                assert_eq!(original_parser_bytes, 0);
+                assert_eq!(w.accepted_parser_bytes, 0);
+                assert!(w.indexed_word_bytes <= text.len());
+                assert!(
+                    w.raw_decoded
+                        + w.decoded_bytes
+                        + w.fragment_input
+                        + w.fragment_output
+                        + w.normalized_base_bytes
+                        + w.normalized_tail_bytes
+                        + w.normalized_revalidation_bytes
+                        + w.url_validation_bytes
+                        + w.url_at_bytes
+                        + w.url_indexed_bytes
+                        + w.url_path_steps
+                        + w.url_opaque_parser_bytes
+                        + w.url_special_bytes
+                        + w.whatsapp_preprocessing
+                        + w.whatsapp_path_steps
+                        + w.whatsapp_authority_scanned
+                        + w.whatsapp_parser_input_bytes
+                        + w.whatsapp_query_bytes
+                        + w.provider_index_bytes
+                        + w.provider_local_bytes
+                        + w.provider_prepare_calls
+                        + w.provider_operations
+                        + w.provider_segment_probes
+                        <= 10000 * text.len()
+                );
             }
         }
-        assert_eq!(whatsapp_work, [0, 0, 0]);
+        crate::safety::stats::reset();
+        let output = linkify_markup("www.example.com");
+        assert_eq!(
+            output,
+            "<a href=\"https://www.example.com/\">www.example.com</a>"
+        );
+        let w = crate::safety::stats::snapshot();
+        assert_eq!(w.consumed_web_links, 1);
+        assert!(w.accepted_parser_bytes > 0);
     }
 
     #[test]
@@ -1275,3 +1360,13 @@ mod tests {
         }
     }
 }
+mod adapter;
+#[cfg(test)]
+mod differential;
+mod interval;
+mod path_index;
+#[cfg(test)]
+#[rustfmt::skip]
+mod reference;
+#[cfg(test)]
+mod stats;
