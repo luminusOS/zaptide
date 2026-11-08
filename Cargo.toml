@@ -85,6 +85,9 @@ qrcode = { version = "0.14", default-features = false }
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 # Parses link-preview URLs.
 url = "2"
+url-batch = { package = "url", path = "vendor/absolute-url", features = ["batch-research"] }
+idna-batch = { package = "idna", path = "vendor/idna-1.1.0", features = ["research-batch"] }
+icu_normalizer = { version = "=2.3.0", default-features = false, features = ["experimental_linear_ccc"] }
 jiff = "0.2"
 # MIME detection for attachments.
 mime_guess = "2"
@@ -111,8 +114,12 @@ ksni = { version = "0.3", default-features = false, features = ["tokio", "blocki
 tempfile = "3"
 
 [dev-dependencies]
+url-batch = { package = "url", path = "vendor/absolute-url", features = ["batch-research", "batch-stats"] }
 # Encodes oversized clipboard images in portal tests. Already included through image.
 png = "0.18"
+
+[patch.crates-io]
+icu_normalizer = { path = "vendor/icu_normalizer" }
 
 [profile.release]
 lto = "thin"

@@ -56,6 +56,7 @@ export GTK_CLASS_FIX=1
 export UPINFO="gh-releases-zsync|luminusOS|zaptide|latest|zaptide-*-$ARCH.AppImage.zsync"
 
 ./quick-sharun /usr/bin/zaptide
+sh packaging/install-licenses.sh AppDir/share/licenses/zaptide
 
 # quick-sharun bundles only the build system's hicolor icons and expects the
 # desktop to provide Adwaita, so a system without it shows missing-image icons.

@@ -2456,8 +2456,6 @@ dependencies = [
 [[package]]
 name = "icu_normalizer"
 version = "2.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "12f9cf5f235641ed274641dd81c3f28d870e276763d0797aeeab72317b1c646f"
 dependencies = [
  "icu_collections",
  "icu_normalizer_data",
@@ -2514,6 +2512,15 @@ name = "ident_case"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
+
+[[package]]
+name = "idna"
+version = "1.1.0"
+dependencies = [
+ "idna_adapter",
+ "smallvec",
+ "utf8_iter",
+]
 
 [[package]]
 name = "idna"
@@ -4036,7 +4043,7 @@ dependencies = [
  "serde",
  "substring",
  "thiserror 2.0.20",
- "url",
+ "url 2.5.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "winapi",
 ]
 
@@ -4848,11 +4855,21 @@ dependencies = [
 [[package]]
 name = "url"
 version = "2.5.8"
+dependencies = [
+ "form_urlencoded",
+ "idna 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "percent-encoding",
+ "serde",
+]
+
+[[package]]
+name = "url"
+version = "2.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff67a8a4397373c3ef660812acab3268222035010ab8680ec4215f38ba3d0eed"
 dependencies = [
  "form_urlencoded",
- "idna",
+ "idna 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "percent-encoding",
  "serde",
 ]
@@ -5496,6 +5513,8 @@ dependencies = [
  "gstreamer-video",
  "gtk4",
  "hex",
+ "icu_normalizer",
+ "idna 1.1.0",
  "image",
  "jiff",
  "ksni",
@@ -5517,7 +5536,8 @@ dependencies = [
  "tempfile",
  "tokio",
  "ureq",
- "url",
+ "url 2.5.8",
+ "url 2.5.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "whatsapp-rust",
  "zeroize",
 ]
