@@ -33,7 +33,7 @@ const SOUND_VERSION: u32 = 2;
 const UNKNOWN_VERSION: u32 = u32::MAX;
 const CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 const WITHDRAW_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
-const AMBIGUOUS: &str = "ambiguous notification transport";
+pub(super) const AMBIGUOUS: &str = "ambiguous notification transport";
 
 /// Only a sandboxed app is identified by the portal without extra registration.
 pub fn sandboxed() -> bool {
@@ -210,7 +210,10 @@ struct Lane {
 pub struct Queue(Rc<RefCell<HashMap<String, Lane>>>);
 
 impl Queue {
-    fn enqueue(&self, id: &str, remove: bool, start: Start, finish: Finish) {
+    pub(super) fn has_pending(&self, id: &str) -> bool {
+        self.0.borrow().contains_key(id)
+    }
+    pub(super) fn enqueue(&self, id: &str, remove: bool, start: Start, finish: Finish) {
         let mut lanes = self.0.borrow_mut();
         if remove && lanes.get(id).is_some_and(|lane| lane.quarantined.get()) {
             if let Some(lane) = lanes.remove(id) {
@@ -346,7 +349,7 @@ impl Queue {
     }
 }
 
-async fn on_runtime(
+pub(super) async fn on_runtime(
     future: impl Future<Output = Result<(), String>> + Send + 'static,
 ) -> Result<(), String> {
     let (sender, receiver) = async_channel::bounded(1);

@@ -10,6 +10,10 @@ use relm4::gtk;
 use relm4::gtk::prelude::*;
 
 #[cfg(target_os = "linux")]
+mod adapters;
+#[cfg(target_os = "linux")]
+mod freedesktop;
+#[cfg(target_os = "linux")]
 mod portal;
 
 const OPEN_CHAT_ACTION: &str = "open-chat";
@@ -127,11 +131,7 @@ pub struct NativeNotifications {
     tokens: std::rc::Rc<std::cell::RefCell<ActivationTokens>>,
     calls: std::rc::Rc<std::cell::RefCell<ActivationTokens>>,
     #[cfg(target_os = "linux")]
-    portal: Option<portal::Support>,
-    #[cfg(target_os = "linux")]
-    portal_queue: portal::Queue,
-    #[cfg(target_os = "linux")]
-    portal_modes: std::rc::Rc<std::cell::RefCell<HashMap<String, bool>>>,
+    chat_backend: std::rc::Rc<dyn adapters::Port>,
     body_format: std::cell::OnceCell<BodyFormat>,
 }
 
@@ -144,17 +144,15 @@ impl NativeNotifications {
     ) -> Self {
         use gtk::gio::prelude::*;
 
-        #[cfg(target_os = "linux")]
-        let portal_queue = portal::Queue::default();
-        #[cfg(target_os = "linux")]
-        let activation_queue = portal::sandboxed().then(|| portal_queue.clone());
-        #[cfg(target_os = "linux")]
-        let portal_modes = std::rc::Rc::new(std::cell::RefCell::new(HashMap::new()));
-        #[cfg(target_os = "linux")]
-        let activation_modes = portal_modes.clone();
-        #[cfg(target_os = "linux")]
-        let activation_application = application.clone();
         let tokens = std::rc::Rc::new(std::cell::RefCell::new(ActivationTokens::default()));
+        #[cfg(target_os = "linux")]
+        let closed_tokens = tokens.clone();
+        #[cfg(target_os = "linux")]
+        let chat_backend = adapters::create(application, portal::sandboxed(), move |token| {
+            closed_tokens.borrow_mut().activate(token);
+        });
+        #[cfg(target_os = "linux")]
+        let activation_backend = chat_backend.clone();
         let action_tokens = tokens.clone();
         let action =
             gtk::gio::SimpleAction::new(OPEN_CHAT_ACTION, Some(&String::static_variant_type()));
@@ -164,15 +162,7 @@ impl NativeNotifications {
             };
             if let Some((account, chat_id)) = action_tokens.borrow_mut().activate(&token) {
                 #[cfg(target_os = "linux")]
-                if let Some(queue) = &activation_queue {
-                    let portal_enabled =
-                        activation_modes.borrow_mut().remove(&token).unwrap_or(true);
-                    let application = activation_application.clone();
-                    let id = token.clone();
-                    queue.remove(&token, portal_enabled, move || {
-                        application.withdraw_notification(&id)
-                    });
-                }
+                activation_backend.withdraw(&token);
                 open_chat(account, chat_id);
             }
         });
@@ -205,11 +195,7 @@ impl NativeNotifications {
             tokens,
             calls,
             #[cfg(target_os = "linux")]
-            portal: portal::sandboxed().then(Default::default),
-            #[cfg(target_os = "linux")]
-            portal_queue,
-            #[cfg(target_os = "linux")]
-            portal_modes,
+            chat_backend,
             body_format: std::cell::OnceCell::new(),
         }
     }
@@ -268,55 +254,27 @@ impl NativeNotifications {
             .set_default_action_and_target_value(&default_action, Some(&token.to_variant()));
 
         #[cfg(target_os = "linux")]
-        if let Some(support) = &self.portal {
-            support.probe();
-            let supported = *self
-                .portal_modes
-                .borrow_mut()
-                .entry(token.clone())
-                .or_insert_with(|| support.supports_sound());
-            let fallback = (
-                self.application.clone(),
-                notification.clone(),
-                token.clone(),
-            );
-            self.portal_queue.add(
-                portal::Request {
-                    id: token.clone(),
-                    title: title.to_owned(),
-                    body: body.to_owned(),
-                    icon: bytes.as_deref().map(<[u8]>::to_vec),
-                    default_action: default_action.clone(),
-                    default_action_target: token.clone(),
-                    sound,
-                },
-                supported,
-                move || {
-                    let (application, notification, token) = fallback;
-                    application.send_notification(Some(&token), &notification);
-                },
-            );
-            return Ok(());
-        }
+        self.chat_backend.show(adapters::Request {
+            token,
+            title: title.to_owned(),
+            body: body.to_owned(),
+            icon: bytes.as_deref().map(<[u8]>::to_vec),
+            sound,
+            notification,
+        });
         #[cfg(not(target_os = "linux"))]
-        let _ = sound;
-
-        self.application
-            .send_notification(Some(&token), &notification);
+        {
+            let _ = sound;
+            self.application
+                .send_notification(Some(&token), &notification);
+        }
         Ok(())
     }
 
     fn withdraw_chat_notification(&self, token: &str) {
         #[cfg(target_os = "linux")]
-        if self.portal.is_some() {
-            let portal_enabled = self.portal_modes.borrow_mut().remove(token).unwrap_or(true);
-            let application = self.application.clone();
-            let id = token.to_owned();
-            self.portal_queue.remove(token, portal_enabled, move || {
-                application.withdraw_notification(&id)
-            });
-            return;
-        }
+        self.chat_backend.withdraw(token);
+        #[cfg(not(target_os = "linux"))]
         self.application.withdraw_notification(token);
     }
 

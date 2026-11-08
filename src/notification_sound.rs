@@ -1,8 +1,8 @@
 //! Short sound that accompanies a desktop notification.
 //!
 //! ZapTide does not play it. It hands the sound to the desktop together with
-//! the notification (notification portal, version 2), and the desktop decides
-//! whether to play it, so Do Not Disturb and the per-app sound setting apply.
+//! the notification, and the desktop decides whether to play it according to
+//! its notification and sound policies.
 //! What belongs to ZapTide is whether to ask for the sound at all: a burst of
 //! messages asks once.
 
@@ -12,9 +12,90 @@ use std::time::{Duration, Instant};
 pub const INTERVALS: [u32; 5] = [0, 10, 30, 60, 120];
 pub const DEFAULT_INTERVAL: u32 = 30;
 
-/// Only the Linux portal takes a sound along with a notification.
 #[cfg(target_os = "linux")]
 pub(crate) static SOUND: &[u8] = include_bytes!("../assets/sounds/message-notification.wav");
+
+#[cfg(target_os = "linux")]
+pub(crate) fn native_sound_file() -> std::io::Result<std::path::PathBuf> {
+    materialize_native_sound(&crate::paths::AppDirs::discover().cache)
+}
+
+#[cfg(target_os = "linux")]
+fn materialize_native_sound(cache: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+    use std::io::{Error, ErrorKind, Read, Write};
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
+
+    if !cache.is_absolute() {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "cache path is not absolute",
+        ));
+    }
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(cache)?;
+    let directory = cache.join("notification-sounds");
+    match std::fs::DirBuilder::new().mode(0o700).create(&directory) {
+        Ok(()) => (),
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => (),
+        Err(error) => return Err(error),
+    }
+    // The cache ancestry is trusted to the current user; the dedicated directory is not followed if it is a symlink.
+    let metadata = std::fs::symlink_metadata(&directory)?;
+    // SAFETY: geteuid has no arguments or side effects.
+    let uid = unsafe { libc::geteuid() };
+    if !metadata.is_dir() || metadata.uid() != uid || metadata.mode() & 0o077 != 0 {
+        return Err(Error::new(
+            ErrorKind::PermissionDenied,
+            "untrusted sound directory",
+        ));
+    }
+    let path = directory.join("message-notification.wav");
+    let validate = || -> std::io::Result<()> {
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+            .open(&path)?;
+        let metadata = file.metadata()?;
+        if !metadata.is_file()
+            || metadata.uid() != uid
+            || metadata.mode() & 0o077 != 0
+            || metadata.len() != SOUND.len() as u64
+        {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "invalid cached sound file",
+            ));
+        }
+        let mut bytes = Vec::with_capacity(SOUND.len());
+        Read::by_ref(&mut file)
+            .take(SOUND.len() as u64 + 1)
+            .read_to_end(&mut bytes)?;
+        if bytes != SOUND {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "invalid cached sound contents",
+            ));
+        }
+        Ok(())
+    };
+    match validate() {
+        Ok(()) => return Ok(path),
+        Err(error) if error.kind() == ErrorKind::NotFound => (),
+        Err(error) => return Err(error),
+    }
+    let mut temporary = tempfile::NamedTempFile::new_in(&directory)?;
+    temporary.write_all(SOUND)?;
+    temporary.flush()?;
+    match temporary.persist_noclobber(&path) {
+        Ok(_) => (),
+        Err(error) if error.error.kind() == ErrorKind::AlreadyExists => (),
+        Err(error) => return Err(error.error),
+    }
+    validate()?;
+    Ok(path)
+}
 
 /// Whether `seconds` is one of the offered intervals.
 pub fn is_supported_interval(seconds: u32) -> bool {
@@ -84,6 +165,77 @@ fn interval_for(seconds: u32) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn native_sound_is_stable_private_and_matches_the_embedded_bytes() {
+        use std::os::unix::fs::MetadataExt;
+        let cache = tempfile::tempdir().unwrap();
+        let first = materialize_native_sound(cache.path()).unwrap();
+        assert!(first.is_absolute());
+        assert_eq!(std::fs::read(&first).unwrap(), SOUND);
+        assert_eq!(std::fs::metadata(&first).unwrap().mode() & 0o777, 0o600);
+        assert_eq!(
+            std::fs::metadata(first.parent().unwrap()).unwrap().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(materialize_native_sound(cache.path()).unwrap(), first);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn native_sound_rejects_symlinks_without_touching_the_target() {
+        use std::os::unix::fs::symlink;
+        let cache = tempfile::tempdir().unwrap();
+        let path = materialize_native_sound(cache.path()).unwrap();
+        let target = cache.path().join("other");
+        std::fs::write(&target, b"untouched").unwrap();
+        std::fs::remove_file(&path).unwrap();
+        symlink(&target, &path).unwrap();
+        assert!(materialize_native_sound(cache.path()).is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"untouched");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn native_sound_rejects_invalid_existing_files_and_directories() {
+        use std::os::unix::fs::PermissionsExt;
+        let cache = tempfile::tempdir().unwrap();
+        let path = materialize_native_sound(cache.path()).unwrap();
+        std::fs::write(&path, b"incorrect").unwrap();
+        assert!(materialize_native_sound(cache.path()).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"incorrect");
+        std::fs::set_permissions(
+            path.parent().unwrap(),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        assert_eq!(
+            materialize_native_sound(cache.path()).unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn native_sound_rejects_a_non_directory_cache_path() {
+        let cache = tempfile::tempdir().unwrap();
+        let file = cache.path().join("file");
+        std::fs::write(&file, b"untouched").unwrap();
+        assert!(materialize_native_sound(&file).is_err());
+        assert_eq!(std::fs::read(file).unwrap(), b"untouched");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn native_sound_rejects_a_symlinked_sound_directory() {
+        use std::os::unix::fs::symlink;
+        let cache = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        symlink(target.path(), cache.path().join("notification-sounds")).unwrap();
+        assert!(materialize_native_sound(cache.path()).is_err());
+        assert!(std::fs::read_dir(target.path()).unwrap().next().is_none());
+    }
 
     fn at(start: Instant, seconds: u64) -> Instant {
         start + Duration::from_secs(seconds)
