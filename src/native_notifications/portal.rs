@@ -11,9 +11,13 @@
 //! `("file-descriptor", h)` and cannot say `silent`, so the sound is added to
 //! the body here.
 
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::future::Future;
 use std::io::{Seek, SeekFrom, Write};
 use std::os::fd::OwnedFd;
+use std::pin::Pin;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
@@ -28,6 +32,8 @@ use crate::notification_sound::{SOUND, SoundRequest};
 const SOUND_VERSION: u32 = 2;
 const UNKNOWN_VERSION: u32 = u32::MAX;
 const CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const WITHDRAW_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
+const AMBIGUOUS: &str = "ambiguous notification transport";
 
 /// Only a sandboxed app is identified by the portal without extra registration.
 pub fn sandboxed() -> bool {
@@ -146,14 +152,32 @@ async fn send(proxy: &NotificationProxy, request: Request) -> Result<(), String>
         notification: notification(&request).map_err(|error| error.to_string())?,
         sound: sound.value(),
     };
-    tokio::time::timeout(
-        CALL_TIMEOUT,
-        proxy.call_method("AddNotification", &(request.id.as_str(), body)),
+    definitive(
+        proxy
+            .call_method("AddNotification", &(request.id.as_str(), body))
+            .await
+            .map(drop),
     )
     .await
-    .map_err(|_| "the portal did not answer".to_owned())?
-    .map(drop)
-    .map_err(|error| error.to_string())
+}
+
+async fn definitive(result: ashpd::zbus::Result<()>) -> Result<(), String> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) => match &error {
+            ashpd::zbus::Error::MethodError(name, _, _)
+                if !matches!(
+                    name.as_str(),
+                    "org.freedesktop.DBus.Error.NoReply"
+                        | "org.freedesktop.DBus.Error.Timeout"
+                        | "org.freedesktop.DBus.Error.Disconnected"
+                ) =>
+            {
+                Err(error.to_string())
+            }
+            _ => Err(AMBIGUOUS.into()),
+        },
+    }
 }
 
 async fn send_to_desktop(request: Request) -> Result<(), String> {
@@ -164,8 +188,180 @@ async fn send_to_desktop(request: Request) -> Result<(), String> {
     send(&proxy, request).await
 }
 
+type LocalTask = Pin<Box<dyn Future<Output = Result<(), String>>>>;
+type Start = Box<dyn FnOnce() -> LocalTask>;
+type Finish = Box<dyn FnOnce(Result<(), String>, bool)>;
+
+struct Operation {
+    generation: u64,
+    remove: bool,
+    start: Start,
+    finish: Finish,
+}
+
+struct Lane {
+    generation: Rc<Cell<u64>>,
+    pending: Rc<RefCell<Option<Operation>>>,
+    quarantined: Rc<Cell<bool>>,
+    abort: futures_util::future::AbortHandle,
+}
+
+#[derive(Clone, Default)]
+pub struct Queue(Rc<RefCell<HashMap<String, Lane>>>);
+
+impl Queue {
+    fn enqueue(&self, id: &str, remove: bool, start: Start, finish: Finish) {
+        let mut lanes = self.0.borrow_mut();
+        if remove && lanes.get(id).is_some_and(|lane| lane.quarantined.get()) {
+            if let Some(lane) = lanes.remove(id) {
+                lane.abort.abort();
+            }
+            return;
+        }
+        let lane = lanes.entry(id.to_owned()).or_insert_with(|| {
+            let generation = Rc::new(Cell::new(0));
+            let current = generation.clone();
+            let pending = Rc::new(RefCell::new(None::<Operation>));
+            let next = pending.clone();
+            let quarantined = Rc::new(Cell::new(false));
+            let uncertain = quarantined.clone();
+            let (abort, registration) = futures_util::future::AbortHandle::new_pair();
+            let lanes = Rc::downgrade(&self.0);
+            let id = id.to_owned();
+            relm4::gtk::glib::spawn_future_local(futures_util::future::Abortable::new(
+                async move {
+                    loop {
+                        let Some(operation) = next.borrow_mut().take() else {
+                            if let Some(lanes) = lanes.upgrade() {
+                                lanes.borrow_mut().remove(&id);
+                            }
+                            break;
+                        };
+                        if operation.remove || operation.generation == current.get() {
+                            let result = (operation.start)().await;
+                            if matches!(&result, Err(reason) if reason == AMBIGUOUS) {
+                                uncertain.set(true);
+                                break;
+                            }
+                            (operation.finish)(result, operation.generation == current.get());
+                        }
+                    }
+                },
+                registration,
+            ));
+            Lane {
+                generation,
+                pending,
+                quarantined,
+                abort,
+            }
+        });
+        if !remove && lane.pending.borrow().as_ref().is_some_and(|op| op.remove) {
+            return;
+        }
+        let generation = lane.generation.get().wrapping_add(1);
+        lane.generation.set(generation);
+        *lane.pending.borrow_mut() = Some(Operation {
+            generation,
+            remove,
+            start,
+            finish,
+        });
+        if remove {
+            let lanes = Rc::downgrade(&self.0);
+            let generation_ref = Rc::downgrade(&lane.generation);
+            let id = id.to_owned();
+            relm4::gtk::glib::spawn_future_local(async move {
+                let _ = on_runtime(async {
+                    tokio::time::sleep(WITHDRAW_GRACE).await;
+                    Ok(())
+                })
+                .await;
+                if let Some(lanes) = lanes.upgrade() {
+                    let mut lanes = lanes.borrow_mut();
+                    if lanes.get(&id).is_some_and(|lane| {
+                        lane.generation.get() == generation
+                            && generation_ref
+                                .upgrade()
+                                .is_some_and(|old| Rc::ptr_eq(&old, &lane.generation))
+                    }) && let Some(lane) = lanes.remove(&id)
+                    {
+                        lane.abort.abort();
+                    }
+                }
+            });
+        }
+    }
+
+    pub fn add(&self, request: Request, supported: bool, fallback: impl FnOnce() + 'static) {
+        let id = request.id.clone();
+        self.enqueue(
+            &id,
+            false,
+            Box::new(move || {
+                Box::pin(async move {
+                    if !supported {
+                        return Err("sound portal unavailable".into());
+                    }
+                    on_runtime(send_to_desktop(request)).await
+                })
+            }),
+            Box::new(move |result, current| {
+                if result.is_err() && current {
+                    fallback();
+                }
+            }),
+        );
+    }
+
+    pub fn remove(&self, id: &str, portal_enabled: bool, withdraw: impl FnOnce()) {
+        withdraw();
+        let token = id.to_owned();
+        self.enqueue(
+            id,
+            true,
+            Box::new(move || {
+                Box::pin(async move {
+                    if !portal_enabled {
+                        return Ok(());
+                    }
+                    on_runtime(async move {
+                        let proxy = tokio::time::timeout(CALL_TIMEOUT, NotificationProxy::new())
+                            .await
+                            .map_err(|_| "the portal did not answer".to_owned())?
+                            .map_err(|error| error.to_string())?;
+                        definitive(
+                            proxy
+                                .call_method("RemoveNotification", &(token.as_str(),))
+                                .await
+                                .map(drop),
+                        )
+                        .await
+                    })
+                    .await
+                })
+            }),
+            Box::new(|_, _| {}),
+        );
+    }
+}
+
+async fn on_runtime(
+    future: impl Future<Output = Result<(), String>> + Send + 'static,
+) -> Result<(), String> {
+    let (sender, receiver) = async_channel::bounded(1);
+    crate::portal::spawn(async move {
+        tokio::select! {
+            result = future => { let _ = sender.send(result).await; }
+            _ = sender.closed() => {}
+        }
+    });
+    receiver.recv().await.map_err(|_| AMBIGUOUS.to_owned())?
+}
+
 /// Runs `outcome` on the portal runtime and reports a failure to `on_error` on
 /// the calling thread, which must be running a main loop.
+#[cfg(test)]
 fn report_failure(
     outcome: impl Future<Output = Result<(), String>> + Send + 'static,
     on_error: impl FnOnce(String) + 'static,
@@ -179,13 +375,6 @@ fn report_failure(
             on_error(reason);
         }
     });
-}
-
-/// Sends the notification, replacing one with the same ID. `on_error` runs on
-/// the calling thread with the reason when the portal refuses it or cannot be
-/// reached.
-pub fn add_notification(request: Request, on_error: impl FnOnce(String) + 'static) {
-    report_failure(send_to_desktop(request), on_error);
 }
 
 /// An anonymous file holding `bytes`, sealed against any later change. The
@@ -222,6 +411,281 @@ mod tests {
     use zbus::zvariant::OwnedValue;
 
     use super::*;
+
+    #[derive(Clone, Default)]
+    struct QueuedFake {
+        remote: Rc<RefCell<HashMap<String, String>>>,
+        fallbacks: Rc<RefCell<Vec<String>>>,
+    }
+
+    impl QueuedFake {
+        fn add(
+            &self,
+            queue: &Queue,
+            message: (&str, &str),
+            gate: async_channel::Receiver<()>,
+            started: async_channel::Sender<()>,
+            done: async_channel::Sender<()>,
+            fail: bool,
+        ) {
+            let (id, body) = message;
+            let key = id.to_owned();
+            let value = body.to_owned();
+            let remote = self.remote.clone();
+            let fallbacks = self.fallbacks.clone();
+            queue.enqueue(
+                id,
+                false,
+                Box::new(move || {
+                    Box::pin(async move {
+                        started.send(()).await.unwrap();
+                        gate.recv().await.unwrap();
+                        if fail {
+                            return Err("refused".into());
+                        }
+                        remote.borrow_mut().insert(key, value);
+                        Ok(())
+                    })
+                }),
+                Box::new(move |result, current| {
+                    if result.is_err() && current {
+                        fallbacks.borrow_mut().push("fallback".into());
+                    }
+                    done.try_send(()).unwrap();
+                }),
+            );
+        }
+
+        fn remove(&self, queue: &Queue, id: &str, done: async_channel::Sender<()>) {
+            let key = id.to_owned();
+            let remote = self.remote.clone();
+            queue.enqueue(
+                id,
+                true,
+                Box::new(move || {
+                    Box::pin(async move {
+                        remote.borrow_mut().remove(&key);
+                        Ok(())
+                    })
+                }),
+                Box::new(move |_, _| {
+                    done.try_send(()).unwrap();
+                }),
+            );
+        }
+    }
+
+    #[test]
+    fn withdrawal_releases_a_call_that_never_replies() {
+        let context = relm4::gtk::glib::MainContext::new();
+        context
+            .with_thread_default(|| {
+                context.block_on(async {
+                    let fake = QueuedFake::default();
+                    let queue = Queue::default();
+                    let (_gate, release) = async_channel::bounded(1);
+                    let (started, started_rx) = async_channel::bounded(1);
+                    let (done, done_rx) = async_channel::bounded(2);
+                    fake.add(
+                        &queue,
+                        ("chat", "old"),
+                        release,
+                        started,
+                        done.clone(),
+                        false,
+                    );
+                    started_rx.recv().await.unwrap();
+                    let payload = Rc::new(vec![0u8; 1024]);
+                    let weak = Rc::downgrade(&payload);
+                    queue.enqueue(
+                        "chat",
+                        true,
+                        Box::new(move || {
+                            Box::pin(async move {
+                                drop(payload);
+                                Ok(())
+                            })
+                        }),
+                        Box::new(|_, _| panic!("abandoned remove ran")),
+                    );
+                    on_runtime(async {
+                        tokio::time::sleep(WITHDRAW_GRACE + std::time::Duration::from_millis(100))
+                            .await;
+                        Ok(())
+                    })
+                    .await
+                    .unwrap();
+                    assert!(!queue.0.borrow().contains_key("chat"));
+                    assert!(weak.upgrade().is_none());
+                    assert!(done_rx.try_recv().is_err());
+                })
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn pending_replacements_release_superseded_payloads_and_preserve_withdrawal() {
+        let context = relm4::gtk::glib::MainContext::new();
+        context
+            .with_thread_default(|| {
+                context.block_on(async {
+                    for withdraw in [false, true] {
+                        let fake = QueuedFake::default();
+                        let queue = Queue::default();
+                        let (gate, release) = async_channel::bounded(1);
+                        let (started, started_rx) = async_channel::bounded(1);
+                        let (done, done_rx) = async_channel::bounded(2);
+                        fake.add(
+                            &queue,
+                            ("chat", "old"),
+                            release,
+                            started,
+                            done.clone(),
+                            false,
+                        );
+                        started_rx.recv().await.unwrap();
+                        let mut payloads = Vec::new();
+                        for number in 0..1000 {
+                            let payload = Rc::new(format!("message-{number}"));
+                            payloads.push(Rc::downgrade(&payload));
+                            let remote = fake.remote.clone();
+                            let done = done.clone();
+                            queue.enqueue(
+                                "chat",
+                                false,
+                                Box::new(move || {
+                                    Box::pin(async move {
+                                        remote
+                                            .borrow_mut()
+                                            .insert("chat".into(), (*payload).clone());
+                                        Ok(())
+                                    })
+                                }),
+                                Box::new(move |_, _| {
+                                    done.try_send(()).unwrap();
+                                }),
+                            );
+                        }
+                        assert_eq!(
+                            payloads
+                                .iter()
+                                .filter(|payload| payload.strong_count() != 0)
+                                .count(),
+                            1
+                        );
+                        if withdraw {
+                            fake.remove(&queue, "chat", done.clone());
+                            assert!(payloads.iter().all(|payload| payload.strong_count() == 0));
+                        }
+                        gate.send(()).await.unwrap();
+                        done_rx.recv().await.unwrap();
+                        done_rx.recv().await.unwrap();
+                        assert_eq!(
+                            fake.remote.borrow().get("chat").map(String::as_str),
+                            if withdraw { None } else { Some("message-999") }
+                        );
+                    }
+                })
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn blocked_adds_are_ordered_before_replacement_and_withdrawal() {
+        let context = relm4::gtk::glib::MainContext::new();
+        context
+            .with_thread_default(|| {
+                context.block_on(async {
+                    for remove in [false, true] {
+                        let fake = QueuedFake::default();
+                        let queue = Queue::default();
+                        let (gate, release) = async_channel::bounded(1);
+                        let (started, started_rx) = async_channel::bounded(2);
+                        let (done, done_rx) = async_channel::bounded(2);
+                        fake.add(
+                            &queue,
+                            ("chat", "old"),
+                            release,
+                            started.clone(),
+                            done.clone(),
+                            false,
+                        );
+                        started_rx.recv().await.unwrap();
+                        if remove {
+                            fake.remove(&queue, "chat", done.clone());
+                        } else {
+                            let (next_gate, next_release) = async_channel::bounded(1);
+                            next_gate.send(()).await.unwrap();
+                            fake.add(
+                                &queue,
+                                ("chat", "new"),
+                                next_release,
+                                started,
+                                done.clone(),
+                                false,
+                            );
+                        }
+                        gate.send(()).await.unwrap();
+                        done_rx.recv().await.unwrap();
+                        done_rx.recv().await.unwrap();
+                        assert_eq!(
+                            fake.remote.borrow().get("chat").map(String::as_str),
+                            if remove { None } else { Some("new") }
+                        );
+                    }
+                })
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn failed_old_add_never_falls_back_after_withdrawal_or_replacement() {
+        let context = relm4::gtk::glib::MainContext::new();
+        context
+            .with_thread_default(|| {
+                context.block_on(async {
+                    for remove in [false, true] {
+                        let fake = QueuedFake::default();
+                        let queue = Queue::default();
+                        let (gate, release) = async_channel::bounded(1);
+                        let (started, started_rx) = async_channel::bounded(2);
+                        let (done, done_rx) = async_channel::bounded(2);
+                        fake.add(
+                            &queue,
+                            ("chat", "old"),
+                            release,
+                            started.clone(),
+                            done.clone(),
+                            true,
+                        );
+                        started_rx.recv().await.unwrap();
+                        if remove {
+                            fake.remove(&queue, "chat", done.clone());
+                        } else {
+                            let (next_gate, next_release) = async_channel::bounded(1);
+                            next_gate.send(()).await.unwrap();
+                            fake.add(
+                                &queue,
+                                ("chat", "new"),
+                                next_release,
+                                started,
+                                done.clone(),
+                                false,
+                            );
+                        }
+                        gate.send(()).await.unwrap();
+                        done_rx.recv().await.unwrap();
+                        done_rx.recv().await.unwrap();
+                        assert!(fake.fallbacks.borrow().is_empty());
+                        assert_eq!(
+                            fake.remote.borrow().get("chat").map(String::as_str),
+                            if remove { None } else { Some("new") }
+                        );
+                    }
+                })
+            })
+            .unwrap();
+    }
 
     fn read_all(descriptor: OwnedFd) -> Vec<u8> {
         let mut bytes = Vec::new();
@@ -291,6 +755,15 @@ mod tests {
         version: u32,
         refuse: bool,
         received: Arc<Mutex<Vec<Received>>>,
+        race: Option<Race>,
+    }
+
+    struct Race {
+        started: async_channel::Sender<()>,
+        release: async_channel::Receiver<()>,
+        remote: Arc<Mutex<HashMap<String, String>>>,
+        fail: bool,
+        no_reply: bool,
     }
 
     #[zbus::interface(
@@ -304,11 +777,29 @@ mod tests {
             self.version
         }
 
-        fn add_notification(
+        async fn add_notification(
             &self,
             id: String,
             notification: std::collections::HashMap<String, OwnedValue>,
         ) -> zbus::fdo::Result<()> {
+            let body = notification
+                .get("body")
+                .and_then(|value| <&str>::try_from(value).ok())
+                .unwrap_or("")
+                .to_owned();
+            if let Some(race) = &self.race {
+                if body == "old" {
+                    race.started.send(()).await.unwrap();
+                    race.release.recv().await.unwrap();
+                    if race.no_reply {
+                        return Err(zbus::fdo::Error::NoReply("ambiguous".into()));
+                    }
+                    if race.fail {
+                        return Err(zbus::fdo::Error::Failed("refused".into()));
+                    }
+                }
+                race.remote.lock().unwrap().insert(id.clone(), body);
+            }
             if self.refuse {
                 return Err(zbus::fdo::Error::Failed("refused".into()));
             }
@@ -317,6 +808,12 @@ mod tests {
                 .unwrap()
                 .push(Received { id, notification });
             Ok(())
+        }
+
+        fn remove_notification(&self, id: String) {
+            if let Some(race) = &self.race {
+                race.remote.lock().unwrap().remove(&id);
+            }
         }
     }
 
@@ -342,6 +839,272 @@ mod tests {
             .unwrap()
     }
 
+    fn queue_dbus_add(
+        queue: &Queue,
+        connection: zbus::Connection,
+        body: &str,
+        done: async_channel::Sender<bool>,
+    ) {
+        let mut item = request(SoundRequest::Silent, None);
+        item.body = body.to_owned();
+        queue.enqueue(
+            "token-1",
+            false,
+            Box::new(move || {
+                Box::pin(async move {
+                    on_runtime(async move {
+                        let proxy = NotificationProxy::with_connection(connection)
+                            .await
+                            .map_err(|e| e.to_string())?;
+                        send(&proxy, item).await
+                    })
+                    .await
+                })
+            }),
+            Box::new(move |result, current| {
+                done.try_send(result.is_err() && current).unwrap();
+            }),
+        );
+    }
+
+    fn queue_dbus_remove(
+        queue: &Queue,
+        connection: zbus::Connection,
+        done: async_channel::Sender<bool>,
+    ) {
+        queue.enqueue(
+            "token-1",
+            true,
+            Box::new(move || {
+                Box::pin(async move {
+                    on_runtime(async move {
+                        let proxy = NotificationProxy::with_connection(connection)
+                            .await
+                            .map_err(|e| e.to_string())?;
+                        definitive(
+                            proxy
+                                .call_method("RemoveNotification", &("token-1",))
+                                .await
+                                .map(drop),
+                        )
+                        .await
+                    })
+                    .await
+                })
+            }),
+            Box::new(move |_, _| {
+                done.try_send(false).unwrap();
+            }),
+        );
+    }
+
+    #[test]
+    fn unsupported_fallback_withdraws_locally_without_waiting_for_portal() {
+        let context = relm4::gtk::glib::MainContext::new();
+        context
+            .with_thread_default(|| {
+                context.block_on(async {
+                    let queue = Queue::default();
+                    let visible = Rc::new(Cell::new(false));
+                    let (fallback, fallback_rx) = async_channel::bounded(1);
+                    let show = visible.clone();
+                    queue.add(request(SoundRequest::Silent, None), false, move || {
+                        show.set(true);
+                        fallback.try_send(()).unwrap();
+                    });
+                    fallback_rx.recv().await.unwrap();
+                    let hide = visible.clone();
+                    queue.remove("token-1", false, move || hide.set(false));
+                    assert!(!visible.get());
+                    on_runtime(async {
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        Ok(())
+                    })
+                    .await
+                    .unwrap();
+                    assert!(
+                        !queue.0.borrow().contains_key("token-1"),
+                        "unsupported removal must not wait for a portal"
+                    );
+
+                    let (_gate, gate_rx) = async_channel::bounded::<()>(1);
+                    let (started, started_rx) = async_channel::bounded(1);
+                    queue.enqueue(
+                        "token-2",
+                        false,
+                        Box::new(move || {
+                            Box::pin(async move {
+                                started.send(()).await.unwrap();
+                                let _ = gate_rx.recv().await;
+                                Ok(())
+                            })
+                        }),
+                        Box::new(|_, _| {}),
+                    );
+                    started_rx.recv().await.unwrap();
+                    visible.set(true);
+                    let hide = visible.clone();
+                    queue.remove("token-2", false, move || hide.set(false));
+                    assert!(!visible.get());
+                    on_runtime(async {
+                        tokio::time::sleep(WITHDRAW_GRACE + std::time::Duration::from_millis(100))
+                            .await;
+                        Ok(())
+                    })
+                    .await
+                    .unwrap();
+                    assert!(!visible.get());
+                    assert!(!queue.0.borrow().contains_key("token-2"));
+                })
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn ambiguous_dbus_reply_quarantines_and_cleanup_releases_the_token() {
+        let context = relm4::gtk::glib::MainContext::new();
+        context
+            .with_thread_default(|| {
+                context.block_on(async {
+                    let (started, started_rx) = async_channel::bounded(1);
+                    let (release, release_rx) = async_channel::bounded(1);
+                    let remote = Arc::new(Mutex::new(HashMap::new()));
+                    let (mut portal, _) = fake(2, false);
+                    portal.race = Some(Race {
+                        started,
+                        release: release_rx,
+                        remote: remote.clone(),
+                        fail: false,
+                        no_reply: true,
+                    });
+                    let connection =
+                        crate::portal::run(async move { connect(portal).await.unwrap() }).unwrap();
+                    let queue = Queue::default();
+                    let (done, done_rx) = async_channel::bounded(2);
+                    let visible = Rc::new(Cell::new(false));
+                    let show = visible.clone();
+                    let (fallback, fallback_rx) = async_channel::bounded(1);
+                    queue.add(request(SoundRequest::Silent, None), false, move || {
+                        show.set(true);
+                        fallback.try_send(()).unwrap();
+                    });
+                    fallback_rx.recv().await.unwrap();
+                    queue_dbus_add(&queue, connection.clone(), "old", done.clone());
+                    started_rx.recv().await.unwrap();
+                    release.send(()).await.unwrap();
+                    on_runtime(async {
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        Ok(())
+                    })
+                    .await
+                    .unwrap();
+                    assert!(queue.0.borrow().get("token-1").unwrap().quarantined.get());
+                    let mut payloads = Vec::new();
+                    for _ in 0..1000 {
+                        let payload = Rc::new(vec![0u8; 1024]);
+                        payloads.push(Rc::downgrade(&payload));
+                        queue.enqueue(
+                            "token-1",
+                            false,
+                            Box::new(move || {
+                                Box::pin(async move {
+                                    drop(payload);
+                                    Ok(())
+                                })
+                            }),
+                            Box::new(|_, _| panic!("quarantined operation ran")),
+                        );
+                    }
+                    assert_eq!(
+                        payloads
+                            .iter()
+                            .filter(|payload| payload.strong_count() != 0)
+                            .count(),
+                        1
+                    );
+                    let hide = visible.clone();
+                    queue.remove("token-1", true, move || hide.set(false));
+                    assert!(
+                        !visible.get(),
+                        "GIO fallback must be withdrawn during quarantine"
+                    );
+                    drop(connection);
+                    assert!(!queue.0.borrow().contains_key("token-1"));
+                    assert!(payloads.iter().all(|payload| payload.strong_count() == 0));
+                    assert!(done_rx.try_recv().is_err());
+                    assert!(remote.lock().unwrap().is_empty());
+                    queue.enqueue(
+                        "new-token",
+                        false,
+                        Box::new(|| Box::pin(async { Ok(()) })),
+                        Box::new(move |result, current| {
+                            assert!(result.is_ok() && current);
+                            done.try_send(false).unwrap();
+                        }),
+                    );
+                    assert!(!done_rx.recv().await.unwrap());
+                })
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn queued_dbus_add_waits_past_old_deadline_before_replacement_or_remove() {
+        let context = relm4::gtk::glib::MainContext::new();
+        context
+            .with_thread_default(|| {
+                context.block_on(async {
+                    for (remove, fail) in
+                        [(false, false), (true, false), (false, true), (true, true)]
+                    {
+                        let (started, started_rx) = async_channel::bounded(1);
+                        let (release, release_rx) = async_channel::bounded(1);
+                        let remote = Arc::new(Mutex::new(HashMap::from([(
+                            "other-account".into(),
+                            "keep".into(),
+                        )])));
+                        let (mut portal, _) = fake(2, false);
+                        portal.race = Some(Race {
+                            started,
+                            release: release_rx,
+                            remote: remote.clone(),
+                            fail,
+                            no_reply: false,
+                        });
+                        let connection =
+                            crate::portal::run(async move { connect(portal).await.unwrap() })
+                                .unwrap();
+                        let queue = Queue::default();
+                        let (done, done_rx) = async_channel::bounded(2);
+                        queue_dbus_add(&queue, connection.clone(), "old", done.clone());
+                        started_rx.recv().await.unwrap();
+                        if remove {
+                            queue_dbus_remove(&queue, connection, done.clone());
+                        } else {
+                            queue_dbus_add(&queue, connection, "new", done.clone());
+                        }
+                        on_runtime(async {
+                            tokio::time::sleep(std::time::Duration::from_millis(5_200)).await;
+                            Ok(())
+                        })
+                        .await
+                        .unwrap();
+                        assert!(done_rx.try_recv().is_err());
+                        release.send(()).await.unwrap();
+                        assert!(!done_rx.recv().await.unwrap());
+                        assert!(!done_rx.recv().await.unwrap());
+                        let state = remote.lock().unwrap();
+                        assert_eq!(
+                            state.get("token-1").map(String::as_str),
+                            if remove { None } else { Some("new") }
+                        );
+                        assert_eq!(state.get("other-account").map(String::as_str), Some("keep"));
+                    }
+                })
+            })
+            .unwrap();
+    }
+
     fn fake(version: u32, refuse: bool) -> (FakePortal, Arc<Mutex<Vec<Received>>>) {
         let received = Arc::default();
         (
@@ -349,6 +1112,7 @@ mod tests {
                 version,
                 refuse,
                 received: Arc::clone(&received),
+                race: None,
             },
             received,
         )

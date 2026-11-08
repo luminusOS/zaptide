@@ -84,9 +84,14 @@ Notifications can carry a short sound, requested at most once per pause (30 seco
 by default, from none to 2 minutes) across all chats and accounts. Both settings are
 under **Preferences → Notifications**. ZapTide hands the sound to the desktop with
 the notification, through version 2 of the notification portal, so Do Not Disturb and
-the desktop's own sound settings decide whether it plays. This works only in the
-Flatpak and only on a desktop whose portal supports it; elsewhere notifications have
-no sound. GNOME does not support it yet. The sound is
+the desktop's own sound settings influence whether it plays. The bundled sound is
+requested only in Flatpak, when the notification portal supports it. Otherwise,
+ordinary notifications are sent without the bundled sound; the desktop may apply its
+own notification sound. Actual playback depends on the portal and desktop backend.
+An ambiguous portal transport failure quarantines that notification ID until it is
+no longer relevant. ZapTide does not automatically recover that ID or guarantee
+that a previously sent notification is cancelled; delivery can still be delayed.
+The sound is
 [Message Notification 4](assets/sounds/README.md) by AnthonyRox (CC0).
 
 GIFs play silently while their rows are shown. Leaving the conversation or hiding

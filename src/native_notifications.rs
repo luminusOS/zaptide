@@ -126,10 +126,13 @@ pub struct NativeNotifications {
     application: gtk::Application,
     tokens: std::rc::Rc<std::cell::RefCell<ActivationTokens>>,
     calls: std::rc::Rc<std::cell::RefCell<ActivationTokens>>,
-    body_format: std::cell::OnceCell<BodyFormat>,
-    /// Present in a Flatpak, where the portal can carry a sound.
     #[cfg(target_os = "linux")]
     portal: Option<portal::Support>,
+    #[cfg(target_os = "linux")]
+    portal_queue: portal::Queue,
+    #[cfg(target_os = "linux")]
+    portal_modes: std::rc::Rc<std::cell::RefCell<HashMap<String, bool>>>,
+    body_format: std::cell::OnceCell<BodyFormat>,
 }
 
 impl NativeNotifications {
@@ -141,6 +144,16 @@ impl NativeNotifications {
     ) -> Self {
         use gtk::gio::prelude::*;
 
+        #[cfg(target_os = "linux")]
+        let portal_queue = portal::Queue::default();
+        #[cfg(target_os = "linux")]
+        let activation_queue = portal::sandboxed().then(|| portal_queue.clone());
+        #[cfg(target_os = "linux")]
+        let portal_modes = std::rc::Rc::new(std::cell::RefCell::new(HashMap::new()));
+        #[cfg(target_os = "linux")]
+        let activation_modes = portal_modes.clone();
+        #[cfg(target_os = "linux")]
+        let activation_application = application.clone();
         let tokens = std::rc::Rc::new(std::cell::RefCell::new(ActivationTokens::default()));
         let action_tokens = tokens.clone();
         let action =
@@ -150,6 +163,16 @@ impl NativeNotifications {
                 return;
             };
             if let Some((account, chat_id)) = action_tokens.borrow_mut().activate(&token) {
+                #[cfg(target_os = "linux")]
+                if let Some(queue) = &activation_queue {
+                    let portal_enabled =
+                        activation_modes.borrow_mut().remove(&token).unwrap_or(true);
+                    let application = activation_application.clone();
+                    let id = token.clone();
+                    queue.remove(&token, portal_enabled, move || {
+                        application.withdraw_notification(&id)
+                    });
+                }
                 open_chat(account, chat_id);
             }
         });
@@ -181,9 +204,13 @@ impl NativeNotifications {
             application: application.clone(),
             tokens,
             calls,
-            body_format: std::cell::OnceCell::new(),
             #[cfg(target_os = "linux")]
             portal: portal::sandboxed().then(Default::default),
+            #[cfg(target_os = "linux")]
+            portal_queue,
+            #[cfg(target_os = "linux")]
+            portal_modes,
+            body_format: std::cell::OnceCell::new(),
         }
     }
 
@@ -231,7 +258,7 @@ impl NativeNotifications {
             }
         };
         if let Some(evicted) = evicted {
-            self.application.withdraw_notification(&evicted);
+            self.withdraw_chat_notification(&evicted);
         }
 
         let bytes = icon_bytes(title, icon);
@@ -243,30 +270,33 @@ impl NativeNotifications {
         #[cfg(target_os = "linux")]
         if let Some(support) = &self.portal {
             support.probe();
-            if support.supports_sound() {
-                let fallback = (
-                    self.application.clone(),
-                    notification.clone(),
-                    token.clone(),
-                );
-                portal::add_notification(
-                    portal::Request {
-                        id: token.clone(),
-                        title: title.to_owned(),
-                        body: body.to_owned(),
-                        icon: bytes.as_deref().map(<[u8]>::to_vec),
-                        default_action: default_action.clone(),
-                        default_action_target: token.clone(),
-                        sound,
-                    },
-                    move |reason| {
-                        log::debug!("the notification portal refused a notification: {reason}");
-                        let (application, notification, token) = fallback;
-                        application.send_notification(Some(&token), &notification);
-                    },
-                );
-                return Ok(());
-            }
+            let supported = *self
+                .portal_modes
+                .borrow_mut()
+                .entry(token.clone())
+                .or_insert_with(|| support.supports_sound());
+            let fallback = (
+                self.application.clone(),
+                notification.clone(),
+                token.clone(),
+            );
+            self.portal_queue.add(
+                portal::Request {
+                    id: token.clone(),
+                    title: title.to_owned(),
+                    body: body.to_owned(),
+                    icon: bytes.as_deref().map(<[u8]>::to_vec),
+                    default_action: default_action.clone(),
+                    default_action_target: token.clone(),
+                    sound,
+                },
+                supported,
+                move || {
+                    let (application, notification, token) = fallback;
+                    application.send_notification(Some(&token), &notification);
+                },
+            );
+            return Ok(());
         }
         #[cfg(not(target_os = "linux"))]
         let _ = sound;
@@ -274,6 +304,20 @@ impl NativeNotifications {
         self.application
             .send_notification(Some(&token), &notification);
         Ok(())
+    }
+
+    fn withdraw_chat_notification(&self, token: &str) {
+        #[cfg(target_os = "linux")]
+        if self.portal.is_some() {
+            let portal_enabled = self.portal_modes.borrow_mut().remove(token).unwrap_or(true);
+            let application = self.application.clone();
+            let id = token.to_owned();
+            self.portal_queue.remove(token, portal_enabled, move || {
+                application.withdraw_notification(&id)
+            });
+            return;
+        }
+        self.application.withdraw_notification(token);
     }
 
     /// Shows or replaces a call's notification. Its buttons act on the call
@@ -340,7 +384,7 @@ impl NativeNotifications {
             .borrow_mut()
             .remove_chat(&(account, chat_id.to_owned()))
         {
-            self.application.withdraw_notification(&token);
+            self.withdraw_chat_notification(&token);
         }
     }
 
@@ -348,7 +392,10 @@ impl NativeNotifications {
     pub fn clear_account(&self, account: AccountId) {
         let removed = self.tokens.borrow_mut().remove_account(account);
         let removed_calls = self.calls.borrow_mut().remove_account(account);
-        for token in removed.into_iter().chain(removed_calls) {
+        for token in removed {
+            self.withdraw_chat_notification(&token);
+        }
+        for token in removed_calls {
             self.application.withdraw_notification(&token);
         }
     }
