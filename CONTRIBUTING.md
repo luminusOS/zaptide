@@ -33,7 +33,7 @@ update dependencies merely to make a local environment compile.
 For a Fedora 45 development environment, the CI dependency set is:
 
 ```sh
-sudo dnf install gcc gcc-c++ git gtk4-devel libadwaita-devel alsa-lib-devel \
+sudo dnf install gcc gcc-c++ git gtk4-devel libadwaita-devel \
   gstreamer1-devel gstreamer1-plugins-base-devel cmake libseccomp-devel fontconfig-devel perl make tar zstd
 cargo build --locked
 ```
@@ -67,6 +67,16 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked --all-targets
 RUSTDOCFLAGS='-D warnings' cargo doc --locked --no-deps
 git diff --check
+```
+
+When a pull request touches `Cargo.toml`, `Cargo.lock` or `deny.toml`, the
+Dependencies workflow runs
+[cargo-deny](https://github.com/EmbarkStudios/cargo-deny) against the RustSec
+database. It also runs when those files change on `main`, and weekly. To run it
+locally:
+
+```sh
+cargo deny check --warn unmaintained advisories bans sources
 ```
 
 Add a focused regression test for a bug fix and confirm it fails before the fix.

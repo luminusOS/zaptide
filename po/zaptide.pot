@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: zaptide\n"
 "Report-Msgid-Bugs-To: https://github.com/luminusOS/zaptide/issues\n"
-"POT-Creation-Date: 2026-11-04 17:50-0300\n"
+"POT-Creation-Date: 2026-11-05 04:17-0300\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -20,7 +20,7 @@ msgstr ""
 #: src/application/accounts.rs:151 src/application/accounts.rs:152
 #: src/application/dispatch/backend_events.rs:425
 #: src/application/dispatch.rs:168 src/application/dispatch.rs:169
-#: src/application/dispatch.rs:483 src/application.rs:2750
+#: src/application/dispatch.rs:483 src/application.rs:2775
 msgid "Could not save preferences"
 msgstr ""
 
@@ -33,35 +33,35 @@ msgstr ""
 msgid "Preference value is invalid"
 msgstr ""
 
-#: src/application/audio.rs:240 src/application/audio.rs:489
+#: src/application/audio.rs:240 src/application/audio.rs:498
 msgid "Could not save voice playback speed"
 msgstr ""
 
-#: src/application/audio.rs:327
+#: src/application/audio.rs:326
 msgid "Downloading voice"
 msgstr ""
 
-#: src/application/audio.rs:333
+#: src/application/audio.rs:334
 msgid "Voice playback could not start."
 msgstr ""
 
-#: src/application/audio.rs:357
+#: src/application/audio.rs:359
 msgid "Voice playback could not seek"
 msgstr ""
 
-#: src/application/audio.rs:385
+#: src/application/audio.rs:394
 msgid "Recording canceled"
 msgstr ""
 
-#: src/application/audio.rs:407
+#: src/application/audio.rs:416
 msgid "Sending voice message"
 msgstr ""
 
-#: src/application/audio.rs:410
+#: src/application/audio.rs:419
 msgid "Could not record voice message"
 msgstr ""
 
-#: src/application/audio.rs:419
+#: src/application/audio.rs:428
 msgid "Audio playback could not continue."
 msgstr ""
 
@@ -255,9 +255,9 @@ msgstr ""
 #: src/application/composer.rs:235 src/application/contact_sharing.rs:439
 #: src/application/dialogs.rs:52 src/application/dialogs.rs:77
 #: src/application/dialogs.rs:224 src/application/dialogs.rs:401
-#: src/application/dispatch.rs:979 src/application/link_page.rs:85
-#: src/application/profile_dialog.rs:115 src/application.rs:961
-#: src/application.rs:2790 src/native_preferences.rs:863
+#: src/application/dispatch.rs:979 src/application/document_safety.rs:196
+#: src/application/link_page.rs:85 src/application/profile_dialog.rs:115
+#: src/application.rs:962 src/application.rs:2815 src/native_preferences.rs:863
 msgid "Cancel"
 msgstr ""
 
@@ -564,7 +564,7 @@ msgstr ""
 msgid "Forwarding"
 msgstr ""
 
-#: src/application/dialogs.rs:661 src/application.rs:978
+#: src/application/dialogs.rs:661 src/application.rs:979
 msgid "Forward"
 msgstr ""
 
@@ -611,7 +611,7 @@ msgstr ""
 msgid "Clear the staged clipboard image before adding files"
 msgstr ""
 
-#: src/application/dispatch/attachments.rs:53 src/application.rs:2076
+#: src/application/dispatch/attachments.rs:53 src/application.rs:2101
 msgid "Finish the active portal action first"
 msgstr ""
 
@@ -636,9 +636,9 @@ msgid "Not connected to WhatsApp"
 msgstr ""
 
 #: src/application/dispatch.rs:55 src/application/dispatch.rs:56
-#: src/application/dispatch.rs:66 src/application.rs:2205
-#: src/application.rs:2206 src/application.rs:2220 src/application.rs:2221
-#: src/application.rs:2245 src/application.rs:2246
+#: src/application/dispatch.rs:66 src/application.rs:2230
+#: src/application.rs:2231 src/application.rs:2245 src/application.rs:2246
+#: src/application.rs:2270 src/application.rs:2271
 msgid "Could not open themes folder"
 msgstr ""
 
@@ -650,7 +650,7 @@ msgstr ""
 msgid "Close window"
 msgstr ""
 
-#: src/application/dispatch.rs:109 src/application.rs:2791
+#: src/application/dispatch.rs:109 src/application.rs:2816
 msgid "Quit"
 msgstr ""
 
@@ -781,6 +781,25 @@ msgstr ""
 
 #: src/application/dispatch.rs:1016
 msgid "Shutdown complete"
+msgstr ""
+
+#: src/application/document_safety.rs:188
+msgid "Open This File?"
+msgstr ""
+
+#: src/application/document_safety.rs:191
+#, rust-format
+msgid ""
+"“{name}” may contain programs or active content. Open it only if you trust "
+"the sender."
+msgstr ""
+
+#: src/application/document_safety.rs:197 src/native_media_widgets/photo.rs:505
+msgid "Open"
+msgstr ""
+
+#: src/application/document_safety.rs:215 src/application.rs:2089
+msgid "Could not open attachment"
 msgstr ""
 
 #: src/application/helpers.rs:80
@@ -925,205 +944,201 @@ msgstr ""
 msgid "Unread messages"
 msgstr ""
 
-#: src/application.rs:834
+#: src/application.rs:835
 msgid "Chat"
 msgstr ""
 
-#: src/application.rs:847
+#: src/application.rs:848
 msgid "Chat details"
 msgstr ""
 
-#: src/application.rs:864
+#: src/application.rs:865
 msgid "Chat menu"
 msgstr ""
 
-#: src/application.rs:871 src/application.rs:872
+#: src/application.rs:872 src/application.rs:873
 msgid "Start video call"
 msgstr ""
 
-#: src/application.rs:881 src/application.rs:882
+#: src/application.rs:882 src/application.rs:883
 msgid "Start voice call"
 msgstr ""
 
-#: src/application.rs:891
+#: src/application.rs:892
 msgid "Connection lost"
 msgstr ""
 
-#: src/application.rs:974
+#: src/application.rs:975
 msgid "Forward selected messages"
 msgstr ""
 
-#: src/application.rs:1004
+#: src/application.rs:1005
 msgid "Drop Files to Attach"
 msgstr ""
 
-#: src/application.rs:1170 src/application.rs:1206
+#: src/application.rs:1171 src/application.rs:1207
 msgid "_Remove Account…"
 msgstr ""
 
-#: src/application.rs:1171 src/application.rs:1209
+#: src/application.rs:1172 src/application.rs:1210
 msgid "_Preferences"
 msgstr ""
 
-#: src/application.rs:1172 src/application.rs:1211
+#: src/application.rs:1173 src/application.rs:1212
 msgid "_About ZapTide"
 msgstr ""
 
-#: src/application.rs:1173 src/application.rs:1212
+#: src/application.rs:1174 src/application.rs:1213
 msgid "_Quit"
 msgstr ""
 
-#: src/application.rs:1205
+#: src/application.rs:1206
 msgid "_New Chat"
 msgstr ""
 
-#: src/application.rs:1210
+#: src/application.rs:1211
 msgid "_Keyboard Shortcuts"
 msgstr ""
 
-#: src/application.rs:1721
+#: src/application.rs:1722
 msgid "Could not save theme preference"
 msgstr ""
 
-#: src/application.rs:1878 src/native_media_widgets/photo.rs:439
+#: src/application.rs:1879 src/native_media_widgets/photo.rs:439
 #: src/native_media_widgets/viewer.rs:927
 #: src/native_media_widgets/viewer.rs:1461
 msgid "Show in Folder"
 msgstr ""
 
-#: src/application.rs:1879
+#: src/application.rs:1880
 msgid "Save Attachment…"
 msgstr ""
 
-#: src/application.rs:1889
+#: src/application.rs:1890
 msgid "Open Link"
 msgstr ""
 
-#: src/application.rs:1893
+#: src/application.rs:1894
 msgid "Go to Quoted Message"
 msgstr ""
 
-#: src/application.rs:1903
+#: src/application.rs:1904
 msgid "Copy Text"
 msgstr ""
 
-#: src/application.rs:1905
+#: src/application.rs:1906
 msgid "Reply"
 msgstr ""
 
-#: src/application.rs:1907
+#: src/application.rs:1908
 msgid "Edit"
 msgstr ""
 
-#: src/application.rs:1909
+#: src/application.rs:1910
 msgid "Forward…"
 msgstr ""
 
-#: src/application.rs:1911
+#: src/application.rs:1912
 msgid "Unstar"
 msgstr ""
 
-#: src/application.rs:1913
+#: src/application.rs:1914
 msgid "Star"
 msgstr ""
 
-#: src/application.rs:1916
+#: src/application.rs:1917
 msgid "Select"
 msgstr ""
 
-#: src/application.rs:1934
+#: src/application.rs:1935
 msgid "Delete for Me"
 msgstr ""
 
-#: src/application.rs:1937
+#: src/application.rs:1938
 msgid "Delete for Everyone"
 msgstr ""
 
-#: src/application.rs:2052
+#: src/application.rs:2053
 msgid "Downloading attachment"
 msgstr ""
 
-#: src/application.rs:2064
-msgid "Could not open attachment"
-msgstr ""
-
-#: src/application.rs:2080
+#: src/application.rs:2105
 msgid "Clipboard is unavailable"
 msgstr ""
 
-#: src/application.rs:2138
+#: src/application.rs:2163
 msgid "Reading clipboard image"
 msgstr ""
 
-#: src/application.rs:2140
+#: src/application.rs:2165
 msgid "Could not read clipboard image"
 msgstr ""
 
-#: src/application.rs:2146
+#: src/application.rs:2171
 msgid "Choose an available conversation before pasting an image"
 msgstr ""
 
-#: src/application.rs:2160
+#: src/application.rs:2185
 msgid "Send or clear the staged attachment before pasting an image"
 msgstr ""
 
-#: src/application.rs:2164
+#: src/application.rs:2189
 msgid "Clipboard image ready"
 msgstr ""
 
-#: src/application.rs:2197
+#: src/application.rs:2222
 msgid "Opening link"
 msgstr ""
 
-#: src/application.rs:2199
+#: src/application.rs:2224
 msgid "Link is not supported"
 msgstr ""
 
-#: src/application.rs:2215
+#: src/application.rs:2240
 msgid "Preparing themes folder"
 msgstr ""
 
-#: src/application.rs:2242
+#: src/application.rs:2267
 msgid "Opening themes folder"
 msgstr ""
 
-#: src/application.rs:2283
+#: src/application.rs:2308
 msgid "Choose save location"
 msgstr ""
 
-#: src/application.rs:2285
+#: src/application.rs:2310
 msgid "Could not open save dialog"
 msgstr ""
 
-#: src/application.rs:2380
+#: src/application.rs:2405
 msgid "Choose another available conversation"
 msgstr ""
 
-#: src/application.rs:2439
+#: src/application.rs:2464
 msgid "Deleting message for everyone"
 msgstr ""
 
-#: src/application.rs:2443
+#: src/application.rs:2468
 msgid "Deleting message"
 msgstr ""
 
-#: src/application.rs:2486
+#: src/application.rs:2511
 msgid "Enter a question and two different poll options"
 msgstr ""
 
-#: src/application.rs:2494
+#: src/application.rs:2519
 msgid "Creating poll"
 msgstr ""
 
-#: src/application.rs:2660
+#: src/application.rs:2685
 msgid "Message deleted"
 msgstr ""
 
-#: src/application.rs:2667
+#: src/application.rs:2692
 msgid "This chat is no longer available."
 msgstr ""
 
-#: src/application.rs:2752
+#: src/application.rs:2777
 msgid "Shutdown requested"
 msgstr ""
 
@@ -1500,10 +1515,6 @@ msgstr ""
 msgid "Play video"
 msgstr ""
 
-#: src/native_media_widgets/photo.rs:505
-msgid "Open"
-msgstr ""
-
 #: src/native_media_widgets/photo.rs:534
 msgid "Downloading"
 msgstr ""
@@ -1602,16 +1613,20 @@ msgstr ""
 msgid "Open in Another App"
 msgstr ""
 
-#: src/native_media_widgets/widget.rs:370
+#: src/native_media_widgets/widget.rs:367
 msgid "This message type cannot be displayed"
 msgstr ""
 
-#: src/native_media_widgets/widget.rs:393
+#: src/native_media_widgets/widget.rs:390
 msgid "Image preview"
 msgstr ""
 
-#: src/native_media_widgets/widget.rs:405
+#: src/native_media_widgets/widget.rs:402
 msgid "Open or download attachment"
+msgstr ""
+
+#: src/native_media_widgets/widget.rs:466
+msgid "This link can't be opened"
 msgstr ""
 
 #: src/native_preferences.rs:404
@@ -1663,4 +1678,8 @@ msgstr ""
 #: src/native_preferences.rs:729
 #, rust-format
 msgid "Custom ({} days)"
+msgstr ""
+
+#: src/services/media.rs:27
+msgid "Playing faster needs the GStreamer scaletempo plugin (gst-plugins-good)"
 msgstr ""

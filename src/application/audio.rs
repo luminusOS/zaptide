@@ -15,7 +15,7 @@ impl NativeApplication {
             .audio
             .selected_voice_message
             .as_ref()
-            .is_some_and(|id| !self.message_snapshots.contains_key(id))
+            .is_some_and(|id| !self.open_chat.message_snapshots.contains_key(id))
         {
             self.audio.selected_voice = None;
             self.audio.selected_voice_message = None;
@@ -24,13 +24,18 @@ impl NativeApplication {
 
     fn update_audio_row(&mut self, id: &str) {
         let Some(voice) = self
+            .open_chat
             .message_snapshots
             .get(id)
             .and_then(|message| self.project_voice(message))
         else {
             return;
         };
-        if let Some(position) = self.message_ids.iter().position(|known| known == id)
+        if let Some(position) = self
+            .open_chat
+            .message_ids
+            .iter()
+            .position(|known| known == id)
             && let Some(row) = self.messages.get(position as u32)
         {
             row.borrow_mut().audio = Some(voice.clone());
@@ -41,11 +46,11 @@ impl NativeApplication {
     }
 
     pub(super) fn queue_waveforms(&mut self) {
-        let Some(chat) = &self.active_chat else {
+        let Some(chat) = &self.open_chat.active_chat else {
             return;
         };
-        for id in &self.message_ids {
-            let Some(message) = self.message_snapshots.get(id) else {
+        for id in &self.open_chat.message_ids {
+            let Some(message) = self.open_chat.message_snapshots.get(id) else {
                 continue;
             };
             let crate::model::Content::Audio {
@@ -85,7 +90,7 @@ impl NativeApplication {
             return;
         }
         while let Some((chat, id, path)) = self.audio.waveform_queue.pop_front() {
-            if self.active_chat.as_deref() != Some(&chat)
+            if self.open_chat.active_chat.as_deref() != Some(&chat)
                 || self
                     .audio
                     .audio_waveforms
@@ -124,7 +129,7 @@ impl NativeApplication {
     ) {
         self.audio.waveform_busy = false;
         self.audio.waveform_cancel = None;
-        if self.active_chat.as_deref() == Some(&chat)
+        if self.open_chat.active_chat.as_deref() == Some(&chat)
             && let Some(bars) = bars
         {
             self.audio.audio_waveforms.insert((chat, id.clone()), bars);
@@ -140,10 +145,11 @@ impl NativeApplication {
         sender: &ComponentSender<Self>,
     ) {
         let Some(audio_message) = self
+            .open_chat
             .message_snapshots
             .get(id)
             .cloned()
-            .filter(|message| self.active_chat.as_deref() == Some(&message.chat))
+            .filter(|message| self.open_chat.active_chat.as_deref() == Some(&message.chat))
         else {
             return;
         };
@@ -157,6 +163,7 @@ impl NativeApplication {
             crate::model::Action::Download { chat, message } => {
                 if let Some(backend) = &self.backend {
                     if let Some(media) = self
+                        .open_chat
                         .message_snapshots
                         .get_mut(&message)
                         .and_then(|message| message.content.media_mut())
@@ -172,7 +179,8 @@ impl NativeApplication {
             }
             crate::model::Action::PlayVoice { message, path } => {
                 let voice_note = matches!(
-                    self.message_snapshots
+                    self.open_chat
+                        .message_snapshots
                         .get(&message)
                         .map(|message| &message.content),
                     Some(crate::model::Content::Audio {
@@ -192,7 +200,7 @@ impl NativeApplication {
                 if let Err(error) = self.audio.media.toggle_playback(&message, &path) {
                     self.audio.audio_errors.insert(
                         (
-                            self.active_chat.clone().unwrap_or_default(),
+                            self.open_chat.active_chat.clone().unwrap_or_default(),
                             message.clone(),
                         ),
                         error,
@@ -222,7 +230,7 @@ impl NativeApplication {
                 if let Err(error) = self.audio.media.seek(&message, &path, fraction) {
                     self.audio.audio_errors.insert(
                         (
-                            self.active_chat.clone().unwrap_or_default(),
+                            self.open_chat.active_chat.clone().unwrap_or_default(),
                             message.clone(),
                         ),
                         error,
@@ -273,8 +281,7 @@ impl NativeApplication {
                 .audio
                 .audio_waveforms
                 .get(&(message.chat.clone(), message.id.clone()))
-                .map(Vec::as_slice)
-                .or_else(|| self.audio.media.waveform(&message.id)),
+                .map(Vec::as_slice),
             playback: self.audio.media.playback_status(&message.id),
             speed: if *voice_note {
                 self.audio.media.speed()
@@ -297,7 +304,7 @@ impl NativeApplication {
             .audio
             .selected_voice_message
             .as_ref()
-            .and_then(|id| self.message_snapshots.get(id))
+            .and_then(|id| self.open_chat.message_snapshots.get(id))
             .and_then(|message| self.project_voice(message));
         if self.audio.selected_voice.is_none() {
             self.audio.selected_voice_message = None;
@@ -317,6 +324,7 @@ impl NativeApplication {
             crate::model::Action::Download { chat, message } => {
                 if let Some(backend) = &self.backend {
                     if let Some(media) = self
+                        .open_chat
                         .message_snapshots
                         .get_mut(&message)
                         .and_then(|message| message.content.media_mut())
@@ -329,8 +337,14 @@ impl NativeApplication {
                 }
             }
             crate::model::Action::PlayVoice { message, path } => {
-                if self.audio.media.toggle_playback(&message, &path).is_err() {
+                let key = (
+                    self.open_chat.active_chat.clone().unwrap_or_default(),
+                    message.clone(),
+                );
+                self.audio.audio_errors.remove(&key);
+                if let Err(error) = self.audio.media.toggle_playback(&message, &path) {
                     self.status = gettext("Voice playback could not start.");
+                    self.audio.audio_errors.insert(key, error);
                 } else if self.audio.media.is_playing() {
                     self.audio.playing_audio = Some(message.clone());
                 }
@@ -353,8 +367,15 @@ impl NativeApplication {
             fraction,
         } = action
         {
-            if self.audio.media.seek(&message, &path, fraction).is_err() {
+            if let Err(error) = self.audio.media.seek(&message, &path, fraction) {
                 self.status = gettext("Voice playback could not seek");
+                self.audio.audio_errors.insert(
+                    (
+                        self.open_chat.active_chat.clone().unwrap_or_default(),
+                        message.clone(),
+                    ),
+                    error,
+                );
             } else {
                 self.audio.playing_audio = Some(message.clone());
             }
@@ -391,9 +412,10 @@ impl NativeApplication {
                 match samples {
                     Ok(samples) => {
                         if let (Some(chat), Some(backend)) =
-                            (self.active_chat.clone(), self.backend.as_ref())
+                            (self.open_chat.active_chat.clone(), self.backend.as_ref())
                         {
                             let quoting = self
+                                .open_chat
                                 .reply_to
                                 .as_ref()
                                 .filter(|(reply_chat, _)| reply_chat == &chat)
@@ -417,7 +439,8 @@ impl NativeApplication {
     pub(super) fn poll_voice(&mut self, sender: &ComponentSender<Self>) {
         if let Err(error) = self.audio.media.poll() {
             self.status = gettext("Audio playback could not continue.");
-            if let (Some(chat), Some(id)) = (&self.active_chat, &self.audio.playing_audio) {
+            if let (Some(chat), Some(id)) = (&self.open_chat.active_chat, &self.audio.playing_audio)
+            {
                 self.audio
                     .audio_errors
                     .insert((chat.clone(), id.clone()), error);
@@ -440,9 +463,10 @@ impl NativeApplication {
 
     fn tell_played(&mut self, id: &str) {
         let Some((chat, message)) = self
+            .open_chat
             .active_chat
             .as_ref()
-            .zip(self.message_snapshots.get(id))
+            .zip(self.open_chat.message_snapshots.get(id))
             .filter(|(_, message)| {
                 !message.from_me
                     && matches!(

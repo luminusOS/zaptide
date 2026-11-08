@@ -18,7 +18,6 @@ pub(super) struct ProfileInit {
     pub(super) send_read_receipts: bool,
     pub(super) send_typing: bool,
     pub(super) link_previews: bool,
-    pub(super) chat_lock_configured: bool,
 }
 
 /// Settings kept per account: they apply at once and are not part of Save.
@@ -61,74 +60,6 @@ fn privacy_group(
         group.add(&row);
     }
 
-    let lock_row = adw::ActionRow::builder()
-        .title(gettext("Locked chats code"))
-        .subtitle(gettext("Write-only. The saved code is never shown."))
-        .build();
-    let set = gtk::Button::builder().valign(gtk::Align::Center).build();
-    let clear = gtk::Button::builder()
-        .label(gettext("Remove…"))
-        .valign(gtk::Align::Center)
-        .css_classes(["destructive-action"])
-        .build();
-    set.update_property(&[gtk::accessible::Property::Label(&gettext(
-        "Set locked chats code",
-    ))]);
-    set.set_tooltip_text(Some(&gettext("Set or change locked chats code")));
-    clear.update_property(&[gtk::accessible::Property::Label(&gettext(
-        "Remove locked chats code",
-    ))]);
-    clear.set_tooltip_text(Some(&gettext("Remove locked chats code")));
-    let show_lock: Rc<dyn Fn(bool)> = {
-        let (set, clear) = (set.clone(), clear.clone());
-        Rc::new(move |configured| {
-            set.set_label(&if configured {
-                gettext("Change…")
-            } else {
-                gettext("Set…")
-            });
-            clear.set_visible(configured);
-        })
-    };
-    show_lock(init.chat_lock_configured);
-    {
-        let (on_setting, show_lock) = (on_setting.clone(), show_lock.clone());
-        set.connect_clicked(move |button| {
-            let (on_setting, show_lock) = (on_setting.clone(), show_lock.clone());
-            crate::native_preferences::present_secret_entry(
-                button,
-                &gettext("Set locked chats code"),
-                &gettext("Enter a code. The saved code cannot be viewed."),
-                &gettext("Locked chats code"),
-                move |text| {
-                    on_setting(PreferenceChange::SetChatLockCode(Some(text)));
-                    show_lock(true);
-                },
-            );
-        });
-    }
-    clear.connect_clicked(move |button| {
-        let alert = adw::AlertDialog::new(
-            Some(&gettext("Remove locked chats code?")),
-            Some(&gettext("Locked chats will no longer require this code.")),
-        );
-        alert.add_response("cancel", &gettext("Cancel"));
-        alert.add_response("remove", &gettext("Remove"));
-        alert.set_response_appearance("remove", adw::ResponseAppearance::Destructive);
-        alert.set_close_response("cancel");
-        alert.set_default_response(Some("cancel"));
-        let (on_setting, show_lock) = (on_setting.clone(), show_lock.clone());
-        alert.connect_response(None, move |_, response| {
-            if response == "remove" {
-                on_setting(PreferenceChange::SetChatLockCode(None));
-                show_lock(false);
-            }
-        });
-        alert.present(Some(button));
-    });
-    lock_row.add_suffix(&set);
-    lock_row.add_suffix(&clear);
-    group.add(&lock_row);
     group
 }
 
@@ -180,7 +111,7 @@ impl ProfileDialog {
         avatar.set_custom_image(
             init.picture
                 .as_deref()
-                .and_then(|path| gtk::gdk::Texture::from_filename(path).ok())
+                .and_then(crate::native_media_widgets::avatar_texture)
                 .as_ref(),
         );
         let change = gtk::Button::builder()
@@ -407,7 +338,60 @@ impl ProfileDialog {
 
 #[cfg(test)]
 mod tests {
-    use super::problem;
+    use super::*;
+
+    #[test]
+    #[ignore = "requires a display"]
+    fn privacy_group_has_only_the_three_working_switches() {
+        gtk::init().expect("display");
+        adw::init().expect("libadwaita");
+        let init = ProfileInit {
+            name: String::new(),
+            picture: None,
+            own_id: String::new(),
+            send_read_receipts: true,
+            send_typing: false,
+            link_previews: true,
+        };
+        let changes = Rc::new(RefCell::new(Vec::new()));
+        let captured = changes.clone();
+        let group = privacy_group(
+            &init,
+            Rc::new(move |change| captured.borrow_mut().push(change)),
+        );
+        fn rows(widget: &gtk::Widget, result: &mut Vec<adw::PreferencesRow>) {
+            if let Some(row) = widget.downcast_ref::<adw::PreferencesRow>() {
+                result.push(row.clone());
+            }
+            let mut child = widget.first_child();
+            while let Some(current) = child {
+                child = current.next_sibling();
+                rows(&current, result);
+            }
+        }
+        let mut found = Vec::new();
+        rows(group.upcast_ref(), &mut found);
+        assert_eq!(found.len(), 3);
+        for (row, (title, active)) in found.iter().zip([
+            (gettext("Send read receipts"), true),
+            (gettext("Send typing status"), false),
+            (gettext("Link previews"), true),
+        ]) {
+            assert_eq!(row.title(), title);
+            let switch = row.downcast_ref::<adw::SwitchRow>().expect("switch row");
+            assert_eq!(switch.is_active(), active);
+            switch.set_active(!active);
+        }
+        let changes = changes.borrow();
+        assert!(matches!(
+            changes.as_slice(),
+            [
+                PreferenceChange::SetSendReadReceipts(false),
+                PreferenceChange::SetSendTyping(true),
+                PreferenceChange::SetLinkPreviews(false),
+            ]
+        ));
+    }
 
     #[test]
     fn a_blank_or_oversized_profile_cannot_be_saved() {

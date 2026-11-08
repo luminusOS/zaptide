@@ -1,6 +1,6 @@
 # ZapTide agent guide
 
-ZapTide is a Linux-first native WhatsApp client forked from ZapFast: Rust, GTK4/libadwaita through Relm4, and the
+ZapTide is a Linux-only native WhatsApp client forked from ZapFast: Rust, GTK4/libadwaita through Relm4, and the
 [whatsapp-rust](https://github.com/oxidezap/whatsapp-rust) library for the
 protocol. These notes are for coding agents and new contributors.
 
@@ -37,6 +37,23 @@ protocol. These notes are for coding agents and new contributors.
   `Bot`, the message archive, downloads, and profile pictures. The two
   sides talk only through `Command` (interface to runtime) and `Event`
   (runtime to interface); every event wakes the window through `Waker`.
+  Operation implementations live under `src/backend/worker/`; the parent retains
+  shared state, batch invariants and orchestration. Startup maintenance connects
+  first and yields between 256-row steps. Preserve commit-delayed events and
+  protected in-memory rollback state when moving archive operations.
+  Account completions use `Command::Completed(Completion { generation, done })`:
+  keep the central session guard separate from operation-specific generations.
+  A finished media sweep clears its running slot before stale-result rejection.
+  Stale or failed-enqueue results discard only owned staging paths and notify
+  waiting batch callbacks; never add cleanup `Drop` to cloneable payloads.
+- `application::OpenChatState` centralizes conversation reset state, but each
+  caller retains its cleanup ordering. Leaving an account preserves starred
+  messages; complete chat reset clears them. Keep request-token invalidation
+  and callback ownership intact.
+- Viewer implementation modules live under `src/native_media_widgets/viewer/`;
+  attachment, selection and theme helpers live under `src/application/`.
+  Resource permits in `src/shared_resource.rs` use distinct counters for distinct
+  workloads. Sharing a helper must not merge those limits.
 - The window owns the account's online presence (`src/application/presence.rs`,
   `backend/worker/presence.rs`): WhatsApp holds the phone's notifications while
   ZapTide is online. The bot uses `PresencePolicy::Manual`; reverting to
@@ -46,10 +63,21 @@ protocol. These notes are for coding agents and new contributors.
   privacy-id mappings. WhatsApp replays history once, at link time, so the
   archive is the only copy. It keeps each message's raw protobuf because
   the keys to fetch an attachment live in it. `src/archive/encryption.rs` opens
-  the archive with SQLCipher and a random key stored in the OS keyring. Plaintext
+  the archive with SQLCipher and a random key stored in the OS keyring through
+  oo7 (`archive/secrets.rs`): the Secret portal's file keyring inside Flatpak,
+  the Secret Service (any collection, never duplicated) outside. Inside
+  Flatpak a key missing from the file keyring is copied once from the Secret
+  Service where older builds kept it and read back from disk before use; that
+  old item is only read, never written or deleted. All keyring work runs in
+  order on one keyring thread; the GTK thread only waits, for at most two
+  minutes, on the one-time key copy when the legacy layout moves. Plaintext
   migration checkpoints the old WAL and verifies an encrypted staging file before
   atomic replacement. A locked or missing key stops linking; never fall back to
   a disposable archive. Tests use fixtures and mock credentials only.
+  `backend/worker/device_store.rs` encrypts whatsapp-rust's `session.db` the
+  same way, with an HKDF key derived from the folder's archive key (no second
+  keyring item), applied by a connection hook on every pooled connection. A new
+  key is only created while neither database in the folder is encrypted.
 - `src/model.rs` holds the app's own types. Views never touch a protobuf;
   the worker translates in `classify()` and `parse_conversation()`.
 - Poll creation, voting, and decryption use whatsapp-rust's `Client::polls()`.
@@ -72,8 +100,8 @@ protocol. These notes are for coding agents and new contributors.
   self-updater.
 - `src/theme/custom.rs` scans local JSON palettes off the UI thread, caching the
   last usable choice in settings, with shared Spotifast palettes embedded as
-  defaults. On Linux filesystem notifications reload the catalog without a
-  repaint timer. `reload-themes` uses the single-instance channel without
+  defaults. Filesystem notifications reload the catalog without a repaint
+  timer. `reload-themes` uses the single-instance channel without
   opening a window.
 - `src/native_theme.rs` turns a palette into GTK CSS; structural styling lives
   beside `apply_theme` in `src/application.rs`. Use libadwaita style classes and
@@ -102,13 +130,19 @@ protocol. These notes are for coding agents and new contributors.
   (the `ogg` crate for the container, `opus` with libopus bundled and
   built by cmake for the codec, so cmake is a build dependency), plus
   the 64-bar waveform WhatsApp draws and a mono/48 kHz resampler.
-  `src/services/media.rs` plays one clip at a time with GStreamer; when the
-  `scaletempo` plugin is unavailable for accelerated playback, `src/audio.rs`
-  uses rodio. Bounded waveform decoding
-  also uses `src/audio.rs` on a worker thread. `Recorder` reads the default
-  microphone through rodio's `Microphone` on a thread, keeping a loudness per
-  50 ms for the live bars. Linux needs ALSA and GStreamer headers to build
-  (`alsa-lib` and `gstreamer` on Arch). Audio controls live in each message bubble;
+  `src/services/media.rs` plays one clip at a time with GStreamer's
+  `playbin`; `scaletempo` (gst-plugins-good) keeps the pitch at 1.5x and
+  2x. Without it a clip still plays at 1x, and other speeds show an error
+  in the bubble. Bounded waveform decoding uses `src/audio.rs` on a worker
+  thread: Ogg Opus through the `opus` crate, anything else through a
+  GStreamer `decodebin` into an appsink. Waveforms decode without a click,
+  so that `decodebin` skips adaptive, source, video, image and subtitle
+  elements: a received file must never make it open a URL or another file. `Recorder` reads the default
+  microphone (`autoaudiosrc`, as calls do) as mono 48 kHz through an appsink
+  on a thread, refusing its silent fallback source when no sound server or
+  microphone exists, keeping a loudness per 50 ms for the live bars. Linux needs
+  the GStreamer headers to build (`gstreamer` on Arch). Audio controls live
+  in each message bubble;
   `StartRecording/CancelRecording/SendRecording` drive the
   microphone from the composer (the send button is a microphone when there
   is nothing to send); `Command::SendVoice` normalizes
@@ -158,8 +192,7 @@ protocol. These notes are for coding agents and new contributors.
   `Client::fetch_message_history` → a `HistorySync` chunk with
   `sync_type == ON_DEMAND`); the archive is paged first, the phone only
   when it is exhausted.
-- Platform-specific code belongs behind `cfg` blocks; a change for one
-  platform must keep the other two compiling.
+- ZapTide builds only for Linux; other targets are not supported.
 - `Popup::context_menu` opens on the *response's* right-click, which those
   inner widgets take for themselves; the bubble reads the right-click from
   the input over its own rect and opens `Popup::menu` itself, so the menu

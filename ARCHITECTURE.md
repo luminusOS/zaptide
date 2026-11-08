@@ -36,6 +36,11 @@ in `application/accounts.rs` and updated from their own backend.
 | `src/application.rs`, `src/application/` | The Relm4 root component and its pieces: sidebar, transcript, composer, dialogs, account switcher, profile dialog. |
 | `src/application/{icons,motion,bubbles,actions,helpers}.rs` | Pieces split out of `application.rs`: drawn and installed icons, scroll and fade animations, message bubble widgets, window actions, small pure helpers. |
 | `src/backend.rs`, `src/backend/` | The `Command` and `Event` types and the worker that owns the connection. |
+| `src/backend/worker/` | Worker operation modules, including history ingestion, bounded maintenance, downloads, outbound sends and identity handling. The parent retains shared state, batch invariants and orchestration. |
+| `src/application/{attachment_helpers,selection,themes}.rs` | Attachment presentation, selection actions and theme application extracted from the root component. |
+| `src/application/dispatch.rs` | Typed sidebar-filter selection and focused input handlers; the root retains its update entry point. |
+| `src/native_media_widgets/viewer/` | Viewer setup, navigation and media-specific presentation; the parent owns viewer state and lifecycle. |
+| `src/shared_resource.rs` | Separate resource counters with RAII permits and shared poisoned-mutex recovery. |
 | `src/archive.rs`, `src/archive/` | The encrypted SQLite store of chats, messages and contacts. |
 | `src/model/` | The app's own types. Views never see a protobuf. `model/call.rs` holds the call state machine and event text. |
 | `src/calls/`, `src/backend/worker/calls.rs`, `src/application/calls.rs` | Calls: GStreamer microphone, speaker, camera and H.264 pipelines (`calls/camera_portal.rs` opens the camera through the camera portal inside a sandbox); the worker that drives whatsapp-rust's VoIP runtime and files call events as chat messages; the call window and Calls tab. `calls/ringtone.rs` plays the ring (sound theme, or a made tone) and the call's notification carries its buttons through `native_notifications.rs`. |
@@ -57,6 +62,11 @@ announces "available" on every connect and silently breaks phone notifications.
 
 ## Download cleanup
 
+Startup connects before scanning stale download staging files and re-deriving archived messages.
+Re-derivation proceeds in 256-row steps, interleaving incoming events. Archive batches delay events
+until commit and restore protected in-memory state on rollback; moving operations between modules
+must preserve these transaction boundaries.
+
 With "Delete old downloads" on, the window sends each account's backend the retention period
 (`Command::SetMediaRetention`). `backend/worker/retention.rs` then runs `media_retention::sweep` about 30 seconds
 after the setting arrives and every six hours, on a blocking thread, and nothing is scheduled while it is off.
@@ -64,6 +74,29 @@ The sweep removes only files that an archived message points to (`Archive::expir
 the account's media cache folder, older than the period by modification time, and not held by a viewer or a
 playing clip (`media_retention::hold`). The worker then clears those messages' `media.path`, so they offer the
 download again. Stickers, messages without the keys to fetch the file again, and pending or failed sends are never listed.
+
+Downloads stream into same-directory staging files created without clobbering existing files.
+Staging names use fallible OS entropy; failure is a local download error, not a fallback name.
+The reupload helper permits one request and one retry fetch for eligible typed HTTP errors;
+it does not introduce download caps or retry local staging failures.
+
+## Conversation reset
+
+`application::OpenChatState` owns conversation-scoped state. Its reset helpers preserve caller-specific
+cleanup stages and callback ordering. Leaving an account retains its starred messages; a complete chat
+reset clears them. Request tokens and asynchronous callbacks must not survive a reset as current work.
+
+## Worker completions
+
+Account-bound asynchronous results use `Command::Completed(Completion { generation, done })`.
+The central session-generation guard discards stale results before operation dispatch; avatar,
+request, attempt, call and privacy generations retain their independent checks. A completed media
+sweep releases its running slot before the session guard, even after an account change.
+
+Discard consumes successful downloaded staging paths, never their destination files, and replies
+`false` once to waiting outbound-batch and group-recipient callbacks. Failed enqueue and owned
+deferred-download drop use that cleanup path. Successful enqueue followed by receiver shutdown is
+not newly covered; cloneable completion payloads deliberately have no cleanup `Drop`.
 
 ## Styling
 

@@ -1,16 +1,42 @@
 //! Validation at the boundary between message content and desktop handlers.
 
+#[cfg(test)]
+thread_local! {
+    static PARSE_BYTES: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+fn parse_url(value: &str) -> Result<url::Url, url::ParseError> {
+    #[cfg(test)]
+    PARSE_BYTES.with(|bytes| bytes.set(bytes.get().map(|total| total + value.len())));
+    url::Url::parse(value)
+}
+
 /// Preview metadata may supply a bare host, but never a desktop URI scheme.
 pub fn preview_url(value: &str) -> Option<String> {
     if value.chars().any(char::is_control) || value.contains('\\') {
         return None;
     }
     let value = value.trim();
-    let url = match url::Url::parse(value) {
+    let url = match parse_url(value) {
         Ok(url) => url,
-        Err(_) => url::Url::parse(&format!("https://{value}")).ok()?,
+        Err(_) => parse_url(&format!("https://{value}")).ok()?,
     };
     (matches!(url.scheme(), "http" | "https") && url.host_str().is_some()).then(|| url.to_string())
+}
+
+/// A link from message content that may be handed to the desktop: an absolute
+/// http or https URL with a host. This is the click-time half of a two-step
+/// check; [`preview_url`] already filters template and preview URLs when a
+/// message is classified, and this guards whatever stored content says when
+/// it is opened. Unlike [`preview_url`] it never guesses a scheme, and every
+/// other one (`file:`, `smb:`, `javascript:`, `data:`, app schemes) is
+/// refused, since the default handler for it could be anything.
+pub fn web_link(value: &str) -> Option<url::Url> {
+    if value.chars().any(char::is_control) || value.contains('\\') {
+        return None;
+    }
+    let url = url::Url::parse(value.trim()).ok()?;
+    (matches!(url.scheme(), "http" | "https") && url.host_str().is_some()).then_some(url)
 }
 
 /// Scheme of in-app links that open a WhatsApp chat with a phone number.
@@ -87,6 +113,7 @@ struct LinkScan {
     index: usize,
     whitespace: usize,
     unsafe_char: usize,
+    question: usize,
     counted: usize,
     balance: isize,
     word: Option<WordTail>,
@@ -171,15 +198,35 @@ impl LinkScan {
     }
 }
 
+/// Byte ranges of HTTP(S) and www link candidates, excluding trailing punctuation.
+pub fn web_link_spans(text: &str) -> impl Iterator<Item = std::ops::Range<usize>> + '_ {
+    let mut scan = LinkScan::default();
+    let mut chars = text.char_indices();
+    let mut boundary = true;
+    std::iter::from_fn(move || {
+        for (index, c) in chars.by_ref() {
+            let starts_link = boundary
+                && ["http://", "https://", "www."]
+                    .iter()
+                    .any(|prefix| text[index..].starts_with(prefix));
+            boundary = c.is_whitespace() || matches!(c, '(' | '[' | '"' | '\'');
+            if starts_link {
+                return Some(index..scan.link_end(text, index));
+            }
+        }
+        None
+    })
+}
+
 /// Link at `index` in `text`: its byte length, target, and optional tooltip.
 ///
-/// Finding where a candidate ends is linear in `text`, but a `www.` or
-/// `whatsapp://` candidate that is then rejected was still parsed as a URL up
-/// to that end, so a long word of such candidates costs quadratic time.
+/// Finding where a candidate ends is linear in `text`, but rejected `www.`
+/// candidates and WhatsApp candidates containing `?` may still take quadratic time.
 fn link_at(
     text: &str,
     index: usize,
     scan: &mut LinkScan,
+    web_end: Option<usize>,
 ) -> Option<(usize, String, Option<&'static str>)> {
     let rest = &text[index..];
     if rest.starts_with('+') {
@@ -190,16 +237,23 @@ fn link_at(
             Some("Message on WhatsApp"),
         ));
     }
-    if !["http://", "https://", "www.", "whatsapp://"]
-        .iter()
-        .any(|prefix| rest.starts_with(prefix))
-    {
-        return None;
-    }
-    let len = scan.link_end(text, index) - index;
+    let end = if rest.starts_with("whatsapp://") {
+        scan.link_end(text, index)
+    } else {
+        web_end?
+    };
+    let len = end - index;
     let link = &rest[..len];
     if link.starts_with("whatsapp://") {
-        let digits = whatsapp_number(&url::Url::parse(link).ok()?)?;
+        // A WhatsApp chat requires a query, whose delimiter cannot be percent-encoded.
+        if !resume_search(&mut scan.question, text.len(), index, |at| {
+            text.as_bytes()[at] == b'?'
+        })
+        .is_some_and(|at| at < end)
+        {
+            return None;
+        }
+        let digits = whatsapp_number(&parse_url(link).ok()?)?;
         return Some((
             len,
             format!("{CHAT_SCHEME}{digits}"),
@@ -212,7 +266,7 @@ fn link_at(
         return None;
     }
     let url = preview_url(link)?;
-    match whatsapp_number(&url::Url::parse(&url).ok()?) {
+    match whatsapp_number(&parse_url(&url).ok()?) {
         Some(digits) => Some((
             len,
             format!("{CHAT_SCHEME}{digits}"),
@@ -220,6 +274,26 @@ fn link_at(
         )),
         None => Some((len, url, None)),
     }
+}
+
+/// What activating a link in message text does.
+#[derive(Debug, PartialEq)]
+pub enum LinkActivation<'a> {
+    /// Open or start the chat with this phone number.
+    Chat(&'a str),
+    /// Open this checked web link in the browser.
+    Web(url::Url),
+    /// Do nothing: a mention without a chat, or a link that is not safe to open.
+    Ignore,
+}
+
+/// Decides what a link in a message label does. Labels never let GTK open
+/// the raw href; the caller acts on the result and stops propagation.
+pub fn link_activation(uri: &str) -> LinkActivation<'_> {
+    if let Some(phone) = chat_link_number(uri).filter(|phone| !phone.is_empty()) {
+        return LinkActivation::Chat(phone);
+    }
+    web_link(uri).map_or(LinkActivation::Ignore, LinkActivation::Web)
 }
 
 /// Phone number from an in-app chat link produced by [`linkify_markup`].
@@ -427,6 +501,7 @@ fn render(text: &str, mentions: &[MentionLabel], mut line_start: bool, out: &mut
     let (mut plain, mut index, mut boundary) = (0, 0, true);
     let mut closers = SpanClosers::default();
     let mut links = LinkScan::default();
+    let mut web_links = web_link_spans(text).peekable();
     while let Some(c) = text[index..].chars().next() {
         let rest = &text[index..];
         if line_start {
@@ -504,8 +579,18 @@ fn render(text: &str, mentions: &[MentionLabel], mut line_start: bool, out: &mut
             index += len;
             plain = index;
             boundary = false;
-        } else if let Some((len, href, title)) =
-            boundary.then(|| link_at(text, index, &mut links)).flatten()
+        } else if let Some((len, href, title)) = boundary
+            .then(|| {
+                while web_links.peek().is_some_and(|span| span.start < index) {
+                    web_links.next();
+                }
+                let end = web_links
+                    .peek()
+                    .filter(|span| span.start == index)
+                    .map(|span| span.end);
+                link_at(text, index, &mut links, end)
+            })
+            .flatten()
         {
             out.push_str(&esc(&text[plain..index]));
             let title = title.map_or_else(String::new, |t| format!(" title=\"{t}\""));
@@ -530,7 +615,51 @@ fn render(text: &str, mentions: &[MentionLabel], mut line_start: bool, out: &mut
 
 #[cfg(test)]
 mod tests {
-    use super::{CODE_OPEN, linkify_markup};
+    use super::{CODE_OPEN, LinkActivation, link_activation, linkify_markup, web_link};
+
+    #[test]
+    fn label_links_open_chats_and_checked_web_links_only() {
+        assert_eq!(link_activation("zaptide-chat:1"), LinkActivation::Chat("1"));
+        assert_eq!(link_activation("zaptide-chat:"), LinkActivation::Ignore);
+        assert_eq!(link_activation("zaptide-mention:"), LinkActivation::Ignore);
+        assert_eq!(link_activation("file:///x"), LinkActivation::Ignore);
+        assert_eq!(
+            link_activation("javascript:alert(1)"),
+            LinkActivation::Ignore
+        );
+        assert_eq!(
+            link_activation("https://a.io/"),
+            LinkActivation::Web(url::Url::parse("https://a.io/").unwrap())
+        );
+    }
+
+    #[test]
+    fn only_absolute_web_links_reach_the_desktop() {
+        assert_eq!(
+            web_link("https://example.com/path?q=1").map(String::from),
+            Some("https://example.com/path?q=1".to_owned())
+        );
+        assert_eq!(
+            web_link("HTTPS://Example.COM/Path").map(String::from),
+            Some("https://example.com/Path".to_owned())
+        );
+        assert!(web_link("http://example.com").is_some());
+        for refused in [
+            "file:///etc/passwd",
+            "smb://server/share",
+            "javascript:alert(1)",
+            "data:text/html,<script>alert(1)</script>",
+            "steam://run/1",
+            "zaptide-chat:15555550123",
+            "example.com",
+            "https://",
+            "https://exa\nmple.com",
+            "https://example.com\\evil",
+            "",
+        ] {
+            assert_eq!(web_link(refused), None, "{refused}");
+        }
+    }
 
     #[test]
     fn links_web_addresses_and_escapes_the_rest() {
@@ -909,6 +1038,48 @@ mod tests {
     }
 
     #[test]
+    fn whatsapp_certificate_matches_reference() {
+        for text in [
+            "whatsapp://send%3Fphone=1234567",
+            "whatsapp://send?%70hone=%31%32%33%34%35%36%37",
+            "whatsapp://x@send?phone=1234567",
+            "whatsapp://send#fragment?phone=1234567",
+            "whatsapp://send?phone=1234567#fragment",
+            "whatsapp://[::1]?phone=1234567",
+            "whatsapp://é?phone=1234567",
+            "(whatsapp://x(whatsapp://send?phone=1234567)).?!",
+            "whatsapp://send?phone=1234567).?!",
+            "whatsapp://send\t?phone=1234567",
+        ] {
+            let mut expected = String::new();
+            quadratic::render(text, &[], true, &mut expected);
+            assert_eq!(linkify_markup(text), expected, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn whatsapp_parse_work_is_bounded_without_question_mark() {
+        let mut whatsapp_work = Vec::new();
+        for candidate in ["whatsapp://x1234567(", "www.a:bad1234567("] {
+            for count in [1_000, 2_000, 4_000] {
+                let text = candidate.repeat(count);
+                super::PARSE_BYTES.with(|bytes| bytes.set(Some(0)));
+                let started = std::time::Instant::now();
+                assert_eq!(linkify_markup(&text), text);
+                let elapsed = started.elapsed();
+                let work = super::PARSE_BYTES.with(|bytes| bytes.replace(None).unwrap());
+                eprintln!("{candidate:?} x{count}: {work} parse bytes, {elapsed:?}");
+                if candidate.starts_with("whatsapp:") {
+                    whatsapp_work.push(work);
+                } else {
+                    assert!(work > 0);
+                }
+            }
+        }
+        assert_eq!(whatsapp_work, [0, 0, 0]);
+    }
+
+    #[test]
     fn linear_render_matches_the_quadratic_reference() {
         use super::MentionLabel;
         const PIECES: &[&str] = &[
@@ -1089,5 +1260,18 @@ mod tests {
             elapsed < std::time::Duration::from_millis(200),
             "trimmed: {elapsed:?}"
         );
+    }
+
+    #[test]
+    #[ignore = "synthetic timing evidence for the deferred rejected-candidate scanner"]
+    fn rejected_candidates_with_irrelevant_digits_timing() {
+        for candidate in ["www.a:bad1234567(", "whatsapp://x1234567("] {
+            for count in [1_000, 2_000, 4_000] {
+                let text = candidate.repeat(count);
+                let started = std::time::Instant::now();
+                assert_eq!(linkify_markup(&text), text);
+                eprintln!("{candidate:?} x{count}: {:?}", started.elapsed());
+            }
+        }
     }
 }

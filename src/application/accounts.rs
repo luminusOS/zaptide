@@ -19,7 +19,7 @@ pub(super) struct AccountSession {
     pub(super) drain: Option<GlibEventDrain>,
     pub(super) link: LinkStatus,
     pub(super) syncing: bool,
-    pub(super) chat_snapshots: Vec<crate::model::Chat>,
+    pub(super) chat_snapshots: Vec<std::rc::Rc<crate::model::Chat>>,
     pub(super) contacts: std::collections::HashMap<String, crate::model::Contact>,
     pub(super) avatars: std::collections::HashMap<String, std::path::PathBuf>,
     pub(super) avatar_requests: std::collections::HashSet<String>,
@@ -28,7 +28,6 @@ pub(super) struct AccountSession {
     pub(super) sticker_packs: Vec<crate::model::StickerPack>,
     pub(super) recent_stickers: Vec<std::path::PathBuf>,
     pub(super) favorite_stickers: Vec<std::path::PathBuf>,
-    pub(super) sticker_emojis: std::collections::HashMap<std::path::PathBuf, Vec<String>>,
 }
 
 impl AccountSession {
@@ -62,7 +61,6 @@ impl AccountSession {
             sticker_packs: Vec::new(),
             recent_stickers: Vec::new(),
             favorite_stickers: Vec::new(),
-            sticker_emojis: Default::default(),
         }
     }
 
@@ -173,7 +171,7 @@ impl NativeApplication {
 
     /// Saves the shared preferences, and the active account's own ones.
     pub(super) fn save_settings(&mut self) -> std::io::Result<()> {
-        self.settings.last_chat = self.active_chat.clone();
+        self.settings.last_chat = self.open_chat.active_chat.clone();
         self.settings.save(&self.settings_path)?;
         if self.legacy_layout {
             return Ok(());
@@ -240,16 +238,20 @@ impl NativeApplication {
         let mut notices = Vec::new();
         let mut withdrawn = Vec::new();
         let mut call_events = Vec::new();
+        let mut poll_errors = Vec::new();
         for event in events {
-            if matches!(event, NativeEvent::Link(LinkStatus::LoggedOut)) {
+            if let Some(error) = super::dispatch::poll_error_message(&event) {
+                poll_errors.push(error);
+            }
+            if matches!(event, Event::Link(LinkStatus::LoggedOut)) {
                 withdrawn.extend(session.chat_snapshots.iter().map(|chat| chat.id.clone()));
             }
             match event {
-                NativeEvent::Profile { phone, name } => profiles.push((phone, name)),
-                event @ (NativeEvent::Call(_)
-                | NativeEvent::CallWaiting(_)
-                | NativeEvent::CallVideo(_)
-                | NativeEvent::CallFrames) => call_events.push(event),
+                Event::Profile { phone, name } => profiles.push((phone, name)),
+                event @ (Event::Call(_)
+                | Event::CallWaiting(_)
+                | Event::CallVideo(_)
+                | Event::CallFrames) => call_events.push(event),
                 event => {
                     notices.extend(apply_hidden_event(session, event, notifications, previews))
                 }
@@ -262,6 +264,9 @@ impl NativeApplication {
         }
         for event in call_events {
             self.handle_call_event(id, event, sender);
+        }
+        for error in poll_errors {
+            self.toast(&error);
         }
         for (phone, name) in profiles {
             // The switcher shows every account's picture, not only the active one's.
@@ -389,7 +394,6 @@ impl NativeApplication {
             send_read_receipts: self.settings.send_read_receipts,
             send_typing: self.settings.send_typing,
             link_previews: self.settings.link_previews,
-            chat_lock_configured: self.settings.chat_lock_code_hash.is_some(),
         };
         let input_sender = sender.clone();
         let setting_sender = sender.clone();
@@ -558,7 +562,6 @@ impl NativeApplication {
             })
         });
         self.composer = composer_with_drafts(&self.drafts);
-        std::mem::swap(&mut self.sticker_emojis, &mut session.sticker_emojis);
         // `session` now holds the account that left the screen.
         let incoming_settings = std::mem::replace(
             &mut session.settings,
@@ -577,7 +580,7 @@ impl NativeApplication {
         };
         (self.page_title, self.status) = link_page(&self.link);
         let chats = std::mem::take(&mut self.chat_snapshots);
-        self.apply_chat_changes(vec![ChatChange::Snapshot(chats)]);
+        self.reset_shared_chats(chats);
         self.flush_chats();
         self.reload_calls();
         self.refresh_sticker_picker(sender);
@@ -586,10 +589,6 @@ impl NativeApplication {
         }
         self.apply_runtime_settings();
         self.sync_tray();
-    }
-
-    pub(super) fn rebuild_sticker_emojis(&mut self) {
-        self.sticker_emojis = sticker_emojis(&self.sticker_packs);
     }
 
     /// Clears everything on screen that belongs to the open conversation, so
@@ -624,22 +623,12 @@ impl NativeApplication {
             }
         }
         self.contact_share_generation = self.contact_share_generation.wrapping_add(1);
-        self.audio.media.stop_playback();
-        self.audio.playing_audio = None;
-        self.audio.waveform_queue.clear();
-        if let Some(cancel) = self.audio.waveform_cancel.take() {
-            cancel.store(true, std::sync::atomic::Ordering::Release);
-        }
-        self.audio.audio_waveforms.clear();
-        self.audio.waveform_attempted.clear();
-        self.audio.audio_errors.clear();
-        self.audio.audio_registry.borrow_mut().clear();
-        self.active_chat = None;
+        self.reset_open_chat_state();
+        self.transcript_requests.initial = None;
+        self.transcript_requests.older = None;
         self.chat_ids.clear();
         self.reset_chat_filters(false);
-        self.message_ids.clear();
-        self.message_snapshots.clear();
-        self.editable_messages.clear();
+        self.open_chat.reset_messages();
         self.messages.clear();
         self.presence.clear();
         self.typing.clear();
@@ -648,9 +637,9 @@ impl NativeApplication {
         self.composer = crate::native_composer::NativeComposerState::default();
         self.composer_buffer.set_text("");
         self.draft.clear();
-        self.editing = None;
-        self.reply_to = None;
-        self.pending_edit = None;
+        self.open_chat.editing = None;
+        self.open_chat.reply_to = None;
+        self.open_chat.pending_edit = None;
         self.pending_composer_request = None;
         self.pending_send = None;
         self.audio.voice_send_pending = false;
@@ -667,7 +656,8 @@ impl NativeApplication {
         self.history_complete = false;
         self.loading_older = false;
         self.recent_messages_pending = false;
-        self.transcript.clear();
+        self.open_chat.transcript.clear();
+        self.open_chat.pending_transcript.clear();
         self.message_menu.popdown();
         if let Some((picker, _)) = &self.sticker_picker {
             picker.popdown();
@@ -702,22 +692,6 @@ fn move_avatar_references<T>(
     for path in outgoing.values() {
         update_avatar_texture_references(cache, references, Some(path.clone()), None);
     }
-}
-
-/// The emoji each sticker of an account's packs answers to.
-fn sticker_emojis(
-    packs: &[crate::model::StickerPack],
-) -> std::collections::HashMap<std::path::PathBuf, Vec<String>> {
-    let mut index = std::collections::HashMap::new();
-    for sticker in packs.iter().flat_map(|pack| &pack.stickers) {
-        if let Ok(bytes) = std::fs::read(sticker) {
-            let emojis = crate::sticker_meta::emojis(&bytes);
-            if !emojis.is_empty() {
-                index.insert(sticker.clone(), emojis);
-            }
-        }
-    }
-    index
 }
 
 /// A suspend kills the socket of every linked account, not only the one on screen.
@@ -799,7 +773,7 @@ pub(super) struct Notice {
 }
 
 /// Unarchived, unmuted, unlocked chats with unread messages, as the tray counts them.
-pub(super) fn unread_chat_count(chats: &[crate::model::Chat]) -> usize {
+pub(super) fn unread_chat_count(chats: &[std::rc::Rc<crate::model::Chat>]) -> usize {
     let now = crate::util::now();
     chats
         .iter()
@@ -835,12 +809,12 @@ pub(super) fn notice_text(
 /// or send anything: a hidden account never marks messages read.
 pub(super) fn apply_hidden_event(
     session: &mut AccountSession,
-    event: NativeEvent,
+    event: Event,
     notifications: bool,
     previews: bool,
 ) -> Option<Notice> {
     match event {
-        NativeEvent::Link(link) => {
+        Event::Link(link) => {
             if matches!(link, LinkStatus::LoggedOut) {
                 session.chat_snapshots.clear();
                 session.contacts.clear();
@@ -851,20 +825,24 @@ pub(super) fn apply_hidden_event(
                 session.sticker_packs.clear();
                 session.recent_stickers.clear();
                 session.favorite_stickers.clear();
-                session.sticker_emojis.clear();
             }
             session.link = link;
         }
-        NativeEvent::Syncing(syncing) => session.syncing = syncing,
-        NativeEvent::Chats(chats) => session.chat_snapshots = chats,
-        NativeEvent::ChatUpdated(chat) => {
+
+        Event::Syncing(syncing) => session.syncing = syncing,
+        Event::Chats(chats) => {
+            session.chat_snapshots = chats.into_iter().map(std::rc::Rc::new).collect()
+        }
+        Event::ChatUpdated(chat) => {
             session.chat_snapshots.retain(|known| known.id != chat.id);
             let index = session
                 .chat_snapshots
                 .partition_point(|known| known.last_activity >= chat.last_activity);
-            session.chat_snapshots.insert(index, *chat);
+            session
+                .chat_snapshots
+                .insert(index, std::rc::Rc::new(*chat));
         }
-        NativeEvent::Contacts(contacts) => {
+        Event::Contacts(contacts) => {
             if contacts.is_empty() {
                 session.contacts.clear();
             }
@@ -874,7 +852,11 @@ pub(super) fn apply_hidden_event(
                     .map(|contact| (contact.id.clone(), contact)),
             );
         }
-        NativeEvent::Avatar { id, path } => match path {
+        Event::Avatar {
+            id,
+            full: false,
+            path,
+        } => match path {
             Some(path) => {
                 session.avatars.insert(id, path);
             }
@@ -882,22 +864,25 @@ pub(super) fn apply_hidden_event(
                 session.avatars.remove(&id);
             }
         },
-        NativeEvent::ReceiptsPrivacy { disabled } => session.account_receipts_off = disabled,
-        NativeEvent::LinkPreviewsChanged(enabled) => session.settings.link_previews = enabled,
-        NativeEvent::Stickers {
+        Event::ReceiptsPrivacy { disabled } => session.account_receipts_off = disabled,
+        Event::LinkPreviewsChanged(enabled) => session.settings.link_previews = enabled,
+        Event::Stickers {
             saved,
             packs,
             recent,
         } => {
             session.favorite_stickers = saved;
-            if packs != session.sticker_packs {
-                session.sticker_emojis = sticker_emojis(&packs);
-            }
             session.sticker_packs = packs;
             session.recent_stickers = recent;
         }
-        NativeEvent::Incoming { chat, message } => {
-            let known = session.chat_snapshots.iter().find(|known| known.id == chat);
+
+        Event::Incoming { chat, message } => {
+            let known = session
+                .chat_snapshots
+                .iter()
+                .find(|known| known.id == chat)
+                .map(std::rc::Rc::as_ref);
+
             // Not on screen, so no chat counts as open.
             if notification_should_show(notifications, false, None, &chat, known) {
                 let (title, body) = notice_text(known, &message, previews);
@@ -950,11 +935,12 @@ mod tests {
         let mut session = AccountSession::detached_for_tests(AccountId(2));
         let notice = apply_hidden_event(
             &mut session,
-            NativeEvent::Messages {
+            Event::Messages {
                 chat: "chat".into(),
                 messages: vec![*message("chat", "Hello")],
                 older: false,
                 complete: true,
+                request: Some(7),
             },
             true,
             true,
@@ -968,14 +954,14 @@ mod tests {
         let mut session = AccountSession::detached_for_tests(AccountId(2));
         apply_hidden_event(
             &mut session,
-            NativeEvent::Chats(vec![unread_chat("chat", "Alice")]),
+            Event::Chats(vec![unread_chat("chat", "Alice")]),
             true,
             true,
         );
         assert_eq!(unread_chat_count(&session.chat_snapshots), 1);
         let notice = apply_hidden_event(
             &mut session,
-            NativeEvent::Incoming {
+            Event::Incoming {
                 chat: "chat".into(),
                 message: message("chat", "Hello"),
             },
@@ -995,11 +981,11 @@ mod tests {
         locked.locked = true;
         apply_hidden_event(
             &mut session,
-            NativeEvent::Chats(vec![locked, unread_chat("chat", "Alice")]),
+            Event::Chats(vec![locked, unread_chat("chat", "Alice")]),
             true,
             true,
         );
-        let incoming = |chat: &str| NativeEvent::Incoming {
+        let incoming = |chat: &str| Event::Incoming {
             chat: chat.into(),
             message: message(chat, "Hello"),
         };
@@ -1097,7 +1083,7 @@ mod tests {
         let mut session = AccountSession::detached_for_tests(AccountId(2));
         apply_hidden_event(
             &mut session,
-            NativeEvent::Chats(vec![unread_chat("chat", "Alice")]),
+            Event::Chats(vec![unread_chat("chat", "Alice")]),
             true,
             true,
         );
@@ -1105,12 +1091,7 @@ mod tests {
         session
             .avatars
             .insert("chat".into(), "/synthetic/a.jpg".into());
-        apply_hidden_event(
-            &mut session,
-            NativeEvent::Link(LinkStatus::LoggedOut),
-            true,
-            true,
-        );
+        apply_hidden_event(&mut session, Event::Link(LinkStatus::LoggedOut), true, true);
         assert!(session.chat_snapshots.is_empty());
         assert!(session.drafts.is_empty());
         assert!(session.avatars.is_empty());
@@ -1122,7 +1103,7 @@ mod tests {
         session.settings.link_previews = true;
         apply_hidden_event(
             &mut session,
-            NativeEvent::LinkPreviewsChanged(false),
+            Event::LinkPreviewsChanged(false),
             false,
             false,
         );
@@ -1211,24 +1192,19 @@ mod tests {
         let mut session = AccountSession::detached_for_tests(AccountId(2));
         apply_hidden_event(
             &mut session,
-            NativeEvent::Chats(vec![crate::model::Chat::new("a".into(), "A".into())]),
+            Event::Chats(vec![crate::model::Chat::new("a".into(), "A".into())]),
             true,
             true,
         );
         apply_hidden_event(
             &mut session,
-            NativeEvent::ChatUpdated(Box::new(unread_chat("a", "A"))),
+            Event::ChatUpdated(Box::new(unread_chat("a", "A"))),
             true,
             true,
         );
         assert_eq!(session.chat_snapshots.len(), 1);
         assert_eq!(unread_chat_count(&session.chat_snapshots), 1);
-        apply_hidden_event(
-            &mut session,
-            NativeEvent::Link(LinkStatus::LoggedOut),
-            true,
-            true,
-        );
+        apply_hidden_event(&mut session, Event::Link(LinkStatus::LoggedOut), true, true);
         assert!(matches!(session.link, LinkStatus::LoggedOut));
     }
 }

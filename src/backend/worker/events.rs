@@ -77,7 +77,7 @@ impl Worker {
                 self.pump_poll_votes();
                 self.renew_presence();
                 if let Some(client) = self.client.clone() {
-                    let me = self.me_pn.clone().and_then(|pn| Self::jid_of(&pn));
+                    let me = self.identity.me_pn.clone().and_then(|pn| Self::jid_of(&pn));
                     let commands = self.commands.clone();
                     let session_generation = self.session_generation;
                     tokio::spawn(async move {
@@ -85,10 +85,11 @@ impl Worker {
                         match client.fetch_privacy_settings().await {
                             Ok(settings) => {
                                 let disabled = !account_allows_receipts(&settings);
-                                let _ = commands.send(Command::ReceiptsPrivacy {
-                                    session_generation,
-                                    disabled,
-                                });
+                                let _ = Completion {
+                                    generation: session_generation,
+                                    done: Done::ReceiptsPrivacy { disabled },
+                                }
+                                .send(&commands);
                             }
                             Err(error) => log::debug!("privacy settings not fetched: {error}"),
                         }
@@ -103,10 +104,11 @@ impl Worker {
                                         .get(&me)
                                         .and_then(|info| info.status.clone())
                                         .filter(|about| !about.is_empty());
-                                    let _ = commands.send(Command::MeInfo {
-                                        session_generation,
-                                        about,
-                                    });
+                                    let _ = Completion {
+                                        generation: session_generation,
+                                        done: Done::MeInfo { about },
+                                    }
+                                    .send(&commands);
                                 }
                                 Err(error) => log::debug!("own info not fetched: {error}"),
                             }
@@ -321,8 +323,9 @@ impl Worker {
                 self.invalidate_avatar_generations(&id);
                 {
                     let _cache_guard = self.session_cache_lock.lock().await;
-                    let _ = std::fs::remove_file(self.avatar_file(&id, false));
-                    let _ = std::fs::remove_file(self.avatar_file(&id, true));
+                    for full in [false, true] {
+                        self.remove_avatar_files(&id, full);
+                    }
                 }
                 if update.removed {
                     self.emit(Event::Avatar {
@@ -341,7 +344,7 @@ impl Worker {
                 }
             }
             E::SelfPushNameUpdated(update) => {
-                self.me_name = Some(update.new_name.clone());
+                self.identity.me_name = Some(update.new_name.clone());
                 let _ = self.archive.set_meta("me_name", &update.new_name);
                 self.emit_profile();
                 self.renew_presence();

@@ -7,10 +7,6 @@ use serde::{Deserialize, Serialize};
 /// Verifying the locked-chat code costs about 20 ms per distinct typed string.
 const CHAT_LOCK_ROUNDS: std::num::NonZeroU32 = std::num::NonZeroU32::new(200_000).unwrap();
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ThemeChoice {
@@ -200,13 +196,106 @@ impl Settings {
             code.as_bytes(),
             &mut hash,
         );
-        format!("{}${}", hex(&salt), hex(&hash))
+        format!("{}${}", hex::encode(salt), hex::encode(hash))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hex::encode as hex;
+
+    #[test]
+    fn byte_encoding_golden_vectors() {
+        assert_eq!(hex([0, 1, 15, 16, 127, 128, 255]), "00010f107f80ff");
+        assert_eq!(hex([]), "");
+        assert_eq!(hex([0; 16]), "00000000000000000000000000000000");
+        assert_eq!(
+            hex([
+                0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40, 0xde, 0x5d, 0xae,
+                0x22, 0x23, 0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61,
+                0xf2, 0x00, 0x15, 0xad,
+            ]),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn chat_lock_verifier_preserves_salt_and_hash_format() {
+        let mut settings = Settings::default();
+        settings.set_chat_lock_code(Some("2468"));
+        let verifier = settings.chat_lock_code_hash.as_deref().unwrap();
+        let (salt, hash) = verifier.split_once('$').unwrap();
+        assert_eq!(salt.len(), 32);
+        assert_eq!(hash.len(), 64);
+        assert!(
+            salt.bytes()
+                .chain(hash.bytes())
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        );
+        let salt = hex::decode(salt).unwrap();
+        let hash = hex::decode(hash).unwrap();
+        assert!(
+            ring::pbkdf2::verify(
+                ring::pbkdf2::PBKDF2_HMAC_SHA256,
+                CHAT_LOCK_ROUNDS,
+                &salt,
+                b"2468",
+                &hash
+            )
+            .is_ok()
+        );
+        assert!(
+            ring::pbkdf2::verify(
+                ring::pbkdf2::PBKDF2_HMAC_SHA256,
+                CHAT_LOCK_ROUNDS,
+                &salt,
+                b"wrong",
+                &hash
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn legacy_chat_lock_code_migrates_and_survives_a_settings_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{"chat_lock_code":"2468","chat_lock_hint_dismissed":true}"#,
+        )
+        .unwrap();
+        let mut settings = Settings::load(&path);
+        assert!(settings.chat_lock_code.is_none());
+        let verifier = settings.chat_lock_code_hash.clone().unwrap();
+        let (salt, hash) = verifier.split_once('$').unwrap();
+        assert!(
+            ring::pbkdf2::verify(
+                ring::pbkdf2::PBKDF2_HMAC_SHA256,
+                CHAT_LOCK_ROUNDS,
+                &hex::decode(salt).unwrap(),
+                b"2468",
+                &hex::decode(hash).unwrap(),
+            )
+            .is_ok()
+        );
+        settings.send_typing = false;
+        settings.save(&path).unwrap();
+        let loaded = Settings::load(&path);
+        assert_eq!(
+            loaded.chat_lock_code_hash.as_deref(),
+            Some(verifier.as_str())
+        );
+        assert!(loaded.chat_lock_hint_dismissed);
+        let stored: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert!(
+            stored
+                .get("chat_lock_code")
+                .is_none_or(serde_json::Value::is_null)
+        );
+    }
 
     #[test]
     fn unknown_and_missing_fields_are_tolerated() {

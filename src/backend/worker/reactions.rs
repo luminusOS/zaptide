@@ -149,14 +149,41 @@ impl Worker {
 
     fn alt_jid(&self, jid: &Jid) -> Option<Jid> {
         if jid.is_lid() {
-            let pn = self.lid_to_pn.get(jid.user_base())?;
+            let pn = self.identity.lid_to_pn.get(jid.user_base())?;
             format!("{pn}@s.whatsapp.net").parse().ok()
         } else {
-            self.lid_to_pn.iter().find_map(|(lid, pn)| {
+            self.identity.lid_to_pn.iter().find_map(|(lid, pn)| {
                 (*pn == jid.user_base())
                     .then(|| format!("{lid}@lid").parse().ok())
                     .flatten()
             })
         }
+    }
+}
+
+impl Worker {
+    pub(super) fn react(&mut self, chat: ChatId, id: String, emoji: String) {
+        let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&chat)) else {
+            self.emit(Event::Error("Not connected to WhatsApp".to_owned()));
+            return;
+        };
+        let Ok(Some(target)) = self.archive.message(&chat, &id) else {
+            return;
+        };
+        let me = self.me();
+        if let Ok(Some(updated)) = self.archive.set_reaction(&chat, &id, &me, true, &emoji) {
+            self.emit(Event::MessageUpdated(Box::new(updated)));
+        }
+        let key = wa::MessageKey {
+            remote_jid: Some(chat.clone()),
+            from_me: Some(target.from_me),
+            id: Some(id),
+            participant: (jid.is_group() && !target.from_me).then(|| target.sender.clone()),
+        };
+        tokio::spawn(async move {
+            if client.send_reaction(jid, key, &emoji).await.is_err() {
+                log::warn!("could not send a reaction");
+            }
+        });
     }
 }

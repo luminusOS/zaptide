@@ -3,7 +3,9 @@
 use std::io::{Read, Seek};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use rodio::Source;
+use gst::prelude::*;
+use gstreamer as gst;
+use gstreamer_app as gst_app;
 
 use crate::voice;
 
@@ -17,7 +19,7 @@ const SAMPLE_CAPACITY_CHUNK: usize = (4 * 1024 * 1024) / std::mem::size_of::<f32
 static ACTIVE_DECODE_JOBS: AtomicUsize = AtomicUsize::new(0);
 
 pub(super) struct DecodePermit {
-    active: &'static AtomicUsize,
+    _permit: crate::shared_resource::Permit<'static>,
 }
 
 impl DecodePermit {
@@ -26,57 +28,18 @@ impl DecodePermit {
     }
 
     fn acquire_from(active: &'static AtomicUsize, limit: usize) -> Option<Self> {
-        try_acquire_decode_job(active, limit).then(|| Self { active })
+        crate::shared_resource::Permit::acquire(active, limit)
+            .map(|permit| Self { _permit: permit })
     }
 }
 
+#[cfg(test)]
 pub(super) fn try_acquire_decode_job(active: &AtomicUsize, limit: usize) -> bool {
-    active
-        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
-            (count < limit).then(|| count + 1)
-        })
-        .is_ok()
-}
-
-impl Drop for DecodePermit {
-    fn drop(&mut self) {
-        self.active.fetch_sub(1, Ordering::AcqRel);
-    }
-}
-
-pub(super) type Decoded =
-    std::sync::Arc<std::sync::Mutex<Option<Result<(Vec<f32>, Vec<u8>), String>>>>;
-
-pub(super) fn publish_decode(
-    slot: &Decoded,
-    cancelled: &AtomicBool,
-    result: Result<(Vec<f32>, Vec<u8>), String>,
-) -> bool {
-    if cancelled.load(Ordering::Relaxed) {
-        return false;
-    }
-    *slot.lock().unwrap_or_else(|p| p.into_inner()) = Some(result);
-    true
-}
-
-pub(super) fn decode_file_with_waveform(
-    path: &std::path::Path,
-    cancelled: &AtomicBool,
-) -> Result<(Vec<f32>, Vec<u8>), String> {
-    let samples = decode_file_with(path, cancelled)?;
-    samples_with_waveform(samples, cancelled)
-}
-
-fn samples_with_waveform(
-    samples: Vec<f32>,
-    cancelled: &AtomicBool,
-) -> Result<(Vec<f32>, Vec<u8>), String> {
-    let bars = super::waveform_cancellable(&samples, cancelled)?;
-    Ok((samples, bars))
+    crate::shared_resource::try_acquire(active, limit)
 }
 
 /// Decodes a file to mono 48 kHz samples. OGG/Opus uses the voice codec; other
-/// supported formats use rodio.
+/// formats use GStreamer.
 #[cfg(test)]
 pub(super) fn decode_file(path: &std::path::Path) -> Result<Vec<f32>, String> {
     decode_file_with(path, &AtomicBool::new(false))
@@ -105,7 +68,7 @@ pub(super) fn decode_file_with(
     if read == signature.len() && &signature == b"OggS" {
         file.seek(std::io::SeekFrom::Start(0))
             .map_err(|error| format!("Could not read the audio: {error}"))?;
-        match decode_opus(file, cancelled) {
+        match decode_opus(&mut file, cancelled) {
             Ok(samples) => {
                 if is_cancelled(cancelled) {
                     return Err("Audio decoding cancelled".to_owned());
@@ -122,13 +85,152 @@ pub(super) fn decode_file_with(
     if is_cancelled(cancelled) {
         return Err("Audio decoding cancelled".to_owned());
     }
-    let file =
-        std::fs::File::open(path).map_err(|error| format!("Could not read the audio: {error}"))?;
-    let decoder = rodio::Decoder::new(std::io::BufReader::new(file))
-        .map_err(|error| format!("Could not decode the audio: {error}"))?;
-    let channels = decoder.channels().get();
-    let rate = decoder.sample_rate().get();
-    collect_samples(decoder, channels, rate, cancelled)
+    file.seek(std::io::SeekFrom::Start(0))
+        .map_err(|error| format!("Could not read the audio: {error}"))?;
+    decode_with_gstreamer(&file, cancelled)
+}
+
+/// A decode that gets no new samples for this long has stalled.
+const DECODE_STALL: std::time::Duration = std::time::Duration::from_secs(10);
+/// A whole decode may take this long; a clip within the size cap takes a
+/// fraction of it.
+const DECODE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
+const MAX_SOURCE_RATE: u32 = 384_000;
+const MAX_SOURCE_CHANNELS: u16 = 8;
+
+/// Element kinds `decodebin` must not plug for a received file. Waveforms
+/// decode without a click, so a file that is really a streaming manifest,
+/// a playlist or a video must not make the decoder open URLs, read other
+/// files, or run video, image and subtitle parsers.
+fn refused_for_waveforms(klass: &str) -> bool {
+    klass
+        .split('/')
+        .any(|kind| matches!(kind, "Adaptive" | "Source" | "Video" | "Image" | "Subtitle"))
+}
+
+/// Decodes any format GStreamer can play, keeping the stream's own rate and
+/// channels so `collect_samples` downmixes and resamples it exactly as it
+/// does every other decoded clip.
+fn decode_with_gstreamer(file: &std::fs::File, cancelled: &AtomicBool) -> Result<Vec<f32>, String> {
+    let failed = |error: &dyn std::fmt::Display| format!("Could not decode the audio: {error}");
+    gst::init().map_err(|error| failed(&error))?;
+    let make = |factory: &str| {
+        gst::ElementFactory::make(factory)
+            .build()
+            .map_err(|error| failed(&error))
+    };
+    // Reopens the file already opened and size-checked through its
+    // descriptor, so a rename or swap of the path cannot change what is
+    // decoded. fdsrc would read the descriptor directly, but cut Vorbis and
+    // chained Ogg streams short; `file` outlives the pipeline.
+    let source = gst::ElementFactory::make("filesrc")
+        .property(
+            "location",
+            format!("/proc/self/fd/{}", std::os::fd::AsRawFd::as_raw_fd(file)),
+        )
+        .build()
+        .map_err(|error| failed(&error))?;
+    let decoder = make("decodebin")?;
+    let select_result = gst::glib::Type::from_name("GstAutoplugSelectResult")
+        .ok_or_else(|| failed(&"decodebin has no autoplug-select"))?;
+    let select = move |skip: bool| {
+        gst::glib::EnumClass::with_type(select_result)
+            .and_then(|class| class.to_value_by_nick(if skip { "skip" } else { "try" }))
+    };
+    if select(true).is_none() || select(false).is_none() {
+        return Err(failed(&"decodebin has no autoplug-select"));
+    }
+    decoder.connect("autoplug-select", false, move |args| {
+        let skip = args
+            .get(3)
+            .and_then(|factory| factory.get::<gst::ElementFactory>().ok())
+            .is_none_or(|factory| refused_for_waveforms(factory.klass()));
+        select(skip)
+    });
+    let convert = make("audioconvert")?;
+    let sink = gst_app::AppSink::builder()
+        .caps(
+            &gst::Caps::builder("audio/x-raw")
+                .field("format", "F32LE")
+                .field("layout", "interleaved")
+                .build(),
+        )
+        .sync(false)
+        .max_buffers(8)
+        .build();
+    let pipeline = gst::Pipeline::new();
+    pipeline
+        .add_many([&source, &decoder, &convert, sink.upcast_ref()])
+        .map_err(|error| failed(&error))?;
+    source.link(&decoder).map_err(|error| failed(&error))?;
+    convert.link(&sink).map_err(|error| failed(&error))?;
+    let convert_input = convert.downgrade();
+    let implausible = std::sync::Arc::new(AtomicBool::new(false));
+    let seen_implausible = std::sync::Arc::clone(&implausible);
+    decoder.connect_pad_added(move |_, pad| {
+        let Some(input) = convert_input
+            .upgrade()
+            .and_then(|convert| convert.static_pad("sink"))
+        else {
+            return;
+        };
+        let caps = pad.current_caps().unwrap_or_else(|| pad.query_caps(None));
+        let Some(structure) = caps.structure(0) else {
+            return;
+        };
+        if !structure.name().starts_with("audio/") || input.is_linked() {
+            return;
+        }
+        let within = |field: &str, limit: u32| {
+            structure.get::<i32>(field).map_or(true, |value| {
+                u32::try_from(value).is_ok_and(|value| (1..=limit).contains(&value))
+            })
+        };
+        if !within("channels", u32::from(MAX_SOURCE_CHANNELS)) || !within("rate", MAX_SOURCE_RATE) {
+            seen_implausible.store(true, Ordering::Release);
+            return;
+        }
+        let _ = pad.link(&input);
+    });
+    let started = std::time::Instant::now();
+    let mut samples = super::pulled::PulledSamples::start(pipeline, sink, |idle| {
+        if is_cancelled(cancelled) {
+            Ok(false)
+        } else if idle >= DECODE_STALL {
+            Err("the decoder stopped producing audio".to_owned())
+        } else {
+            Ok(true)
+        }
+    })
+    .map_err(|error| failed(&error))?
+    .with_deadline(started + DECODE_DEADLINE, audio_limit_error());
+    let Some((channels, rate)) = samples.format() else {
+        if is_cancelled(cancelled) {
+            return Err("Audio decoding cancelled".to_owned());
+        }
+        if implausible.load(Ordering::Acquire) {
+            return Err(audio_limit_error());
+        }
+        return Err(decode_failure(
+            samples.failure().unwrap_or("no audio stream"),
+        ));
+    };
+    if !(1..=MAX_SOURCE_CHANNELS).contains(&channels) || !(1..=MAX_SOURCE_RATE).contains(&rate) {
+        return Err(audio_limit_error());
+    }
+    let decoded = collect_samples(&mut samples, channels, rate, cancelled)?;
+    match samples.failure() {
+        Some(error) => Err(decode_failure(error)),
+        None => Ok(decoded),
+    }
+}
+
+fn decode_failure(error: &str) -> String {
+    if error == audio_limit_error() {
+        error.to_owned()
+    } else {
+        format!("Could not decode the audio: {error}")
+    }
 }
 
 pub(super) fn is_cancelled(cancelled: &AtomicBool) -> bool {
@@ -373,7 +475,6 @@ pub(super) fn collect_samples_with_limits<I: Iterator<Item = f32>>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
 
     static TEST_ACTIVE_DECODE_JOBS: AtomicUsize = AtomicUsize::new(0);
 
@@ -385,24 +486,6 @@ mod tests {
 
         assert_eq!(TEST_ACTIVE_DECODE_JOBS.load(Ordering::Acquire), 1);
         TEST_ACTIVE_DECODE_JOBS.store(0, Ordering::Release);
-    }
-
-    #[test]
-    fn decode_completion_publishes_samples_and_waveform_together() {
-        let slot: Decoded = Arc::new(Mutex::new(None));
-        let cancelled = AtomicBool::new(false);
-        let samples = vec![0.5; voice::BARS];
-        let (projected_samples, bars) = samples_with_waveform(samples.clone(), &cancelled).unwrap();
-
-        assert!(publish_decode(
-            &slot,
-            &cancelled,
-            Ok((projected_samples, bars.clone()))
-        ));
-
-        let (published_samples, published_bars) = slot.lock().unwrap().take().unwrap().unwrap();
-        assert_eq!(published_samples, samples);
-        assert_eq!(published_bars, bars);
     }
 
     #[test]

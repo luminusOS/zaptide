@@ -18,35 +18,27 @@ impl Worker {
         let session_generation = self.session_generation;
         tokio::spawn(async move {
             let result = apply(&client, &edit).await;
-            let _ = commands.send(Command::ProfileSaved {
-                session_generation,
-                edit,
-                result,
-            });
+            let _ = Completion {
+                generation: session_generation,
+                done: Done::ProfileSaved { edit, result },
+            }
+            .send(&commands);
         });
     }
 
-    pub(super) fn profile_saved(
-        &mut self,
-        session_generation: u64,
-        edit: ProfileEdit,
-        result: Result<(), String>,
-    ) {
-        if session_generation != self.session_generation {
-            return;
-        }
+    pub(super) async fn profile_saved(&mut self, edit: ProfileEdit, result: Result<(), String>) {
         if result.is_ok() {
             if let Some(name) = edit.name {
                 let _ = self.archive.set_meta("me_name", &name);
-                self.me_name = Some(name);
+                self.identity.me_name = Some(name);
                 self.emit_profile();
             }
             if let Some(about) = edit.about {
                 let _ = self.archive.set_meta("me_about", &about);
-                self.me_about = Some(about).filter(|about| !about.is_empty());
+                self.identity.me_about = Some(about).filter(|about| !about.is_empty());
             }
             if edit.picture != PictureEdit::Keep {
-                self.refresh_own_avatar();
+                self.refresh_own_avatar().await;
             }
         }
         self.emit(Event::ProfileSaved {
@@ -55,12 +47,15 @@ impl Worker {
     }
 
     /// Drops the cached picture so the next fetch shows the new one.
-    fn refresh_own_avatar(&mut self) {
-        let Some(me) = self.me_pn.clone() else {
+    async fn refresh_own_avatar(&mut self) {
+        let Some(me) = self.identity.me_pn.clone() else {
             return;
         };
-        for full in [false, true] {
-            let _ = std::fs::remove_file(self.avatar_file(&me, full));
+        {
+            let _cache_guard = self.session_cache_lock.lock().await;
+            for full in [false, true] {
+                self.remove_avatar_files(&me, full);
+            }
         }
         self.fetch_avatar(me.clone(), false);
         self.fetch_avatar(me, true);

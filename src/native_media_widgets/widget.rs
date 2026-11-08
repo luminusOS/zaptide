@@ -336,15 +336,12 @@ pub fn build_media_widget_with_action(
             for (label, url) in links {
                 let button = link_button(label);
                 button.set_tooltip_text(Some(url));
-                let url = url.clone();
-                button.connect_clicked(move |button| {
-                    let window = button.root().and_downcast::<gtk::Window>();
-                    gtk::UriLauncher::new(&url).launch(
-                        window.as_ref(),
-                        gtk::gio::Cancellable::NONE,
-                        |_| {},
-                    );
-                });
+                match crate::safety::web_link(url) {
+                    Some(url) => {
+                        button.connect_clicked(move |button| open_web_link(button, &url));
+                    }
+                    None => refuse_link(&button, url),
+                }
                 root.append(&button);
             }
             ("", "")
@@ -461,4 +458,13 @@ pub(super) fn attachment_button_label(message: &Message) -> &'static str {
         }
         _ => "Open attachment",
     }
+}
+
+/// Disables a button whose link from a message is not safe to open, and says
+/// why in its tooltip and accessible description, the link on a second line.
+pub(super) fn refuse_link(button: &gtk::Button, url: &str) {
+    let reason = gettext("This link can't be opened");
+    button.set_sensitive(false);
+    button.set_tooltip_text(Some(&format!("{reason}\n{url}")));
+    button.update_property(&[gtk::accessible::Property::Description(&reason)]);
 }

@@ -2,6 +2,8 @@
 //! capture and decoding. The VoIP runtime moves the packets; this module only
 //! supplies and consumes raw audio and encoded video.
 
+use crate::shared_resource::lock;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -209,11 +211,6 @@ impl VideoSlots {
         self.announce();
     }
 
-    pub fn clear_remote(&self) {
-        *lock(&self.remote) = Some(None);
-        self.announce();
-    }
-
     /// Takes the newest pictures and re-arms the notification. The outer
     /// `Option` says whether a picture changed; the inner one is the picture,
     /// `None` when it was cleared.
@@ -237,12 +234,6 @@ impl VideoSlots {
 pub struct VideoUpdate {
     pub remote: Option<Option<RgbaFrame>>,
     pub local: Option<Option<RgbaFrame>>,
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// The microphone, speaker, and optional video of one call.
@@ -298,7 +289,7 @@ impl VideoPlan {
     }
 
     fn start_camera(&self) -> Result<video::Camera, MediaError> {
-        match camera_portal::route(camera_portal::sandboxed()) {
+        match camera_portal::route(crate::portal::sandboxed()) {
             camera_portal::Route::Portal => self.start_through_portal(),
             camera_portal::Route::DirectThenPortal => match self.start_directly() {
                 Err(MediaError::NoCamera) => self

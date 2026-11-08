@@ -54,22 +54,18 @@ jobs:
     # Linux builds need libadwaita 1.10 (GNOME 51), which Ubuntu does not
     # package yet.
     container: ${{ matrix.container }}
-    # Baked into the binary by settings.rs; releases built without the
-    # secret simply ship keyless and the picker asks for one.
-    env:
-      ZAPTIDE_GIPHY_KEY: ${{ secrets.ZAPTIDE_GIPHY_KEY }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-24.04
-            container: registry.fedoraproject.org/fedora:45
+            container: registry.fedoraproject.org/fedora:45@sha256:f5afe36c8ddb2aa5333597e900f53c5ed0267d9ebb27be765dc8ec2633aa1648
             target: x86_64-unknown-linux-gnu
             arch: x86_64
           # A native arm64 runner, so the GUI's system libraries need no
           # cross-compilation sysroot.
           - os: ubuntu-24.04-arm
-            container: registry.fedoraproject.org/fedora:45
+            container: registry.fedoraproject.org/fedora:45@sha256:f5afe36c8ddb2aa5333597e900f53c5ed0267d9ebb27be765dc8ec2633aa1648
             target: aarch64-unknown-linux-gnu
             arch: aarch64
     steps:
@@ -83,10 +79,7 @@ jobs:
       # library to the toolchain the pin actually resolves to.
       - run: rustup target add ${{ matrix.target }}
       - name: GUI build dependencies
-        run: dnf install -y --setopt=install_weak_deps=False gcc gcc-c++ git gtk4-devel libadwaita-devel alsa-lib-devel gstreamer1-devel gstreamer1-plugins-base-devel cmake libseccomp-devel fontconfig-devel perl make tar zstd
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-        with:
-          key: ${{ matrix.target }}
+        run: dnf install -y --setopt=install_weak_deps=False gcc gcc-c++ git gtk4-devel libadwaita-devel gstreamer1-devel gstreamer1-plugins-base-devel cmake libseccomp-devel fontconfig-devel perl make tar zstd
 
       - run: cargo build --locked --release --target ${{ matrix.target }}
 
@@ -118,7 +111,7 @@ jobs:
     permissions:
       contents: read
     container:
-      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08@sha256:c91a88269eee8fcdd73ecf43064232fbebe27411f926f63f38bdf70c51f2ceae
       options: --privileged
     strategy:
       fail-fast: false
@@ -250,7 +243,7 @@ jobs:
           SOURCE_RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           python3 -m venv /tmp/manifest-venv
-          /tmp/manifest-venv/bin/pip install jsonschema
+          /tmp/manifest-venv/bin/pip install jsonschema==4.26.0
           /tmp/manifest-venv/bin/python packaging/flatpak/export_manifest.py manifest \
             --tag "$RELEASE_TAG" --revision "$SOURCE_REVISION" \
             --run-id "$SOURCE_RUN_ID" --run-attempt "$SOURCE_RUN_ATTEMPT" \

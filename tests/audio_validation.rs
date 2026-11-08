@@ -10,12 +10,10 @@
 //! | `voice_codec_roundtrip`                        | No            | No         | No      |
 //! | `waveform_generation_is_64_bars`               | No            | No         | No      |
 //! | `narrowest_audio_permissions_documented`       | No            | No         | No      |
-//! | `player_handles_missing_device_gracefully`     | No (tests absence) | No    | No      |
-//! | `recorder_handles_permission_denied`           | No            | No (tests denial) | No |
-//! | `player_respects_seek_within_bounds`           | Optional      | No         | No      |
-//! | `recorder_level_metering_produces_50ms_windows`| No            | Optional   | No      |
-//! | `alsa_playback_reaches_completion_within_budget`| ALSA         | No         | No      |
-//! | `alsa_capture_produces_at_least_one_second_of_audio` | ALSA  | ALSA       | No      |
+//! | `recorder_handles_source_that_cannot_open`      | No            | No (test source) | No |
+//! | `recorder_level_metering_produces_50ms_windows`| No            | No (test tone) | No  |
+//! | `playback_reaches_completion_within_budget`    | Yes           | No         | No      |
+//! | `capture_produces_at_least_one_second_of_audio` | No           | Yes        | No      |
 //! | `player_handles_device_unplug_during_playback` | Deferred      | No         | No      |
 //! | `recorder_handles_device_unplug_during_capture`| No            | Deferred   | No      |
 //! | `flatpak_microphone_denial_*`                  | No            | Sandbox    | Yes     |
@@ -26,7 +24,8 @@ use std::time::{Duration, Instant};
 
 use tempfile::NamedTempFile;
 
-use zaptide::audio::{Player, Recorder, State};
+use zaptide::audio::{Recorder, State};
+use zaptide::services::media::MediaService;
 use zaptide::voice;
 
 static AUDIO_DECODE_TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -94,70 +93,27 @@ fn ordinary_wav_attachment_generates_a_waveform() {
     assert!(bars.iter().any(|bar| *bar > 0));
 }
 
-fn poll_until_loaded(player: &mut Player, message: &str, timeout: Duration) -> Result<(), String> {
-    let started = Instant::now();
-    while started.elapsed() < timeout {
-        match player.poll() {
-            Ok(()) => {
-                if player.status(message).state != State::Loading {
-                    return Ok(());
-                }
-            }
-            Err(error) => return Err(error),
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    Err("decode timed out".to_owned())
-}
-
 // ─── Mock audio backend tests (no hardware required) ──────────────────────────
 
 #[test]
-fn player_handles_missing_device_gracefully() {
-    let _guard = decode_test_guard();
-    let file = write_ogg_temp(&synthetic_tone(0.5, 440.0, 0.3));
-    let mut player = Player::default();
-
-    player
-        .toggle("missing-device", file.path())
-        .expect("toggle spawns decode thread");
-
-    // Poll picks up the decoded clip and attempts to open the output device.
-    // Without a device, restart() returns a recoverable error; with one,
-    // playback begins. Neither path panics.
-    match poll_until_loaded(&mut player, "missing-device", Duration::from_secs(3)) {
-        Ok(()) => {
-            player.stop();
-        }
-        Err(error) => {
-            // Device was missing or denied; verify the error is a clean string.
-            assert!(
-                error.contains("No sound output") || error.contains("device"),
-                "unexpected error: {error}"
-            );
-            player.stop();
-        }
-    }
-}
-
-#[test]
-fn recorder_handles_permission_denied() {
-    // In CI without a microphone, Recorder::start() fails gracefully.
-    // With a microphone present, recording proceeds. Either way, no panic.
-    let recorder = Recorder::start();
+fn recorder_handles_source_that_cannot_open() {
+    // A source that exists but cannot open its device stands in for a
+    // microphone the sound server refuses; no real microphone is opened.
+    let recorder = Recorder::with_source("filesrc location=/nonexistent/zaptide-microphone");
     std::thread::sleep(Duration::from_millis(500));
 
-    if let Some(error) = recorder.failure() {
-        assert!(!error.is_empty(), "error message must be non-empty");
-        assert!(
-            error.contains("microphone")
-                || error.contains("Microphone")
-                || error.contains("device")
-                || error.contains("permission")
-                || error.contains("audio"),
-            "error should describe the denial: {error}"
-        );
-    }
+    let error = recorder
+        .failure()
+        .expect("a refused microphone fails recording");
+    assert!(!error.is_empty(), "error message must be non-empty");
+    assert!(
+        error.contains("microphone")
+            || error.contains("Microphone")
+            || error.contains("device")
+            || error.contains("permission")
+            || error.contains("audio"),
+        "error should describe the denial: {error}"
+    );
     // Dropping the recorder stops the capture thread cleanly.
 }
 
@@ -204,62 +160,16 @@ fn waveform_generation_is_64_bars() {
 }
 
 #[test]
-fn player_respects_seek_within_bounds() {
-    let _guard = decode_test_guard();
-    let file = write_ogg_temp(&synthetic_tone(2.0, 440.0, 0.3));
-    let mut player = Player::default();
-
-    player
-        .seek("seek-msg", file.path(), 0.0)
-        .expect("seek spawns decode thread");
-
-    let device_available =
-        poll_until_loaded(&mut player, "seek-msg", Duration::from_secs(3)).is_ok();
-
-    if !device_available {
-        // No output device: subsequent seeks still return cleanly, no panic.
-        let _ = player.seek("seek-msg", file.path(), 0.5);
-        let _ = player.poll();
-        let _ = player.seek("seek-msg", file.path(), 1.0);
-        let _ = player.poll();
-        player.stop();
-        return;
-    }
-
-    // Device available: verify seek to middle lands near 50%.
-    player
-        .seek("seek-msg", file.path(), 0.5)
-        .expect("seek to 0.5");
-    std::thread::sleep(Duration::from_millis(100));
-    let _ = player.poll();
-    let status = player.status("seek-msg");
-    let total = status.total.as_secs_f32();
-    if total > 0.0 {
-        let fraction = status.position.as_secs_f32() / total;
-        assert!(
-            (0.35..=0.75).contains(&fraction),
-            "seek(0.5) landed at {fraction:.2} of total"
-        );
-    }
-
-    // Seek to end does not panic.
-    let _ = player.seek("seek-msg", file.path(), 1.0);
-    std::thread::sleep(Duration::from_millis(100));
-    let _ = player.poll();
-
-    player.stop();
-}
-
-#[test]
 fn recorder_level_metering_produces_50ms_windows() {
-    let recorder = Recorder::start();
+    // A live test tone instead of the microphone, so no real device opens.
+    let recorder = Recorder::with_source("audiotestsrc is-live=true volume=0.3");
     std::thread::sleep(Duration::from_millis(2_000));
 
-    if let Some(error) = recorder.failure() {
-        // No microphone available: clean error, not a panic.
-        assert!(!error.is_empty());
-        return;
-    }
+    assert!(
+        recorder.failure().is_none(),
+        "test tone failed: {:?}",
+        recorder.failure()
+    );
 
     let levels = recorder.levels();
     assert!(
@@ -278,11 +188,11 @@ fn recorder_level_metering_produces_50ms_windows() {
 fn narrowest_audio_permissions_documented() {
     // Playback (voice messages):
     //   PulseAudio/PipeWire-Pulse: socket access (Flatpak: --socket=pulseaudio)
-    //   ALSA fallback: read /dev/snd/pcmC*D*p
+    //   GStreamer ALSA fallback: read /dev/snd/pcmC*D*p
     //
     // Capture (voice recording):
     //   PulseAudio/PipeWire-Pulse: same socket handles both directions
-    //   ALSA fallback: read /dev/snd/pcmC*D*c
+    //   GStreamer ALSA fallback: read /dev/snd/pcmC*D*c
     //
     // Narrowest Flatpak finish-args for full audio:
     //   --socket=pulseaudio
@@ -296,18 +206,18 @@ fn narrowest_audio_permissions_documented() {
     }
 }
 
-// ─── ALSA-specific tests (ignored: require live audio devices) ─────────────────
+// ─── Device tests (ignored: require live audio devices) ───────────────────────
 
 #[test]
-#[ignore = "requires ALSA output device; run with: cargo test --test audio_validation -- --ignored"]
-fn alsa_playback_reaches_completion_within_budget() {
+#[ignore = "requires an audio output device; run with: cargo test --test audio_validation -- --ignored"]
+fn playback_reaches_completion_within_budget() {
     let _guard = decode_test_guard();
     let file = write_ogg_temp(&synthetic_tone(1.0, 330.0, 0.3));
-    let mut player = Player::default();
+    let mut player = MediaService::default();
 
     player
-        .toggle("alsa-playback", file.path())
-        .expect("starts decoding");
+        .toggle_playback("alsa-playback", file.path())
+        .expect("starts playing");
 
     let budget = Duration::from_millis(1_500);
     let deadline = Duration::from_secs(3);
@@ -316,7 +226,7 @@ fn alsa_playback_reaches_completion_within_budget() {
 
     while started.elapsed() < deadline {
         player.poll().expect("poll does not error during playback");
-        let status = player.status("alsa-playback");
+        let status = player.playback_status("alsa-playback");
         if status.state == State::Playing {
             seen_playing = true;
         }
@@ -334,15 +244,15 @@ fn alsa_playback_reaches_completion_within_budget() {
         budget
     );
     assert_eq!(
-        player.status("alsa-playback").state,
+        player.playback_status("alsa-playback").state,
         State::Idle,
         "playback should reach completion"
     );
 }
 
 #[test]
-#[ignore = "requires ALSA capture device; run with: cargo test --test audio_validation -- --ignored"]
-fn alsa_capture_produces_at_least_one_second_of_audio() {
+#[ignore = "requires a microphone; run with: cargo test --test audio_validation -- --ignored"]
+fn capture_produces_at_least_one_second_of_audio() {
     let recorder = Recorder::start();
     std::thread::sleep(Duration::from_millis(1_100));
 

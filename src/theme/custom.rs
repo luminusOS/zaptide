@@ -168,7 +168,14 @@ fn read_theme(directory: &Path, filename: &str) -> Result<CustomTheme, String> {
 struct Loaded {
     themes: Vec<CustomTheme>,
     problem: Option<String>,
-    watch: Option<super::watch::ThemeWatch>,
+    watch: Option<WatchRequest>,
+}
+
+/// A themes folder that exists and can be monitored once the result reaches
+/// the main context.
+struct WatchRequest {
+    directory: PathBuf,
+    waker: std::sync::Arc<dyn crate::backend::Wake>,
 }
 
 fn discover(directory: &Path, selected: Option<&str>) -> Loaded {
@@ -318,13 +325,13 @@ impl Catalog {
                 loaded.themes.sort_by(|a, b| a.filename.cmp(&b.filename));
             }
             if needs_watch {
-                let watch = std::fs::create_dir_all(&scan.directory)
-                    .map_err(notify::Error::io)
-                    .and_then(|()| {
-                        super::watch::ThemeWatch::new(&scan.directory, scan.waker.clone())
-                    });
-                match watch {
-                    Ok(watch) => loaded.watch = Some(watch),
+                match std::fs::create_dir_all(&scan.directory) {
+                    Ok(()) => {
+                        loaded.watch = Some(WatchRequest {
+                            directory: scan.directory,
+                            waker: scan.waker,
+                        })
+                    }
                     Err(error) => log::warn!("unable to watch theme changes: {error}"),
                 }
             }
@@ -370,6 +377,8 @@ impl Catalog {
         self.receiver.is_some()
     }
 
+    /// Call from the GTK main context: a folder monitor started here reports
+    /// through the context that is current when it is created.
     pub fn poll(&mut self) -> bool {
         let Some(receiver) = &self.receiver else {
             return false;
@@ -389,8 +398,18 @@ impl Catalog {
             Ok(loaded) => {
                 self.themes = loaded.themes;
                 self.problem = loaded.problem;
-                if loaded.watch.is_some() {
-                    self.watch = loaded.watch;
+                if self.watch.is_none()
+                    && let Some(request) = loaded.watch
+                {
+                    match super::watch::ThemeWatch::new(&request.directory, request.waker) {
+                        Ok(watch) => {
+                            // The folder was read before the monitor started, so
+                            // rescan once to pick up anything written in between.
+                            watch.mark_changed();
+                            self.watch = Some(watch);
+                        }
+                        Err(error) => log::warn!("unable to watch theme changes: {error}"),
+                    }
                 }
             }
             Err(mpsc::TryRecvError::Disconnected) => {
@@ -438,7 +457,8 @@ mod custom_theme_tests {
 
     #[test]
     fn discovery_sorts_valid_files_and_skips_invalid_files() {
-        let dir = std::env::temp_dir().join(format!("zaptide-themes-{}", rand::random::<u64>()));
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("themes");
         assert!(discover(&dir, None).themes.is_empty());
         std::fs::create_dir_all(&dir).unwrap();
         for (name, text) in [
@@ -457,14 +477,12 @@ mod custom_theme_tests {
                 .collect::<Vec<_>>(),
             ["a.json", "z.json"]
         );
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn reads_are_bounded_and_cannot_escape_to_other_files() {
-        let root =
-            std::env::temp_dir().join(format!("zaptide-theme-bounds-{}", rand::random::<u64>()));
-        let dir = root.join("themes");
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("themes");
         std::fs::create_dir_all(&dir).unwrap();
         let mut boundary = vec![b' '; MAX_FILE_BYTES as usize];
         boundary[..2].copy_from_slice(b"{}");
@@ -477,7 +495,7 @@ mod custom_theme_tests {
         std::fs::write(dir.join("too-large.json"), boundary).unwrap();
         std::fs::write(dir.join("invalid-utf8.json"), [0xff, 0xfe]).unwrap();
         std::fs::create_dir(dir.join("directory.json")).unwrap();
-        std::fs::write(root.join("outside.json"), b"{}").unwrap();
+        std::fs::write(root.path().join("outside.json"), b"{}").unwrap();
         for filename in [
             "too-large.json",
             "invalid-utf8.json",
@@ -489,7 +507,8 @@ mod custom_theme_tests {
             assert!(read_theme(&dir, filename).is_err(), "{filename}");
         }
         {
-            std::os::unix::fs::symlink(root.join("outside.json"), dir.join("link.json")).unwrap();
+            std::os::unix::fs::symlink(root.path().join("outside.json"), dir.join("link.json"))
+                .unwrap();
             assert!(read_theme(&dir, "link.json").is_err());
             assert!(
                 discover(&dir, Some("link.json"))
@@ -498,14 +517,12 @@ mod custom_theme_tests {
                     .all(|theme| theme.filename != "link.json")
             );
         }
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn catalog_limits_keep_the_saved_selection_without_an_arbitrary_partial_listing() {
-        let dir =
-            std::env::temp_dir().join(format!("zaptide-theme-catalog-{}", rand::random::<u64>()));
-        std::fs::create_dir(&dir).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().to_path_buf();
         for index in 0..MAX_THEMES + 1 {
             std::fs::write(dir.join(format!("{index:03}.json")), b"{}").unwrap();
         }
@@ -532,6 +549,48 @@ mod custom_theme_tests {
             ["selected.json"]
         );
         assert!(loaded.problem.unwrap().contains("512"));
-        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn wait_for(context: &gtk4::glib::MainContext, mut done: impl FnMut() -> bool, what: &str) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while !done() {
+            assert!(std::time::Instant::now() < deadline, "{what}");
+            if !context.iteration(false) {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+    }
+
+    #[test]
+    fn a_desktop_catalog_watches_its_folder_from_the_polling_context() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("themes");
+        let context = gtk4::glib::MainContext::new();
+        context
+            .with_thread_default(|| {
+                let mut catalog = Catalog::default();
+                catalog.enable_desktop_themes();
+                catalog.start(directory.clone(), None, &crate::backend::Waker);
+                wait_for(&context, || catalog.poll(), "the first scan did not finish");
+                assert!(directory.is_dir());
+                while context.iteration(false) {}
+                assert!(catalog.needs_reload(), "the startup gap was not rescanned");
+                catalog.start(directory.clone(), None, &crate::backend::Waker);
+                wait_for(&context, || catalog.poll(), "the rescan did not finish");
+                while context.iteration(false) {}
+                assert!(!catalog.needs_reload());
+
+                let temporary = root.path().join("next");
+                std::fs::write(&temporary, r#"{"base":"dark"}"#).unwrap();
+                std::fs::rename(temporary, directory.join("palette.json")).unwrap();
+                wait_for(
+                    &context,
+                    || catalog.needs_reload(),
+                    "the palette was not noticed",
+                );
+                while context.iteration(false) {}
+                assert!(!catalog.needs_reload());
+            })
+            .unwrap();
     }
 }

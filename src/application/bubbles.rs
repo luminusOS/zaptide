@@ -145,15 +145,15 @@ pub(super) struct RowFlags {
     pub starred: bool,
 }
 
-pub(super) fn message_row(
+pub(super) fn message_row<S>(
     message: crate::model::Message,
     contacts: &std::collections::HashMap<String, crate::model::Contact>,
-    pointer_sender: ComponentSender<NativeApplication>,
+    pointer_sender: S,
     prefix: &str,
     avatar: Option<std::path::PathBuf>,
     flags: RowFlags,
     audio_registry: AudioRegistry,
-) -> MessageRow {
+) -> MessageRow<S> {
     let RowFlags {
         show_sender,
         show_timestamp,

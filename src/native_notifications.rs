@@ -122,6 +122,7 @@ pub struct NativeNotifications {
     application: gtk::Application,
     tokens: std::rc::Rc<std::cell::RefCell<ActivationTokens>>,
     calls: std::rc::Rc<std::cell::RefCell<ActivationTokens>>,
+    body_format: std::cell::OnceCell<BodyFormat>,
 }
 
 impl NativeNotifications {
@@ -173,7 +174,16 @@ impl NativeNotifications {
             application: application.clone(),
             tokens,
             calls,
+            body_format: std::cell::OnceCell::new(),
         }
+    }
+
+    /// GIO picks its notification backend when the first notification is
+    /// sent or withdrawn, so this is worked out then and kept.
+    fn body_format(&self) -> BodyFormat {
+        *self
+            .body_format
+            .get_or_init(|| detect_body_format(self.application.dbus_connection().as_ref()))
     }
 
     /// Shows or replaces the chat's notification; the chat ID stays in the
@@ -213,7 +223,7 @@ impl NativeNotifications {
             self.application.withdraw_notification(&evicted);
         }
 
-        let notification = notification(title, body, icon);
+        let notification = notification(title, body, self.body_format(), icon);
         notification.set_default_action_and_target_value(
             &format!("app.{OPEN_CHAT_ACTION}"),
             Some(&token.to_variant()),
@@ -247,7 +257,7 @@ impl NativeNotifications {
         };
         self.calls.borrow_mut().insert(token.clone(), target);
 
-        let notification = notification(title, body, icon);
+        let notification = notification(title, body, self.body_format(), icon);
         notification.set_priority(gtk::gio::NotificationPriority::Urgent);
         let value = token.to_variant();
         notification
@@ -296,9 +306,14 @@ impl NativeNotifications {
     }
 }
 
-fn notification(title: &str, body: &str, icon: Option<&std::path::Path>) -> gtk::gio::Notification {
+fn notification(
+    title: &str,
+    body: &str,
+    format: BodyFormat,
+    icon: Option<&std::path::Path>,
+) -> gtk::gio::Notification {
     let notification = gtk::gio::Notification::new(title);
-    notification.set_body(Some(body));
+    notification.set_body(Some(&notification_body(body, format)));
     // The notification portal drops file icons, so a Flatpak build sends the bytes.
     // Without a picture, draw the same coloured initials the chat list shows.
     let bytes = icon
@@ -378,8 +393,13 @@ fn round_icon(source: &std::path::Path) -> Option<std::path::PathBuf> {
     {
         return Some(target);
     }
-    let mut image = image::open(source)
-        .ok()?
+    let crate::native_media::ThumbnailResult::Image(decoded) =
+        crate::native_media::decode_avatar_file(source)
+    else {
+        return None;
+    };
+    let decoded = image::RgbaImage::from_raw(decoded.width, decoded.height, decoded.rgba)?;
+    let mut image = image::DynamicImage::ImageRgba8(decoded)
         .resize_to_fill(SIZE, SIZE, image::imageops::FilterType::Triangle)
         .to_rgba8();
     let radius = SIZE as f32 / 2.0;
@@ -394,22 +414,193 @@ fn round_icon(source: &std::path::Path) -> Option<std::path::PathBuf> {
     Some(target)
 }
 
+/// How the notification server will read a body GIO passes through as is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BodyFormat {
+    Plain,
+    Markup,
+}
+
+/// The message text as the server should show it: a markup-reading server
+/// gets `&`, `<` and `>` escaped so a sender's tags show as typed. Quotes are
+/// left alone because they are harmless in element text and some servers
+/// show `&apos;` literally.
+fn notification_body(body: &str, format: BodyFormat) -> std::borrow::Cow<'_, str> {
+    if format == BodyFormat::Plain || !body.contains(['&', '<', '>']) {
+        return std::borrow::Cow::Borrowed(body);
+    }
+    let mut escaped = String::with_capacity(body.len() + 16);
+    for character in body.chars() {
+        match character {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            other => escaped.push(other),
+        }
+    }
+    std::borrow::Cow::Owned(escaped)
+}
+
+/// GIO's notification backends, in its order of preference.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Backend {
+    Portal,
+    Gtk,
+    Freedesktop,
+}
+
+/// Mirrors GIO's choice: `GNOTIFICATION_BACKEND` names a backend that is
+/// used only if supported, otherwise the portal inside a sandbox, then
+/// org.gtk.Notifications when someone owns it, then freedesktop.
+fn gio_backend(requested: Option<&str>, portal: bool, gtk_daemon: impl Fn() -> bool) -> Backend {
+    let supported = |backend: Backend| match backend {
+        Backend::Portal => portal,
+        Backend::Gtk => gtk_daemon(),
+        Backend::Freedesktop => true,
+    };
+    let requested = match requested {
+        Some("portal") => Some(Backend::Portal),
+        Some("gtk") => Some(Backend::Gtk),
+        Some("freedesktop") => Some(Backend::Freedesktop),
+        _ => None,
+    };
+    requested
+        .into_iter()
+        .chain([Backend::Portal, Backend::Gtk, Backend::Freedesktop])
+        .find(|backend| supported(*backend))
+        .unwrap_or(Backend::Freedesktop)
+}
+
+/// The portal and org.gtk.Notifications take the body as plain text; only
+/// the freedesktop backend hands it to a server that may read markup.
+fn body_format_for(backend: Backend, server_reads_markup: impl FnOnce() -> bool) -> BodyFormat {
+    if backend == Backend::Freedesktop && server_reads_markup() {
+        BodyFormat::Markup
+    } else {
+        BodyFormat::Plain
+    }
+}
+
+fn detect_body_format(connection: Option<&gtk::gio::DBusConnection>) -> BodyFormat {
+    if !cfg!(all(unix, not(target_os = "macos"))) {
+        return BodyFormat::Plain;
+    }
+    let requested = std::env::var("GNOTIFICATION_BACKEND").ok();
+    // GIO's own rule (the Flatpak info file), not portal::sandboxed(); Snap is not mirrored.
+    let portal = std::path::Path::new("/.flatpak-info").exists()
+        || std::env::var("GIO_USE_PORTALS").is_ok_and(|value| value.starts_with('1'));
+    let gtk_daemon = || {
+        connection.is_some_and(|connection| {
+            bus_call(
+                connection,
+                "org.freedesktop.DBus",
+                "/org/freedesktop/DBus",
+                "org.freedesktop.DBus",
+                "NameHasOwner",
+                Some(&("org.gtk.Notifications",).to_variant()),
+            )
+            .and_then(|reply| reply.get::<(bool,)>())
+            .is_some_and(|(owned,)| owned)
+        })
+    };
+    let backend = gio_backend(requested.as_deref(), portal, gtk_daemon);
+    // Escaping for a server that turns out to show markup literally only
+    // costs a visible `&amp;`; not escaping for one that reads it lets the
+    // sender's tags through, so an unanswered question counts as markup.
+    body_format_for(backend, || {
+        connection
+            .and_then(|connection| {
+                bus_call(
+                    connection,
+                    "org.freedesktop.Notifications",
+                    "/org/freedesktop/Notifications",
+                    "org.freedesktop.Notifications",
+                    "GetCapabilities",
+                    None,
+                )
+            })
+            .and_then(|reply| reply.get::<(Vec<String>,)>())
+            .is_none_or(|(capabilities,)| capabilities.iter().any(|name| name == "body-markup"))
+    })
+}
+
+fn bus_call(
+    connection: &gtk::gio::DBusConnection,
+    name: &str,
+    path: &str,
+    interface: &str,
+    method: &str,
+    parameters: Option<&gtk::glib::Variant>,
+) -> Option<gtk::glib::Variant> {
+    connection
+        .call_sync(
+            Some(name),
+            path,
+            interface,
+            method,
+            parameters,
+            None,
+            gtk::gio::DBusCallFlags::NONE,
+            1_000,
+            gtk::gio::Cancellable::NONE,
+        )
+        .ok()
+}
+
 pub fn activation_token() -> Result<String, getrandom::Error> {
     let mut bytes = [0_u8; 16];
     getrandom::fill(&mut bytes)?;
-    let mut token = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        use std::fmt::Write as _;
-        // Writing to a String cannot fail.
-        let _ = write!(token, "{byte:02x}");
-    }
-    Ok(token)
+    Ok(hex::encode(bytes))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::ActivationTokens;
+    use super::{ActivationTokens, Backend, BodyFormat};
     use crate::account::AccountId;
+
+    #[test]
+    fn markup_servers_get_message_text_escaped() {
+        let body = "Tom & Jerry: <b>hi</b> <a href=\"https://x.test\">x</a> it's \"ok\"";
+        assert_eq!(
+            super::notification_body(body, BodyFormat::Markup),
+            "Tom &amp; Jerry: &lt;b&gt;hi&lt;/b&gt; &lt;a href=\"https://x.test\"&gt;x&lt;/a&gt; it's \"ok\""
+        );
+        assert_eq!(super::notification_body(body, BodyFormat::Plain), body);
+        assert!(matches!(
+            super::notification_body("plain words", BodyFormat::Markup),
+            std::borrow::Cow::Borrowed("plain words")
+        ));
+    }
+
+    #[test]
+    fn only_the_freedesktop_backend_with_body_markup_is_escaped() {
+        let backend = |requested, portal, gtk: bool| super::gio_backend(requested, portal, || gtk);
+        assert_eq!(backend(None, true, true), Backend::Portal);
+        assert_eq!(backend(None, false, true), Backend::Gtk);
+        assert_eq!(backend(None, false, false), Backend::Freedesktop);
+        assert_eq!(
+            backend(Some("freedesktop"), true, true),
+            Backend::Freedesktop
+        );
+        assert_eq!(backend(Some("gtk"), true, false), Backend::Portal);
+        assert_eq!(backend(Some("portal"), false, true), Backend::Gtk);
+        assert_eq!(backend(Some("unknown"), false, false), Backend::Freedesktop);
+
+        assert_eq!(
+            super::body_format_for(Backend::Freedesktop, || true),
+            BodyFormat::Markup
+        );
+        assert_eq!(
+            super::body_format_for(Backend::Freedesktop, || false),
+            BodyFormat::Plain
+        );
+        for backend in [Backend::Portal, Backend::Gtk] {
+            assert_eq!(
+                super::body_format_for(backend, || panic!("not asked")),
+                BodyFormat::Plain
+            );
+        }
+    }
 
     fn chat(id: &str) -> (AccountId, String) {
         (AccountId(1), id.to_owned())
@@ -483,6 +674,19 @@ mod tests {
             Some(round),
             "cached copy reused"
         );
+    }
+
+    #[test]
+    fn chat_pictures_outside_the_avatar_bounds_get_no_icon() {
+        let directory = tempfile::tempdir().unwrap();
+        let tiff = directory.path().join("avatar.tiff");
+        std::fs::write(&tiff, b"II*\0\x08\0\0\0").unwrap();
+        assert_eq!(super::round_icon(&tiff), None);
+        let wide = directory.path().join("wide.png");
+        image::RgbImage::new(crate::native_media::MAX_AVATAR_DIMENSION + 1, 1)
+            .save(&wide)
+            .unwrap();
+        assert_eq!(super::round_icon(&wide), None);
     }
 
     #[test]

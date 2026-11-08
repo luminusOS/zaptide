@@ -266,7 +266,7 @@ mod imp {
             actions: relm4::Sender<TrayAction>,
         ) -> Option<Self> {
             // Flatpak cannot own the org.kde.StatusNotifierItem-* name.
-            let sandboxed = std::env::var_os("FLATPAK_ID").is_some();
+            let sandboxed = crate::portal::sandboxed();
             let tray = Tray {
                 state,
                 light_theme: true,

@@ -26,6 +26,7 @@ impl NativeApplication {
             return;
         }
         let Some(chat) = self
+            .open_chat
             .active_chat
             .as_ref()
             .and_then(|id| self.chat_snapshots.iter().find(|chat| &chat.id == id))
@@ -37,6 +38,7 @@ impl NativeApplication {
             name: chat.name.clone(),
             generation: self.contact_share_generation,
             quoting: self
+                .open_chat
                 .reply_to
                 .as_ref()
                 .filter(|(id, _)| id == &chat.id)
@@ -192,12 +194,13 @@ fn valid_target(
     target: &ShareTarget,
     generation: u64,
     connected: bool,
-    chats: &[crate::model::Chat],
+    chats: &[impl std::borrow::Borrow<crate::model::Chat>],
 ) -> bool {
     target.generation == generation
         && connected
         && chats
             .iter()
+            .map(std::borrow::Borrow::borrow)
             .any(|chat| chat.id == target.chat && chat.can_send())
 }
 

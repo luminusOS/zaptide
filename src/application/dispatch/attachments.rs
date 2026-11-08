@@ -3,6 +3,7 @@ use crate::i18n::gettext;
 
 pub(super) fn attach_dropped(application: &mut NativeApplication, paths: Vec<std::path::PathBuf>) {
     let Some(chat) = application
+        .open_chat
         .active_chat
         .clone()
         .filter(|_| application.can_attach())
@@ -43,6 +44,7 @@ pub(super) fn pick_attachments(
     sender: &ComponentSender<NativeApplication>,
 ) {
     let Some(chat) = application
+        .open_chat
         .active_chat
         .clone()
         .filter(|_| application.can_attach())
@@ -129,14 +131,14 @@ pub(super) fn attachments_picked(
 }
 
 pub(super) fn clear_attachments(application: &mut NativeApplication) {
-    if let Some(chat) = &application.active_chat {
+    if let Some(chat) = &application.open_chat.active_chat {
         application.pending_attachments.remove(chat);
         application.pending_clipboard_images.remove(chat);
     }
 }
 
 pub(super) fn remove_attachment(application: &mut NativeApplication, path: &std::path::Path) {
-    let Some(chat) = application.active_chat.clone() else {
+    let Some(chat) = application.open_chat.active_chat.clone() else {
         return;
     };
     if let Some(paths) = application.pending_attachments.get_mut(&chat) {

@@ -2,7 +2,7 @@ use crate::model::{Chat, Content, LastMessage, Message};
 
 use super::{kind_from_name, status_from_rank};
 
-fn content_from_json(json: &str) -> Content {
+pub(super) fn content_from_json(json: &str) -> Content {
     serde_json::from_str(json).unwrap_or(Content::Unsupported {
         what: crate::model::unsupported::UNREADABLE.into(),
     })
@@ -62,7 +62,9 @@ pub(super) fn chat_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Chat> {
         muted_until: row.get(7)?,
         locked: row.get(17)?,
         last,
-        participants: serde_json::from_str(&participants).unwrap_or_default(),
+        participants: serde_json::from_str::<Vec<String>>(&participants)
+            .unwrap_or_default()
+            .into(),
         read_only: row.get(14)?,
         ephemeral_expiration: row
             .get::<_, Option<u32>>(16)?

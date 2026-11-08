@@ -70,7 +70,7 @@ pub struct Chat {
     /// Latest message shown in the chat list.
     pub last: Option<LastMessage>,
     /// Canonical group-member ids, empty until loaded.
-    pub participants: Vec<String>,
+    pub participants: std::sync::Arc<[String]>,
     /// Whether this is an announcement group where we cannot post.
     pub read_only: bool,
     /// Hidden while WhatsApp chat lock is enabled on the phone.
@@ -103,7 +103,7 @@ impl Chat {
             pinned_at: 0,
             muted_until: None,
             last: None,
-            participants: Vec::new(),
+            participants: Default::default(),
             read_only: false,
             locked: false,
             ephemeral_expiration: None,

@@ -1,6 +1,7 @@
 use super::*;
 use std::io;
 use std::sync::Barrier;
+use std::time::Instant;
 
 #[test]
 fn speed_labels_match_the_button() {
@@ -10,84 +11,12 @@ fn speed_labels_match_the_button() {
 }
 
 #[test]
-fn cycling_wraps_through_every_speed() {
-    let mut player = Player::default();
-    assert_eq!(player.speed(), SPEEDS[0]);
-    assert_eq!(player.cycle_speed(), 1.5);
-    assert_eq!(player.cycle_speed(), 2.0);
-    assert_eq!(player.cycle_speed(), 1.0);
-    // A speed set by hand still cycles up to the next known one.
-    player.set_speed(1.75);
-    assert_eq!(player.cycle_speed(), 2.0);
-    assert_eq!(player.speed(), 2.0);
-}
-
-#[test]
-fn a_speed_still_building_keeps_the_queued_one() {
-    let samples = Arc::new(vec![0.0; 12]);
-    let one_and_a_half = Arc::new(vec![0.0; 8]);
-    let double = Arc::new(vec![0.0; 6]);
-    let loaded = Loaded {
-        message: "clip".to_owned(),
-        samples: Arc::clone(&samples),
-        buffer: Arc::clone(&one_and_a_half),
-        factor: 1.5,
-        base: Duration::ZERO,
-        paused: false,
-        done: false,
-    };
-    let mut stretches = vec![(1.5, Arc::clone(&one_and_a_half))];
-
-    let (buffer, factor) = Player::buffer_for(&loaded, &stretches, 2.0);
-    assert!(Arc::ptr_eq(&buffer, &one_and_a_half));
-    assert_eq!(factor, 1.5);
-
-    stretches.push((2.0, Arc::clone(&double)));
-    let (buffer, factor) = Player::buffer_for(&loaded, &stretches, 2.0);
-    assert!(Arc::ptr_eq(&buffer, &double));
-    assert_eq!(factor, 2.0);
-    // Both built speeds stay available when cycling back.
-    let (buffer, _) = Player::buffer_for(&loaded, &stretches, 1.5);
-    assert!(Arc::ptr_eq(&buffer, &one_and_a_half));
-    let (buffer, factor) = Player::buffer_for(&loaded, &stretches, 1.0);
-    assert!(Arc::ptr_eq(&buffer, &samples));
-    assert_eq!(factor, 1.0);
-}
-
-#[test]
 fn unusable_speeds_are_kept_in_range() {
-    let mut player = Player::default();
-    player.set_speed(f32::NAN);
-    assert_eq!(player.speed(), 1.0);
-    player.set_speed(f32::INFINITY);
-    assert_eq!(player.speed(), 1.0);
-    player.set_speed(50.0);
-    assert_eq!(player.speed(), 2.0);
-    player.set_speed(-3.0);
-    assert_eq!(player.speed(), 1.0);
-}
-
-#[test]
-fn going_back_to_one_x_cancels_the_outstanding_compression() {
-    let mut player = Player::default();
-    let cancelled = Arc::new(AtomicBool::new(false));
-    player.set_speed(2.0);
-    player.stretching = Some(Stretching {
-        factor: 2.0,
-        slot: Default::default(),
-        cancelled: Arc::clone(&cancelled),
-    });
-    player.set_speed(1.0);
-    assert!(player.stretching.is_none());
-    assert!(cancelled.load(Ordering::Relaxed));
-}
-
-#[test]
-fn missing_or_revoked_output_is_a_recoverable_error() {
-    let missing = open_device("No sound output", || Err::<(), _>("device missing"));
-    assert_eq!(missing.unwrap_err(), "No sound output: device missing");
-    let revoked = open_device("No sound output", || Err::<(), _>("permission revoked"));
-    assert_eq!(revoked.unwrap_err(), "No sound output: permission revoked");
+    assert_eq!(playable_speed(f32::NAN), 1.0);
+    assert_eq!(playable_speed(f32::INFINITY), 1.0);
+    assert_eq!(playable_speed(50.0), 2.0);
+    assert_eq!(playable_speed(-3.0), 1.0);
+    assert_eq!(playable_speed(1.75), 1.75);
 }
 
 #[test]
@@ -116,23 +45,6 @@ fn recorder_handles_unplug_and_cancellation_with_synthetic_samples() {
     })
     .unwrap_err();
     assert_eq!(error, "The microphone did not record any audio");
-}
-
-#[test]
-fn late_decode_completion_after_stop_is_discarded() {
-    let slot: Decoded = Default::default();
-    let mut player = Player::default();
-    player.decoding = Some(Decoding {
-        message: "old-message".to_owned(),
-        start: 0.0,
-        slot: Arc::clone(&slot),
-        cancelled: Arc::new(AtomicBool::new(false)),
-    });
-    let cancelled = Arc::clone(&player.decoding.as_ref().unwrap().cancelled);
-    player.stop();
-
-    assert!(!publish_decode(&slot, &cancelled, Ok((vec![0.5], vec![1]))));
-    assert!(slot.lock().unwrap().is_none());
 }
 
 #[test]
@@ -348,25 +260,6 @@ fn oversized_audio_input_is_rejected_before_allocation() {
 }
 
 #[test]
-fn an_unplugged_playback_sink_marks_clip_complete() {
-    let samples = Arc::new(vec![0.25; 480]);
-    let mut loaded = Loaded {
-        message: "clip".to_owned(),
-        buffer: Arc::clone(&samples),
-        samples,
-        factor: 1.0,
-        base: Duration::ZERO,
-        paused: false,
-        done: false,
-    };
-    // A synthetic sink reports empty when its device disappears mid-clip.
-    assert!(playback_ended(&mut loaded, true));
-    assert!(loaded.done);
-    assert_eq!(loaded.message, "clip");
-    assert!(!playback_ended(&mut loaded, true));
-}
-
-#[test]
 fn unsupported_or_corrupt_audio_returns_codec_error() {
     let path = std::env::temp_dir().join(format!(
         "zaptide-audio-invalid-{}-{}.bin",
@@ -392,82 +285,6 @@ fn opus_decode_preserves_voice_clip_samples() {
     assert!(decoded.iter().any(|sample| sample.abs() > 0.01));
 }
 
-/// Plays a one-second test tone:
-/// `cargo test audio::tests::plays -- --ignored --nocapture`.
-#[test]
-#[ignore = "makes a sound on this machine"]
-fn plays_a_clip_on_this_machine() {
-    let dir = std::env::temp_dir();
-    let path = dir.join("zaptide-audio-test.ogg");
-    let tone: Vec<f32> = (0..voice::RATE)
-        .map(|i| (i as f32 * 330.0 * std::f32::consts::TAU / voice::RATE as f32).sin() * 0.3)
-        .collect();
-    std::fs::write(&path, voice::encode(&tone).expect("encodes")).expect("written");
-    let mut player = Player::default();
-    player.toggle("clip", &path).expect("starts decoding");
-    assert_eq!(player.status("clip").state, State::Loading);
-    let started = Instant::now();
-    let mut seen_playing = false;
-    while started.elapsed() < Duration::from_secs(3) {
-        player.poll().expect("plays");
-        let status = player.status("clip");
-        if status.state == State::Playing && status.position > Duration::from_millis(300) {
-            seen_playing = true;
-            eprintln!("playing at {:?} of {:?}", status.position, status.total);
-        }
-        if seen_playing && status.state == State::Idle {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(30));
-    }
-    assert!(seen_playing, "never heard it playing");
-    assert_eq!(player.status("clip").state, State::Idle, "ends on its own");
-    assert_eq!(player.bars("clip").map(<[u8]>::len), Some(voice::BARS));
-    let _ = std::fs::remove_file(path);
-}
-
-/// Plays a two-second tone at double speed and checks the position
-/// outruns the clock:
-/// `cargo test audio::tests::doubles -- --ignored --nocapture`.
-#[test]
-#[ignore = "makes a sound on this machine"]
-fn doubles_the_position_rate_on_this_machine() {
-    let dir = std::env::temp_dir();
-    let path = dir.join("zaptide-audio-speed-test.ogg");
-    let tone: Vec<f32> = (0..voice::RATE * 2)
-        .map(|i| (i as f32 * 330.0 * std::f32::consts::TAU / voice::RATE as f32).sin() * 0.3)
-        .collect();
-    std::fs::write(&path, voice::encode(&tone).expect("encodes")).expect("written");
-    let mut player = Player::default();
-    player.set_speed(2.0);
-    player.toggle("clip", &path).expect("starts decoding");
-    let started = Instant::now();
-    let mut seen: Vec<(Duration, Duration)> = Vec::new();
-    while started.elapsed() < Duration::from_secs(6) {
-        player.poll().expect("plays");
-        let status = player.status("clip");
-        // The clip starts at 1x while its compression builds; measure
-        // only after the compressed buffer has taken over.
-        if status.state == State::Playing && status.position > Duration::from_millis(600) {
-            seen.push((started.elapsed(), status.position));
-        }
-        if status.state == State::Idle && !seen.is_empty() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(30));
-    }
-    let (first_wall, first_position) = seen.first().expect("played");
-    let (last_wall, last_position) = seen.last().expect("played");
-    let wall = *last_wall - *first_wall;
-    let advanced = *last_position - *first_position;
-    assert!(wall > Duration::from_millis(200), "played for {wall:?}");
-    assert!(
-        advanced.as_secs_f32() >= 1.5 * wall.as_secs_f32(),
-        "position advanced {advanced:?} over {wall:?} of wall time"
-    );
-    let _ = std::fs::remove_file(path);
-}
-
 /// Records one second from the default microphone:
 /// `cargo test audio::tests::records -- --ignored --nocapture`.
 #[test]
@@ -485,4 +302,360 @@ fn records_a_second_on_this_machine() {
         heard.len()
     );
     assert!(levels.len() >= 15, "{}", levels.len());
+}
+
+mod formats {
+    use super::*;
+    use gst::prelude::*;
+    use gstreamer as gst;
+    use gstreamer_app as gst_app;
+
+    pub(super) const SOURCE_RATE: u32 = 44_100;
+    const SECONDS: f32 = 3.0;
+
+    /// A stereo clip whose loudness rises and falls, so its bars differ.
+    pub(super) fn source() -> Vec<f32> {
+        let frames = (SOURCE_RATE as f32 * SECONDS) as usize;
+        let mut interleaved = Vec::with_capacity(frames * 2);
+        for frame in 0..frames {
+            let t = frame as f32 / SOURCE_RATE as f32;
+            let phase = t / SECONDS;
+            let envelope = 0.1
+                + 0.6
+                    * (std::f32::consts::PI * phase).sin().powi(2)
+                    * (0.7 + 0.3 * (std::f32::consts::TAU * 1.5 * phase).sin());
+            interleaved.push((std::f32::consts::TAU * 440.0 * t).sin() * envelope);
+            interleaved.push((std::f32::consts::TAU * 660.0 * t).sin() * envelope);
+        }
+        interleaved
+    }
+
+    /// Encodes `source()` with `encoder` into a temporary file, or `None`
+    /// when this machine lacks one of its elements.
+    pub(super) fn fixture(encoder: &str) -> Option<tempfile::NamedTempFile> {
+        gst::init().ok()?;
+        let file = tempfile::NamedTempFile::new().ok()?;
+        let pipeline = gst::parse::launch(&format!(
+            "appsrc name=in format=time \
+             caps=audio/x-raw,format=F32LE,rate={SOURCE_RATE},channels=2,layout=interleaved ! \
+             audioconvert ! audioresample ! {encoder} ! filesink name=out"
+        ))
+        .ok()?
+        .downcast::<gst::Pipeline>()
+        .ok()?;
+        pipeline
+            .by_name("out")?
+            .set_property("location", file.path().to_string_lossy().as_ref());
+        let input = pipeline.by_name("in")?.downcast::<gst_app::AppSrc>().ok()?;
+        pipeline.set_state(gst::State::Playing).ok()?;
+        const FRAMES: usize = 1_024;
+        for (index, chunk) in source().chunks(FRAMES * 2).enumerate() {
+            let bytes: Vec<u8> = chunk
+                .iter()
+                .flat_map(|sample| sample.to_le_bytes())
+                .collect();
+            let mut buffer = gst::Buffer::from_slice(bytes);
+            let at = |frame: usize| {
+                gst::ClockTime::from_nseconds(frame as u64 * 1_000_000_000 / u64::from(SOURCE_RATE))
+            };
+            let start = index * FRAMES;
+            let buffer_mut = buffer.get_mut()?;
+            buffer_mut.set_pts(at(start));
+            buffer_mut.set_duration(at(start + chunk.len() / 2) - at(start));
+            input.push_buffer(buffer).ok()?;
+        }
+        input.end_of_stream().ok()?;
+        let finished = pipeline.bus()?.timed_pop_filtered(
+            gst::ClockTime::from_seconds(20),
+            &[gst::MessageType::Eos, gst::MessageType::Error],
+        );
+        let _ = pipeline.set_state(gst::State::Null);
+        matches!(finished?.view(), gst::MessageView::Eos(..)).then_some(file)
+    }
+
+    pub(super) const ENCODERS: [(&str, &str); 5] = [
+        ("WAV", "audio/x-raw,format=F32LE ! wavenc"),
+        ("Ogg Vorbis", "vorbisenc ! oggmux"),
+        ("Ogg Opus", "opusenc ! oggmux"),
+        ("MP3", "lamemp3enc"),
+        ("AAC in MP4", "fdkaacenc ! mp4mux"),
+    ];
+
+    pub(super) fn bars(samples: &[f32]) -> Vec<u8> {
+        waveform_cancellable(samples, &AtomicBool::new(false)).expect("bars")
+    }
+
+    pub(super) fn largest_difference(left: &[u8], right: &[u8]) -> u8 {
+        left.iter()
+            .zip(right)
+            .map(|(left, right)| left.abs_diff(*right))
+            .max()
+            .unwrap_or(0)
+    }
+}
+
+/// Received clips in every supported container decode to the length and
+/// bars of the clip that was encoded, downmixed and resampled the way every
+/// decoded clip is. Lossless float WAV must match exactly. The other
+/// tolerances come from lossy encoders, not from the decoder: MP3 and AAC
+/// add encoder delay at the start (about 30 ms and 65 ms), which shifts the
+/// bars by up to a bar and a half on a clip whose loudness changes. The
+/// enforced maximum bar differences are WAV 0, Vorbis 5, Opus 6, MP3 10,
+/// and AAC 22 points out of 100.
+#[test]
+fn received_formats_decode_close_to_their_source() {
+    const TOLERANCES: [(u8, u32); 5] = [(0, 0), (5, 10), (6, 20), (10, 50), (22, 100)];
+    let expected = collect_samples_limited(
+        formats::source().into_iter(),
+        2,
+        formats::SOURCE_RATE,
+        &AtomicBool::new(false),
+        MAX_AUDIO_SAMPLES,
+    )
+    .expect("the source resamples");
+    let expected_samples = expected.len();
+    let expected_bars = formats::bars(&expected);
+    for ((name, encoder), (bars, milliseconds)) in formats::ENCODERS.into_iter().zip(TOLERANCES) {
+        let Some(file) = formats::fixture(encoder) else {
+            // wavenc ships with gst-plugins-good, which playback needs anyway.
+            assert_ne!(name, "WAV", "the lossless WAV check must run");
+            assert!(
+                std::env::var_os("ZAPTIDE_REQUIRE_GST").is_none(),
+                "{name} fixture unavailable: {encoder}"
+            );
+            eprintln!("skipping {name}: `{encoder}` is not available here");
+            continue;
+        };
+        let decoded = decode_file(file.path()).unwrap_or_else(|error| panic!("{name}: {error}"));
+        let difference = decoded.len().abs_diff(expected_samples);
+        assert!(
+            difference <= voice::RATE as usize * milliseconds as usize / 1_000,
+            "{name}: {} samples, expected about {expected_samples}",
+            decoded.len()
+        );
+        let largest = formats::largest_difference(&formats::bars(&decoded), &expected_bars);
+        assert!(largest <= bars, "{name}: bars differ by up to {largest}");
+    }
+}
+
+fn have_test_source() -> bool {
+    crate::calls::gst_ready(&["audiotestsrc"])
+}
+
+#[test]
+fn recording_a_test_source_makes_a_voice_note_of_its_length() {
+    if !have_test_source() {
+        eprintln!("skipping: audiotestsrc is not available here");
+        return;
+    }
+    let recorder = Recorder::with_source("audiotestsrc is-live=true freq=440 volume=0.3");
+    std::thread::sleep(Duration::from_millis(1_000));
+    assert!(recorder.failure().is_none(), "{:?}", recorder.failure());
+    let levels = recorder.levels();
+    let samples = recorder.finish().expect("the test tone was recorded");
+    let seconds = samples.len() as f32 / voice::RATE as f32;
+    // Wide bounds: the thread may start late or stop late on a busy machine.
+    assert!((0.5..2.5).contains(&seconds), "recorded {seconds} s");
+    assert!(levels.len() >= 8, "{} level readings", levels.len());
+    assert!(levels.iter().all(|level| *level > 0.1 && *level < 0.4));
+
+    let note = voice::encode(&samples).expect("encodes the recording");
+    assert!(note.starts_with(b"OggS"));
+    let decoded = decode_opus(std::io::Cursor::new(note), &AtomicBool::new(false))
+        .expect("the voice note is valid Ogg Opus");
+    // The encoder pads the last 20 ms Opus frame.
+    assert!(
+        decoded.len().abs_diff(samples.len()) <= voice::RATE as usize / 50,
+        "{} decoded samples for {} recorded",
+        decoded.len(),
+        samples.len()
+    );
+}
+
+#[test]
+fn a_source_that_ends_keeps_what_it_recorded() {
+    if !have_test_source() {
+        eprintln!("skipping: audiotestsrc is not available here");
+        return;
+    }
+    // Pin the source rate so resampling cannot alter the exact sample count.
+    let recorder = Recorder::with_source(
+        "audiotestsrc is-live=true num-buffers=30 samplesperbuffer=1024 volume=0.3 ! audio/x-raw,rate=48000,channels=1",
+    );
+    std::thread::sleep(Duration::from_millis(1_200));
+    let samples = recorder.finish().expect("partial samples are usable");
+    assert_eq!(samples.len(), 30 * 1_024);
+}
+
+#[test]
+fn a_missing_or_refused_microphone_is_a_readable_error() {
+    if !have_test_source() {
+        eprintln!("skipping: audiotestsrc is not available here");
+        return;
+    }
+    let missing = Recorder::with_source("zaptidenosuchsrc")
+        .finish()
+        .unwrap_err();
+    assert!(missing.starts_with("No microphone available:"), "{missing}");
+
+    // A source that exists but cannot open its device, as when the sound
+    // server refuses the microphone.
+    let refused = Recorder::with_source("filesrc location=/nonexistent/zaptide-microphone")
+        .finish()
+        .unwrap_err();
+    assert!(
+        refused.starts_with("Could not open the microphone:"),
+        "{refused}"
+    );
+}
+
+#[test]
+fn a_streaming_manifest_posing_as_audio_is_not_followed() {
+    if !crate::calls::gst_ready(&["hlsdemux"]) {
+        eprintln!("skipping: no HLS demuxer here, so nothing could follow the manifest");
+        return;
+    }
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("local listener");
+    listener
+        .set_nonblocking(true)
+        .expect("non-blocking listener");
+    let port = listener.local_addr().expect("listener address").port();
+    let manifest = tempfile::NamedTempFile::new().expect("temporary manifest");
+    std::fs::write(
+        manifest.path(),
+        format!(
+            "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:0\n\
+             #EXTINF:1.0,\nhttp://127.0.0.1:{port}/segment.aac\n#EXT-X-ENDLIST\n"
+        ),
+    )
+    .expect("write manifest");
+
+    assert!(decode_file(manifest.path()).is_err());
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        matches!(listener.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock),
+        "the decoder connected to the address in the manifest"
+    );
+}
+
+fn wav_header(channels: u16, rate: u32, data: &[u8]) -> Vec<u8> {
+    let mut wav = Vec::new();
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36 + data.len() as u32).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16_u32.to_le_bytes());
+    wav.extend_from_slice(&1_u16.to_le_bytes());
+    wav.extend_from_slice(&channels.to_le_bytes());
+    wav.extend_from_slice(&rate.to_le_bytes());
+    wav.extend_from_slice(&(rate * u32::from(channels) * 2).to_le_bytes());
+    wav.extend_from_slice(&(channels * 2).to_le_bytes());
+    wav.extend_from_slice(&16_u16.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    wav.extend_from_slice(data);
+    wav
+}
+
+#[test]
+fn implausible_rates_and_channel_counts_are_refused() {
+    if !crate::calls::gst_ready(&["wavparse"]) {
+        return;
+    }
+    let data = vec![0x10; 4_096 * 18];
+    for (channels, rate) in [(9, 48_000), (2, 768_000)] {
+        let file = tempfile::NamedTempFile::new().expect("temporary clip");
+        std::fs::write(file.path(), wav_header(channels, rate, &data)).expect("write clip");
+        assert_eq!(
+            decode_file(file.path()),
+            Err(audio_limit_error()),
+            "{channels} channels at {rate} Hz"
+        );
+    }
+}
+
+#[test]
+fn a_format_change_mid_stream_is_refused() {
+    use gstreamer::prelude::*;
+    if !crate::calls::gst_ready(&["vorbisenc"]) {
+        eprintln!("skipping: vorbisenc is not available here");
+        return;
+    }
+    // A chained Ogg file: a second stream at another rate follows the first.
+    let mut chained = Vec::new();
+    for rate in [44_100, 22_050] {
+        let file = tempfile::NamedTempFile::new().expect("temporary link");
+        let pipeline = gstreamer::parse::launch(&format!(
+            "audiotestsrc num-buffers=20 ! audio/x-raw,rate={rate},channels=1 ! audioconvert ! \
+             vorbisenc ! oggmux ! filesink location={}",
+            file.path().display()
+        ))
+        .expect("encoder pipeline");
+        pipeline
+            .set_state(gstreamer::State::Playing)
+            .expect("encode");
+        let _ = pipeline.bus().expect("bus").timed_pop_filtered(
+            gstreamer::ClockTime::from_seconds(10),
+            &[gstreamer::MessageType::Eos, gstreamer::MessageType::Error],
+        );
+        let _ = pipeline.set_state(gstreamer::State::Null);
+        chained.extend(std::fs::read(file.path()).expect("read link"));
+    }
+    let file = tempfile::NamedTempFile::new().expect("temporary clip");
+    std::fs::write(file.path(), chained).expect("write chained clip");
+    let error = decode_file(file.path()).unwrap_err();
+    assert!(error.contains("changed mid-stream"), "{error}");
+}
+
+/// Runs the recorder's real microphone path with every audio source ranked
+/// out, in a child process so the environment cannot leak into other tests,
+/// and so no real microphone can be opened.
+#[test]
+fn without_a_sound_server_recording_reports_no_microphone() {
+    const CHILD: &str = "ZAPTIDE_TEST_NO_AUDIO_SOURCES";
+    if std::env::var_os(CHILD).is_some() {
+        let recorder = Recorder::start();
+        // Long enough that a silent fallback would have recorded something.
+        std::thread::sleep(Duration::from_millis(300));
+        match recorder.finish() {
+            Ok(samples) => panic!("recorded {} samples of silence", samples.len()),
+            Err(error) => assert!(error.starts_with("No microphone available:"), "{error}"),
+        }
+        return;
+    }
+    if !crate::calls::gst_ready(&["autoaudiosrc", "audiotestsrc"]) {
+        eprintln!("skipping: autoaudiosrc is not available here");
+        return;
+    }
+    let ranked_out: Vec<String> = gstreamer::ElementFactory::factories_with_type(
+        gstreamer::ElementFactoryType::SRC,
+        gstreamer::Rank::NONE,
+    )
+    .into_iter()
+    .filter(|factory| {
+        use gstreamer::prelude::*;
+        factory.name() != "autoaudiosrc"
+    })
+    .map(|factory| {
+        use gstreamer::prelude::*;
+        format!("{}:NONE", factory.name())
+    })
+    .collect();
+    let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+        .args([
+            "audio::tests::without_a_sound_server_recording_reports_no_microphone",
+            "--exact",
+            "--test-threads=1",
+        ])
+        .env(CHILD, "1")
+        .env("GST_PLUGIN_FEATURE_RANK", ranked_out.join(","))
+        .env("PULSE_SERVER", "unix:/nonexistent/zaptide-pulse")
+        .env("PIPEWIRE_REMOTE", "/nonexistent/zaptide-pipewire")
+        .output()
+        .expect("child test runs");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains("1 passed"),
+        "{stdout}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

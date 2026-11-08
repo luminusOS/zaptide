@@ -80,6 +80,29 @@ and Arch Linux ARM ships libadwaita 1.9. `build.sh` picks the `dnf` path when
 podman run --rm -v "$PWD":/src -w /src -e VERSION=dev registry.fedoraproject.org/fedora:45 ./packaging/appimage/build.sh
 ```
 
+`build.sh` fetches quick-sharun from a fixed commit and stops unless the file
+matches `QUICK_SHARUN_SHA256`, so a bump changes `QUICK_SHARUN_URL` and the hash
+together. The script then downloads sharun, appimagetool, cross-libc-dlopen and
+onelf at the release versions it names; those are pinned by version but not
+hashed. Its self-updater hook, the only part that would fetch the latest
+AppImageUpdate, is not enabled because `build.sh` sets no `ADD_HOOKS`. Tag
+builds restore no CI caches, so a release never reuses build output from
+another branch.
+
+The CI and release workflows name their containers by digest, keeping the tag
+for readers. Dependabot does not update `container:` digests, so re-pin them
+before a release. Each command prints the digest of the multi-architecture
+index, which replaces the `sha256:` part of every reference to that image:
+
+```sh
+skopeo inspect --raw docker://registry.fedoraproject.org/fedora:45 | sha256sum
+skopeo inspect --raw docker://docker.io/library/archlinux:latest | sha256sum
+skopeo inspect --raw docker://ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08 | sha256sum
+```
+
+The Arch image has only an x86_64 manifest and is used only by the x86_64
+AppImage job.
+
 The AppDir follows the AppImage convention: the application lives under `usr/`
 (`usr/bin`, `usr/lib`, `usr/share`). sharun's `AppRun` also looks for those
 directories beside itself, so `build.sh` leaves a link to each one at the top
@@ -100,8 +123,7 @@ appimageupdatetool zaptide.AppImage
 | Dependency | Fedora | Notes |
 |------------|--------|-------|
 | GTK 4.14+, libadwaita 1.10+ | `gtk4-devel libadwaita-devel` | GNOME 51 |
-| ALSA | `alsa-lib-devel` | Audio |
-| GStreamer 1.20+ | `gstreamer1-devel`, `gstreamer1-plugins-base-devel` | Playback and calls; base and good plugins at runtime. Video calls also need an H.264 encoder (`gstreamer1-plugin-openh264` or x264) and `gst-libav` |
+| GStreamer 1.20+ | `gstreamer1-devel`, `gstreamer1-plugins-base-devel` | Voice notes (recording, playback, waveforms) and calls; base and good plugins at runtime. Video calls also need an H.264 encoder (`gstreamer1-plugin-openh264` or x264) and `gst-libav` |
 | cmake | `cmake` | Builds libopus via opusic-sys |
 | libseccomp, fontconfig | `libseccomp-devel fontconfig-devel` | glycin; needs `glycin-loaders` and `bubblewrap` at runtime |
 | Perl | `perl` | Bundled OpenSSL |
@@ -112,6 +134,14 @@ Calls add the `rtc-*` crates (DTLS, SCTP and data channels), which are still 0.2
 
 ## Flatpak limitations
 
-- **Calls**: voice calls and the ring use the PulseAudio socket. The ring looks for the freedesktop sound theme in the data directories and falls back to a tone it makes, so it works without that theme. Notification buttons go through the notification portal; the desktop's do-not-disturb setting is read through GSettings and may not be visible in the sandbox. Video calls read the camera through the camera portal (`org.freedesktop.portal.Camera`): ZapTide detects the sandbox from `/.flatpak-info`, asks the portal for access, opens its PipeWire remote and runs `pipewiresrc` on the camera node, so the manifest needs no device permission, `--filesystem` or `--talk-name` for it, and `--device=all` stays out. The GNOME 51 runtime ships the GStreamer PipeWire plugin. It has no H.264 encoder of its own and ZapTide does not use the `org.freedesktop.Platform.openh264` extension: `x264enc` comes from `org.freedesktop.Platform.codecs-extra`, which the runtime declares and Flatpak installs with the app when a remote carries it, and `avdec_h264` was present in a sandbox with that extension installed. Without that extension a video call reports a missing H.264 decoder or encoder; that case was not run. The portal route was checked against a real session portal outside a sandbox; it has not been run inside a built Flatpak.
+- **Calls**: voice calls and the ring use the PulseAudio socket. The ring looks for the freedesktop sound theme in the data directories and falls back to a tone it makes, so it works without that theme. Notification buttons go through the notification portal; the desktop's do-not-disturb setting is read through GSettings and may not be visible in the sandbox. Video calls read the camera through the camera portal (`org.freedesktop.portal.Camera`): ZapTide detects the sandbox from the `/.flatpak-info` file or a non-empty `FLATPAK_ID`, asks the portal for access, opens its PipeWire remote and runs `pipewiresrc` on the camera node, so the manifest needs no device permission, `--filesystem` or `--talk-name` for it, and `--device=all` stays out. The GNOME 51 runtime ships the GStreamer PipeWire plugin. It has no H.264 encoder of its own and ZapTide does not use the `org.freedesktop.Platform.openh264` extension: `x264enc` comes from `org.freedesktop.Platform.codecs-extra`, which the runtime declares and Flatpak installs with the app when a remote carries it, and `avdec_h264` was present in a sandbox with that extension installed. Without that extension a video call reports a missing H.264 decoder or encoder; that case was not run. The portal route was checked against a real session portal outside a sandbox; it has not been run inside a built Flatpak.
+
+- **Keyring**: inside the sandbox oo7 keeps the archive keys in its own file keyring, `~/.var/app/dev.luminusos.ZapTide/data/keyrings/default.keyring`. That file is encrypted with a per-app secret that the Secret portal (`org.freedesktop.portal.Secret`) stores in the host keyring (GNOME Keyring, KWallet), so a backup or a move to another machine needs the file and the host keyring together. On a desktop without a Secret portal backend the keys stay in the host Secret Service, as outside the sandbox. Outside the sandbox nothing is migrated: keys are found in any Secret Service collection and created in the default one only when no item exists. Builds before oo7 stored the keys in the host Secret Service, so on first start ZapTide copies each missing key from there, reads the copy back, and leaves the original in place. Reading that original needs `--talk-name=org.freedesktop.secrets`, which is why both manifests still grant it. A later release drops the grant once existing installs have migrated; desktops without a Secret portal will then need one.
+
+  Synthetic credential and migration tests do not establish real-daemon or
+  Flatpak migration acceptance. That acceptance still requires a user-operated
+  test account, including the applicable capture checks. Keep the legacy
+  Secret Service permission until that migration window is deliberately closed;
+  closing superseded implementation PRs does not complete those manual checks.
 
 - **Tray icon**: GNOME shows StatusNotifierItem only with an extension such as AppIndicator.
