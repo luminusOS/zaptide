@@ -36,7 +36,7 @@ class LicensePackaging(unittest.TestCase):
         subprocess.run(["sh", "-eu", "-c", command], cwd=cwd, env=env, check=True)
 
     def test_distribution_entrypoints(self):
-        with tempfile.TemporaryDirectory(dir="/tmp/opencode") as directory:
+        with tempfile.TemporaryDirectory() as directory:
             temp = Path(directory)
             direct = temp / "direct destination"
             subprocess.run(["sh", "packaging/install-licenses.sh", str(direct)], cwd=ROOT, check=True)
