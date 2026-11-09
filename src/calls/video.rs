@@ -1,7 +1,7 @@
 //! H.264 camera capture for the outgoing picture and decoding for the incoming one.
 
 use std::os::fd::OwnedFd;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use gstreamer as gst;
 use gstreamer_app as gst_app;
@@ -19,6 +19,7 @@ const FRAMES_PER_SECOND: i32 = 15;
 const KEYFRAME_INTERVAL: i32 = 2 * FRAMES_PER_SECOND;
 /// Encoded pictures waiting for the VoIP runtime; a full queue drops the newest.
 const FRAMES_QUEUED: usize = 8;
+const ORIENTATIONS_QUEUED: usize = 256;
 const LOCAL_PREVIEW_WIDTH: i32 = 480;
 const REMOTE_MAX_SIDE: i32 = 960;
 
@@ -100,6 +101,37 @@ fn rgba_of(sample: &gst::Sample) -> Option<RgbaFrame> {
         height: info.height(),
         data,
     })
+}
+
+fn orient_remote(frame: RgbaFrame, orientation: u8) -> RgbaFrame {
+    let rotation = orientation & 3;
+    if rotation == 0 {
+        return frame;
+    }
+    let (width, height) = (frame.width as usize, frame.height as usize);
+    let (new_width, new_height) = if rotation == 2 {
+        (width, height)
+    } else {
+        (height, width)
+    };
+    let mut data = vec![0; frame.data.len()];
+    for y in 0..height {
+        for x in 0..width {
+            let (new_x, new_y) = match rotation {
+                1 => (y, width - 1 - x),
+                2 => (width - 1 - x, height - 1 - y),
+                _ => (height - 1 - y, x),
+            };
+            let source = (y * width + x) * 4;
+            let target = (new_y * new_width + new_x) * 4;
+            data[target..target + 4].copy_from_slice(&frame.data[source..source + 4]);
+        }
+    }
+    RgbaFrame {
+        width: new_width as u32,
+        height: new_height as u32,
+        data,
+    }
 }
 
 /// Whether a source factory draws a picture instead of capturing one.
@@ -251,6 +283,28 @@ impl Drop for Camera {
     }
 }
 
+#[derive(Default)]
+struct RemoteOrientations {
+    pending: std::collections::BTreeMap<u64, u8>,
+    last: u8,
+}
+
+impl RemoteOrientations {
+    fn insert(&mut self, pts: u64, orientation: u8) {
+        self.pending.insert(pts, orientation);
+        while self.pending.len() > ORIENTATIONS_QUEUED {
+            self.pending.pop_first();
+        }
+    }
+
+    fn for_picture(&mut self, pts: Option<u64>) -> u8 {
+        if let Some(orientation) = pts.and_then(|pts| self.pending.remove(&pts)) {
+            self.last = orientation;
+        }
+        self.last
+    }
+}
+
 /// Decodes the other side's access units into pictures for the window.
 pub struct RemoteDecoder {
     pipeline: gst::Pipeline,
@@ -260,7 +314,7 @@ pub struct RemoteDecoder {
 impl RemoteDecoder {
     pub(super) fn start(slots: Arc<VideoSlots>, faults: FaultHandler) -> Result<Self, MediaError> {
         let pipeline = pipeline_from(&format!(
-            "appsrc name=in is-live=true format=time do-timestamp=true \
+            "appsrc name=in is-live=true format=time do-timestamp=false \
              caps=video/x-h264,stream-format=byte-stream,alignment=au ! \
              h264parse ! decodebin ! videoconvert ! videoscale ! \
              video/x-raw,format=RGBA,width=[1,{REMOTE_MAX_SIDE}],height=[1,{REMOTE_MAX_SIDE}],\
@@ -273,12 +327,21 @@ impl RemoteDecoder {
             .and_then(|element| element.downcast::<gst_app::AppSrc>().ok())
             .ok_or(MediaError::NoVideoDecoder)?;
         let output = app_sink(&pipeline, "out")?;
+        // The decoder runs asynchronously and may drop or reorder pictures.
+        // PTS keeps each decoded picture paired with its own orientation.
+        let orientations = Arc::new(Mutex::new(RemoteOrientations::default()));
+        let decoded_orientations = orientations.clone();
         output.set_callbacks(
             gst_app::AppSinkCallbacks::builder()
                 .new_sample(move |sink| {
                     let sample = sink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
+                    let pts = sample
+                        .buffer()
+                        .and_then(|buffer| buffer.pts())
+                        .map(|pts| pts.nseconds());
+                    let orientation = super::lock(&decoded_orientations).for_picture(pts);
                     if let Some(frame) = rgba_of(&sample) {
-                        slots.put_remote(frame);
+                        slots.put_remote(orient_remote(frame, orientation));
                     }
                     Ok(gst::FlowSuccess::Ok)
                 })
@@ -292,11 +355,19 @@ impl RemoteDecoder {
         std::thread::Builder::new()
             .name("zaptide-call-video".to_owned())
             .spawn(move || {
+                let mut sequence = 0u64;
                 while let Ok(frame) = incoming.recv_blocking() {
-                    if source
-                        .push_buffer(gst::Buffer::from_slice(frame.data))
-                        .is_err()
+                    let pts = sequence.saturating_mul(1_000_000_000 / FRAMES_PER_SECOND as u64);
+                    sequence = sequence.saturating_add(1);
                     {
+                        super::lock(&orientations).insert(pts, frame.orientation);
+                    }
+                    let mut buffer = gst::Buffer::from_slice(frame.data);
+                    buffer
+                        .get_mut()
+                        .expect("new buffer is writable")
+                        .set_pts(gst::ClockTime::from_nseconds(pts));
+                    if source.push_buffer(buffer).is_err() {
                         break;
                     }
                 }
@@ -354,6 +425,35 @@ mod tests {
         assert!(is_test_source("gltestsrc"));
         for real in ["v4l2src", "pipewiresrc", "libcamerasrc", "fakesrc"] {
             assert!(!is_test_source(real), "{real}");
+        }
+    }
+
+    #[test]
+    fn remote_orientation_rotates_pixels_in_the_protocol_direction() {
+        let frame = RgbaFrame {
+            width: 2,
+            height: 3,
+            data: (1..=6).flat_map(|pixel| [pixel, 0, 0, 255]).collect(),
+        };
+        for (orientation, dimensions, expected) in [
+            (0, (2, 3), vec![1, 2, 3, 4, 5, 6]),
+            (1, (3, 2), vec![2, 4, 6, 1, 3, 5]),
+            (2, (2, 3), vec![6, 5, 4, 3, 2, 1]),
+            (3, (3, 2), vec![5, 3, 1, 6, 4, 2]),
+            (5, (3, 2), vec![2, 4, 6, 1, 3, 5]),
+        ] {
+            let rotated = orient_remote(frame.clone(), orientation);
+            assert_eq!((rotated.width, rotated.height), dimensions);
+            assert_eq!(
+                rotated
+                    .data
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|pixel| pixel[0])
+                    .collect::<Vec<_>>(),
+                expected
+            );
         }
     }
 
@@ -441,6 +541,109 @@ mod tests {
     }
 
     #[test]
+    fn missing_decoded_timestamps_keep_the_last_known_orientation() {
+        let mut orientations = RemoteOrientations::default();
+        orientations.insert(100, 1);
+        orientations.insert(200, 3);
+        assert_eq!(orientations.for_picture(Some(100)), 1);
+        assert_eq!(orientations.for_picture(None), 1);
+        assert_eq!(orientations.for_picture(Some(150)), 1);
+        assert_eq!(orientations.for_picture(Some(200)), 3);
+        assert_eq!(orientations.for_picture(Some(999)), 3);
+    }
+
+    #[test]
+    #[ignore = "runs a live synthetic video stream for 45 seconds"]
+    fn remote_decoder_continues_playing_for_45_seconds() {
+        let Some(encoder) = available_encoder() else {
+            assert!(std::env::var_os("ZAPTIDE_REQUIRE_GST").is_none());
+            return;
+        };
+        if !camera_test_ready() || !decoder_available() {
+            return;
+        }
+        let slots = Arc::new(VideoSlots::new(|| {}));
+        let camera = Camera::start(
+            encoder,
+            "videotestsrc is-live=true pattern=ball",
+            slots.clone(),
+            crate::calls::ignore_faults(),
+        )
+        .unwrap();
+        let decoder = RemoteDecoder::start(slots.clone(), crate::calls::ignore_faults()).unwrap();
+        let frames = camera.frames();
+        let sender = decoder.sender();
+        for interval in 0..9 {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            let mut decoded = 0;
+            while std::time::Instant::now() < deadline {
+                if let Some(data) = crate::calls::recv_within(&frames, Duration::from_millis(200)) {
+                    let _ = sender.try_send(VideoFrame::new(data));
+                }
+                if slots.take().remote.flatten().is_some() {
+                    decoded += 1;
+                }
+            }
+            assert!(
+                decoded >= 10,
+                "only {decoded} decoded frames in interval {interval}"
+            );
+        }
+    }
+
+    #[test]
+    fn decoder_survives_remote_resolution_changes() {
+        let Some(encoder) = available_encoder() else {
+            return;
+        };
+        if !decoder_available() || !camera_test_ready() {
+            return;
+        }
+        let slots = Arc::new(VideoSlots::new(|| {}));
+        let decoder = RemoteDecoder::start(slots.clone(), crate::calls::ignore_faults()).unwrap();
+        let sender = decoder.sender();
+        for (height, orientation) in [(360, 0), (480, 1), (360, 0)] {
+            let camera = Camera::start(
+                encoder,
+                &format!("videotestsrc is-live=true ! video/x-raw,width=640,height={height}"),
+                slots.clone(),
+                crate::calls::ignore_faults(),
+            )
+            .unwrap();
+            let frames = camera.frames();
+            let deadline = std::time::Instant::now() + Duration::from_secs(8);
+            let expected = if orientation == 1 {
+                (height, 640)
+            } else {
+                (640, height)
+            };
+            let mut seen = 0;
+            while std::time::Instant::now() < deadline {
+                if let Some(data) = crate::calls::recv_within(&frames, Duration::from_millis(500)) {
+                    let mut frame = VideoFrame::new(data);
+                    frame.orientation = orientation;
+                    let _ = sender.try_send(frame);
+                }
+                if slots
+                    .take()
+                    .remote
+                    .flatten()
+                    .is_some_and(|f| (f.width, f.height) == expected)
+                {
+                    seen += 1;
+                    if seen == 10 {
+                        break;
+                    }
+                }
+            }
+            assert!(
+                seen == 10,
+                "only {seen} frames after changing resolution to {height} and orientation to {orientation}"
+            );
+        }
+    }
+
+    #[test]
     fn camera_output_decodes_back_into_pictures() {
         let Some(encoder) = available_encoder() else {
             eprintln!("skipped: no H.264 encoder is installed");
@@ -501,5 +704,31 @@ mod tests {
             remote.data.len(),
             remote.width as usize * remote.height as usize * 4
         );
+        for (orientation, expected_width) in
+            [(1, remote.height), (0, 640), (3, remote.height), (2, 640)]
+        {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            let mut found = false;
+            while std::time::Instant::now() < deadline {
+                if let Some(next) = crate::calls::recv_within(&frames, Duration::from_millis(500)) {
+                    let mut frame = VideoFrame::new(next);
+                    frame.orientation = orientation;
+                    let _ = sender.try_send(frame);
+                }
+                if slots
+                    .take()
+                    .remote
+                    .flatten()
+                    .is_some_and(|frame| frame.width == expected_width)
+                {
+                    found = true;
+                    break;
+                }
+            }
+            assert!(
+                found,
+                "orientation {orientation} did not reach width {expected_width}"
+            );
+        }
     }
 }
