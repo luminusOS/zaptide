@@ -188,7 +188,7 @@ impl NativeApplication {
             calls: self.calls.tab,
             calls_unseen: self.calls.unseen(),
             calls_empty: self.calls.is_empty(),
-            live_call: self.calls.has_live(),
+            live_call: self.calls.in_call(),
             refreshing: self.refreshing(),
             empty: self.chat_ids.is_empty(),
             empty_title: self.chat_list_empty_title(),

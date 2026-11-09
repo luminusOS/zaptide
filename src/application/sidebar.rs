@@ -106,10 +106,23 @@ impl SimpleComponent for Sidebar {
             set_content = &gtk::Box {
                 set_orientation: gtk::Orientation::Vertical,
                 append = &gtk::Button {
-                    set_label: &gettext("Return to call"),
+                    set_tooltip_text: Some(&gettext("Return to call")),
+                    update_property: &[gtk::accessible::Property::Label(&gettext("Return to call"))],
                     set_margin_start: 12,
                     set_margin_end: 12,
+                    set_margin_top: 6,
                     set_margin_bottom: 6,
+                    #[wrap(Some)]
+                    set_child = &gtk::Box {
+                        set_halign: gtk::Align::Center,
+                        set_spacing: 6,
+                        append = &gtk::Image {
+                            set_icon_name: Some("call-start-symbolic"),
+                        },
+                        append = &gtk::Label {
+                            set_label: &gettext("Return to call"),
+                        },
+                    },
                     #[watch]
                     set_visible: model.state.live_call,
                     connect_clicked[sender] => move |_| sender.output(SidebarOutput::ShowLiveCall).unwrap(),
