@@ -12,6 +12,7 @@ pub(super) struct SidebarState {
     pub(super) calls: bool,
     pub(super) calls_unseen: usize,
     pub(super) calls_empty: bool,
+    pub(super) live_call: bool,
     pub(super) refreshing: bool,
     pub(super) empty: bool,
     pub(super) empty_title: &'static str,
@@ -28,6 +29,7 @@ impl Default for SidebarState {
             calls: false,
             calls_unseen: 0,
             calls_empty: true,
+            live_call: false,
             refreshing: false,
             empty: true,
             empty_title: "No Chats Yet",
@@ -66,6 +68,7 @@ pub(super) enum SidebarOutput {
     ShowCalls(bool),
     SelectChat(crate::account::AccountId, String),
     NewChat,
+    ShowLiveCall,
 }
 
 #[relm4::component(pub(super))]
@@ -102,6 +105,15 @@ impl SimpleComponent for Sidebar {
             #[wrap(Some)]
             set_content = &gtk::Box {
                 set_orientation: gtk::Orientation::Vertical,
+                append = &gtk::Button {
+                    set_label: &gettext("Return to call"),
+                    set_margin_start: 12,
+                    set_margin_end: 12,
+                    set_margin_bottom: 6,
+                    #[watch]
+                    set_visible: model.state.live_call,
+                    connect_clicked[sender] => move |_| sender.output(SidebarOutput::ShowLiveCall).unwrap(),
+                },
                 append = &gtk::Box {
                     add_css_class: "linked",
                     #[watch]

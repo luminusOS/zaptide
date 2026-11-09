@@ -157,6 +157,7 @@ impl NativeApplication {
         if let Some(live) = self.calls.live.take().filter(LiveCall::is_active) {
             self.calls.abandoned = Some((live.account, live.session.id.clone()));
         }
+        self.calls.showing_live = false;
     }
 
     /// The call in the window ended: a waiting call of another account, which

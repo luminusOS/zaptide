@@ -17,7 +17,6 @@ pub enum CallAction {
     DeclineWaiting,
     EndAndAnswer,
     BackToChat,
-    Close,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

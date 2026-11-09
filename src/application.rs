@@ -651,6 +651,7 @@ pub enum Input {
         video: bool,
     },
     CallAction(CallAction),
+    ShowLiveCall,
     /// A button of a call's notification, for the account that owns the call.
     CallChoice(
         crate::account::AccountId,
@@ -658,6 +659,8 @@ pub enum Input {
         crate::native_notifications::CallChoice,
     ),
     CallTick,
+    #[cfg(test)]
+    TestCall(crate::model::call::CallSession),
     Reconnect,
     /// The computer woke from suspend: the connection may be dead.
     Resumed,
@@ -863,8 +866,7 @@ impl SimpleComponent for NativeApplication {
                             set_title: &gettext("Chat"),
                             #[wrap(Some)]
                             set_child = &gtk::Stack {
-                            #[watch]
-                            set_visible_child_name: if model.calls.tab { "calls" } else { "chat" },
+                            add_named[Some("live-call")] = model.live_call_view(),
                             add_named[Some("calls")] = model.calls_details(),
                             add_named[Some("chat")] = &adw::ToolbarView {
                             add_top_bar = &adw::HeaderBar {
@@ -1038,12 +1040,14 @@ impl SimpleComponent for NativeApplication {
                                     },
                                 },
                             },
+                            #[watch]
+                            set_visible_child_name: if model.calls.showing_live && model.calls.has_live() { "live-call" } else if model.calls.tab { "calls" } else { "chat" },
                             },
                         },
                     },
 
                     #[watch]
-                    set_visible_child_name: if model.is_linked() { "chats" } else { "link" },
+                    set_visible_child_name: if model.is_linked() || (model.calls.showing_live && model.calls.has_live()) { "chats" } else { "link" },
                 },
             },
         }
@@ -1284,6 +1288,7 @@ impl SimpleComponent for NativeApplication {
                 SidebarOutput::ShowCalls(active) => Input::ShowCalls(active),
                 SidebarOutput::SelectChat(account, chat) => Input::SelectChat(account, chat),
                 SidebarOutput::NewChat => Input::ShowNewChat,
+                SidebarOutput::ShowLiveCall => Input::ShowLiveCall,
             });
         let transcript_view = TranscriptView::builder()
             .launch(TranscriptViewInit {
