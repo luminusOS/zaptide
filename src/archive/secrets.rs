@@ -120,7 +120,11 @@ fn jobs() -> Result<&'static Mutex<mpsc::Sender<Job>>> {
     let (sender, receiver) = mpsc::channel::<Job>();
     std::thread::Builder::new()
         .name("keyring".into())
-        .spawn(move || receiver.into_iter().for_each(|job| job()))
+        .spawn(move || {
+            // oo7's host service spawns session cleanup from Drop on this thread.
+            let _runtime = crate::portal::enter();
+            receiver.into_iter().for_each(|job| job());
+        })
         .context("Could not start the keyring thread")?;
     Ok(JOBS.get_or_init(|| Mutex::new(sender)))
 }
@@ -520,6 +524,32 @@ pub(super) mod memory {
 mod tests {
     use super::memory::Store;
     use super::*;
+
+    #[test]
+    fn keyring_jobs_can_spawn_cleanup_on_drop_and_process_the_next_job() {
+        struct Session(mpsc::Sender<()>);
+
+        impl Drop for Session {
+            fn drop(&mut self) {
+                let sender = self.0.clone();
+                tokio::spawn(async move {
+                    sender.send(()).unwrap();
+                });
+            }
+        }
+
+        let (sender, receiver) = mpsc::channel();
+        queue(Box::new(move || {
+            let session = block_on(async { Ok(Session(sender)) }).unwrap();
+            drop(session);
+        }))
+        .unwrap();
+        receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+
+        let (sender, receiver) = mpsc::channel();
+        queue(Box::new(move || sender.send(()).unwrap())).unwrap();
+        receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+    }
 
     fn found(lookup: Lookup) -> Vec<u8> {
         match lookup {
