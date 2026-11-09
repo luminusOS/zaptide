@@ -5,7 +5,7 @@
 
 use super::*;
 use gtk::glib;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -16,11 +16,12 @@ const DEFAULT_REACTIONS: [&str; QUICK_SLOTS] = ["👍", "❤️", "😂", "😮"
 /// Sweeping across the transcript should not flash a pill on every bubble.
 const SHOW_DELAY: Duration = Duration::from_millis(120);
 
-/// Long enough to cross from the bubble onto the pill.
+/// Long enough to cross from the bubble onto the pill, gap included.
 const HIDE_DELAY: Duration = Duration::from_millis(250);
 
-/// How far the pill sits inside the bubble's top edge, within its padding.
-const OVERLAP: f32 = 6.0;
+/// Space between the pill and the bubble's top edge, so the pill never covers
+/// the sender's name or the first line.
+const GAP: f32 = 8.0;
 
 /// Keeps the pill inside the list when the bubble's top has scrolled away.
 const MIN_TOP: i32 = 44;
@@ -109,6 +110,8 @@ struct Drawer {
     shown: RefCell<Option<Shown>>,
     timer: RefCell<Option<glib::SourceId>>,
     popover: RefCell<Option<glib::WeakRef<gtk::Popover>>>,
+    /// The message menu is open and already offers the same reactions.
+    suspended: Cell<bool>,
 }
 
 thread_local! {
@@ -137,7 +140,7 @@ pub(super) fn pointer_entered(
     let touch = controller
         .current_event_device()
         .is_some_and(|device| device.source() == gtk::gdk::InputSource::Touchscreen);
-    if touch || slot.borrow().is_none() {
+    if touch || slot.borrow().is_none() || drawer().suspended.get() {
         return;
     }
     let drawer = drawer();
@@ -173,6 +176,19 @@ pub(super) fn rebound(bubble: &gtk::Box) {
 
 pub(super) fn dismiss() {
     drawer().hide();
+}
+
+/// Hides the pill and keeps it hidden until [`resume`], while the message
+/// menu shows its own reactions. Opening the menu moves the pointer grab,
+/// which reports the pointer entering the bubble again.
+pub(super) fn suspend() {
+    let drawer = drawer();
+    drawer.hide();
+    drawer.suspended.set(true);
+}
+
+pub(super) fn resume() {
+    drawer().suspended.set(false);
 }
 
 impl Drawer {
@@ -218,6 +234,9 @@ impl Drawer {
     }
 
     fn present(self: &Rc<Self>, bubble: &gtk::Widget, slot: &HoverSlot) {
+        if self.suspended.get() {
+            return;
+        }
         let Some(target) = slot.borrow().clone() else {
             return;
         };
@@ -236,7 +255,7 @@ impl Drawer {
         } else {
             gtk::Align::Start
         });
-        let top = ((bounds.y() + OVERLAP) as i32).max(MIN_TOP);
+        let top = pill_anchor_top(bounds.y());
         popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(
             bounds.x() as i32,
             top,
@@ -370,6 +389,11 @@ impl Drawer {
         });
         chooser.popup();
     }
+}
+
+/// Where the pill points, given the bubble's top in list coordinates.
+fn pill_anchor_top(bubble_top: f32) -> i32 {
+    ((bubble_top - GAP) as i32).max(MIN_TOP)
 }
 
 /// Not focusable: clicking a quick reaction must leave the composer's focus alone.
@@ -571,6 +595,22 @@ mod tests {
         let (_, size) = popover.preferred_size();
         assert!(size.width() < 600, "pill is {} px wide", size.width());
         assert!(size.height() < 200, "pill is {} px tall", size.height());
+    }
+
+    #[test]
+    fn the_pill_points_above_the_bubble_and_stays_inside_the_list() {
+        assert_eq!(pill_anchor_top(200.0), 192);
+        assert!(pill_anchor_top(200.0) < 200);
+        assert_eq!(pill_anchor_top(10.0), MIN_TOP);
+    }
+
+    #[test]
+    fn a_suspended_drawer_shows_nothing_until_resumed() {
+        suspend();
+        assert!(drawer().suspended.get());
+        assert!(drawer().shown.borrow().is_none());
+        resume();
+        assert!(!drawer().suspended.get());
     }
 
     #[test]
