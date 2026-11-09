@@ -1,6 +1,40 @@
 use super::*;
 
 #[test]
+fn copy_image_is_available_only_for_downloaded_images() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("photo.png");
+    std::fs::write(&path, b"synthetic fixture").unwrap();
+    let mut message = grouping_message("image", "sender", true, 1);
+    let media = crate::model::Media {
+        mime: "image/png".into(),
+        size: 1,
+        width: Some(1),
+        height: Some(1),
+        path: Some(path.clone()),
+        state: crate::model::MediaState::Idle,
+    };
+    message.content = crate::model::Content::Image {
+        caption: None,
+        media: media.clone(),
+    };
+    assert_eq!(copy_image_path(&message), Some(path.as_path()));
+    message.content = crate::model::Content::Video {
+        caption: None,
+        media: media.clone(),
+        seconds: None,
+        gif: false,
+    };
+    assert_eq!(copy_image_path(&message), None);
+    std::fs::remove_file(&path).unwrap();
+    message.content = crate::model::Content::Image {
+        caption: None,
+        media,
+    };
+    assert_eq!(copy_image_path(&message), None);
+}
+
+#[test]
 fn open_chat_state_reset_preserves_external_starred_and_request_correlation() {
     let mut open = OpenChatState::default();
     assert!(open.message_ids.is_empty());
@@ -261,7 +295,7 @@ fn attachment_summary_names_staged_files() {
     assert_eq!(attachment_summary(&[], 1), "1 attachment ready");
 }
 
-fn grouping_message(
+pub(super) fn grouping_message(
     id: &str,
     sender: &str,
     from_me: bool,

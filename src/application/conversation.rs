@@ -53,6 +53,7 @@ impl NativeApplication {
     /// Returns to the empty home screen. The draft stays with the chat and
     /// nothing is marked read, since reading only follows the open chat.
     pub(super) fn close_chat(&mut self) {
+        self.close_media_viewer();
         let Some(chat) = self.open_chat.active_chat.clone() else {
             return;
         };

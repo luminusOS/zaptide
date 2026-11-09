@@ -1,6 +1,6 @@
 use super::{
     video_stream::VideoStream,
-    viewer::{PhotoItem, ViewerDetails, show_photo, show_video},
+    viewer::{PhotoItem, ViewerDetails},
     *,
 };
 use crate::i18n::gettext;
@@ -118,6 +118,8 @@ pub fn build_album_widget(
     let mut opened = 0;
     for (index, message) in messages.iter().take(ALBUM_TILES).enumerate() {
         let tile = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        tile.set_widget_name(&message.id);
+        tile.add_css_class("zaptide-album-tile");
         let tile_token = DecodeToken::default();
         let viewer =
             matches!(attachment_action(message), Some(NativeMediaAction::Open(_))).then(|| {
@@ -253,8 +255,11 @@ fn append_photo_sized(
                 };
                 (std::rc::Rc::new(vec![item]), 0)
             });
-            button.connect_clicked(move |button| {
-                show_photo(button, items.clone(), start, on_action.clone());
+            button.connect_clicked(move |_| {
+                on_action(NativeMediaAction::ViewPhotos {
+                    paths: items.iter().map(|item| item.path.clone()).collect(),
+                    start,
+                });
             });
             parent.append(&button);
         }
@@ -277,7 +282,9 @@ fn append_photo_sized(
             | NativeMediaAction::AnswerListRow { .. }
             | NativeMediaAction::CopyContactPhone(_)
             | NativeMediaAction::OpenContact(_)
-            | NativeMediaAction::MessageContact { .. },
+            | NativeMediaAction::MessageContact { .. }
+            | NativeMediaAction::ViewPhotos { .. }
+            | NativeMediaAction::ViewVideo(_),
         )
         | None => {
             let spinner = adw::Spinner::builder()
@@ -381,10 +388,9 @@ pub(super) fn append_video(
                 .css_classes(["flat", "zaptide-photo-button"])
                 .build();
             button.update_property(&[gtk::accessible::Property::Label(&gettext("Play video"))]);
-            let details = ViewerDetails::of(message);
-            button.connect_clicked(move |button| {
+            button.connect_clicked(move |_| {
                 if playable {
-                    show_video(button, &path, &details, on_action.clone());
+                    on_action(NativeMediaAction::ViewVideo(path.clone()));
                 } else {
                     on_action(NativeMediaAction::Open(path.clone()));
                 }
@@ -402,7 +408,9 @@ pub(super) fn append_video(
             | NativeMediaAction::AnswerListRow { .. }
             | NativeMediaAction::CopyContactPhone(_)
             | NativeMediaAction::OpenContact(_)
-            | NativeMediaAction::MessageContact { .. },
+            | NativeMediaAction::MessageContact { .. }
+            | NativeMediaAction::ViewPhotos { .. }
+            | NativeMediaAction::ViewVideo(_),
         )
         | None => {
             frame.add_overlay(
@@ -524,7 +532,9 @@ pub(super) fn document_card(
             | NativeMediaAction::AnswerListRow { .. }
             | NativeMediaAction::CopyContactPhone(_)
             | NativeMediaAction::OpenContact(_)
-            | NativeMediaAction::MessageContact { .. },
+            | NativeMediaAction::MessageContact { .. }
+            | NativeMediaAction::ViewPhotos { .. }
+            | NativeMediaAction::ViewVideo(_),
         )
         | None => actions.append(
             &adw::Spinner::builder()

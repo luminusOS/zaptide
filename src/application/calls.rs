@@ -483,6 +483,7 @@ impl NativeApplication {
     }
 
     pub(super) fn start_call(&mut self, video: bool) {
+        self.close_media_viewer();
         if !self.can_call() {
             return;
         }
@@ -494,6 +495,7 @@ impl NativeApplication {
     }
 
     pub(super) fn show_calls_tab(&mut self, on: bool) {
+        self.close_media_viewer();
         self.calls.tab = on;
         self.calls.showing_live = false;
         if on {
@@ -546,6 +548,7 @@ impl NativeApplication {
     }
 
     pub(super) fn show_live_call(&mut self) {
+        self.close_media_viewer();
         if self.calls.has_live() {
             self.calls.showing_live = true;
             self.sidebar_visible = false;
@@ -697,6 +700,7 @@ impl NativeApplication {
             return;
         }
         if !same {
+            self.close_media_viewer();
             let input = sender.clone();
             let window = CallWindow::new(std::rc::Rc::new(move |action| {
                 input.input(Input::CallAction(action))

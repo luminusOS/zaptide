@@ -205,6 +205,80 @@ fn photo_item(message: &Message) -> PhotoItem {
     }
 }
 
+#[test]
+#[ignore = "requires a graphical display and glycin loaders"]
+fn copy_image_places_a_texture_on_the_clipboard_without_opening_viewer() {
+    use super::super::playback_tests::wait_until;
+
+    let runtime = init_display();
+    let _guard = runtime.enter();
+    let directory = tempfile::tempdir().unwrap();
+    let message = fixture_message(directory.path(), "clipboard.png", 32, 24);
+    let path = photo_item(&message).path;
+    let clipboard = gdk::Display::default().unwrap().clipboard();
+    super::super::copy_image(path.clone(), &clipboard);
+    wait_until("image decode did not finish", || {
+        !crate::media_retention::is_held(&path)
+    });
+    let result = Rc::new(RefCell::new(None));
+    let received = result.clone();
+    clipboard.read_texture_async(None::<&gtk::gio::Cancellable>, move |texture| {
+        *received.borrow_mut() = Some(texture.unwrap());
+    });
+    wait_until("clipboard read did not finish", || {
+        result.borrow().is_some()
+    });
+    let texture = result
+        .borrow_mut()
+        .take()
+        .unwrap()
+        .expect("clipboard texture");
+    assert_eq!((texture.width(), texture.height()), (32, 24));
+}
+
+#[test]
+#[ignore = "requires a graphical display and GStreamer plugins"]
+fn closing_video_stops_playback_and_releases_file() {
+    use super::super::playback_tests::{drain, wait_until};
+
+    let runtime = init_display();
+    let _guard = runtime.enter();
+    let directory = tempfile::tempdir().unwrap();
+    let video = directory.path().join("clip.webm");
+    let status = std::process::Command::new("gst-launch-1.0")
+        .args("-q videotestsrc num-buffers=90 ! video/x-raw,width=640,height=360,framerate=30/1 ! vp8enc deadline=1 ! webmmux ! filesink".split_whitespace())
+        .arg(format!("location={}", video.display()))
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let message = fixture_message(directory.path(), "image.png", 32, 32);
+    let details = ViewerDetails::of(&message);
+    let window = adw::Window::builder()
+        .default_width(800)
+        .default_height(600)
+        .content(&gtk::Box::new(gtk::Orientation::Vertical, 0))
+        .build();
+    window.present();
+    drain();
+    let window_ref = window.upcast_ref::<gtk::Window>();
+    show_video(&window, &video, &details, Rc::new(|_| {}));
+    wait_until("video controls did not appear", || {
+        has_button(window_ref, "Pause")
+    });
+    assert!(crate::media_retention::is_held(&video));
+    let clip = playing_clip(window_ref).expect("video stream");
+    let released = clip.downgrade();
+    button(window_ref, "Back").emit_clicked();
+    drain();
+    assert!(!clip.is_prepared(), "closing releases playback");
+    assert!(!crate::media_retention::is_held(&video));
+    drop(clip);
+    wait_until("closed viewer kept its video stream", || {
+        released.upgrade().is_none()
+    });
+    window.close();
+}
+
 fn open_photo_state() -> Rc<PhotoState> {
     OPEN_PHOTO.with(|open| open.borrow().clone().expect("a photo viewer was opened"))
 }
@@ -254,7 +328,7 @@ fn measure_opening(
     let painted = clock.connect_after_paint({
         let (first_frame, window) = (first_frame.clone(), window_ref.clone());
         move |_| {
-            if first_frame.get().is_none() && has_button(&window, "Close") {
+            if first_frame.get().is_none() && has_button(&window, "Back") {
                 first_frame.set(Some(started.elapsed()));
             }
         }
@@ -399,8 +473,8 @@ fn opening_media_keeps_the_main_loop_turning() {
                     .is_some_and(|frame| frame < std::time::Duration::from_millis(250)),
                 "{label} {attempt} was late to appear"
             );
-            button(window_ref, "Close").emit_clicked();
-            wait_until("viewer did not close", || !has_button(window_ref, "Close"));
+            button(window_ref, "Back").emit_clicked();
+            wait_until("viewer did not close", || !has_button(window_ref, "Back"));
             drain();
         }
     }
@@ -428,8 +502,8 @@ fn opening_media_keeps_the_main_loop_turning() {
             opening.returned < std::time::Duration::from_millis(100),
             "video {attempt} blocked the caller"
         );
-        button(window_ref, "Close").emit_clicked();
-        wait_until("viewer did not close", || !has_button(window_ref, "Close"));
+        button(window_ref, "Back").emit_clicked();
+        wait_until("viewer did not close", || !has_button(window_ref, "Back"));
         drain();
     }
     window.destroy();
@@ -643,7 +717,7 @@ fn photos_zoom_freely_about_the_pointer() {
         "the header fits a narrow window"
     );
     let level = button(narrow_ref, "Actual Size");
-    let close = button(narrow_ref, "Close");
+    let close = button(narrow_ref, "Back");
     for widget in [level.upcast_ref::<gtk::Widget>(), close.upcast_ref()] {
         let bounds = widget
             .compute_bounds(narrow_ref)
@@ -654,7 +728,7 @@ fn photos_zoom_freely_about_the_pointer() {
             widget.type_().name()
         );
     }
-    button(narrow_ref, "Close").emit_clicked();
+    button(narrow_ref, "Back").emit_clicked();
     narrow.destroy();
     OPEN_PHOTO.with(|open| open.take());
     window.destroy();
@@ -711,7 +785,7 @@ fn videos_open_in_the_background_with_a_poster() {
     };
 
     show_video(&window, &clip, &details, on_action.clone());
-    assert!(has_button(window_ref, "Close"), "the viewer is up at once");
+    assert!(has_button(window_ref, "Back"), "the viewer is up at once");
     assert!(
         !has_button(window_ref, "Pause"),
         "playing waits for the pipeline"
@@ -724,8 +798,8 @@ fn videos_open_in_the_background_with_a_poster() {
         !spinner_shown(window_ref)
     });
     assert!(opened.borrow().is_empty());
-    button(window_ref, "Close").emit_clicked();
-    wait_until("viewer did not close", || !has_button(window_ref, "Close"));
+    button(window_ref, "Back").emit_clicked();
+    wait_until("viewer did not close", || !has_button(window_ref, "Back"));
 
     let broken = directory.path().join("broken.webm");
     std::fs::write(&broken, b"synthetic invalid video").unwrap();
@@ -734,12 +808,12 @@ fn videos_open_in_the_background_with_a_poster() {
         failure_button(window_ref).is_some()
     });
     assert!(!spinner_shown(window_ref));
-    button(window_ref, "Close").emit_clicked();
-    wait_until("viewer did not close", || !has_button(window_ref, "Close"));
+    button(window_ref, "Back").emit_clicked();
+    wait_until("viewer did not close", || !has_button(window_ref, "Back"));
 
     show_video(&window, &clip, &details, on_action);
-    button(window_ref, "Close").emit_clicked();
-    wait_until("viewer did not close", || !has_button(window_ref, "Close"));
+    button(window_ref, "Back").emit_clicked();
+    wait_until("viewer did not close", || !has_button(window_ref, "Back"));
     drain();
     window.destroy();
     drain();
@@ -792,8 +866,8 @@ fn accessible_names_say_whose_media_it_is() {
 fn dialog_keys(window: &gtk::Window) -> gtk::EventControllerKey {
     let dialog = tree(window)
         .into_iter()
-        .find_map(|widget| widget.downcast::<adw::Dialog>().ok())
-        .expect("viewer dialog");
+        .find(|widget| widget.widget_name() == "zaptide-media-viewer")
+        .expect("viewer page");
     let controllers = dialog.observe_controllers();
     (0..controllers.n_items())
         .filter_map(|index| controllers.item(index))
@@ -820,7 +894,9 @@ fn failure_button(window: &gtk::Window) -> Option<gtk::Button> {
     tree(window)
         .into_iter()
         .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
-        .find(|button| button.label().as_deref() == Some("Open in Another App"))
+        .find(|button| {
+            button.label().as_deref() == Some("Open in Another App") && button.is_mapped()
+        })
 }
 
 /// Needs a display, and runs alone because GTK initialises on one thread:
@@ -1002,12 +1078,12 @@ fn viewer_steps_zooms_and_controls_video() {
     button(window_ref, "Fullscreen").emit_clicked();
     wait_until("window did not enter fullscreen", || window.is_fullscreen());
     assert!(has_button(window_ref, "Exit Fullscreen"));
-    button(window_ref, "Close").emit_clicked();
+    button(window_ref, "Back").emit_clicked();
     wait_until("closing the viewer left the window fullscreen", || {
         !window.is_fullscreen()
     });
     drain();
-    assert!(!has_button(window_ref, "Close"), "viewer closed");
+    assert!(!has_button(window_ref, "Back"), "viewer closed");
     assert!(!clip.is_prepared(), "closing releases the playback");
     drop(clip);
     wait_until("closed viewer kept its video stream", || {
@@ -1037,7 +1113,7 @@ fn viewer_steps_zooms_and_controls_video() {
     });
     drain();
     screenshot(window_ref, "48-video-unavailable-light");
-    button(window_ref, "Close").emit_clicked();
+    button(window_ref, "Back").emit_clicked();
     drain();
     show_video(&window, &video, &details, on_action.clone());
     wait_until("light video controls did not appear", || {
@@ -1053,7 +1129,7 @@ fn viewer_steps_zooms_and_controls_video() {
         &volume.popover().expect("volume popover"),
         "15-volume-popover-light",
     );
-    button(window_ref, "Close").emit_clicked();
+    button(window_ref, "Back").emit_clicked();
     drain();
     adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceDark);
 
@@ -1072,7 +1148,7 @@ fn viewer_steps_zooms_and_controls_video() {
     drain();
     assert!(!label(narrow_ref, "zaptide-viewer-time").is_visible());
     screenshot(narrow_ref, "narrow-album");
-    button(narrow_ref, "Close").emit_clicked();
+    button(narrow_ref, "Back").emit_clicked();
     drain();
     show_video(&narrow, &video, &details, on_action.clone());
     wait_until("narrow video controls did not appear", || {
@@ -1082,7 +1158,7 @@ fn viewer_steps_zooms_and_controls_video() {
         drain();
     }
     screenshot(narrow_ref, "narrow-video");
-    button(narrow_ref, "Close").emit_clicked();
+    button(narrow_ref, "Back").emit_clicked();
     drain();
     narrow.destroy();
     window.destroy();
