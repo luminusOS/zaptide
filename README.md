@@ -245,6 +245,10 @@ cd zaptide
 cargo build --locked
 ```
 
+Run `cargo run --locked` from the checkout to use the pinned toolchain. Quit
+any running ZapTide first. Native runs use the desktop Secret Service and
+separate data directories from Flatpak, so they may need to be linked again.
+
 See [CONTRIBUTING.md](CONTRIBUTING.md) for checks and running with translations,
 and [ARCHITECTURE.md](ARCHITECTURE.md) for the code layout.
 Report vulnerabilities privately through [SECURITY.md](SECURITY.md).

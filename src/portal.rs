@@ -39,6 +39,11 @@ fn runtime() -> &'static tokio::runtime::Runtime {
     &RUNTIME
 }
 
+/// Keeps runtime APIs available to synchronous code until the guard is dropped.
+pub(crate) fn enter() -> tokio::runtime::EnterGuard<'static> {
+    runtime().enter()
+}
+
 /// Starts `future` on the portal runtime without waiting for it.
 pub fn spawn(future: impl Future<Output = ()> + Send + 'static) {
     runtime().spawn(future);
