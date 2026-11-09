@@ -172,7 +172,7 @@ struct WaitingCard {
 }
 
 struct Ui {
-    window: adw::Window,
+    root: adw::BreakpointBin,
     toolbar: adw::ToolbarView,
     title: adw::WindowTitle,
     remote: gtk::Picture,
@@ -291,7 +291,7 @@ impl Ui {
 
     fn set_narrow(&self, narrow: bool) {
         self.narrow.set(narrow);
-        set_class(&self.window, "call-narrow", narrow);
+        set_class(&self.root, "call-narrow", narrow);
         self.resize_identity();
         let (width, height) = if narrow { (96, 128) } else { (160, 120) };
         for (clamp, size) in [(&self.pip_width, width), (&self.pip_height, height)] {
@@ -304,14 +304,12 @@ impl Ui {
 
     fn render(&self, name: &str, look: &Look, screen: &Screen) {
         let video = screen.stage == Stage::Video;
-        self.window
-            .set_title(Some(&format!("{name} · {}", screen.status)));
         self.title
             .set_title(if video { name } else { &screen.title });
         self.title
             .set_subtitle(if video { &screen.status } else { "" });
         self.toolbar.set_extend_content_to_top_edge(video);
-        set_class(&self.window, "call-over-video", video);
+        set_class(&self.root, "call-over-video", video);
         self.remote.set_visible(video);
         self.top_scrim.set_visible(video);
         self.bottom_scrim.set_visible(video);
@@ -371,15 +369,15 @@ impl Ui {
     }
 
     fn take_focus(&self, screen: &Screen, look: &Look) {
-        if self.focused.get() == screen.focus {
+        if !look.allow_focus || self.focused.get() == screen.focus {
             return;
         }
-        self.focused.set(screen.focus);
-        let Some(action) = screen.focus.filter(|_| look.allow_focus) else {
+        let Some(action) = screen.focus else {
+            self.focused.set(None);
             return;
         };
-        if !self.controls.borrow().focus(action) {
-            self.waiting_set.borrow().focus(action);
+        if self.controls.borrow().focus(action) || self.waiting_set.borrow().focus(action) {
+            self.focused.set(Some(action));
         }
     }
 }
@@ -399,7 +397,7 @@ fn set_class(widget: &impl IsA<gtk::Widget>, class: &str, on: bool) {
 }
 
 pub(super) struct CallWindow {
-    pub(super) window: adw::Window,
+    root: adw::BreakpointBin,
     pub(super) remote: gtk::Picture,
     pub(super) preview: gtk::Picture,
     ui: Rc<Ui>,
@@ -407,20 +405,11 @@ pub(super) struct CallWindow {
 
 impl CallWindow {
     pub(super) fn new(on_action: OnAction) -> Self {
-        let window = adw::Window::builder()
-            .title(gettext("Call"))
-            .default_width(420)
-            .default_height(640)
-            .width_request(MIN_WIDTH_PX)
-            .build();
-        window.add_css_class("zaptide-call-window");
-        let application: gtk::Application = relm4::main_application().upcast();
-        window.set_application(Some(&application));
-        let close = on_action.clone();
-        window.connect_close_request(move |_| {
-            close(CallAction::Close);
-            gtk::glib::Propagation::Stop
-        });
+        let root = adw::BreakpointBin::new();
+        root.add_css_class("zaptide-call-window");
+        root.set_size_request(MIN_WIDTH_PX, 360);
+        root.set_hexpand(true);
+        root.set_vexpand(true);
 
         let title = adw::WindowTitle::new("", "");
         let header = adw::HeaderBar::new();
@@ -592,10 +581,10 @@ impl CallWindow {
         let toolbar = adw::ToolbarView::new();
         toolbar.add_top_bar(&header);
         toolbar.set_content(Some(&stage));
-        window.set_content(Some(&toolbar));
+        root.set_child(Some(&toolbar));
 
         let ui = Rc::new(Ui {
-            window: window.clone(),
+            root: root.clone(),
             toolbar,
             title,
             remote: remote.clone(),
@@ -650,14 +639,18 @@ impl CallWindow {
         };
         breakpoint.connect_apply(follow(true, &ui));
         breakpoint.connect_unapply(follow(false, &ui));
-        window.add_breakpoint(breakpoint);
+        root.add_breakpoint(breakpoint);
 
         Self {
-            window,
+            root,
             remote,
             preview,
             ui,
         }
+    }
+
+    pub(super) fn view(&self) -> adw::BreakpointBin {
+        self.root.clone()
     }
 
     pub(super) fn render(&mut self, name: &str, look: &Look, screen: &Screen) {

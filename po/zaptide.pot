@@ -98,6 +98,10 @@ msgstr ""
 msgid "Call details"
 msgstr ""
 
+#: src/application/sidebar.rs
+msgid "Return to call"
+msgstr ""
+
 #: src/application/calls/screen.rs:237
 msgid "Video call"
 msgstr ""

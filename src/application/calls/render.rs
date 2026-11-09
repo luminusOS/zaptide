@@ -16,6 +16,9 @@ fn look(allow_focus: bool) -> Look<'static> {
 /// flips it; the default button is focused only when allowed.
 fn controls_follow_the_model() {
     let mut window = CallWindow::new(std::rc::Rc::new(|_| {}));
+    let host = adw::Window::new();
+    host.set_content(Some(&window.view()));
+    host.present();
     let voice = connected(CallDirection::Outgoing, false);
     window.render("Ana", &look(true), &screen(&voice, "Ana", 100));
     let mute = window.control(CallAction::ToggleMute).unwrap();
@@ -29,22 +32,36 @@ fn controls_follow_the_model() {
     assert!(toggle.is_active());
     assert_eq!(after.tooltip_text().as_deref(), Some("Unmute"));
     assert_eq!(
-        gtk::prelude::GtkWindowExt::focus(&window.window).as_ref(),
+        gtk::prelude::GtkWindowExt::focus(&host).as_ref(),
         Some(mute.upcast_ref())
     );
-    window.window.destroy();
+    host.destroy();
 
     for (allowed, expected) in [(true, true), (false, false)] {
         let mut window = CallWindow::new(std::rc::Rc::new(|_| {}));
-        window.window.present();
+        let host = adw::Window::new();
+        host.set_content(Some(&window.view()));
+        host.present();
         let ringing = session(CallDirection::Incoming, false);
         window.render("Ana", &look(allowed), &screen(&ringing, "Ana", 100));
         let answer = window.control(CallAction::Answer).unwrap();
         let focused =
-            gtk::prelude::GtkWindowExt::focus(&window.window).as_ref() == Some(answer.upcast_ref());
+            gtk::prelude::GtkWindowExt::focus(&host).as_ref() == Some(answer.upcast_ref());
         assert_eq!(focused, expected, "Answer focus when allowed is {allowed}");
-        window.window.destroy();
+        host.destroy();
     }
+}
+
+fn call_screen_can_be_embedded() {
+    let mut call = CallWindow::new(std::rc::Rc::new(|_| {}));
+    let host = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    let view = call.view();
+    host.append(&view);
+    let ringing = session(CallDirection::Incoming, false);
+    call.render("Ana", &look(false), &screen(&ringing, "Ana", 100));
+    assert!(call.control(CallAction::Answer).is_some());
+    assert_eq!(view.parent().as_ref(), Some(host.upcast_ref()));
+    host.remove(&view);
 }
 
 /// Renders every call screen and the Calls tab to PNGs under
@@ -108,6 +125,37 @@ fn render_call_screens() {
             .collect(),
     };
     controls_follow_the_model();
+    call_screen_can_be_embedded();
+    for (size_name, width, collapsed) in [("wide", 960, false), ("narrow", 360, true)] {
+        let mut call = CallWindow::new(std::rc::Rc::new(|_| {}));
+        let view = call.view();
+        let sidebar = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        sidebar.append(&gtk::Label::new(Some("Calls")));
+        let split = adw::NavigationSplitView::new();
+        split.set_sidebar(Some(&adw::NavigationPage::new(&sidebar, "Chats")));
+        split.set_content(Some(&adw::NavigationPage::new(&view, "Call")));
+        split.set_collapsed(collapsed);
+        split.set_show_content(true);
+        let host = adw::Window::new();
+        host.set_default_size(width, 640);
+        host.set_content(Some(&split));
+        let incoming = session(CallDirection::Incoming, false);
+        call.render(
+            "Ana Souza",
+            &look(false),
+            &screen(&incoming, "Ana Souza", 100),
+        );
+        host.present();
+        settle();
+        assert!(
+            view.is_mapped(),
+            "call is visible in the {size_name} layout"
+        );
+        assert_eq!(sidebar.is_mapped(), !collapsed);
+        assert!(call.control(CallAction::Answer).unwrap().is_mapped());
+        shoot(&format!("call-integrated-{size_name}"), host.upcast_ref());
+        host.destroy();
+    }
     let clicked = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let mut muted = connected(CallDirection::Outgoing, false);
     muted.muted = true;
@@ -163,8 +211,10 @@ fn render_call_screens() {
             let mut window = CallWindow::new(std::rc::Rc::new(move |action| {
                 record.borrow_mut().push(action)
             }));
-            window.window.set_default_size(width, height);
-            window.window.present();
+            let host = adw::Window::new();
+            host.set_content(Some(&window.view()));
+            host.set_default_size(width, height);
+            host.present();
             for (state, call) in &screens {
                 let mut shown = screen(call, &name, 100 + 138);
                 if *state == "waiting" {
@@ -191,14 +241,10 @@ fn render_call_screens() {
                 }
                 shoot(
                     &format!("call-{state}-{size_name}-{scheme_name}"),
-                    window.window.upcast_ref(),
+                    host.upcast_ref(),
                 );
-                let bounds = gtk::graphene::Rect::new(
-                    0.0,
-                    0.0,
-                    window.window.width() as f32,
-                    window.window.height() as f32,
-                );
+                let bounds =
+                    gtk::graphene::Rect::new(0.0, 0.0, host.width() as f32, host.height() as f32);
                 if width < 400
                     && let Some(end) = window.control(CallAction::HangUp)
                 {
@@ -211,7 +257,7 @@ fn render_call_screens() {
                         "{state} {size_name}: a control is {w}x{h}"
                     );
                     let inside = control
-                        .compute_bounds(&window.window)
+                        .compute_bounds(&host)
                         .is_some_and(|b| bounds.contains_rect(&b));
                     assert!(inside, "{state} {size_name}: a control leaves the window");
                 }
@@ -220,11 +266,60 @@ fn render_call_screens() {
                 window.control(CallAction::Retry).unwrap().emit_clicked();
                 assert_eq!(clicked.borrow().last(), Some(&CallAction::Retry));
             }
-            window.window.destroy();
+            host.destroy();
         }
     }
 
-    let ui = CallsUi::new(|_| {}, || {}, || {});
+    for (size_name, width, collapsed) in [("wide", 960, false), ("narrow", 360, true)] {
+        let mut call = CallWindow::new(std::rc::Rc::new(|_| {}));
+        let view = call.view();
+        let split = adw::NavigationSplitView::new();
+        split.set_sidebar(Some(&adw::NavigationPage::new(
+            &gtk::Box::new(gtk::Orientation::Vertical, 0),
+            "Chats",
+        )));
+        split.set_content(Some(&adw::NavigationPage::new(&view, "Call")));
+        split.set_collapsed(collapsed);
+        split.set_show_content(true);
+        let host = adw::Window::new();
+        host.set_default_size(width, height);
+        host.set_content(Some(&split));
+        host.present();
+        for (state, session) in &screens {
+            let mut shown = screen(session, &name, 100 + 138);
+            if *state == "waiting" {
+                shown = with_waiting(shown, &other, true, &name);
+            }
+            call.render(&name, &look(false), &shown);
+            if session.peer_video {
+                call.remote
+                    .set_paintable(texture(gradient(320, 240, 90)).as_ref());
+            }
+            if session.camera_on {
+                call.preview
+                    .set_paintable(texture(gradient(120, 160, 200)).as_ref());
+            }
+            shoot(
+                &format!("integrated-{state}-{size_name}"),
+                host.upcast_ref(),
+            );
+            let bounds =
+                gtk::graphene::Rect::new(0.0, 0.0, view.width() as f32, view.height() as f32);
+            for control in call.controls() {
+                assert!(
+                    control
+                        .compute_bounds(&view)
+                        .is_some_and(|b| bounds.contains_rect(&b)),
+                    "{state} {size_name}: a control leaves the call screen"
+                );
+            }
+        }
+        host.destroy();
+    }
+
+    let activated = std::rc::Rc::new(std::cell::Cell::new(None));
+    let selected = activated.clone();
+    let ui = CallsUi::new(move |index| selected.set(Some(index)), || {}, || {});
     let chats = [
         crate::model::Chat::new("1@s.whatsapp.net".into(), "Ana Souza".into()),
         crate::model::Chat::new("2@s.whatsapp.net".into(), "Bruno Lima".into()),
@@ -268,7 +363,43 @@ fn render_call_screens() {
     ];
     ui.selected = Some(1);
     ui.refill(&chats, &Default::default());
+    let host = adw::Window::new();
+    host.set_content(Some(&ui.list));
+    host.present();
+    settle();
+    let row = ui.list.row_at_index(0).unwrap();
+    assert!(row.is_activatable());
+    row.activate();
+    assert_eq!(activated.get(), Some(0));
+    host.set_content(None::<&gtk::Widget>);
+    host.destroy();
     ui.show_selected(&chats, &Default::default(), false);
+    ui.selected = Some(0);
+    ui.show_selected(&chats, &Default::default(), false);
+    assert_eq!(ui.detail.moment.label(), when(ui.entries[0].timestamp));
+    ui.selected = Some(1);
+    ui.show_selected(&chats, &Default::default(), false);
+    let actions = ui
+        .detail
+        .call_back
+        .parent()
+        .unwrap()
+        .downcast::<gtk::Box>()
+        .unwrap();
+    assert_eq!(actions.orientation(), gtk::Orientation::Vertical);
+    assert!(
+        ui.detail
+            .call_back
+            .child()
+            .unwrap()
+            .is::<adw::ButtonContent>()
+    );
+    let open_chat = actions
+        .last_child()
+        .unwrap()
+        .downcast::<gtk::Button>()
+        .unwrap();
+    assert!(open_chat.child().unwrap().is::<adw::ButtonContent>());
     for (scheme_name, scheme) in [
         ("light", adw::ColorScheme::ForceLight),
         ("dark", adw::ColorScheme::ForceDark),
@@ -277,10 +408,7 @@ fn render_call_screens() {
         let scroll = gtk::ScrolledWindow::new();
         scroll.set_child(Some(&ui.list));
         scroll.set_vexpand(true);
-        let header = adw::HeaderBar::new();
-        header.set_title_widget(Some(&adw::WindowTitle::new(&gettext("Recent calls"), "")));
         let side = adw::ToolbarView::new();
-        side.add_top_bar(&header);
         side.set_content(Some(&scroll));
         let split = adw::NavigationSplitView::new();
         split.set_sidebar(Some(&adw::NavigationPage::new(&side, "Calls")));

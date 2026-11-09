@@ -79,4 +79,54 @@ fn every_sidebar_section_switch_settles_on_the_chosen_section() {
             current = to;
         }
     }
+
+    let mut call = crate::model::call::CallSession::new(
+        "test-call".into(),
+        "test-chat".into(),
+        crate::model::call::CallDirection::Outgoing,
+        false,
+        100,
+    );
+    call.phase = crate::model::call::CallPhase::Connecting;
+    app.emit(Input::TestCall(call.clone()));
+    spin(std::time::Duration::from_millis(300));
+    assert!(app.model().calls.showing_live);
+    assert!(app.model().calls.live_view.is_mapped());
+    assert_eq!(
+        app.widgets().page_stack.visible_child_name().as_deref(),
+        Some("chats")
+    );
+
+    app.emit(Input::ShowCalls(true));
+    spin(std::time::Duration::from_millis(300));
+    assert!(!app.model().calls.showing_live);
+    assert!(!app.model().calls.live_view.is_mapped());
+    let account = app.model().active_account;
+    app.emit(Input::CallChoice(
+        account,
+        "stale-call".into(),
+        crate::native_notifications::CallChoice::Show,
+    ));
+    spin(std::time::Duration::from_millis(100));
+    assert!(!app.model().calls.showing_live);
+    app.emit(Input::CallChoice(
+        account,
+        "test-call".into(),
+        crate::native_notifications::CallChoice::Show,
+    ));
+    spin(std::time::Duration::from_millis(300));
+    assert!(app.model().calls.showing_live);
+    assert!(app.model().calls.live_view.is_mapped());
+
+    app.emit(Input::ShowCalls(true));
+    spin(std::time::Duration::from_millis(300));
+    app.emit(Input::ShowLiveCall);
+    spin(std::time::Duration::from_millis(300));
+    assert!(app.model().calls.live_view.is_mapped());
+
+    call.phase = crate::model::call::CallPhase::Ended(crate::model::call::CallOutcome::Elsewhere);
+    app.emit(Input::TestCall(call));
+    spin(std::time::Duration::from_millis(300));
+    assert!(!app.model().calls.has_live());
+    assert!(app.model().calls.live_view.first_child().is_none());
 }

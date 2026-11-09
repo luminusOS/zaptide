@@ -113,6 +113,10 @@ msgstr "Retornar chamada"
 msgid "Call details"
 msgstr "Detalhes da chamada"
 
+#: src/application/sidebar.rs
+msgid "Return to call"
+msgstr "Voltar à chamada"
+
 #: src/application/calls/screen.rs:237
 msgid "Video call"
 msgstr "Chamada de vídeo"

@@ -57,6 +57,7 @@ struct LiveCall {
     account: AccountId,
     session: CallSession,
     window: CallWindow,
+    view: adw::BreakpointBin,
     avatar: Option<gtk::gdk::Texture>,
     tick: Option<gtk::glib::SourceId>,
 }
@@ -85,7 +86,9 @@ impl LiveCall {
 impl Drop for LiveCall {
     fn drop(&mut self) {
         self.stop_timer();
-        self.window.window.destroy();
+        if let Some(parent) = self.view.parent().and_downcast::<gtk::Box>() {
+            parent.remove(&self.view);
+        }
     }
 }
 
@@ -103,6 +106,8 @@ struct Detail {
 pub(super) struct CallsUi {
     pub(super) list: gtk::ListBox,
     pub(super) details: adw::ToolbarView,
+    pub(super) live_view: gtk::Box,
+    pub(super) showing_live: bool,
     detail: Detail,
     pub(super) tab: bool,
     entries: Vec<CallEntry>,
@@ -145,17 +150,30 @@ impl CallsUi {
         summary.add_css_class("title-4");
         let moment = gtk::Label::new(None);
         moment.add_css_class("dim-label");
-        let open_chat = gtk::Button::with_label(&gettext("Open chat"));
+        let open_chat = gtk::Button::new();
+        open_chat.set_child(Some(
+            &adw::ButtonContent::builder()
+                .icon_name("chat-message-new-symbolic")
+                .label(gettext("Open chat"))
+                .build(),
+        ));
         open_chat.add_css_class("pill");
-        let call_back = gtk::Button::with_label(&gettext("Call back"));
+        let call_back = gtk::Button::new();
+        call_back.set_child(Some(
+            &adw::ButtonContent::builder()
+                .icon_name("call-start-symbolic")
+                .label(gettext("Call back"))
+                .build(),
+        ));
         call_back.add_css_class("pill");
         call_back.add_css_class("suggested-action");
         call_back.add_css_class("call-primary");
         open_chat.connect_clicked(move |_| on_open_chat());
         call_back.connect_clicked(move |_| on_call_back());
-        let actions = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        let actions = gtk::Box::new(gtk::Orientation::Vertical, 12);
         actions.set_halign(gtk::Align::Center);
         actions.set_margin_top(12);
+        actions.set_size_request(184, -1);
         actions.append(&call_back);
         actions.append(&open_chat);
         let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
@@ -184,6 +202,8 @@ impl CallsUi {
         Self {
             list,
             details,
+            live_view: gtk::Box::new(gtk::Orientation::Vertical, 0),
+            showing_live: false,
             detail: Detail {
                 stack,
                 avatar,
@@ -235,6 +255,10 @@ impl CallsUi {
         self.live.as_ref().is_some_and(LiveCall::is_active)
     }
 
+    pub(super) fn has_live(&self) -> bool {
+        self.live.is_some()
+    }
+
     pub(super) fn stop_ring(&mut self) {
         self.ringer.stop();
     }
@@ -246,6 +270,7 @@ impl CallsUi {
             .is_some_and(|live| live.account == account)
         {
             self.live = None;
+            self.showing_live = false;
         }
         if self
             .waiting
@@ -288,6 +313,7 @@ impl CallsUi {
         });
         for entry in &self.entries {
             let row = adw::ActionRow::new();
+            row.set_activatable(true);
             row.set_title(&gtk::glib::markup_escape_text(&chat_label(
                 chats,
                 &entry.chat,
@@ -340,10 +366,14 @@ impl CallsUi {
             entry.outcome,
             entry.seconds,
         ));
-        self.detail.moment.set_label(&with_detail(
-            &direction_label(entry.outgoing, entry.video),
-            &when(entry.timestamp),
-        ));
+        let moment = when(entry.timestamp);
+        self.detail
+            .moment
+            .set_label(&if entry.kind() == CallKind::Missed {
+                moment
+            } else {
+                with_detail(&direction_label(entry.outgoing, entry.video), &moment)
+            });
         self.detail.call_back.set_sensitive(!busy);
         self.detail.stack.set_visible_child_name("detail");
     }
@@ -405,6 +435,10 @@ impl NativeApplication {
         &self.calls.details
     }
 
+    pub(super) fn live_call_view(&self) -> &gtk::Box {
+        &self.calls.live_view
+    }
+
     pub(super) fn can_offer_call(&self) -> bool {
         self.open_chat.active_chat.as_ref().is_some_and(|id| {
             self.chat_snapshots
@@ -461,6 +495,7 @@ impl NativeApplication {
 
     pub(super) fn show_calls_tab(&mut self, on: bool) {
         self.calls.tab = on;
+        self.calls.showing_live = false;
         if on {
             self.sidebar_visible = true;
             if let Some(backend) = &self.backend {
@@ -498,6 +533,7 @@ impl NativeApplication {
             return;
         }
         self.calls.selected = Some(index);
+        self.calls.showing_live = false;
         self.calls
             .show_selected(&self.chat_snapshots, &self.avatars, self.calls.in_call());
         self.sidebar_visible = false;
@@ -507,6 +543,14 @@ impl NativeApplication {
         self.calls
             .selected
             .and_then(|index| self.calls.entries.get(index))
+    }
+
+    pub(super) fn show_live_call(&mut self) {
+        if self.calls.has_live() {
+            self.calls.showing_live = true;
+            self.sidebar_visible = false;
+            self.window.present();
+        }
     }
 
     pub(super) fn call_back(&mut self) {
@@ -649,6 +693,7 @@ impl NativeApplication {
             CallPhase::Ended(crate::model::CallOutcome::Elsewhere)
         ) {
             self.calls.live = None;
+            self.calls.showing_live = false;
             return;
         }
         if !same {
@@ -656,21 +701,23 @@ impl NativeApplication {
             let window = CallWindow::new(std::rc::Rc::new(move |action| {
                 input.input(Input::CallAction(action))
             }));
+            let view = window.view();
+            let input = sender.clone();
+            view.connect_map(move |_| input.input(Input::CallTick));
+            self.calls.live_view.append(&view);
             self.calls.live = Some(LiveCall {
                 account,
                 session: session.clone(),
                 window,
+                view,
                 avatar: None,
                 tick: None,
             });
+            self.calls.showing_live = true;
+            self.sidebar_visible = false;
         }
         let screen = self.full_screen(&session, &name);
-        let allow_focus = self.window.is_active()
-            || self
-                .calls
-                .live
-                .as_ref()
-                .is_some_and(|live| live.window.window.is_active());
+        let allow_focus = self.window.is_active() && self.calls.showing_live;
         let waiting_avatar = self.calls.waiting.as_ref().and_then(|w| w.avatar.clone());
         let Some(live) = self.calls.live.as_mut() else {
             return;
@@ -686,9 +733,6 @@ impl NativeApplication {
             },
             &screen,
         );
-        if !same {
-            live.window.window.present();
-        }
         let connected = matches!(live.session.phase, CallPhase::Connected { .. });
         if connected && live.tick.is_none() {
             let input = sender.clone();
@@ -753,9 +797,7 @@ impl NativeApplication {
                 CallChoice::Decline => self.decline_waiting(),
                 CallChoice::EndAndAnswer => self.end_and_answer(),
                 CallChoice::Show => {
-                    if let Some(live) = &self.calls.live {
-                        live.window.window.present();
-                    }
+                    self.show_live_call();
                 }
                 CallChoice::Answer => {}
             }
@@ -770,7 +812,7 @@ impl NativeApplication {
             return;
         };
         if choice == CallChoice::Show {
-            live.window.window.present();
+            self.show_live_call();
             return;
         }
         if let Some(command) = choice_command(choice, live.session.phase)
@@ -791,12 +833,7 @@ impl NativeApplication {
         };
         let name = chat_label(self.chats_of(account), &session.chat);
         let screen = self.full_screen(&session, &name);
-        let allow_focus = self.window.is_active()
-            || self
-                .calls
-                .live
-                .as_ref()
-                .is_some_and(|live| live.window.window.is_active());
+        let allow_focus = self.window.is_active() && self.calls.showing_live;
         let waiting_avatar = self.calls.waiting.as_ref().and_then(|w| w.avatar.clone());
         if let Some(live) = self.calls.live.as_mut() {
             live.window.render(
@@ -849,13 +886,6 @@ impl NativeApplication {
                 self.close_call_window(account);
                 sender.input(Input::OpenAccountChat(account, session.chat));
             }
-            CallAction::Close => {
-                if !session.phase.is_finished() {
-                    command(Command::HangUpCall);
-                    self.calls.abandoned = Some((account, session.id));
-                }
-                self.close_call_window(account);
-            }
         }
     }
 
@@ -867,6 +897,7 @@ impl NativeApplication {
             .is_some_and(|live| live.account == account)
         {
             self.calls.live = None;
+            self.calls.showing_live = false;
         }
     }
 

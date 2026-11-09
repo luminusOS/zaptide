@@ -62,6 +62,7 @@ impl NativeApplication {
         let Some(chat) = self.chat_ids.get(position as usize).cloned() else {
             return;
         };
+        self.calls.showing_live = false;
         if self
             .split_view
             .as_ref()

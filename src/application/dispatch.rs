@@ -666,14 +666,20 @@ impl NativeApplication {
 
     pub(super) fn handle_input(&mut self, input: Input, sender: ComponentSender<Self>) {
         match input {
-            Input::WindowActivated => self.read_open_chat(),
+            Input::WindowActivated => {
+                self.read_open_chat();
+                if self.calls.showing_live {
+                    self.call_tick();
+                }
+            }
             Input::WindowMapped => {
                 gtk::glib::idle_add_local_once(move || sender.input(Input::StartBackend));
             }
             Input::SidebarShown(shown) => self.sidebar_visible = shown,
             // Collapsing keeps an open conversation on screen; widening resets.
             Input::SplitCollapsed(collapsed) => {
-                self.sidebar_visible = !collapsed || self.open_chat.active_chat.is_none();
+                self.sidebar_visible = !collapsed
+                    || (!self.calls.showing_live && self.open_chat.active_chat.is_none());
                 self.sync_translucent_sidebar();
             }
             Input::ShowPreferences => self.show_preferences(sender),
@@ -806,8 +812,15 @@ impl NativeApplication {
             Input::CallBack => self.call_back(),
             Input::StartCall { video } => self.start_call(video),
             Input::CallAction(action) => self.call_action(action, &sender),
+            Input::ShowLiveCall => self.show_live_call(),
             Input::CallChoice(account, call, choice) => self.call_choice(account, &call, choice),
             Input::CallTick => self.call_tick(),
+            #[cfg(test)]
+            Input::TestCall(session) => self.handle_call_event(
+                self.active_account,
+                crate::backend::Event::Call(session),
+                &sender,
+            ),
             Input::ToggleSelectedPin => {
                 if let Some(chat) = self.selected_chat().cloned()
                     && let Some(backend) = &self.backend
