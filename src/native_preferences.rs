@@ -29,6 +29,8 @@ pub enum SettingsField {
     NotificationPreviews,
     OfflineAfterLeavingSeconds,
     OfflineAfterInactiveSeconds,
+    NotificationSound,
+    NotificationSoundInterval,
     KeepRunningInBackground,
     VoiceSpeed,
     MediaRetention,
@@ -77,6 +79,8 @@ pub struct NotificationPreferences {
     pub previews: bool,
     pub offline_after_leaving_seconds: u32,
     pub offline_after_inactive_seconds: u32,
+    pub sound: bool,
+    pub sound_interval: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -121,6 +125,8 @@ impl From<&Settings> for NativePreferences {
                 previews: settings.notification_previews,
                 offline_after_leaving_seconds: settings.offline_after_leaving_seconds,
                 offline_after_inactive_seconds: settings.offline_after_inactive_seconds,
+                sound: settings.notification_sound,
+                sound_interval: settings.notification_sound_interval,
             },
             storage: StoragePreferences {
                 auto_download: settings.auto_download,
@@ -160,6 +166,8 @@ pub enum PreferenceChange {
     SetNotificationPreviews(bool),
     SetOfflineAfterLeavingSeconds(u32),
     SetOfflineAfterInactiveSeconds(u32),
+    SetNotificationSound(bool),
+    SetNotificationSoundInterval(u32),
     SetKeepRunningInBackground(bool),
     SetVoiceSpeed(f32),
     SetMediaRetention(bool),
@@ -235,6 +243,14 @@ impl std::fmt::Debug for PreferenceChange {
                 .debug_tuple("SetOfflineAfterInactiveSeconds")
                 .field(value)
                 .finish(),
+            Change::SetNotificationSound(value) => formatter
+                .debug_tuple("SetNotificationSound")
+                .field(value)
+                .finish(),
+            Change::SetNotificationSoundInterval(value) => formatter
+                .debug_tuple("SetNotificationSoundInterval")
+                .field(value)
+                .finish(),
             Change::SetKeepRunningInBackground(value) => formatter
                 .debug_tuple("SetKeepRunningInBackground")
                 .field(value)
@@ -276,6 +292,8 @@ impl PreferenceChange {
             Self::SetNotificationPreviews(_) => SettingsField::NotificationPreviews,
             Self::SetOfflineAfterLeavingSeconds(_) => SettingsField::OfflineAfterLeavingSeconds,
             Self::SetOfflineAfterInactiveSeconds(_) => SettingsField::OfflineAfterInactiveSeconds,
+            Self::SetNotificationSound(_) => SettingsField::NotificationSound,
+            Self::SetNotificationSoundInterval(_) => SettingsField::NotificationSoundInterval,
             Self::SetKeepRunningInBackground(_) => SettingsField::KeepRunningInBackground,
             Self::SetVoiceSpeed(_) => SettingsField::VoiceSpeed,
             Self::SetMediaRetention(_) => SettingsField::MediaRetention,
@@ -494,6 +512,52 @@ impl NativePreferencesDialog {
             change_sink.clone(),
             PreferenceChange::SetNotificationPreviews,
         );
+        let sound_row = libadwaita::SwitchRow::new();
+        sound_row.set_title(&gettext("Notification sound"));
+        sound_row.set_subtitle(&gettext(
+            "Play a short sound with notifications, where the desktop supports it",
+        ));
+        sound_row.set_active(preferences.notifications.sound);
+        {
+            let change_sink = change_sink.clone();
+            sound_row.connect_active_notify(move |row| {
+                change_sink.push(PreferenceChange::SetNotificationSound(row.is_active()));
+            });
+        }
+        notifications_group.add(&sound_row);
+
+        let interval_row = libadwaita::ComboRow::new();
+        interval_row.set_title(&gettext("Pause between sounds"));
+        interval_row.set_subtitle(&gettext("Messages that arrive sooner stay silent"));
+        interval_row.set_model(Some(&gtk4::StringList::new(&[
+            &gettext("No pause"),
+            &gettext("10 seconds"),
+            &gettext("30 seconds"),
+            &gettext("1 minute"),
+            &gettext("2 minutes"),
+        ])));
+        interval_row.set_selected(
+            crate::notification_sound::INTERVALS
+                .iter()
+                .position(|seconds| *seconds == preferences.notifications.sound_interval)
+                .map_or(2, |index| index as u32),
+        );
+        {
+            let change_sink = change_sink.clone();
+            interval_row.connect_selected_notify(move |row| {
+                if let Some(seconds) = crate::notification_sound::INTERVALS
+                    .get(row.selected() as usize)
+                    .copied()
+                {
+                    change_sink.push(PreferenceChange::SetNotificationSoundInterval(seconds));
+                }
+            });
+        }
+        sound_row
+            .bind_property("active", &interval_row, "sensitive")
+            .sync_create()
+            .build();
+        notifications_group.add(&interval_row);
         add_online_status(
             &notifications_page,
             &preferences.notifications,
@@ -650,6 +714,11 @@ fn push_change(
         }
         PreferenceChange::SetMediaRetentionDays(value) if !retention_days_in_range(*value) => {
             Some(ValidationError::MediaRetentionOutOfRange)
+        }
+        PreferenceChange::SetNotificationSoundInterval(value)
+            if !crate::notification_sound::is_supported_interval(*value) =>
+        {
+            Some(ValidationError::UnsupportedSoundInterval)
         }
         _ => None,
     };
@@ -869,6 +938,7 @@ pub enum ValidationError {
     UnsupportedVoiceSpeed,
     OfflineDelayOutOfRange,
     MediaRetentionOutOfRange,
+    UnsupportedSoundInterval,
 }
 
 impl std::fmt::Display for ValidationError {
@@ -879,6 +949,9 @@ impl std::fmt::Display for ValidationError {
             Self::UnsupportedVoiceSpeed => "voice speed must be 1.0, 1.5, or 2.0",
             Self::OfflineDelayOutOfRange => "offline delay must be at most 24 hours",
             Self::MediaRetentionOutOfRange => "download retention must be 1 to 3650 days",
+            Self::UnsupportedSoundInterval => {
+                "notification sound interval must be 0, 10, 30, 60, or 120 seconds"
+            }
         };
         formatter.write_str(message)
     }
@@ -941,6 +1014,13 @@ impl PreferenceChange {
             }
             Self::SetOfflineAfterInactiveSeconds(value) => {
                 settings.offline_after_inactive_seconds = checked_offline_delay(value)?
+            }
+            Self::SetNotificationSound(value) => settings.notification_sound = value,
+            Self::SetNotificationSoundInterval(value) => {
+                if !crate::notification_sound::is_supported_interval(value) {
+                    return Err(ValidationError::UnsupportedSoundInterval);
+                }
+                settings.notification_sound_interval = value;
             }
             Self::SetKeepRunningInBackground(value) => settings.keep_running_in_background = value,
             Self::SetVoiceSpeed(value) => {
@@ -1061,6 +1141,66 @@ mod tests {
             Err(ValidationError::UnsupportedVoiceSpeed)
         );
         assert_eq!(settings, before);
+    }
+
+    #[test]
+    fn every_offered_sound_interval_can_be_chosen() {
+        let mut settings = Settings::default();
+        for seconds in [0, 10, 30, 60, 120] {
+            PreferenceChange::SetNotificationSoundInterval(seconds)
+                .apply(&mut settings)
+                .unwrap();
+            assert_eq!(settings.notification_sound_interval, seconds);
+        }
+    }
+
+    #[test]
+    fn an_unoffered_sound_interval_is_rejected_without_mutating_settings() {
+        let mut settings = Settings::default();
+        let before = settings.clone();
+
+        assert_eq!(
+            PreferenceChange::SetNotificationSoundInterval(45).apply(&mut settings),
+            Err(ValidationError::UnsupportedSoundInterval)
+        );
+        assert_eq!(settings, before);
+
+        let changes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let errors = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let on_change: std::rc::Rc<dyn Fn()> = std::rc::Rc::new(|| {});
+        push_change(
+            &changes,
+            &errors,
+            &on_change,
+            PreferenceChange::SetNotificationSoundInterval(45),
+        );
+        assert!(changes.borrow().is_empty());
+        assert_eq!(
+            *errors.borrow(),
+            [ValidationError::UnsupportedSoundInterval]
+        );
+    }
+
+    #[test]
+    fn the_sound_switch_changes_only_the_sound_and_the_snapshot_reflects_it() {
+        let mut settings = Settings::default();
+        let notifications = settings.notifications;
+        PreferenceChange::SetNotificationSound(false)
+            .apply(&mut settings)
+            .unwrap();
+
+        let snapshot = NativePreferences::from(&settings);
+        assert!(!snapshot.notifications.sound);
+        assert_eq!(snapshot.notifications.sound_interval, 30);
+        assert_eq!(settings.notifications, notifications);
+        assert_eq!(
+            PreferenceChange::SetNotificationSound(true).settings_field(),
+            SettingsField::NotificationSound
+        );
+        assert_eq!(
+            PreferenceChange::SetNotificationSoundInterval(10).settings_field(),
+            SettingsField::NotificationSoundInterval
+        );
     }
 
     #[test]

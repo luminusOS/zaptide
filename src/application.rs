@@ -488,6 +488,8 @@ pub struct NativeApplication {
     window: adw::ApplicationWindow,
     backend: Option<Backend>,
     notifications: crate::native_notifications::NativeNotifications,
+    /// One throttle for every account and chat.
+    notification_sound: crate::notification_sound::NotificationSound,
     notifier: EventNotifier,
     /// The active account's event drain; hidden accounts keep their own.
     active_drain: Option<GlibEventDrain>,
@@ -1332,6 +1334,7 @@ impl SimpleComponent for NativeApplication {
             window: root.clone(),
             backend,
             notifications,
+            notification_sound: crate::notification_sound::NotificationSound::default(),
             notifier,
             active_drain: Some(event_drain),
             accounts: std::collections::HashMap::new(),

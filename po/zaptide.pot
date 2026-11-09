@@ -1683,3 +1683,51 @@ msgstr ""
 #: src/services/media.rs:27
 msgid "Playing faster needs the GStreamer scaletempo plugin (gst-plugins-good)"
 msgstr ""
+
+#: src/application/calls/screen.rs:88
+msgid "%1$s is also calling, with video"
+msgstr ""
+
+#: src/application/calls/screen.rs:90
+msgid "%1$s is also calling"
+msgstr ""
+
+#: src/application/calls/screen.rs:99
+msgid "Decline new call"
+msgstr ""
+
+#: src/native_preferences.rs:518
+msgid "Notification sound"
+msgstr ""
+
+#: src/native_preferences.rs:520
+msgid "Play a short sound with notifications, where the desktop supports it"
+msgstr ""
+
+#: src/native_preferences.rs:532
+msgid "Pause between sounds"
+msgstr ""
+
+#: src/native_preferences.rs:533
+msgid "Messages that arrive sooner stay silent"
+msgstr ""
+
+#: src/native_preferences.rs:535
+msgid "No pause"
+msgstr ""
+
+#: src/native_preferences.rs:536
+msgid "10 seconds"
+msgstr ""
+
+#: src/native_preferences.rs:537
+msgid "30 seconds"
+msgstr ""
+
+#: src/native_preferences.rs:538
+msgid "1 minute"
+msgstr ""
+
+#: src/native_preferences.rs:539
+msgid "2 minutes"
+msgstr ""

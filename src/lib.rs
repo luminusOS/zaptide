@@ -34,6 +34,7 @@ pub(crate) mod native_theme;
 pub(crate) mod native_transcript;
 pub(crate) mod native_tray;
 pub(crate) mod native_voice;
+pub(crate) mod notification_sound;
 pub(crate) mod notifier;
 pub mod paths;
 pub(crate) mod portal;

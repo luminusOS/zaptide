@@ -25,7 +25,7 @@ without a browser engine. Messages stay in a local, encrypted archive.
 - Voice and video calls with one contact, with a call history.
 - Multiple accounts with separate history and settings.
 - Chat search, starred messages and link previews.
-- Desktop notifications and synced read status.
+- Desktop notifications with an optional sound, and synced read status.
 - Phone notifications while you do not use ZapTide: ZapTide goes offline soon
   after you leave it or stop using it (Preferences, Notifications).
 - Light, dark and custom themes.
@@ -79,6 +79,16 @@ History may take a few minutes. The avatar adds or switches accounts;
 Enter sends; Shift+Enter adds a line (configurable). Emoji selection returns focus
 to the input. Escape dismisses selection, edits or replies before closing the chat.
 **Close Chat** also returns home; both keep drafts and mark nothing as read.
+
+Notifications can carry a short sound, at most once per pause (30 seconds by
+default, from none to 2 minutes) across all chats and accounts. Both settings are
+under **Preferences → Notifications**. Flatpak offers the sound through version 2 of
+the notification portal; other builds, including AppImage, offer it to the desktop
+notification service when the service supports sounds. The desktop decides whether
+to play it, so Do Not Disturb and its own sound settings still apply. Where neither
+takes a sound, or with the sound turned off, notifications are sent as before and the
+desktop may play its own sound. The sound is
+[Message Notification 4](assets/sounds/README.md) by AnthonyRox (CC0).
 
 GIFs play silently while their rows are shown. Leaving the conversation or hiding
 the window releases their playback resources; showing them again restarts playback.

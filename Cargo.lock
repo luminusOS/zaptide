@@ -5519,6 +5519,7 @@ dependencies = [
  "jiff",
  "ksni",
  "libadwaita",
+ "libc",
  "log",
  "mime_guess",
  "ogg",

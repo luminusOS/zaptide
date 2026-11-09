@@ -9,6 +9,13 @@ use std::collections::{HashMap, VecDeque};
 use relm4::gtk;
 use relm4::gtk::prelude::*;
 
+#[cfg(target_os = "linux")]
+mod adapters;
+#[cfg(target_os = "linux")]
+mod freedesktop;
+#[cfg(target_os = "linux")]
+mod portal;
+
 const OPEN_CHAT_ACTION: &str = "open-chat";
 const CALL_ANSWER_ACTION: &str = "call-answer";
 const CALL_DECLINE_ACTION: &str = "call-decline";
@@ -18,6 +25,7 @@ const MAX_PENDING_ACTIVATIONS: usize = 256;
 
 use crate::account::AccountId;
 use crate::i18n::gettext;
+use crate::notification_sound::SoundRequest;
 
 /// What the person chose on a call's notification.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,6 +71,11 @@ impl ActivationTokens {
     fn activate(&mut self, token: &str) -> Option<(AccountId, String)> {
         self.order.retain(|existing| existing != token);
         self.chats.remove(token)
+    }
+
+    /// Drops a token whose notification the person dismissed.
+    fn forget(&mut self, token: &str) {
+        self.activate(token);
     }
 
     /// The target of a token that stays valid, as the buttons of a call's
@@ -122,6 +135,8 @@ pub struct NativeNotifications {
     application: gtk::Application,
     tokens: std::rc::Rc<std::cell::RefCell<ActivationTokens>>,
     calls: std::rc::Rc<std::cell::RefCell<ActivationTokens>>,
+    #[cfg(target_os = "linux")]
+    chat_backend: std::rc::Rc<adapters::Notifier>,
     body_format: std::cell::OnceCell<BodyFormat>,
 }
 
@@ -135,6 +150,16 @@ impl NativeNotifications {
         use gtk::gio::prelude::*;
 
         let tokens = std::rc::Rc::new(std::cell::RefCell::new(ActivationTokens::default()));
+        #[cfg(target_os = "linux")]
+        let closed_tokens = tokens.clone();
+        #[cfg(target_os = "linux")]
+        let chat_backend = std::rc::Rc::new(adapters::create(
+            application,
+            portal::sandboxed(),
+            move |token| closed_tokens.borrow_mut().forget(token),
+        ));
+        #[cfg(target_os = "linux")]
+        let activation_backend = chat_backend.clone();
         let action_tokens = tokens.clone();
         let action =
             gtk::gio::SimpleAction::new(OPEN_CHAT_ACTION, Some(&String::static_variant_type()));
@@ -143,6 +168,8 @@ impl NativeNotifications {
                 return;
             };
             if let Some((account, chat_id)) = action_tokens.borrow_mut().activate(&token) {
+                #[cfg(target_os = "linux")]
+                activation_backend.withdraw(&token);
                 open_chat(account, chat_id);
             }
         });
@@ -174,6 +201,8 @@ impl NativeNotifications {
             application: application.clone(),
             tokens,
             calls,
+            #[cfg(target_os = "linux")]
+            chat_backend,
             body_format: std::cell::OnceCell::new(),
         }
     }
@@ -187,7 +216,9 @@ impl NativeNotifications {
     }
 
     /// Shows or replaces the chat's notification; the chat ID stays in the
-    /// in-memory token map.
+    /// in-memory token map. `sound` is passed on only where the desktop can
+    /// take it with the notification, and ignored elsewhere; `None` means the
+    /// person turned the sound off.
     pub fn show(
         &self,
         account: AccountId,
@@ -195,6 +226,7 @@ impl NativeNotifications {
         title: &str,
         body: &str,
         icon: Option<&std::path::Path>,
+        sound: Option<SoundRequest>,
     ) -> Result<(), getrandom::Error> {
         use gtk::gio::prelude::*;
 
@@ -220,17 +252,40 @@ impl NativeNotifications {
             }
         };
         if let Some(evicted) = evicted {
-            self.application.withdraw_notification(&evicted);
+            self.withdraw_chat_notification(&evicted);
         }
 
-        let notification = notification(title, body, self.body_format(), icon);
-        notification.set_default_action_and_target_value(
-            &format!("app.{OPEN_CHAT_ACTION}"),
-            Some(&token.to_variant()),
+        let bytes = icon_bytes(title, icon);
+        let notification = notification(title, body, self.body_format(), bytes.as_ref());
+        let default_action = format!("app.{OPEN_CHAT_ACTION}");
+        notification
+            .set_default_action_and_target_value(&default_action, Some(&token.to_variant()));
+
+        #[cfg(target_os = "linux")]
+        self.chat_backend.show(
+            adapters::Request {
+                token,
+                title: title.to_owned(),
+                body: body.to_owned(),
+                icon: bytes.as_deref().map(<[u8]>::to_vec),
+                notification,
+            },
+            sound,
         );
-        self.application
-            .send_notification(Some(&token), &notification);
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = sound;
+            self.application
+                .send_notification(Some(&token), &notification);
+        }
         Ok(())
+    }
+
+    fn withdraw_chat_notification(&self, token: &str) {
+        #[cfg(target_os = "linux")]
+        self.chat_backend.withdraw(token);
+        #[cfg(not(target_os = "linux"))]
+        self.application.withdraw_notification(token);
     }
 
     /// Shows or replaces a call's notification. Its buttons act on the call
@@ -257,7 +312,12 @@ impl NativeNotifications {
         };
         self.calls.borrow_mut().insert(token.clone(), target);
 
-        let notification = notification(title, body, self.body_format(), icon);
+        let notification = notification(
+            title,
+            body,
+            self.body_format(),
+            icon_bytes(title, icon).as_ref(),
+        );
         notification.set_priority(gtk::gio::NotificationPriority::Urgent);
         let value = token.to_variant();
         notification
@@ -292,7 +352,7 @@ impl NativeNotifications {
             .borrow_mut()
             .remove_chat(&(account, chat_id.to_owned()))
         {
-            self.application.withdraw_notification(&token);
+            self.withdraw_chat_notification(&token);
         }
     }
 
@@ -300,29 +360,35 @@ impl NativeNotifications {
     pub fn clear_account(&self, account: AccountId) {
         let removed = self.tokens.borrow_mut().remove_account(account);
         let removed_calls = self.calls.borrow_mut().remove_account(account);
-        for token in removed.into_iter().chain(removed_calls) {
+        for token in removed {
+            self.withdraw_chat_notification(&token);
+        }
+        for token in removed_calls {
             self.application.withdraw_notification(&token);
         }
     }
+}
+
+/// The picture to send with a notification. The notification portal drops file
+/// icons, so a Flatpak build sends the bytes. Without a picture, draw the same
+/// coloured initials the chat list shows.
+fn icon_bytes(title: &str, icon: Option<&std::path::Path>) -> Option<gtk::glib::Bytes> {
+    icon.and_then(round_icon)
+        .and_then(|path| std::fs::read(path).ok())
+        .map(gtk::glib::Bytes::from_owned)
+        .or_else(|| initials_icon(title))
 }
 
 fn notification(
     title: &str,
     body: &str,
     format: BodyFormat,
-    icon: Option<&std::path::Path>,
+    icon: Option<&gtk::glib::Bytes>,
 ) -> gtk::gio::Notification {
     let notification = gtk::gio::Notification::new(title);
     notification.set_body(Some(&notification_body(body, format)));
-    // The notification portal drops file icons, so a Flatpak build sends the bytes.
-    // Without a picture, draw the same coloured initials the chat list shows.
-    let bytes = icon
-        .and_then(round_icon)
-        .and_then(|path| std::fs::read(path).ok())
-        .map(gtk::glib::Bytes::from_owned)
-        .or_else(|| initials_icon(title));
-    if let Some(bytes) = bytes {
-        notification.set_icon(&gtk::gio::BytesIcon::new(&bytes));
+    if let Some(bytes) = icon {
+        notification.set_icon(&gtk::gio::BytesIcon::new(bytes));
     }
     notification
 }
