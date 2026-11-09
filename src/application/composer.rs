@@ -502,15 +502,30 @@ impl SimpleComponent for ComposerView {
                 .foreground_rgba(&libadwaita::StyleManager::default().accent_color_rgba())
                 .build(),
         );
+        crate::native_composer::formatting::install(&model.buffer);
+        crate::native_composer::formatting::refresh(&model.buffer);
         model.buffer.connect_changed(move |buffer| {
+            #[cfg(test)]
+            crate::native_composer::formatting::probe::changed(true);
             highlight_links(buffer);
+            crate::native_composer::formatting::refresh(buffer);
+            #[cfg(test)]
+            crate::native_composer::formatting::probe::event("draft_copy_enter", 0);
             let text = buffer
                 .text(&buffer.start_iter(), &buffer.end_iter(), true)
                 .to_string();
+            #[cfg(test)]
+            crate::native_composer::formatting::probe::event("draft_copy_exit", text.len());
+            #[cfg(test)]
+            crate::native_composer::formatting::probe::event("draft_send_enter", 0);
             component_input.input(ComposerViewInput::DraftChanged(text.clone()));
             input
                 .output(ComposerViewOutput::DraftChanged(text))
                 .unwrap();
+            #[cfg(test)]
+            crate::native_composer::formatting::probe::event("draft_send_exit", 0);
+            #[cfg(test)]
+            crate::native_composer::formatting::probe::changed(false);
         });
         let enter_buffer = model.buffer.clone();
         let send_sender = sender.clone();
@@ -963,13 +978,42 @@ const LINK_TAG: &str = "zaptide-link";
 
 fn highlight_links(buffer: &gtk::TextBuffer) {
     let (start, end) = buffer.bounds();
+    #[cfg(test)]
+    crate::native_composer::formatting::probe::event("link_remove_enter", 0);
     buffer.remove_tag_by_name(LINK_TAG, &start, &end);
+    #[cfg(test)]
+    crate::native_composer::formatting::probe::event("link_remove_exit", 0);
+    #[cfg(test)]
+    crate::native_composer::formatting::probe::event("link_text_enter", 0);
     let text = buffer.text(&start, &end, false);
-    for (from, to) in crate::link_preview::link_ranges(&text) {
+    #[cfg(test)]
+    crate::native_composer::formatting::probe::event("link_text_exit", text.len());
+    #[cfg(test)]
+    crate::native_composer::formatting::probe::event("link_scan_enter", 0);
+    let ranges = crate::link_preview::link_ranges(&text);
+    #[cfg(test)]
+    crate::native_composer::formatting::probe::event("link_scan_exit", ranges.len());
+    #[cfg(test)]
+    crate::native_composer::formatting::probe::event("link_apply_enter", ranges.len());
+    #[cfg(test)]
+    let mut applied = 0usize;
+    for (from, to) in ranges {
         buffer.apply_tag_by_name(
             LINK_TAG,
             &buffer.iter_at_offset(from as i32),
             &buffer.iter_at_offset(to as i32),
         );
+        #[cfg(test)]
+        {
+            applied += 1;
+            if applied.is_multiple_of(1024) {
+                crate::native_composer::formatting::probe::event("link_apply_checkpoint", applied);
+            }
+        }
     }
+    #[cfg(test)]
+    crate::native_composer::formatting::probe::event("link_apply_exit", applied);
 }
+
+#[cfg(test)]
+mod resource_validation;

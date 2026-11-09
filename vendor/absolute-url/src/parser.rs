@@ -16,6 +16,11 @@ use crate::Url;
 use form_urlencoded::EncodingOverride;
 use percent_encoding::{percent_encode, utf8_percent_encode, AsciiSet, CONTROLS};
 
+#[cfg(test)]
+std::thread_local! {
+    static ROOT_DOT_SEARCH_BYTES: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+}
+
 /// https://url.spec.whatwg.org/#fragment-percent-encode-set
 const FRAGMENT: &AsciiSet = &CONTROLS.add(b' ').add(b'"').add(b'<').add(b'>').add(b'`');
 
@@ -1427,8 +1432,15 @@ impl Parser<'_> {
     }
 
     fn last_slash_can_be_removed(serialization: &str, path_start: usize) -> bool {
-        let url_before_segment = &serialization[..serialization.len() - 1];
-        if let Some(segment_before_start) = url_before_segment.rfind('/') {
+        let url_before_segment = &serialization[path_start..serialization.len() - 1];
+        #[cfg(not(test))]
+        let segment_before_start = url_before_segment.rfind('/');
+        #[cfg(test)]
+        let segment_before_start = url_before_segment.as_bytes().iter().rposition(|&byte| {
+            ROOT_DOT_SEARCH_BYTES.with(|work| work.set(work.get() + 1));
+            byte == b'/'
+        });
+        if let Some(segment_before_start) = segment_before_start.map(|index| path_start + index) {
             // Do not remove the root slash
             segment_before_start >= path_start
                 // Or a windows drive letter slash
@@ -1742,6 +1754,36 @@ impl Parser<'_> {
     fn check_url_code_point(&self, c: char, input: &Input<'_>) {
         if let Some(vfn) = self.violation_fn {
             check_url_code_point(vfn, c, input)
+        }
+    }
+}
+
+#[cfg(test)]
+mod root_dot_regression {
+    use super::ROOT_DOT_SEARCH_BYTES;
+
+    #[test]
+    fn root_dot_search_work_is_linear() {
+        ROOT_DOT_SEARCH_BYTES.with(|work| work.set(0));
+        assert_eq!(
+            crate::Url::parse("https://example.com/abc/../x")
+                .unwrap()
+                .as_str(),
+            "https://example.com/x"
+        );
+        assert!(ROOT_DOT_SEARCH_BYTES.with(core::cell::Cell::get) > 0);
+        for n in [128, 256] {
+            let input = format!("https://{}/{}x", "a".repeat(n), "../".repeat(n));
+            ROOT_DOT_SEARCH_BYTES.with(|work| work.set(0));
+            let parsed = crate::Url::parse(&input).unwrap();
+            let visited = ROOT_DOT_SEARCH_BYTES.with(core::cell::Cell::get);
+            std::println!("n={n} visited={visited} input={}", input.len());
+            assert_eq!(parsed.as_str(), format!("https://{}/x", "a".repeat(n)));
+            assert!(
+                visited <= input.len() * 4,
+                "n={n} visited={visited} input={}",
+                input.len()
+            );
         }
     }
 }

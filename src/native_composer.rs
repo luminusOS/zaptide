@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::fmt;
 
+pub(crate) mod formatting;
+
 /// Toolkit-neutral composer state, keyed by chat ID.
 ///
 /// Draft text and captions stay in memory only. Debug output deliberately omits

@@ -83,6 +83,30 @@ to the input. Escape dismisses selection, edits or replies before closing the ch
 GIFs play silently while their rows are shown. Leaving the conversation or hiding
 the window releases their playback resources; showing them again restarts playback.
 
+## Message formatting (development)
+
+This development branch adds WhatsApp formatting to message bubbles and the
+composer: bold, italic, strikethrough, monospace, inline code, bulleted lists,
+numbered lists and quotes.
+
+````text
+*bold* _italic_ ~strikethrough~
+`inline code`
+```monospace```
+- bulleted item
+1. numbered item
+> quoted text
+````
+
+The composer keeps the original delimiters visible and sends the original text.
+Formatting does not require a separate preview. Wrapped list items retain their
+indentation, and links remain selectable and clickable.
+
+This implementation is not release-ready: large, densely formatted messages have
+not met the required work and whole-process memory bounds. The private GTK and
+Pango builds used for investigation are not application dependencies or supported
+runtime requirements.
+
 ## Calls
 
 > [!WARNING]
