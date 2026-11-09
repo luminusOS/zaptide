@@ -18,6 +18,23 @@ fn find_toggle_group(widget: &gtk::Widget) -> Option<adw::ToggleGroup> {
     None
 }
 
+fn find_return_to_call(widget: &gtk::Widget) -> Option<gtk::Button> {
+    if let Ok(button) = widget.clone().downcast::<gtk::Button>()
+        && (button.label().as_deref() == Some("Return to call")
+            || button.tooltip_text().as_deref() == Some("Return to call"))
+    {
+        return Some(button);
+    }
+    let mut child = widget.first_child();
+    while let Some(current) = child {
+        if let Some(button) = find_return_to_call(&current) {
+            return Some(button);
+        }
+        child = current.next_sibling();
+    }
+    None
+}
+
 fn spin(duration: std::time::Duration) {
     let context = gtk::glib::MainContext::default();
     let end = std::time::Instant::now() + duration;
@@ -123,6 +140,16 @@ fn every_sidebar_section_switch_settles_on_the_chosen_section() {
     app.emit(Input::ShowLiveCall);
     spin(std::time::Duration::from_millis(300));
     assert!(app.model().calls.live_view.is_mapped());
+
+    let return_button = find_return_to_call(window.upcast_ref()).expect("return to call button");
+    assert!(return_button.is_visible());
+    call.phase = crate::model::call::CallPhase::Ended(crate::model::call::CallOutcome::Completed);
+    app.emit(Input::TestCall(call.clone()));
+    spin(std::time::Duration::from_millis(300));
+    assert!(
+        !return_button.is_visible(),
+        "finished calls must not offer to return"
+    );
 
     call.phase = crate::model::call::CallPhase::Ended(crate::model::call::CallOutcome::Elsewhere);
     app.emit(Input::TestCall(call));
