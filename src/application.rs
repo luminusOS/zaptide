@@ -1473,6 +1473,9 @@ impl SimpleComponent for NativeApplication {
         model.message_menu.set_parent(&widgets.conversation_body);
         model.message_menu.set_has_arrow(false);
         model.message_menu.set_halign(gtk::Align::Start);
+        model
+            .message_menu
+            .connect_closed(|_| reaction_drawer::resume());
         install_message_actions(&root, &sender);
         let selection_keys = gtk::EventControllerKey::new();
         let selection_sender = sender.clone();
@@ -1779,6 +1782,7 @@ impl NativeApplication {
             "reactions",
         );
         self.message_menu.set_pointing_to(Some(&rect));
+        reaction_drawer::suspend();
         self.message_menu.popup();
     }
 
