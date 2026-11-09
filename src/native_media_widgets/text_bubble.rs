@@ -15,6 +15,9 @@ struct LinkRange {
 type LinkHandler = Box<dyn for<'a> Fn(crate::safety::LinkActivation<'a>)>;
 type CodeHandler = Box<dyn Fn(&str)>;
 
+// GtkTextView reserves one pixel for the cursor, even when hidden.
+const CURSOR_SPACE: i32 = 1;
+
 thread_local! {
     static BUBBLE_STYLE: gtk::CssProvider = {
         let provider = gtk::CssProvider::new();
@@ -305,12 +308,9 @@ mod imp {
             let (minimum, natural, min_baseline, nat_baseline) =
                 view.measure(orientation, for_size);
             if orientation == gtk::Orientation::Horizontal {
-                let buffer = view.buffer();
-                let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), true);
-                let layout = view.create_pango_layout(Some(&text));
-                layout.set_attributes(self.width_attributes.borrow().as_ref());
-                // GtkTextView reserves one pixel for the cursor, even when hidden.
-                let width = layout.pixel_size().0 + view.left_margin() + view.right_margin() + 1;
+                let layout = self.obj().text_layout();
+                let width =
+                    layout.pixel_size().0 + view.left_margin() + view.right_margin() + CURSOR_SPACE;
                 return (
                     minimum,
                     natural.max(width).max(minimum),
@@ -365,6 +365,67 @@ impl TextBubble {
 
     pub(crate) fn view(&self) -> gtk::TextView {
         self.imp().view.get().expect("view initialized").clone()
+    }
+
+    fn text_layout(&self) -> gtk::pango::Layout {
+        let view = self.view();
+        let buffer = view.buffer();
+        let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), true);
+        let layout = view.create_pango_layout(Some(&text));
+        layout.set_attributes(self.imp().width_attributes.borrow().as_ref());
+        layout
+    }
+
+    pub(crate) fn wrapped_width(&self, available: i32) -> i32 {
+        let view = self.view();
+        let buffer = view.buffer();
+        let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), true);
+        let margins = view.left_margin() + view.right_margin() + CURSOR_SPACE;
+        let mut start = 0;
+        let paragraphs: Vec<_> = text
+            .split_inclusive('\n')
+            .map(|paragraph| {
+                let range = start..start + paragraph.len();
+                start = range.end;
+                (range, gtk::pango::AttrList::new())
+            })
+            .collect();
+        if let Some(attributes) = self.imp().width_attributes.borrow().as_ref() {
+            for attribute in attributes.attributes() {
+                let start = attribute.start_index() as usize;
+                let end = (attribute.end_index() as usize).min(text.len());
+                let first = paragraphs
+                    .partition_point(|(range, _)| range.start <= start)
+                    .saturating_sub(1);
+                for (range, attributes) in paragraphs[first..].iter() {
+                    if range.start >= end {
+                        break;
+                    }
+                    let mut attribute = attribute.clone();
+                    attribute.set_start_index((start.max(range.start) - range.start) as u32);
+                    attribute.set_end_index((end.min(range.end) - range.start) as u32);
+                    attributes.insert(attribute);
+                }
+            }
+        }
+        let blocks = self.imp().blocks.borrow();
+        let mut blocks = blocks.iter().peekable();
+        let mut offset = 0;
+        let mut widest = 0;
+        for (range, attributes) in paragraphs {
+            let paragraph = &text[range];
+            let layout = view.create_pango_layout(Some(paragraph.trim_end_matches('\n')));
+            layout.set_attributes(Some(&attributes));
+            if let Some((_, marker)) = blocks.next_if(|(range, _)| range.start == offset) {
+                let indent = view.create_pango_layout(Some(marker)).pixel_size().0;
+                layout.set_indent(-indent * gtk::pango::SCALE);
+            }
+            layout.set_width((available - margins).max(1) * gtk::pango::SCALE);
+            layout.set_wrap(gtk::pango::WrapMode::WordChar);
+            widest = widest.max(layout.pixel_size().0);
+            offset += paragraph.chars().count() as i32;
+        }
+        (widest + margins).min(available)
     }
 
     fn schedule_metrics_refresh(&self) {
