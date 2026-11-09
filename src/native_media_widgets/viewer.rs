@@ -1,3 +1,4 @@
+mod caption;
 mod details;
 mod photo;
 mod video;
@@ -223,7 +224,7 @@ struct ViewerParts {
     name: gtk::Label,
     time: gtk::Label,
     counter: gtk::Label,
-    caption: gtk::Label,
+    caption: caption::Caption,
     metadata: gtk::Label,
 }
 
@@ -236,8 +237,7 @@ impl ViewerParts {
         self.counter.set_visible(counter.is_some());
         self.counter
             .set_label(counter.as_deref().unwrap_or_default());
-        self.caption
-            .set_label(details.caption.as_deref().unwrap_or_default());
+        self.caption.show(details.caption.as_deref());
         self.metadata.set_label(&details.metadata);
     }
 }
@@ -360,24 +360,13 @@ fn media_viewer(
         header.pack_end(action);
     }
 
-    let caption = gtk::Label::builder()
-        .hexpand(true)
-        .xalign(0.0)
-        .valign(gtk::Align::Center)
-        .wrap(true)
-        .wrap_mode(gtk::pango::WrapMode::WordChar)
-        .ellipsize(gtk::pango::EllipsizeMode::End)
-        .lines(2)
-        .selectable(true)
-        .build();
     let metadata = label_with(&["caption", "dim-label", "numeric", "zaptide-viewer-metadata"]);
+    metadata.set_hexpand(true);
+    metadata.set_xalign(1.0);
+    metadata.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    metadata.set_width_chars(1);
     metadata.set_halign(gtk::Align::End);
-    let bar = gtk::Box::builder()
-        .spacing(16)
-        .css_classes(["zaptide-viewer-caption"])
-        .build();
-    bar.append(&caption);
-    bar.append(&metadata);
+    let caption = caption::Caption::new(&metadata);
 
     let view = adw::ToolbarView::builder()
         .content(content)
@@ -386,7 +375,7 @@ fn media_viewer(
         .css_classes(["zaptide-viewer"])
         .build();
     view.add_top_bar(&header);
-    view.add_bottom_bar(&bar);
+    view.add_bottom_bar(&caption.widget);
     let responsive_view = adw::BreakpointBin::builder()
         .width_request(MIN_VIEWER.0)
         .height_request(MIN_VIEWER.1)

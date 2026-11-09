@@ -206,6 +206,149 @@ fn photo_item(message: &Message) -> PhotoItem {
 }
 
 #[test]
+#[ignore = "needs a display and glycin loaders"]
+fn long_captions_keep_the_photo_visible_and_open_the_complete_text() {
+    use super::super::playback_tests::{drain, wait_until};
+
+    let runtime = init_display();
+    let _guard = runtime.enter();
+    let directory = tempfile::tempdir().unwrap();
+    let mut message = fixture_message(directory.path(), "caption.png", 1200, 1600);
+    let text = (1..=40)
+        .map(|number| format!("Synthetic paragraph {number}: a long description of the sample photograph with enough text to wrap across several lines."))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    if let Content::Image { caption, .. } = &mut message.content {
+        *caption = Some(text.clone());
+    }
+    let long = photo_item(&message);
+    if let Content::Image { caption, .. } = &mut message.content {
+        *caption = Some("Short caption".into());
+    }
+    let short = photo_item(&message);
+    if let Content::Image { caption, .. } = &mut message.content {
+        *caption = None;
+    }
+    let empty = photo_item(&message);
+    let window = adw::Window::builder()
+        .default_width(960)
+        .default_height(640)
+        .content(&gtk::Box::new(gtk::Orientation::Vertical, 0))
+        .build();
+    window.present();
+    drain();
+    let window_ref = window.upcast_ref::<gtk::Window>();
+    show_photo(
+        &window,
+        Rc::new(vec![long, short, empty]),
+        0,
+        Rc::new(|_| {}),
+    );
+    wait_until("photo did not load", || {
+        button(window_ref, "Copy Image").is_sensitive()
+    });
+    drain();
+    let footer = tree(window_ref)
+        .into_iter()
+        .find(|widget| widget.has_css_class("zaptide-viewer-caption"))
+        .unwrap();
+    assert!(
+        footer.height() <= 120,
+        "caption must not displace the photo: {} px",
+        footer.height()
+    );
+    let preview = label(window_ref, "zaptide-viewer-caption-preview");
+    assert!(!preview.label().contains('\n'));
+    assert!(preview.layout().is_ellipsized());
+    let open = tree(window_ref)
+        .into_iter()
+        .filter_map(|widget| widget.downcast::<gtk::MenuButton>().ok())
+        .find(|button| button.label().as_deref() == Some("View Caption"))
+        .expect("caption disclosure");
+    let popover = open.popover().unwrap();
+    let scroller = popover
+        .child()
+        .and_downcast::<gtk::ScrolledWindow>()
+        .unwrap();
+    let full = label(window_ref, "zaptide-viewer-caption-full");
+    for width in [960, 420, 350] {
+        window.set_default_size(width, 640);
+        drain();
+        assert!(footer.height() <= 120, "compact footer at {width} px");
+        assert!(open.activate(), "caption opens from keyboard activation");
+        wait_until("caption did not open", || popover.is_mapped());
+        drain();
+        assert_eq!(full.label().as_str(), text);
+        assert!(full.is_selectable());
+        assert!(
+            full.selection_bounds().is_none(),
+            "opening the caption must not select its text at {width} px"
+        );
+        assert!(
+            scroller.height() <= 240,
+            "full caption has a bounded viewport"
+        );
+        assert!(
+            popover.width() <= window.width(),
+            "caption fits at {width} px"
+        );
+        let scroll = scroller.vadjustment();
+        assert!(scroll.upper() > scroll.page_size());
+        scroll.set_value(scroll.upper() - scroll.page_size());
+        drain();
+        assert!(scroll.value() > 0.0, "last paragraph can be reached");
+        screenshot(&popover, &format!("caption-expanded-{width}"));
+        full.select_region(0, 19);
+        assert_eq!(full.selection_bounds(), Some((0, 19)));
+        full.emit_by_name::<()>("copy-clipboard", &[]);
+        let copied = Rc::new(RefCell::new(None));
+        full.clipboard()
+            .read_text_async(gtk::gio::Cancellable::NONE, {
+                let copied = copied.clone();
+                move |result| *copied.borrow_mut() = Some(result.unwrap())
+            });
+        wait_until("selected caption was not copied", || {
+            copied.borrow().is_some()
+        });
+        assert_eq!(
+            copied.borrow().as_ref().unwrap().as_deref(),
+            Some("Synthetic paragraph")
+        );
+        open.popdown();
+        drain();
+        open.popup();
+        drain();
+        assert!(
+            full.selection_bounds().is_none(),
+            "reopening clears the previous selection"
+        );
+        open.popdown();
+        drain();
+        screenshot(window_ref, &format!("caption-collapsed-{width}"));
+    }
+    open.popup();
+    drain();
+    button(window_ref, "Next Photo").emit_clicked();
+    drain();
+    assert!(
+        !popover.is_visible(),
+        "album navigation closes the old caption"
+    );
+    assert_eq!(preview.label(), "Short caption");
+    assert_eq!(full.label(), "Short caption");
+    open.popup();
+    drain();
+    assert_eq!(scroller.vadjustment().value(), 0.0);
+    open.popdown();
+    button(window_ref, "Next Photo").emit_clicked();
+    drain();
+    assert!(!open.is_visible());
+    assert!(!preview.is_visible());
+    assert!(label(window_ref, "zaptide-viewer-metadata").is_mapped());
+    window.close();
+}
+
+#[test]
 #[ignore = "requires a graphical display and glycin loaders"]
 fn copy_image_places_a_texture_on_the_clipboard_without_opening_viewer() {
     use super::super::playback_tests::wait_until;

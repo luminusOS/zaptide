@@ -220,6 +220,8 @@ wide windows. Use Back or Escape to return to the conversation. Photos support z
 and album navigation; videos include playback, volume and fullscreen controls.
 Leaving the viewer stops playback and releases its files for download cleanup.
 Open With Another App remains available in the viewer.
+Long captions stay compact below the media; View Caption opens the complete,
+selectable text in a scrollable popover without shrinking the photo or video.
 
 Audio, PDF, EPUB, RTF, office documents (OpenDocument and Microsoft Office), plain
 text, Markdown, CSV and common archives open in their default app as before. Any other
