@@ -59,6 +59,7 @@ fn chat_row(chat: &crate::model::Chat, avatar: Option<std::path::PathBuf>, open:
 
 impl NativeApplication {
     pub(super) fn select_chat(&mut self, position: u32) {
+        self.close_media_viewer();
         let Some(chat) = self.chat_ids.get(position as usize).cloned() else {
             return;
         };

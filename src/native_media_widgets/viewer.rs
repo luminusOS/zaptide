@@ -1,18 +1,26 @@
+mod caption;
 mod details;
 mod photo;
 mod video;
 
-pub(super) use video::show_video;
+pub(crate) use video::build_video;
+#[cfg(test)]
+use video::show_video;
 #[cfg(test)]
 use video::{clock_text, seek_target, video_label, volume_icon};
 
 use photo::PhotoState;
-pub(super) use photo::show_photo;
+pub(crate) use photo::build_photo;
+#[cfg(test)]
+use photo::show_photo;
 #[cfg(test)]
 use photo::{OPEN_PHOTO, ZoomKey, pan_key, zoom_key};
 
-pub(super) use details::ViewerDetails;
+pub(crate) use details::ViewerDetails;
 
+#[cfg(test)]
+use adw::prelude::AdwWindowExt;
+use adw::prelude::BreakpointBinExt;
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -28,7 +36,6 @@ use super::{
 use crate::i18n::gettext;
 
 const AVATAR_SIZE: i32 = 28;
-const UNLIMITED_DIALOG_SIZE: i32 = 10_000;
 const MIN_VIEWER: (i32, i32) = (320, 240);
 const NARROW_VIEWER: &str = "max-width: 480px";
 /// Largest side the viewer decodes to show a photo fitted to the window; more
@@ -37,9 +44,9 @@ const FIT_EDGE: u32 = 3840;
 /// Most pixels the viewer holds for one photo, whatever its real size.
 const NATIVE_PIXELS: f64 = 64e6;
 #[derive(Clone)]
-pub(super) struct PhotoItem {
-    pub(super) path: std::path::PathBuf,
-    pub(super) details: ViewerDetails,
+pub(crate) struct PhotoItem {
+    pub(crate) path: std::path::PathBuf,
+    pub(crate) details: ViewerDetails,
 }
 
 fn of_text(current: &str, total: &str) -> String {
@@ -213,20 +220,16 @@ impl ZoomPillWeak {
 
 #[derive(Clone)]
 struct ViewerParts {
-    dialog: glib::WeakRef<adw::Dialog>,
     avatar: adw::Avatar,
     name: gtk::Label,
     time: gtk::Label,
     counter: gtk::Label,
-    caption: gtk::Label,
+    caption: caption::Caption,
     metadata: gtk::Label,
 }
 
 impl ViewerParts {
     fn show(&self, details: &ViewerDetails, position: Option<(usize, usize)>) {
-        if let Some(dialog) = self.dialog.upgrade() {
-            dialog.set_title(&details.title);
-        }
         self.avatar.set_text(Some(&details.title));
         self.name.set_label(&details.title);
         self.time.set_label(&details.subtitle);
@@ -234,22 +237,66 @@ impl ViewerParts {
         self.counter.set_visible(counter.is_some());
         self.counter
             .set_label(counter.as_deref().unwrap_or_default());
-        self.caption
-            .set_label(details.caption.as_deref().unwrap_or_default());
+        self.caption.show(details.caption.as_deref());
         self.metadata.set_label(&details.metadata);
     }
 }
 
 struct Viewer {
-    dialog: adw::Dialog,
+    page: MediaViewer,
     view: adw::ToolbarView,
     parts: ViewerParts,
 }
 
-/// The files shown are kept from the downloads cleanup until the dialog closes.
-fn keep_while_open(dialog: &adw::Dialog, paths: impl IntoIterator<Item = std::path::PathBuf>) {
-    let hold = std::cell::RefCell::new(Some(crate::media_retention::hold(paths)));
-    dialog.connect_closed(move |_| drop(hold.take()));
+pub(crate) struct MediaViewer {
+    pub(crate) widget: adw::BreakpointBin,
+    lifetime: Rc<RefCell<ViewerLifetime>>,
+    on_close: Rc<dyn Fn()>,
+}
+
+impl Drop for MediaViewer {
+    fn drop(&mut self) {
+        self.lifetime.borrow_mut().close();
+    }
+}
+
+struct ViewerLifetime {
+    hold: Option<crate::media_retention::Hold>,
+    cleanup: Vec<Box<dyn FnOnce()>>,
+}
+
+impl ViewerLifetime {
+    fn new(paths: impl IntoIterator<Item = std::path::PathBuf>) -> Self {
+        Self {
+            hold: Some(crate::media_retention::hold(paths)),
+            cleanup: Vec::new(),
+        }
+    }
+
+    fn on_close(&mut self, cleanup: impl FnOnce() + 'static) {
+        self.cleanup.push(Box::new(cleanup));
+    }
+
+    fn close(&mut self) {
+        for cleanup in self.cleanup.drain(..) {
+            cleanup();
+        }
+        self.hold.take();
+    }
+}
+
+impl Drop for ViewerLifetime {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
+fn keep_while_open(
+    page: &MediaViewer,
+    paths: impl IntoIterator<Item = std::path::PathBuf>,
+) -> Rc<RefCell<ViewerLifetime>> {
+    page.lifetime.borrow_mut().hold = Some(crate::media_retention::hold(paths));
+    page.lifetime.clone()
 }
 
 fn viewer_size(parent: &impl IsA<gtk::Widget>) -> (i32, i32) {
@@ -266,27 +313,13 @@ fn label_with(classes: &[&str]) -> gtk::Label {
     label
 }
 
-/// A dark, near-full-window dialog around `content`: the sender, an optional
-/// zoom pill and the `actions` (left to right, before a close button) in a
-/// 56 px header, and the caption with the file summary in a bar below. Below
-/// 480 px the time, the counter and the pill's zoom steps give way so the
-/// header still fits; the percentage stays.
 fn media_viewer(
-    parent: &impl IsA<gtk::Widget>,
     details: &ViewerDetails,
     content: &impl IsA<gtk::Widget>,
     zoom: Option<&ZoomPill>,
     actions: &[gtk::Widget],
+    on_close: Rc<dyn Fn()>,
 ) -> Viewer {
-    let (width, height) = viewer_size(parent);
-    let dialog = adw::Dialog::builder()
-        .title(&details.title)
-        .content_width(width)
-        .content_height(height)
-        .width_request(MIN_VIEWER.0)
-        .height_request(MIN_VIEWER.1)
-        .build();
-
     let avatar = adw::Avatar::new(AVATAR_SIZE, Some(&details.title), true);
     avatar.set_valign(gtk::Align::Center);
     let name = label_with(&["heading", "zaptide-viewer-name"]);
@@ -311,56 +344,29 @@ fn media_viewer(
     }
 
     let header = adw::HeaderBar::builder()
-        .show_start_title_buttons(false)
-        .show_end_title_buttons(false)
+        .show_back_button(false)
+        .show_start_title_buttons(true)
+        .show_end_title_buttons(true)
         .title_widget(&centre)
         .build();
-    header.pack_start(&identity);
-    let close = header_button("window-close-symbolic", &gettext("Close"));
-    close.set_margin_end(6);
+    let close = header_button("go-previous-symbolic", &gettext("Back"));
     close.connect_clicked({
-        let dialog = dialog.downgrade();
-        move |_| {
-            if let Some(dialog) = dialog.upgrade() {
-                dialog.close();
-            }
-        }
+        let on_close = on_close.clone();
+        move |_| on_close()
     });
-    header.pack_end(&close);
+    header.pack_start(&close);
+    header.pack_start(&identity);
     for action in actions.iter().rev() {
         header.pack_end(action);
     }
 
-    if let Ok(condition) = adw::BreakpointCondition::parse(NARROW_VIEWER) {
-        let narrow = adw::Breakpoint::new(condition);
-        let hidden = false.to_value();
-        narrow.add_setter(&time, "visible", Some(&hidden));
-        narrow.add_setter(&counter_slot, "visible", Some(&hidden));
-        if let Some(zoom) = zoom {
-            narrow.add_setter(&zoom.shrink, "visible", Some(&hidden));
-            narrow.add_setter(&zoom.grow, "visible", Some(&hidden));
-        }
-        dialog.add_breakpoint(narrow);
-    }
-
-    let caption = gtk::Label::builder()
-        .hexpand(true)
-        .xalign(0.0)
-        .valign(gtk::Align::Center)
-        .wrap(true)
-        .wrap_mode(gtk::pango::WrapMode::WordChar)
-        .ellipsize(gtk::pango::EllipsizeMode::End)
-        .lines(2)
-        .selectable(true)
-        .build();
     let metadata = label_with(&["caption", "dim-label", "numeric", "zaptide-viewer-metadata"]);
+    metadata.set_hexpand(true);
+    metadata.set_xalign(1.0);
+    metadata.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    metadata.set_width_chars(1);
     metadata.set_halign(gtk::Align::End);
-    let bar = gtk::Box::builder()
-        .spacing(16)
-        .css_classes(["zaptide-viewer-caption"])
-        .build();
-    bar.append(&caption);
-    bar.append(&metadata);
+    let caption = caption::Caption::new(&metadata);
 
     let view = adw::ToolbarView::builder()
         .content(content)
@@ -369,11 +375,54 @@ fn media_viewer(
         .css_classes(["zaptide-viewer"])
         .build();
     view.add_top_bar(&header);
-    view.add_bottom_bar(&bar);
-    dialog.set_child(Some(&view));
+    view.add_bottom_bar(&caption.widget);
+    let responsive_view = adw::BreakpointBin::builder()
+        .width_request(MIN_VIEWER.0)
+        .height_request(MIN_VIEWER.1)
+        .child(&view)
+        .build();
+    if let Ok(condition) = adw::BreakpointCondition::parse(NARROW_VIEWER) {
+        let narrow = adw::Breakpoint::new(condition);
+        let hidden = false.to_value();
+        narrow.add_setter(&avatar, "visible", Some(&hidden));
+        narrow.add_setter(&time, "visible", Some(&hidden));
+        narrow.add_setter(&counter_slot, "visible", Some(&hidden));
+        if let Some(zoom) = zoom {
+            narrow.add_setter(&zoom.shrink, "visible", Some(&hidden));
+            narrow.add_setter(&zoom.grow, "visible", Some(&hidden));
+        }
+        responsive_view.add_breakpoint(narrow);
+    }
+    if let Ok(condition) = adw::BreakpointCondition::parse("max-width: 380px") {
+        let compact = adw::Breakpoint::new(condition);
+        compact.add_setter(&identity, "visible", Some(&false.to_value()));
+        compact.add_setter(&counter_slot, "visible", Some(&false.to_value()));
+        if let Some(zoom) = zoom {
+            compact.add_setter(&zoom.shrink, "visible", Some(&false.to_value()));
+            compact.add_setter(&zoom.grow, "visible", Some(&false.to_value()));
+        }
+        responsive_view.add_breakpoint(compact);
+    }
+    responsive_view.set_widget_name("zaptide-media-viewer");
+    responsive_view.set_hexpand(true);
+    responsive_view.set_vexpand(true);
+    responsive_view.set_focusable(true);
+    let keys = gtk::EventControllerKey::new();
+    keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+    keys.connect_key_pressed({
+        let on_close = on_close.clone();
+        move |_, key, _, _| {
+            if key == gdk::Key::Escape {
+                on_close();
+                glib::Propagation::Stop
+            } else {
+                glib::Propagation::Proceed
+            }
+        }
+    });
+    responsive_view.add_controller(keys);
 
     let parts = ViewerParts {
-        dialog: dialog.downgrade(),
         avatar,
         name,
         time,
@@ -383,7 +432,11 @@ fn media_viewer(
     };
     parts.show(details, None);
     Viewer {
-        dialog,
+        page: MediaViewer {
+            widget: responsive_view,
+            lifetime: Rc::new(RefCell::new(ViewerLifetime::new([]))),
+            on_close,
+        },
         view,
         parts,
     }
@@ -391,3 +444,77 @@ fn media_viewer(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+thread_local! {
+    static TEST_PAGE: RefCell<Option<MediaViewer>> = const { RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn test_host(parent: &impl IsA<gtk::Widget>) -> (gtk::Box, Rc<dyn Fn()>) {
+    let window = parent
+        .as_ref()
+        .root()
+        .and_downcast::<adw::Window>()
+        .unwrap();
+    let host = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    window.set_content(Some(&host));
+    let weak = host.downgrade();
+    let on_close: Rc<dyn Fn()> = Rc::new(move || {
+        TEST_PAGE.with(|page| {
+            page.borrow_mut().take();
+        });
+        if let Some(host) = weak.upgrade() {
+            while let Some(child) = host.first_child() {
+                host.remove(&child);
+            }
+        }
+    });
+    (host, on_close)
+}
+
+#[cfg(test)]
+fn present_test_page(host: &gtk::Box, page: MediaViewer) {
+    host.append(&page.widget);
+    page.widget.grab_focus();
+    TEST_PAGE.with(|open| open.replace(Some(page)));
+}
+
+#[cfg(test)]
+mod lifetime_tests {
+    use super::*;
+
+    #[test]
+    fn viewer_lifetime_releases_files_and_stops_playback_once() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("video.mp4");
+        let stops = Rc::new(Cell::new(0));
+        let count = stops.clone();
+        let mut lifetime = ViewerLifetime::new([path.clone()]);
+        lifetime.on_close(move || count.set(count.get() + 1));
+        assert!(crate::media_retention::is_held(&path));
+        lifetime.close();
+        assert!(!crate::media_retention::is_held(&path));
+        assert_eq!(stops.get(), 1);
+        drop(lifetime);
+        assert_eq!(stops.get(), 1);
+    }
+
+    #[test]
+    fn viewer_lifetime_retains_files_until_cleanup_finishes_on_drop() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("video.mp4");
+        let held_during_cleanup = Rc::new(Cell::new(false));
+        {
+            let mut lifetime = ViewerLifetime::new([path.clone()]);
+            let held = held_during_cleanup.clone();
+            let cleanup_path = path.clone();
+            lifetime.on_close(move || {
+                held.set(crate::media_retention::is_held(&cleanup_path));
+            });
+            assert!(crate::media_retention::is_held(&path));
+        }
+        assert!(held_during_cleanup.get());
+        assert!(!crate::media_retention::is_held(&path));
+    }
+}

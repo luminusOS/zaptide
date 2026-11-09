@@ -533,6 +533,7 @@ impl NativeApplication {
         if self.save_settings().is_err() {
             log::warn!("could not save account {}'s settings", self.active_account);
         }
+        self.close_media_viewer();
         self.leave_screen();
         std::mem::swap(&mut self.backend, &mut session.backend);
         // The account leaving the screen goes offline; `update` reports the new one.
@@ -599,6 +600,7 @@ impl NativeApplication {
     /// Clears everything on screen that belongs to the open conversation, so
     /// nothing of one account shows or acts in another.
     pub(super) fn leave_screen(&mut self) {
+        self.close_media_viewer();
         // Pickers answer by chat id only; an answer must not land in another account.
         self.cancel_portal_requests();
         // A dialog acts on whichever account is on screen when it is confirmed.

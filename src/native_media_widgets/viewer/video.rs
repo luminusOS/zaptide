@@ -34,18 +34,13 @@ struct VideoControls {
 
 /// The floating play, progress, volume and fullscreen controls of `clip`,
 /// and the large play button shown while it is paused. The widgets hold the
-/// stream weakly, so the picture showing it stays its only owner.
-///
-/// Fullscreen belongs to the window that hosts the viewer: it is remembered
-/// when entered and left again when the dialog closes, whatever the order of
-/// the dialog's teardown.
+/// stream weakly. The page lifetime stops playback and restores fullscreen.
 fn video_controls(
     clip: &VideoStream,
-    dialog: &adw::Dialog,
+    page: &MediaViewer,
     parent: &impl IsA<gtk::Widget>,
 ) -> VideoControls {
     let window = parent.as_ref().root().and_downcast::<gtk::Window>();
-    let size = viewer_size(parent);
     let play = header_button("media-playback-start-symbolic", &gettext("Play"));
     let position = label_with(&["caption", "numeric"]);
     let length = label_with(&["caption", "dim-label", "numeric"]);
@@ -210,40 +205,23 @@ fn video_controls(
         }
     });
 
-    let entered = Rc::new(Cell::new(false));
     fullscreen.connect_clicked({
-        let (entered, dialog, window) = (
-            entered.clone(),
-            dialog.downgrade(),
-            window.as_ref().map(ObjectExt::downgrade),
-        );
+        let window = window.as_ref().map(ObjectExt::downgrade);
         move |button| {
-            let (Some(window), Some(dialog)) = (
-                window.as_ref().and_then(glib::WeakRef::upgrade),
-                dialog.upgrade(),
-            ) else {
+            let Some(window) = window.as_ref().and_then(glib::WeakRef::upgrade) else {
                 return;
             };
             let enter = !window.is_fullscreen();
             window.set_fullscreened(enter);
-            entered.set(enter);
-            let (width, height) = if enter {
-                (UNLIMITED_DIALOG_SIZE, UNLIMITED_DIALOG_SIZE)
-            } else {
-                size
-            };
-            dialog.set_content_width(width);
-            dialog.set_content_height(height);
             set_fullscreen_look(button, enter);
         }
     });
-    dialog.connect_closed({
+    let was_fullscreen = window.as_ref().is_some_and(|window| window.is_fullscreen());
+    page.lifetime.borrow_mut().on_close({
         let window = window.as_ref().map(ObjectExt::downgrade);
-        move |_| {
-            if entered.replace(false)
-                && let Some(window) = window.as_ref().and_then(glib::WeakRef::upgrade)
-            {
-                window.set_fullscreened(false);
+        move || {
+            if let Some(window) = window.as_ref().and_then(glib::WeakRef::upgrade) {
+                window.set_fullscreened(was_fullscreen);
             }
         }
     });
@@ -317,21 +295,18 @@ fn video_controls(
 
 /// Plays `path` in the viewer with sound; stops when the viewer closes and
 /// offers another app when GStreamer cannot play it.
-pub(in crate::native_media_widgets) fn show_video(
+pub(crate) fn build_video(
     parent: &impl IsA<gtk::Widget>,
     path: &std::path::Path,
     details: &ViewerDetails,
     on_action: Rc<dyn Fn(NativeMediaAction)>,
-) {
-    let dialog_slot: Rc<std::cell::OnceCell<glib::WeakRef<adw::Dialog>>> = Rc::default();
+    on_close: Rc<dyn Fn()>,
+) -> MediaViewer {
     let clip = VideoStream::open_in_background(path, 1920, 1080, {
-        let (path, on_action, dialog_slot) =
-            (path.to_path_buf(), on_action.clone(), dialog_slot.clone());
+        let (path, on_action, on_close) = (path.to_path_buf(), on_action.clone(), on_close.clone());
         move || {
             on_action(NativeMediaAction::Open(path));
-            if let Some(dialog) = dialog_slot.get().and_then(glib::WeakRef::upgrade) {
-                dialog.close();
-            }
+            on_close();
         }
     });
     let picture = gtk::Picture::builder()
@@ -366,19 +341,18 @@ pub(in crate::native_media_widgets) fn show_video(
         &gettext("Open With Another App"),
     );
     let viewer = media_viewer(
-        parent,
         details,
         &gtk::Box::new(gtk::Orientation::Vertical, 0),
         None,
         &[folder.upcast(), open.clone().upcast()],
+        on_close,
     );
-    let dialog = viewer.dialog.clone();
-    let _ = dialog_slot.set(dialog.downgrade());
-    keep_while_open(&dialog, [path.to_path_buf()]);
-    open.connect_clicked(open_and_close(path, &on_action, &dialog));
-    another.connect_clicked(open_and_close(path, &on_action, &dialog));
+    let page = viewer.page;
+    let lifetime = keep_while_open(&page, [path.to_path_buf()]);
+    open.connect_clicked(open_and_close(path, &on_action, &page.on_close));
+    another.connect_clicked(open_and_close(path, &on_action, &page.on_close));
 
-    let controls = video_controls(&clip, &dialog, parent);
+    let controls = video_controls(&clip, &page, parent);
     let overlay = gtk::Overlay::builder().child(&picture).build();
     let waiting = video_placeholder(details, &clip);
     overlay.add_overlay(&waiting);
@@ -408,10 +382,20 @@ pub(in crate::native_media_widgets) fn show_video(
             }
         });
     }
-    // Held by the dialog, not looked up through the picture, which the
-    // dialog may already have let go of by the time it reports closing.
-    dialog.connect_closed(move |_| clip.close());
-    dialog.present(Some(parent));
+    lifetime.borrow_mut().on_close(move || clip.close());
+    page
+}
+
+#[cfg(test)]
+pub(super) fn show_video(
+    parent: &impl IsA<gtk::Widget>,
+    path: &std::path::Path,
+    details: &ViewerDetails,
+    on_action: Rc<dyn Fn(NativeMediaAction)>,
+) {
+    let (host, on_close) = test_host(parent);
+    let page = build_video(parent, path, details, on_action, on_close);
+    present_test_page(&host, page);
 }
 
 /// The sender's thumbnail with a spinner over it, shown until the clip has a
@@ -461,13 +445,11 @@ fn video_placeholder(details: &ViewerDetails, clip: &VideoStream) -> gtk::Overla
 fn open_and_close(
     path: &std::path::Path,
     on_action: &Rc<dyn Fn(NativeMediaAction)>,
-    dialog: &adw::Dialog,
+    on_close: &Rc<dyn Fn()>,
 ) -> impl Fn(&gtk::Button) + 'static {
-    let (path, on_action, dialog) = (path.to_path_buf(), on_action.clone(), dialog.downgrade());
+    let (path, on_action, on_close) = (path.to_path_buf(), on_action.clone(), on_close.clone());
     move |_| {
         on_action(NativeMediaAction::Open(path.clone()));
-        if let Some(dialog) = dialog.upgrade() {
-            dialog.close();
-        }
+        on_close();
     }
 }

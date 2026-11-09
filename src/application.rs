@@ -470,6 +470,13 @@ fn message_menu_position(row: &gtk::Widget, x: f64, y: f64) -> Option<gtk::graph
     row.compute_point(&list, &gtk::graphene::Point::new(x as f32, y as f32))
 }
 
+fn copy_image_path(message: &crate::model::Message) -> Option<&std::path::Path> {
+    let crate::model::Content::Image { media, .. } = &message.content else {
+        return None;
+    };
+    media.path.as_deref().filter(|path| path.is_file())
+}
+
 pub struct Init {
     pub dirs: AppDirs,
 }
@@ -598,6 +605,8 @@ pub struct NativeApplication {
     profile_dialog: Option<profile_dialog::ProfileDialog>,
     sidebar: relm4::Controller<Sidebar>,
     calls: calls::CallsUi,
+    media_viewer: Option<crate::native_media_widgets::viewer::MediaViewer>,
+    media_viewer_host: gtk::Box,
     sidebar_visible: bool,
     split_view: Option<adw::NavigationSplitView>,
     phone_linking: bool,
@@ -715,6 +724,8 @@ pub enum Input {
         emoji: String,
     },
     CopySelectedText,
+    CopySelectedImage,
+    CloseMediaViewer,
     ShowForward,
     ForwardSelected(Vec<String>),
     StartSelection,
@@ -866,6 +877,7 @@ impl SimpleComponent for NativeApplication {
                             set_title: &gettext("Chat"),
                             #[wrap(Some)]
                             set_child = &gtk::Stack {
+                            add_named[Some("media-viewer")] = &model.media_viewer_host.clone(),
                             add_named[Some("live-call")] = model.live_call_view(),
                             add_named[Some("calls")] = model.calls_details(),
                             add_named[Some("chat")] = &adw::ToolbarView {
@@ -1041,7 +1053,7 @@ impl SimpleComponent for NativeApplication {
                                 },
                             },
                             #[watch]
-                            set_visible_child_name: if model.calls.showing_live && model.calls.has_live() { "live-call" } else if model.calls.tab { "calls" } else { "chat" },
+                            set_visible_child_name: if model.media_viewer.is_some() { "media-viewer" } else if model.calls.showing_live && model.calls.has_live() { "live-call" } else if model.calls.tab { "calls" } else { "chat" },
                             },
                         },
                     },
@@ -1440,6 +1452,8 @@ impl SimpleComponent for NativeApplication {
             sidebar,
             calls,
             sidebar_visible: true,
+            media_viewer: None,
+            media_viewer_host: gtk::Box::new(gtk::Orientation::Vertical, 0),
             split_view: None,
             phone_linking: false,
             chats_dirty: false,
@@ -1791,6 +1805,28 @@ impl NativeApplication {
         self.message_menu.popup();
     }
 
+    fn present_media_viewer(&mut self, page: crate::native_media_widgets::viewer::MediaViewer) {
+        self.media_viewer_host.append(&page.widget);
+        self.sidebar_visible = false;
+        self.media_viewer = Some(page);
+        let host = self.media_viewer_host.downgrade();
+        gtk::glib::idle_add_local_once(move || {
+            if let Some(host) = host.upgrade() {
+                host.child_focus(gtk::DirectionType::TabForward);
+            }
+        });
+    }
+
+    fn close_media_viewer(&mut self) {
+        if self.media_viewer.take().is_none() {
+            return;
+        }
+        while let Some(child) = self.media_viewer_host.first_child() {
+            self.media_viewer_host.remove(&child);
+        }
+        self.focus_composer();
+    }
+
     /// Actions for the right-clicked message, grouped as GNOME menus are.
     fn message_menu_model(&self) -> gtk::gio::Menu {
         let menu = gtk::gio::Menu::new();
@@ -1836,6 +1872,9 @@ impl NativeApplication {
         item.set_attribute_value("custom", Some(&"reactions".to_variant()));
         reactions.append_item(&item);
         let respond = gtk::gio::Menu::new();
+        if copy_image_path(message).is_some() {
+            respond.append(Some(&gettext("Copy Image")), Some("message.copy-image"));
+        }
         if message_text(message).is_some() {
             respond.append(Some(&gettext("Copy Text")), Some("message.copy"));
         }
@@ -2272,3 +2311,7 @@ mod tests;
 #[cfg(test)]
 #[path = "application/sidebar_sections_tests.rs"]
 mod sidebar_sections_tests;
+
+#[cfg(test)]
+#[path = "application/media_viewer_tests.rs"]
+mod media_viewer_tests;

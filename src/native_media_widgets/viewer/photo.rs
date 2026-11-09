@@ -62,7 +62,7 @@ fn can_scroll(adjustment: &gtk::Adjustment) -> bool {
 type WaitingCopy = Box<dyn FnOnce(&gdk::Texture)>;
 
 /// What the photo viewer is showing. Widgets that own a handler for it are
-/// held weakly, so it never keeps the dialog alive.
+/// held weakly, so it never keeps the page alive.
 pub(super) struct PhotoState {
     items: Rc<Vec<PhotoItem>>,
     current: Cell<usize>,
@@ -382,15 +382,14 @@ impl PhotoState {
 /// Opens the photos in the viewer, starting at `start`: fitted to the window,
 /// then zoomed freely with the pill, the keyboard, Ctrl and the scroll wheel
 /// or a pinch, and dragged around when larger than the window.
-pub(in crate::native_media_widgets) fn show_photo(
+pub(crate) fn build_photo(
     parent: &impl IsA<gtk::Widget>,
     items: Rc<Vec<PhotoItem>>,
     start: usize,
     on_action: Rc<dyn Fn(NativeMediaAction)>,
-) {
-    if items.is_empty() {
-        return;
-    }
+    on_close: Rc<dyn Fn()>,
+) -> MediaViewer {
+    assert!(!items.is_empty());
     let start = start.min(items.len() - 1);
     let canvas = ZoomCanvas::new();
     let scroller = gtk::ScrolledWindow::builder()
@@ -419,7 +418,6 @@ pub(in crate::native_media_widgets) fn show_photo(
         overlay.add_overlay(&next);
     }
     let viewer = media_viewer(
-        parent,
         &items[start].details,
         &overlay,
         Some(&pill),
@@ -428,9 +426,10 @@ pub(in crate::native_media_widgets) fn show_photo(
             folder.clone().upcast(),
             open.clone().upcast(),
         ],
+        on_close,
     );
-    let dialog = viewer.dialog.clone();
-    keep_while_open(&dialog, items.iter().map(|item| item.path.clone()));
+    let page = viewer.page;
+    let lifetime = keep_while_open(&page, items.iter().map(|item| item.path.clone()));
     let photo = Rc::new(PhotoState {
         items,
         current: Cell::new(start),
@@ -447,6 +446,16 @@ pub(in crate::native_media_widgets) fn show_photo(
         loading: Cell::new(None),
         waiting: RefCell::default(),
         token: DecodeToken::default(),
+    });
+    lifetime.borrow_mut().on_close({
+        let photo = Rc::downgrade(&photo);
+        move || {
+            if let Some(photo) = photo.upgrade() {
+                photo.token.cancel();
+                photo.waiting.borrow_mut().clear();
+                photo.texture.take();
+            }
+        }
     });
     pill.connect(&photo);
     canvas.connect_layout_changed({
@@ -470,12 +479,10 @@ pub(in crate::native_media_widgets) fn show_photo(
         move |button| show_in_folder(button, &photo.item().path)
     });
     open.connect_clicked({
-        let (photo, dialog) = (photo.clone(), dialog.downgrade());
+        let (photo, on_close) = (photo.clone(), page.on_close.clone());
         move |_| {
             on_action(NativeMediaAction::Open(photo.item().path.clone()));
-            if let Some(dialog) = dialog.upgrade() {
-                dialog.close();
-            }
+            on_close();
         }
     });
     for (button, delta) in [(&previous, -1), (&next, 1)] {
@@ -561,6 +568,7 @@ pub(in crate::native_media_widgets) fn show_photo(
     scroller.add_controller(pan);
 
     let keys = gtk::EventControllerKey::new();
+    keys.set_name(Some("photo-keys"));
     keys.set_propagation_phase(gtk::PropagationPhase::Capture);
     keys.connect_key_pressed({
         let photo = photo.clone();
@@ -595,11 +603,26 @@ pub(in crate::native_media_widgets) fn show_photo(
             }
         }
     });
-    dialog.add_controller(keys);
+    page.widget.add_controller(keys);
     #[cfg(test)]
     OPEN_PHOTO.with(|open| open.replace(Some(photo.clone())));
     photo.show(start);
-    dialog.present(Some(parent));
+    page
+}
+
+#[cfg(test)]
+pub(super) fn show_photo(
+    parent: &impl IsA<gtk::Widget>,
+    items: Rc<Vec<PhotoItem>>,
+    start: usize,
+    on_action: Rc<dyn Fn(NativeMediaAction)>,
+) {
+    if items.is_empty() {
+        return;
+    }
+    let (host, on_close) = test_host(parent);
+    let page = build_photo(parent, items, start, on_action, on_close);
+    present_test_page(&host, page);
 }
 
 #[cfg(test)]

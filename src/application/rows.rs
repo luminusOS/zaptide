@@ -376,6 +376,7 @@ impl RelmListItem for MessageRow {
                     root.grab_focus();
                 }
                 if let Some(point) = message_menu_position(&row, x, y) {
+                    let id = album_tile_at(&row, x, y).unwrap_or(id);
                     sender(Input::ShowMessageMenu {
                         id,
                         x: point.x(),
@@ -677,9 +678,53 @@ impl RelmListItem for MessageRow {
     }
 }
 
+fn album_tile_at(row: &gtk::Widget, x: f64, y: f64) -> Option<String> {
+    let mut widget = row.pick(x, y, gtk::PickFlags::DEFAULT);
+    while let Some(current) = widget {
+        if current.has_css_class("zaptide-album-tile") {
+            return Some(current.widget_name().to_string());
+        }
+        widget = current.parent();
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "needs a display"]
+    fn album_context_menu_targets_the_clicked_photo() {
+        gtk::init().unwrap();
+        adw::init().unwrap();
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        for id in ["first", "second"] {
+            let tile = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            tile.set_widget_name(id);
+            tile.add_css_class("zaptide-album-tile");
+            tile.append(&gtk::Button::with_label(id));
+            row.append(&tile);
+        }
+        let window = adw::Window::builder().content(&row).build();
+        window.present();
+        let context = gtk::glib::MainContext::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while row.width() == 0 && std::time::Instant::now() < deadline {
+            context.iteration(false);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(row.width() > 0);
+        let second = row.last_child().unwrap();
+        let point = second
+            .compute_point(&row, &gtk::graphene::Point::new(5.0, 5.0))
+            .unwrap();
+        assert_eq!(
+            album_tile_at(row.upcast_ref(), point.x() as f64, point.y() as f64).as_deref(),
+            Some("second")
+        );
+        window.close();
+    }
 
     #[test]
     #[ignore = "needs a display"]

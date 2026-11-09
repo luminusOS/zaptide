@@ -604,6 +604,58 @@ impl NativeApplication {
         sender: ComponentSender<Self>,
     ) {
         match action {
+            crate::native_media::NativeMediaAction::ViewPhotos { paths, start } => {
+                use crate::native_media_widgets::viewer::{PhotoItem, ViewerDetails, build_photo};
+                let target = paths.get(start).cloned();
+                let items: Vec<_> = paths
+                    .iter()
+                    .filter_map(|path| {
+                        self.open_chat
+                            .message_snapshots
+                            .values()
+                            .find(|message| copy_image_path(message) == Some(path.as_path()))
+                            .map(|message| PhotoItem {
+                                path: path.clone(),
+                                details: ViewerDetails::of(message),
+                            })
+                    })
+                    .collect();
+                if items.is_empty() {
+                    return;
+                }
+                let start = target
+                    .and_then(|path| items.iter().position(|item| item.path == path))
+                    .unwrap_or(0);
+                self.close_media_viewer();
+                let output = sender.clone();
+                let back = sender.clone();
+                let page = build_photo(
+                    &self.window,
+                    std::rc::Rc::new(items),
+                    start,
+                    std::rc::Rc::new(move |action| output.input(Input::MediaAction(action))),
+                    std::rc::Rc::new(move || back.input(Input::CloseMediaViewer)),
+                );
+                self.present_media_viewer(page);
+            }
+            crate::native_media::NativeMediaAction::ViewVideo(path) => {
+                use crate::native_media_widgets::viewer::{ViewerDetails, build_video};
+                let Some(message) = self.open_chat.message_snapshots.values().find(|message| {
+                    matches!(&message.content, crate::model::Content::Video { media, .. } if media.path.as_ref() == Some(&path))
+                }) else { return; };
+                let details = ViewerDetails::of(message);
+                self.close_media_viewer();
+                let output = sender.clone();
+                let back = sender.clone();
+                let page = build_video(
+                    &self.window,
+                    &path,
+                    &details,
+                    std::rc::Rc::new(move |action| output.input(Input::MediaAction(action))),
+                    std::rc::Rc::new(move || back.input(Input::CloseMediaViewer)),
+                );
+                self.present_media_viewer(page);
+            }
             crate::native_media::NativeMediaAction::CopyContactPhone(number) => {
                 crate::native_portals::NativePortals::write_clipboard_text(
                     &self.window.clipboard(),
@@ -645,6 +697,7 @@ impl NativeApplication {
                 }
             }
             crate::native_media::NativeMediaAction::Open(path) => {
+                self.close_media_viewer();
                 if let Some(id) = self
                     .open_chat
                     .message_snapshots
@@ -1084,6 +1137,15 @@ impl NativeApplication {
                     self.toast(&gettext("Copied"));
                 }
             }
+            Input::CloseMediaViewer => self.close_media_viewer(),
+            Input::CopySelectedImage => {
+                if let Some(path) = self.selected_message().and_then(copy_image_path) {
+                    crate::native_media_widgets::copy_image(
+                        path.to_path_buf(),
+                        &self.window.clipboard(),
+                    );
+                }
+            }
             Input::ActivateVoice => self.activate_voice(&sender),
             Input::CycleVoiceSpeed => self.cycle_voice_speed(),
             Input::SeekVoice(fraction) => self.seek_voice(fraction, &sender),
@@ -1124,7 +1186,11 @@ impl NativeApplication {
                 }
             }
             Input::EscapePressed => {
-                self.press_escape();
+                if self.media_viewer.is_some() {
+                    self.close_media_viewer();
+                } else {
+                    self.press_escape();
+                }
             }
             Input::CloseChat => self.close_chat(),
             Input::ToggleSelectedStar => self.toggle_selected_star(),
@@ -1149,10 +1215,12 @@ impl NativeApplication {
             }
             Input::SendText { text, link_preview } => self.send_text(text, link_preview),
             Input::Close => {
+                self.close_media_viewer();
                 self.cancel_portal_requests();
                 self.finish_close(sender);
             }
             Input::Quit => {
+                self.close_media_viewer();
                 self.cancel_portal_requests();
                 self.request_shutdown(sender);
             }

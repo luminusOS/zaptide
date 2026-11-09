@@ -3,7 +3,7 @@ use super::{Content, Message, gettext};
 /// Who sent a photo or video, when, its caption, and a one-line summary of
 /// the file, for the viewer.
 #[derive(Clone)]
-pub(in crate::native_media_widgets) struct ViewerDetails {
+pub(crate) struct ViewerDetails {
     pub(super) title: String,
     pub(super) subtitle: String,
     pub(super) caption: Option<String>,
@@ -13,7 +13,7 @@ pub(in crate::native_media_widgets) struct ViewerDetails {
 }
 
 impl ViewerDetails {
-    pub(in crate::native_media_widgets) fn of(message: &Message) -> Self {
+    pub(crate) fn of(message: &Message) -> Self {
         let title = if message.from_me {
             gettext("You")
         } else {

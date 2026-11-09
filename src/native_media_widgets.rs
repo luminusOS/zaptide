@@ -2,7 +2,7 @@
 
 use std::{sync::atomic::AtomicUsize, thread};
 
-use relm4::adw::{self, prelude::AdwDialogExt};
+use relm4::adw;
 use relm4::gtk::{self, gdk, glib, prelude::*};
 
 pub(crate) mod text_bubble;
@@ -76,14 +76,24 @@ enum PlaybackProjection {
 
 mod audio;
 mod cards;
+mod clipboard_image;
 mod contacts;
 mod photo;
 mod sticker;
 mod video_stream;
-mod viewer;
+pub(crate) mod viewer;
 mod widget;
 mod zoom;
 mod zoom_canvas;
+
+pub(crate) fn copy_image(path: std::path::PathBuf, clipboard: &gdk::Clipboard) {
+    let hold = crate::media_retention::hold([path.clone()]);
+    let request = clipboard_image::ImageCopy::new(clipboard);
+    photo::decode_photo(path, 8000, 8000, &DecodeToken::default(), move |texture| {
+        request.finish(&texture);
+        drop(hold);
+    });
+}
 
 #[cfg(test)]
 mod call_tests;
