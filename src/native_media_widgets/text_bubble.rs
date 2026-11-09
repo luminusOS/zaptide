@@ -161,6 +161,7 @@ mod imp {
     #[derive(Default)]
     pub struct TextBubble {
         pub(super) view: OnceCell<gtk::TextView>,
+        pub(super) width_attributes: RefCell<Option<gtk::pango::AttrList>>,
         pub(super) measured: Cell<Option<(i32, i32)>>,
         pub(super) resize_pending: Cell<bool>,
         pub(super) block_tags: RefCell<HashMap<i32, gtk::TextTag>>,
@@ -303,6 +304,19 @@ mod imp {
             }
             let (minimum, natural, min_baseline, nat_baseline) =
                 view.measure(orientation, for_size);
+            if orientation == gtk::Orientation::Horizontal {
+                let buffer = view.buffer();
+                let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), true);
+                let layout = view.create_pango_layout(Some(&text));
+                layout.set_attributes(self.width_attributes.borrow().as_ref());
+                let width = layout.pixel_size().0 + view.left_margin() + view.right_margin();
+                return (
+                    minimum,
+                    natural.max(width).max(minimum),
+                    min_baseline,
+                    nat_baseline,
+                );
+            }
             if orientation == gtk::Orientation::Vertical && minimum == 0 {
                 let (_, line_height) = view.create_pango_layout(Some("Mg")).pixel_size();
                 return (line_height, natural.max(line_height), -1, -1);
@@ -526,6 +540,9 @@ impl TextBubble {
         self.imp().click_start.set(None);
         let markup = crate::safety::linkify_markup_with_mentions(text, mentions);
         let (markup, links, code) = text_view_markup(&markup);
+        *self.imp().width_attributes.borrow_mut() = gtk::pango::parse_markup(&markup, '\0')
+            .ok()
+            .map(|(attributes, _, _)| attributes);
         let buffer = self.view().buffer();
         let table = buffer.tag_table();
         for (_, tag) in self.imp().block_tags.borrow_mut().drain() {
@@ -548,6 +565,7 @@ impl TextBubble {
 
     #[cfg(test)]
     pub(crate) fn set_block_text(&self, text: &str) {
+        *self.imp().width_attributes.borrow_mut() = None;
         self.imp().keyboard_link.set(None);
         self.imp().click_start.set(None);
         self.imp().links.borrow_mut().clear();
@@ -610,6 +628,32 @@ impl TextBubble {
 mod tests {
     use super::*;
     use std::{cell::RefCell, rc::Rc, time::Duration};
+
+    #[test]
+    #[ignore = "needs a display"]
+    fn message_text_requests_a_natural_width_that_fits_the_content() {
+        gtk::init().unwrap();
+        let bubble = TextBubble::new();
+        bubble.set_formatted("Tinha esquecido de pagar o cabelo", &[]);
+        let (_, natural, _, _) = bubble.measure(gtk::Orientation::Horizontal, -1);
+        let (text_width, _) = bubble
+            .view()
+            .create_pango_layout(Some("Tinha esquecido de pagar o cabelo"))
+            .pixel_size();
+        assert!(
+            natural >= text_width,
+            "natural width {natural}, text width {text_width}"
+        );
+
+        bubble.set_formatted("*bold* `monospace`", &[]);
+        let markup = crate::safety::linkify_markup_with_mentions("*bold* `monospace`", &[]);
+        let (markup, _, _) = text_view_markup(&markup);
+        let (attrs, text, _) = gtk::pango::parse_markup(&markup, '\0').unwrap();
+        let layout = bubble.view().create_pango_layout(Some(&text));
+        layout.set_attributes(Some(&attrs));
+        let (_, natural, _, _) = bubble.measure(gtk::Orientation::Horizontal, -1);
+        assert!(natural >= layout.pixel_size().0);
+    }
 
     #[test]
     #[ignore = "needs a display"]

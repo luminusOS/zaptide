@@ -676,6 +676,55 @@ mod tests {
 
     #[test]
     #[ignore = "needs a display"]
+    fn message_rows_fit_text_and_keep_incoming_and_outgoing_on_their_sides() {
+        use std::time::{Duration, Instant};
+
+        gtk::init().unwrap();
+        adw::init().unwrap();
+        let item: gtk::ListItem = gtk::glib::Object::new();
+        let (root, mut widgets) = <MessageRow as RelmListItem>::setup(&item);
+        widgets.separator.set_visible(false);
+        widgets.unread_divider.set_visible(false);
+        widgets.header.set_visible(false);
+        widgets.quote.set_visible(false);
+        widgets.media.set_visible(false);
+        widgets.audio.set_visible(false);
+        widgets.reactions.set_visible(false);
+        widgets.set_body("synthetic", "Tinha esquecido de pagar o cabelo", &[]);
+        let window = gtk::Window::builder()
+            .default_width(500)
+            .default_height(200)
+            .child(&root)
+            .build();
+        let settle = || {
+            let context = gtk::glib::MainContext::default();
+            let until = Instant::now() + Duration::from_millis(300);
+            while Instant::now() < until {
+                while context.pending() {
+                    context.iteration(false);
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        };
+        window.present();
+        for outgoing in [false, true] {
+            widgets.leading_space.set_visible(outgoing);
+            widgets.trailing_space.set_visible(!outgoing);
+            widgets.avatar.set_visible(!outgoing);
+            settle();
+            let bounds = widgets.bubble.compute_bounds(&root).unwrap();
+            assert!(bounds.width() > 180.0, "bubble width: {}", bounds.width());
+            if outgoing {
+                assert!(bounds.x() > 200.0, "outgoing bubble: {bounds:?}");
+            } else {
+                assert!(bounds.x() < 100.0, "incoming bubble: {bounds:?}");
+            }
+        }
+        window.close();
+    }
+
+    #[test]
+    #[ignore = "needs a display"]
     fn factory_recycles_production_body_with_current_actions() {
         use std::{
             cell::{Cell, RefCell},
