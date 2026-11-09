@@ -681,6 +681,13 @@ mod tests {
 
         gtk::init().unwrap();
         adw::init().unwrap();
+        let provider = gtk::CssProvider::new();
+        provider.load_from_string(include_str!("../../data/style.css"));
+        gtk::style_context_add_provider_for_display(
+            &gtk::gdk::Display::default().unwrap(),
+            &provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
         let item: gtk::ListItem = gtk::glib::Object::new();
         let (root, mut widgets) = <MessageRow as RelmListItem>::setup(&item);
         widgets.separator.set_visible(false);
@@ -718,6 +725,23 @@ mod tests {
                 assert!(bounds.x() > 200.0, "outgoing bubble: {bounds:?}");
             } else {
                 assert!(bounds.x() < 100.0, "incoming bubble: {bounds:?}");
+            }
+        }
+        for outgoing in [true, false] {
+            widgets.leading_space.set_visible(outgoing);
+            widgets.trailing_space.set_visible(!outgoing);
+            widgets.avatar.set_visible(!outgoing);
+            for text in ["Bom dia", "Boa tarde", "*Bom dia*", "_Boa tarde_"] {
+                widgets.set_body("short", text, &[]);
+                settle();
+                let view = widgets.body.view();
+                let buffer = view.buffer();
+                assert_eq!(
+                    view.iter_location(&buffer.start_iter()).y(),
+                    view.iter_location(&buffer.end_iter()).y(),
+                    "short message {text:?} wraps at width {}, outgoing: {outgoing}",
+                    view.width()
+                );
             }
         }
         window.close();

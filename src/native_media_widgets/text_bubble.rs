@@ -309,7 +309,8 @@ mod imp {
                 let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), true);
                 let layout = view.create_pango_layout(Some(&text));
                 layout.set_attributes(self.width_attributes.borrow().as_ref());
-                let width = layout.pixel_size().0 + view.left_margin() + view.right_margin();
+                // GtkTextView reserves one pixel for the cursor, even when hidden.
+                let width = layout.pixel_size().0 + view.left_margin() + view.right_margin() + 1;
                 return (
                     minimum,
                     natural.max(width).max(minimum),
