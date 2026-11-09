@@ -25,6 +25,7 @@ pub(super) fn base_message(message: &wa::Message) -> &wa::Message {
             &current.group_mentioned_message,
             &current.associated_child_message,
             &current.spoiler_message,
+            &current.lottie_sticker_message,
         ]
         .into_iter()
         .find_map(|wrapper| wrapper.as_option()?.message.as_option());
@@ -120,7 +121,8 @@ pub(super) fn classify(message: &wa::Message) -> Option<Content> {
                 sticker.width,
                 sticker.height,
             ),
-            animated: sticker.is_animated.unwrap_or(false),
+            animated: sticker.is_animated.unwrap_or(false)
+                || sticker.mimetype.as_deref() == Some("application/was"),
         });
     }
     if let Some(location) = base.location_message.as_option() {

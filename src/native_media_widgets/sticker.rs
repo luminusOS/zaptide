@@ -47,6 +47,9 @@ pub(super) fn decode_sticker(
     bytes: &[u8],
     current: impl Fn() -> bool,
 ) -> Option<Vec<StickerFrame>> {
+    if bytes.starts_with(b"PK\x03\x04") {
+        return decode_lottie_sticker(bytes, current);
+    }
     use crate::native_media::{MAX_THUMBNAIL_DIMENSION, MAX_THUMBNAIL_PIXELS, image_limits};
     use image::{AnimationDecoder, ImageDecoder};
     let fits = |(width, height): (u32, u32)| {
@@ -119,6 +122,146 @@ pub(super) fn decode_sticker(
         }
     }
     (!kept.is_empty()).then_some(kept)
+}
+
+fn decode_lottie_sticker(bytes: &[u8], current: impl Fn() -> bool) -> Option<Vec<StickerFrame>> {
+    use std::io::Read;
+
+    const MAX_JSON_BYTES: u64 = 1024 * 1024;
+    const MAX_ARCHIVE_ENTRIES: usize = 32;
+    const MAX_DURATION_SECONDS: f32 = 30.0;
+    if !current() {
+        return None;
+    }
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).ok()?;
+    if archive.len() > MAX_ARCHIVE_ENTRIES {
+        return None;
+    }
+    let mut candidate = None;
+    for index in 0..archive.len() {
+        let file = archive.by_index(index).ok()?;
+        let name = file.name().ok()?;
+        if !file.is_dir() && name.ends_with(".json") {
+            if name.ends_with("animation.json") {
+                candidate = Some(index);
+                break;
+            }
+            candidate.get_or_insert(index);
+        }
+    }
+    let file = archive.by_index(candidate?).ok()?;
+    if file.size() > MAX_JSON_BYTES {
+        return None;
+    }
+    let mut json = Vec::new();
+    file.take(MAX_JSON_BYTES + 1).read_to_end(&mut json).ok()?;
+    if json.len() as u64 > MAX_JSON_BYTES || !current() {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_slice(&json).ok()?;
+    if !safe_lottie_shapes(&value) {
+        return None;
+    }
+    let animation =
+        rasterlottie::Animation::from_json_str(std::str::from_utf8(&json).ok()?).ok()?;
+    let frames = animation.out_point - animation.in_point;
+    if animation.width == 0
+        || animation.height == 0
+        || animation.width > 1024
+        || animation.height > 1024
+        || !animation.frame_rate.is_finite()
+        || !(1.0..=60.0).contains(&animation.frame_rate)
+        || !animation.in_point.is_finite()
+        || !frames.is_finite()
+        || frames <= 0.0
+        || frames / animation.frame_rate > MAX_DURATION_SECONDS
+        || !safe_lottie_layers(&animation)
+    {
+        return None;
+    }
+    let count = (frames.ceil() as usize).min(MAX_STICKER_FRAMES);
+    let duration_ms = (frames * 1000.0 / animation.frame_rate).round() as u32;
+    let mut config = rasterlottie::RenderConfig::default();
+    config.scale = STICKER_SIZE as f32 / animation.width.max(animation.height) as f32;
+    let prepared = rasterlottie::Renderer::default().prepare(&animation).ok()?;
+    let mut output = Vec::with_capacity(count);
+    for index in 0..count {
+        if !current() {
+            return None;
+        }
+        let frame = prepared
+            .render_frame(
+                animation.in_point + frames * index as f32 / count as f32,
+                config,
+            )
+            .ok()?;
+        let mut rgba = frame.pixels;
+        for pixel in rgba.as_chunks_mut::<4>().0 {
+            let alpha = u32::from(pixel[3]);
+            for channel in &mut pixel[..3] {
+                *channel = (u32::from(*channel) * 255)
+                    .checked_div(alpha)
+                    .unwrap_or(0)
+                    .min(255) as u8;
+            }
+        }
+        let start = duration_ms as u64 * index as u64 / count as u64;
+        let end = duration_ms as u64 * (index + 1) as u64 / count as u64;
+        output.push(StickerFrame {
+            texture_rgba: rgba,
+            width: frame.width,
+            height: frame.height,
+            delay_ms: (end - start) as u32,
+        });
+    }
+    Some(output)
+}
+
+fn safe_lottie_shapes(root: &serde_json::Value) -> bool {
+    let mut pending = vec![root];
+    let mut visited = 0;
+    while let Some(value) = pending.pop() {
+        visited += 1;
+        if visited > 20_000 {
+            return false;
+        }
+        match value {
+            serde_json::Value::Object(object) => {
+                if matches!(object.get("ty").and_then(|v| v.as_str()), Some("rp" | "sr")) {
+                    return false;
+                }
+                pending.extend(object.values());
+            }
+            serde_json::Value::Array(array) => pending.extend(array),
+            _ => {}
+        }
+    }
+    true
+}
+
+fn safe_lottie_layers(animation: &rasterlottie::Animation) -> bool {
+    fn visit(
+        layers: &[rasterlottie::Layer],
+        animation: &rasterlottie::Animation,
+        depth: usize,
+        budget: &mut usize,
+    ) -> bool {
+        if depth > 8 || layers.len() > *budget {
+            return false;
+        }
+        *budget -= layers.len();
+        layers.iter().all(|layer| {
+            if layer.layer_type.0 != 0 {
+                return true;
+            }
+            layer
+                .ref_id
+                .as_ref()
+                .and_then(|id| animation.assets.iter().find(|asset| &asset.id == id))
+                .is_none_or(|asset| visit(&asset.layers, animation, depth + 1, budget))
+        })
+    }
+    visit(&animation.layers, animation, 0, &mut 512)
 }
 
 fn start_sticker_decode(
