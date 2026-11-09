@@ -15,9 +15,35 @@ pub const DEFAULT_INTERVAL: u32 = 30;
 #[cfg(target_os = "linux")]
 pub(crate) static SOUND: &[u8] = include_bytes!("../assets/sounds/message-notification.wav");
 
+/// The bundled sound as a private file in the cache, for notification servers
+/// that take a path.
+///
+/// The first call checks the whole file; later calls only check that it is
+/// still a private file of the right size. Reading it again for every
+/// notification would protect only against the user's own processes, which
+/// could replace the sound in any case.
 #[cfg(target_os = "linux")]
 pub(crate) fn native_sound_file() -> std::io::Result<std::path::PathBuf> {
-    materialize_native_sound(&crate::paths::AppDirs::discover().cache)
+    use std::os::unix::fs::MetadataExt;
+
+    static CHECKED: std::sync::Mutex<Option<std::path::PathBuf>> = std::sync::Mutex::new(None);
+    let mut checked = CHECKED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(path) = checked.as_ref()
+        && std::fs::symlink_metadata(path).is_ok_and(|metadata| {
+            // SAFETY: geteuid has no arguments or side effects.
+            metadata.is_file()
+                && metadata.uid() == unsafe { libc::geteuid() }
+                && metadata.mode() & 0o077 == 0
+                && metadata.len() == SOUND.len() as u64
+        })
+    {
+        return Ok(path.clone());
+    }
+    let path = materialize_native_sound(&crate::paths::AppDirs::discover().cache)?;
+    *checked = Some(path.clone());
+    Ok(path)
 }
 
 #[cfg(target_os = "linux")]
@@ -107,7 +133,8 @@ pub fn is_supported_interval(seconds: u32) -> bool {
 pub enum SoundRequest {
     /// Play the bundled sound.
     Play,
-    /// Play nothing, not even the desktop's default notification sound.
+    /// Play nothing, not even the desktop's default notification sound: a
+    /// sound was asked for less than an interval ago.
     Silent,
 }
 
@@ -137,17 +164,25 @@ pub struct NotificationSound {
 }
 
 impl NotificationSound {
-    /// The request for the next notification. A disabled sound is silent and
-    /// leaves the interval alone.
-    pub fn request(&mut self, enabled: bool, interval_seconds: u32) -> SoundRequest {
+    /// The request for the next notification, or `None` when the sound is
+    /// turned off: the notification is then sent as it was before the sound
+    /// existed, and the interval is left alone.
+    pub fn request(&mut self, enabled: bool, interval_seconds: u32) -> Option<SoundRequest> {
         self.request_at(Instant::now(), enabled, interval_seconds)
     }
 
-    fn request_at(&mut self, now: Instant, enabled: bool, interval_seconds: u32) -> SoundRequest {
-        if enabled && self.throttle.admit(now, interval_for(interval_seconds)) {
-            SoundRequest::Play
+    fn request_at(
+        &mut self,
+        now: Instant,
+        enabled: bool,
+        interval_seconds: u32,
+    ) -> Option<SoundRequest> {
+        if !enabled {
+            None
+        } else if self.throttle.admit(now, interval_for(interval_seconds)) {
+            Some(SoundRequest::Play)
         } else {
-            SoundRequest::Silent
+            Some(SoundRequest::Silent)
         }
     }
 }
@@ -313,37 +348,37 @@ mod tests {
     fn a_burst_asks_for_one_sound_and_the_rest_are_silent() {
         let start = Instant::now();
         let mut sound = NotificationSound::default();
-        assert_eq!(sound.request_at(start, true, 30), SoundRequest::Play);
+        assert_eq!(sound.request_at(start, true, 30), Some(SoundRequest::Play));
         assert_eq!(
             sound.request_at(at(start, 5), true, 30),
-            SoundRequest::Silent
+            Some(SoundRequest::Silent)
         );
         assert_eq!(
             sound.request_at(at(start, 30), true, 30),
-            SoundRequest::Play
+            Some(SoundRequest::Play)
         );
     }
 
     #[test]
-    fn a_disabled_sound_is_silent_and_never_consumes_the_interval() {
+    fn a_disabled_sound_asks_nothing_and_never_consumes_the_interval() {
         let start = Instant::now();
         let mut sound = NotificationSound::default();
-        assert_eq!(sound.request_at(start, false, 30), SoundRequest::Silent);
-        assert_eq!(sound.request_at(start, true, 30), SoundRequest::Play);
+        assert_eq!(sound.request_at(start, false, 30), None);
+        assert_eq!(sound.request_at(start, true, 30), Some(SoundRequest::Play));
     }
 
     #[test]
     fn a_changed_interval_applies_to_the_next_request() {
         let start = Instant::now();
         let mut sound = NotificationSound::default();
-        assert_eq!(sound.request_at(start, true, 120), SoundRequest::Play);
+        assert_eq!(sound.request_at(start, true, 120), Some(SoundRequest::Play));
         assert_eq!(
             sound.request_at(at(start, 15), true, 120),
-            SoundRequest::Silent
+            Some(SoundRequest::Silent)
         );
         assert_eq!(
             sound.request_at(at(start, 15), true, 10),
-            SoundRequest::Play
+            Some(SoundRequest::Play)
         );
     }
 

@@ -1,3 +1,9 @@
+//! A client of `org.freedesktop.Notifications` that keeps the server's
+//! notification IDs behind ZapTide's tokens.
+//!
+//! The IDs belong to one server process. When the bus name changes owner the
+//! session stops answering as current, and its IDs are never reused.
+
 use std::collections::{HashMap, HashSet};
 
 use ashpd::zbus::{self, zvariant::OwnedValue};
@@ -256,8 +262,9 @@ impl Session {
         ))
     }
 
-    pub fn capabilities(&self) -> &[String] {
-        &self.capabilities
+    /// Whether the server advertised `capability` when the session opened.
+    pub fn supports(&self, capability: &str) -> bool {
+        self.capabilities.iter().any(|cap| cap == capability)
     }
 
     pub async fn is_current(&self) -> bool {

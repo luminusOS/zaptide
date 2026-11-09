@@ -1,26 +1,83 @@
+//! Delivery of chat notifications, with the notification sound where the
+//! desktop can take it.
+//!
+//! A sandboxed build goes through the notification portal; any other build
+//! talks to the desktop notification service directly. Both fall back to
+//! GNotification when the desktop refuses or cannot take the sound.
+
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
 use super::{OPEN_CHAT_ACTION, freedesktop, portal};
+use crate::i18n::gettext;
 use crate::notification_sound::SoundRequest;
 use gtk::glib::variant::ToVariant;
 use gtk::prelude::*;
 use relm4::gtk;
+
+/// Edge, in pixels, of the picture sent as `image-data`. The raw RGBA crosses
+/// D-Bus with every notification, and servers draw it far smaller.
+const IMAGE_DATA_EDGE: u32 = 128;
 
 pub(super) struct Request {
     pub token: String,
     pub title: String,
     pub body: String,
     pub icon: Option<Vec<u8>>,
-    pub sound: SoundRequest,
+    /// The same notification for GNotification, used as is or as the fallback.
     pub notification: gtk::gio::Notification,
 }
 
+/// Shows and withdraws notifications by token, without a sound of its own.
 pub(super) trait Port {
     fn show(&self, request: Request);
     fn withdraw(&self, token: &str);
+}
+
+/// Shows and withdraws notifications that say what to do about the sound.
+trait SoundPort {
+    fn show(&self, request: Request, sound: SoundRequest);
+    fn withdraw(&self, token: &str);
+}
+
+/// Sends chat notifications through the sound-capable transport while the
+/// person wants the sound, and through plain GNotification otherwise, as
+/// before the sound existed. A token that changes transport is withdrawn from
+/// the old one first, so it is never shown twice.
+pub(super) struct Notifier {
+    plain: Rc<dyn Port>,
+    with_sound: Rc<dyn SoundPort>,
+    on_sound: Rc<RefCell<HashSet<String>>>,
+}
+
+impl Notifier {
+    /// `sound` is `None` when the person turned the sound off.
+    pub fn show(&self, request: Request, sound: Option<SoundRequest>) {
+        match sound {
+            Some(sound) => {
+                if self.on_sound.borrow_mut().insert(request.token.clone()) {
+                    self.plain.withdraw(&request.token);
+                }
+                self.with_sound.show(request, sound);
+            }
+            None => {
+                if self.on_sound.borrow_mut().remove(&request.token) {
+                    self.with_sound.withdraw(&request.token);
+                }
+                self.plain.show(request);
+            }
+        }
+    }
+
+    pub fn withdraw(&self, token: &str) {
+        if self.on_sound.borrow_mut().remove(token) {
+            self.with_sound.withdraw(token);
+        } else {
+            self.plain.withdraw(token);
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -35,20 +92,56 @@ impl Port for Gio {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum Route {
+    Gio,
+    Portal,
+    /// The first portal delivery of a token that may already be on screen
+    /// through GNotification.
+    PortalAfterGio,
+}
+
+/// Pins a token to one transport once the portal version is known, so a
+/// replacement never lands beside its predecessor. Until then, notifications
+/// go through GNotification without pinning.
+fn route(modes: &mut HashMap<String, bool>, token: &str, sound_support: Option<bool>) -> Route {
+    if let Some(&portal) = modes.get(token) {
+        return if portal { Route::Portal } else { Route::Gio };
+    }
+    let Some(portal) = sound_support else {
+        return Route::Gio;
+    };
+    modes.insert(token.to_owned(), portal);
+    if portal {
+        Route::PortalAfterGio
+    } else {
+        Route::Gio
+    }
+}
+
 struct Portal {
     gio: Gio,
     support: portal::Support,
     queue: portal::Queue,
+    /// Tokens pinned to a transport: true for the portal.
     modes: RefCell<HashMap<String, bool>>,
 }
-impl Port for Portal {
-    fn show(&self, request: Request) {
+impl SoundPort for Portal {
+    fn show(&self, request: Request, sound: SoundRequest) {
         self.support.probe();
-        let supported = *self
-            .modes
-            .borrow_mut()
-            .entry(request.token.clone())
-            .or_insert_with(|| self.support.supports_sound());
+        let route = route(
+            &mut self.modes.borrow_mut(),
+            &request.token,
+            self.support.sound_support(),
+        );
+        match route {
+            Route::Gio => {
+                self.gio.show(request);
+                return;
+            }
+            Route::PortalAfterGio => self.gio.withdraw(&request.token),
+            Route::Portal => (),
+        }
         let fallback = self.gio.clone();
         let portal_request = portal::Request {
             id: request.token.clone(),
@@ -57,45 +150,67 @@ impl Port for Portal {
             icon: request.icon.clone(),
             default_action: format!("app.{OPEN_CHAT_ACTION}"),
             default_action_target: request.token.clone(),
-            sound: request.sound,
+            sound,
         };
         self.queue
-            .add(portal_request, supported, move || fallback.show(request));
+            .add(portal_request, move || fallback.show(request));
     }
     fn withdraw(&self, token: &str) {
-        let enabled = self.modes.borrow_mut().remove(token).unwrap_or(true);
+        // `route` records a token only once it may go through the portal.
+        let portal = self.modes.borrow_mut().remove(token).unwrap_or(false);
         let gio = self.gio.clone();
         let id = token.to_owned();
-        self.queue.remove(token, enabled, move || gio.withdraw(&id));
+        self.queue.remove(token, portal, move || gio.withdraw(&id));
     }
 }
 
 pub(super) fn image_data(icon: &[u8]) -> Result<ashpd::zbus::zvariant::OwnedValue, String> {
-    let crate::native_media::ThumbnailResult::Image(image) =
+    let crate::native_media::ThumbnailResult::Image(thumbnail) =
         crate::native_media::decode_thumbnail(icon)
     else {
         return Err("notification icon could not be decoded".into());
     };
-    let width = i32::try_from(image.width).map_err(|e| e.to_string())?;
-    let height = i32::try_from(image.height).map_err(|e| e.to_string())?;
-    ashpd::zbus::zvariant::Value::new((width, height, width * 4, true, 8_i32, 4_i32, image.rgba))
-        .try_into()
-        .map_err(|e: ashpd::zbus::zvariant::Error| e.to_string())
+    let image = image::RgbaImage::from_raw(thumbnail.width, thumbnail.height, thumbnail.rgba)
+        .ok_or("notification icon has an invalid size")?;
+    let image = image::DynamicImage::ImageRgba8(image)
+        .thumbnail(IMAGE_DATA_EDGE, IMAGE_DATA_EDGE)
+        .into_rgba8();
+    let width = i32::try_from(image.width()).map_err(|e| e.to_string())?;
+    let height = i32::try_from(image.height()).map_err(|e| e.to_string())?;
+    ashpd::zbus::zvariant::Value::new((
+        width,
+        height,
+        width * 4,
+        true,
+        8_i32,
+        4_i32,
+        image.into_raw(),
+    ))
+    .try_into()
+    .map_err(|e: ashpd::zbus::zvariant::Error| e.to_string())
 }
 
 type SharedSession = Arc<tokio::sync::Mutex<Option<freedesktop::Session>>>;
+
+/// Talks to `org.freedesktop.Notifications` directly, which takes a sound file
+/// and reports which notifications were clicked or closed.
 struct Native {
     gio: Rc<dyn Port>,
     queue: portal::Queue,
     session: SharedSession,
+    /// Tokens the server refused, shown through GNotification until withdrawn.
     fallback: Rc<RefCell<HashSet<String>>>,
+    /// Tokens the server holds, whose next failure is ambiguous.
     delivered: Arc<std::sync::Mutex<HashSet<String>>>,
+    /// Tokens shown and not withdrawn since.
     active: Arc<std::sync::Mutex<HashSet<String>>>,
     events: async_channel::Sender<freedesktop::Event>,
     connection: Option<ashpd::zbus::Connection>,
+    /// The application ID, which lets the desktop apply its per-app settings.
+    desktop_entry: String,
 }
-impl Port for Native {
-    fn show(&self, request: Request) {
+impl SoundPort for Native {
+    fn show(&self, request: Request, sound: SoundRequest) {
         if self.fallback.borrow().contains(&request.token) {
             self.gio.show(request);
             return;
@@ -105,11 +220,15 @@ impl Port for Native {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(token.clone());
+        let content = Content {
+            title: request.title.clone(),
+            body: request.body.clone(),
+            icon: request.icon.clone(),
+            sound,
+            open_label: gettext("Open"),
+            desktop_entry: self.desktop_entry.clone(),
+        };
         let id = token.clone();
-        let title = request.title.clone();
-        let body = request.body.clone();
-        let icon = request.icon.clone();
-        let sound = request.sound;
         let session = self.session.clone();
         let events = self.events.clone();
         let connection = self.connection.clone();
@@ -121,124 +240,33 @@ impl Port for Native {
             &token,
             false,
             Box::new(move || {
-                Box::pin(async move {
-                    portal::on_runtime(async move {
-                        let previously_delivered = delivered
+                Box::pin(portal::on_runtime(async move {
+                    let previously_delivered = delivered
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .contains(&id);
+                    let result = async {
+                        let mut session = session.lock().await;
+                        let session = current_session(&mut session, connection, events).await?;
+                        notify(session, &id, content).await
+                    }
+                    .await;
+                    if result.is_ok()
+                        && active
                             .lock()
                             .unwrap_or_else(|e| e.into_inner())
-                            .contains(&id);
-                        let result: Result<(), String> = async {
-                            let mut session = session.lock().await;
-                            if let Some(existing) = session.as_ref()
-                                && !existing.is_current().await
-                            {
-                                *session = None;
-                            }
-                            if session.is_none() {
-                                let connection = match connection {
-                                    Some(connection) => connection,
-                                    None => ashpd::zbus::Connection::session()
-                                        .await
-                                        .map_err(|e| e.to_string())?,
-                                };
-                                let (new_session, receiver) = freedesktop::Session::new(connection)
-                                    .await
-                                    .map_err(|e| e.to_string())?;
-                                crate::portal::spawn(async move {
-                                    while let Ok(event) = receiver.recv().await {
-                                        if events.send(event).await.is_err() {
-                                            break;
-                                        }
-                                    }
-                                });
-                                *session = Some(new_session);
-                            }
-                            let Some(session) = session.as_ref() else {
-                                return Err("notification session unavailable".into());
-                            };
-                            if !session.capabilities().iter().any(|cap| cap == "actions") {
-                                return Err("notification actions unavailable".into());
-                            }
-                            let mut hints = HashMap::new();
-                            if let Some(icon) = icon {
-                                hints.insert("image-data".into(), image_data(&icon)?);
-                            }
-                            match sound {
-                                SoundRequest::Silent => {
-                                    hints.insert("suppress-sound".into(), true.into());
-                                }
-                                SoundRequest::Play
-                                    if session.capabilities().iter().any(|cap| cap == "sound") =>
-                                {
-                                    let path = crate::notification_sound::native_sound_file()
-                                        .map_err(|e| e.to_string())?;
-                                    let path = path.to_str().ok_or("sound path is not UTF-8")?;
-                                    hints.insert(
-                                        "sound-file".into(),
-                                        ashpd::zbus::zvariant::Str::from(path).into(),
-                                    );
-                                }
-                                SoundRequest::Play => {}
-                            }
-                            let body_format = if session
-                                .capabilities()
-                                .iter()
-                                .any(|cap| cap == "body-markup")
-                            {
-                                super::BodyFormat::Markup
-                            } else {
-                                super::BodyFormat::Plain
-                            };
-                            let body = super::notification_body(&body, body_format);
-                            session
-                                .show(
-                                    &id,
-                                    freedesktop::Notification {
-                                        app_name: "ZapTide",
-                                        replaces_id: 0,
-                                        app_icon: "",
-                                        summary: &title,
-                                        body: &body,
-                                        actions: vec!["default".into(), "Open".into()],
-                                        hints,
-                                        expire_timeout: -1,
-                                    },
-                                )
-                                .await
-                                .map_err(|error| match error {
-                                    ashpd::zbus::Error::MethodError(ref name, _, _)
-                                        if !matches!(
-                                            name.as_str(),
-                                            "org.freedesktop.DBus.Error.NoReply"
-                                                | "org.freedesktop.DBus.Error.Timeout"
-                                                | "org.freedesktop.DBus.Error.Disconnected"
-                                        ) =>
-                                    {
-                                        error.to_string()
-                                    }
-                                    _ => portal::AMBIGUOUS.to_owned(),
-                                })?;
-                            Ok(())
-                        }
-                        .await;
-                        if result.is_ok()
-                            && active
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner())
-                                .contains(&id)
-                        {
-                            delivered
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner())
-                                .insert(id);
-                        }
-                        if previously_delivered && result.is_err() {
-                            return Err(portal::AMBIGUOUS.to_owned());
-                        }
-                        result
-                    })
-                    .await
-                })
+                            .contains(&id)
+                    {
+                        delivered
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .insert(id);
+                    }
+                    if previously_delivered && result.is_err() {
+                        return Err(portal::AMBIGUOUS.to_owned());
+                    }
+                    result
+                }))
             }),
             Box::new(move |result, current| {
                 if result.is_err() && current {
@@ -283,6 +311,102 @@ impl Port for Native {
     }
 }
 
+/// What [`notify`] sends, gathered on the GTK thread.
+struct Content {
+    title: String,
+    body: String,
+    icon: Option<Vec<u8>>,
+    sound: SoundRequest,
+    open_label: String,
+    desktop_entry: String,
+}
+
+/// The session with the current server owner, opened again after the server
+/// restarted or changed. Its click and close events go to `events`.
+async fn current_session(
+    slot: &mut Option<freedesktop::Session>,
+    connection: Option<ashpd::zbus::Connection>,
+    events: async_channel::Sender<freedesktop::Event>,
+) -> Result<&freedesktop::Session, String> {
+    if let Some(existing) = slot.as_ref()
+        && !existing.is_current().await
+    {
+        *slot = None;
+    }
+    if slot.is_none() {
+        let connection = match connection {
+            Some(connection) => connection,
+            None => ashpd::zbus::Connection::session()
+                .await
+                .map_err(|e| e.to_string())?,
+        };
+        let (session, receiver) = freedesktop::Session::new(connection)
+            .await
+            .map_err(|e| e.to_string())?;
+        crate::portal::spawn(async move {
+            while let Ok(event) = receiver.recv().await {
+                if events.send(event).await.is_err() {
+                    break;
+                }
+            }
+        });
+        *slot = Some(session);
+    }
+    slot.as_ref()
+        .ok_or_else(|| "notification session unavailable".into())
+}
+
+async fn notify(session: &freedesktop::Session, id: &str, content: Content) -> Result<(), String> {
+    if !session.supports("actions") {
+        return Err("notification actions unavailable".into());
+    }
+    let mut hints = HashMap::new();
+    hints.insert(
+        "desktop-entry".into(),
+        ashpd::zbus::zvariant::Str::from(content.desktop_entry).into(),
+    );
+    if let Some(icon) = content.icon {
+        hints.insert("image-data".into(), image_data(&icon)?);
+    }
+    match content.sound {
+        SoundRequest::Silent => {
+            hints.insert("suppress-sound".into(), true.into());
+        }
+        SoundRequest::Play if session.supports("sound") => {
+            let path = crate::notification_sound::native_sound_file().map_err(|e| e.to_string())?;
+            let path = path.to_str().ok_or("sound path is not UTF-8")?;
+            hints.insert(
+                "sound-file".into(),
+                ashpd::zbus::zvariant::Str::from(path).into(),
+            );
+        }
+        SoundRequest::Play => {}
+    }
+    let body_format = if session.supports("body-markup") {
+        super::BodyFormat::Markup
+    } else {
+        super::BodyFormat::Plain
+    };
+    let body = super::notification_body(&content.body, body_format);
+    session
+        .show(
+            id,
+            freedesktop::Notification {
+                app_name: "ZapTide",
+                replaces_id: 0,
+                app_icon: "",
+                summary: &content.title,
+                body: &body,
+                actions: vec!["default".into(), content.open_label],
+                hints,
+                expire_timeout: -1,
+            },
+        )
+        .await
+        .map(drop)
+        .map_err(|error| portal::classify(&error))
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum BackendChoice {
     Portal,
@@ -322,23 +446,51 @@ fn handle_event(
     }
 }
 
+/// The chat notification sender for this build. `closed` receives the token of
+/// a notification the person dismissed, where the desktop reports it.
 pub(super) fn create(
     application: &gtk::Application,
     sandboxed: bool,
     closed: impl Fn(&str) + 'static,
-) -> Rc<dyn Port> {
+) -> Notifier {
     let gio = Gio(application.clone());
-    if backend_choice(sandboxed) == BackendChoice::Portal {
-        return Rc::new(Portal {
-            gio,
-            support: portal::Support::default(),
+    let on_sound: Rc<RefCell<HashSet<String>>> = Rc::default();
+    let dismissed = on_sound.clone();
+    let closed = move |token: &str| {
+        dismissed.borrow_mut().remove(token);
+        closed(token);
+    };
+    let with_sound: Rc<dyn SoundPort> = if backend_choice(sandboxed) == BackendChoice::Portal {
+        let support = portal::Support::default();
+        support.probe();
+        Rc::new(Portal {
+            gio: gio.clone(),
+            support,
             queue: portal::Queue::default(),
             modes: RefCell::new(HashMap::new()),
-        });
+        })
+    } else {
+        native(application, gio.clone(), closed)
+    };
+    Notifier {
+        plain: Rc::new(gio),
+        with_sound,
+        on_sound,
     }
+}
+
+fn native(
+    application: &gtk::Application,
+    gio: Gio,
+    closed: impl Fn(&str) + 'static,
+) -> Rc<dyn SoundPort> {
     let (events, receiver) = async_channel::unbounded();
     let queue = portal::Queue::default();
     let event_queue = queue.clone();
+    let desktop_entry = application
+        .application_id()
+        .map(String::from)
+        .unwrap_or_default();
     let application = application.clone();
     let active: Arc<std::sync::Mutex<HashSet<String>>> = Arc::default();
     let delivered: Arc<std::sync::Mutex<HashSet<String>>> = Arc::default();
@@ -365,6 +517,7 @@ pub(super) fn create(
         active,
         events,
         connection: None,
+        desktop_entry,
     })
 }
 
@@ -499,18 +652,18 @@ mod tests {
                         active: Arc::default(),
                         events,
                         connection: None,
+                        desktop_entry: "test.app".into(),
                     };
                     let request = || Request {
                         token: "one".into(),
                         title: "title".into(),
                         body: "body".into(),
                         icon: None,
-                        sound: SoundRequest::Silent,
                         notification: gtk::gio::Notification::new("title"),
                     };
-                    native.show(request());
+                    native.show(request(), SoundRequest::Silent);
                     assert_eq!(received.recv().await.unwrap(), ('n', 0));
-                    native.show(request());
+                    native.show(request(), SoundRequest::Silent);
                     native.withdraw("one");
                     assert!(received.try_recv().is_err());
                     gate.send(()).await.unwrap();
@@ -615,16 +768,16 @@ mod tests {
                         active: Arc::default(),
                         events,
                         connection: Some(connection),
+                        desktop_entry: "test.app".into(),
                     };
                     let request = |token: &str| Request {
                         token: token.into(),
                         title: "title".into(),
                         body: "body".into(),
                         icon: None,
-                        sound: SoundRequest::Silent,
                         notification: gtk::gio::Notification::new("title"),
                     };
-                    native.show(request("old"));
+                    native.show(request("old"), SoundRequest::Silent);
                     assert_eq!(received.recv().await.unwrap(), ('n', 0));
                     while native.queue.has_pending("old") {
                         gtk::glib::timeout_future(std::time::Duration::from_millis(5)).await;
@@ -643,7 +796,7 @@ mod tests {
                         same_done.send(()).await.unwrap();
                     });
                     same_ready.recv().await.unwrap();
-                    native.show(request("old"));
+                    native.show(request("old"), SoundRequest::Silent);
                     assert_eq!(received.recv().await.unwrap(), ('n', 0));
                     while native.queue.has_pending("old") {
                         gtk::glib::timeout_future(std::time::Duration::from_millis(5)).await;
@@ -674,7 +827,7 @@ mod tests {
                         setup.send(server).await.unwrap();
                     });
                     let second = ready.recv().await.unwrap();
-                    native.show(request("new"));
+                    native.show(request("new"), SoundRequest::Silent);
                     assert_eq!(received.recv().await.unwrap(), ('n', 0));
                     native.withdraw("old");
                     gtk::glib::timeout_future(std::time::Duration::from_millis(150)).await;
@@ -707,12 +860,12 @@ mod tests {
                         setup.send(server).await.unwrap();
                     });
                     let _third = ready.recv().await.unwrap();
-                    native.show(request("unsupported"));
+                    native.show(request("unsupported"), SoundRequest::Silent);
                     while native.queue.has_pending("unsupported") {
                         gtk::glib::timeout_future(std::time::Duration::from_millis(5)).await;
                     }
                     assert_eq!(*fallback.borrow(), 1);
-                    native.show(request("unsupported"));
+                    native.show(request("unsupported"), SoundRequest::Silent);
                     assert_eq!(*fallback.borrow(), 2);
                     assert!(received.try_recv().is_err());
                 })
@@ -757,6 +910,7 @@ mod tests {
                         active: Arc::default(),
                         events,
                         connection: None,
+                        desktop_entry: "test.app".into(),
                     };
                     let mut png = std::io::Cursor::new(Vec::new());
                     image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
@@ -766,50 +920,53 @@ mod tests {
                     ))
                     .write_to(&mut png, image::ImageFormat::Png)
                     .unwrap();
-                    let request = |token: &str, sound| Request {
+                    let request = |token: &str| Request {
                         token: token.into(),
                         title: "title".into(),
                         body: "<hello> &".into(),
                         icon: Some(png.get_ref().clone()),
-                        sound,
                         notification: gtk::gio::Notification::new("title"),
                     };
-                    native.show(request("one", SoundRequest::Play));
+                    native.show(request("one"), SoundRequest::Play);
                     let (body, actions, hints) = wire_rx.recv().await.unwrap();
                     assert_eq!(body, "&lt;hello&gt; &amp;");
                     assert_eq!(actions, ["default", "Open"]);
                     let structure =
                         <&zbus::zvariant::Structure<'_>>::try_from(&hints["image-data"]).unwrap();
                     let fields = structure.fields();
-                    assert_eq!(i32::try_from(&fields[0]).unwrap(), 512);
-                    assert_eq!(i32::try_from(&fields[1]).unwrap(), 256);
-                    assert_eq!(i32::try_from(&fields[2]).unwrap(), 2048);
+                    assert_eq!(i32::try_from(&fields[0]).unwrap(), 128);
+                    assert_eq!(i32::try_from(&fields[1]).unwrap(), 64);
+                    assert_eq!(i32::try_from(&fields[2]).unwrap(), 512);
                     let pixels = Vec::<u8>::try_from(fields[6].try_clone().unwrap()).unwrap();
-                    assert_eq!(pixels.len(), 512 * 256 * 4);
+                    assert_eq!(pixels.len(), 128 * 64 * 4);
                     let (pixels, remainder) = pixels.as_chunks::<4>();
                     assert!(remainder.is_empty());
                     assert!(pixels.iter().all(|pixel| *pixel == [1, 2, 3, 255]));
+                    assert_eq!(
+                        <&str>::try_from(&hints["desktop-entry"]).unwrap(),
+                        "test.app"
+                    );
                     let path = <&str>::try_from(&hints["sound-file"]).unwrap();
                     assert_eq!(
                         std::fs::read(path).unwrap(),
                         crate::notification_sound::SOUND
                     );
-                    native.show(request("two", SoundRequest::Silent));
+                    native.show(request("two"), SoundRequest::Silent);
                     let (_, _, hints) = wire_rx.recv().await.unwrap();
                     assert!(bool::try_from(&hints["suppress-sound"]).unwrap());
                     assert!(!hints.contains_key("sound-file") && !hints.contains_key("sound-name"));
                     assert_eq!(*fallback.borrow(), 0);
-                    let mut refused = request("refused", SoundRequest::Silent);
+                    let mut refused = request("refused");
                     refused.title = "refuse".into();
-                    native.show(refused);
+                    native.show(refused, SoundRequest::Silent);
                     wire_rx.recv().await.unwrap();
                     while native.queue.has_pending("refused") {
                         gtk::glib::timeout_future(std::time::Duration::from_millis(5)).await;
                     }
                     assert_eq!(*fallback.borrow(), 1);
-                    let mut ambiguous = request("ambiguous", SoundRequest::Silent);
+                    let mut ambiguous = request("ambiguous");
                     ambiguous.title = "no-reply".into();
-                    native.show(ambiguous);
+                    native.show(ambiguous, SoundRequest::Silent);
                     wire_rx.recv().await.unwrap();
                     gtk::glib::timeout_future(std::time::Duration::from_millis(100)).await;
                     assert_eq!(*fallback.borrow(), 1);
@@ -819,6 +976,90 @@ mod tests {
                 })
             })
             .unwrap();
+    }
+
+    #[derive(Default)]
+    struct Recorder(RefCell<Vec<String>>);
+    impl Recorder {
+        fn take(&self) -> Vec<String> {
+            std::mem::take(&mut self.0.borrow_mut())
+        }
+    }
+    impl Port for Recorder {
+        fn show(&self, request: Request) {
+            self.0.borrow_mut().push(format!("show {}", request.token));
+        }
+        fn withdraw(&self, token: &str) {
+            self.0.borrow_mut().push(format!("withdraw {token}"));
+        }
+    }
+    impl SoundPort for Recorder {
+        fn show(&self, request: Request, sound: SoundRequest) {
+            self.0
+                .borrow_mut()
+                .push(format!("show {} {sound:?}", request.token));
+        }
+        fn withdraw(&self, token: &str) {
+            self.0.borrow_mut().push(format!("withdraw {token}"));
+        }
+    }
+
+    fn plain_request(token: &str) -> Request {
+        Request {
+            token: token.into(),
+            title: "title".into(),
+            body: "body".into(),
+            icon: None,
+            notification: gtk::gio::Notification::new("title"),
+        }
+    }
+
+    #[test]
+    fn a_turned_off_sound_keeps_plain_notifications_and_switching_never_shows_twice() {
+        let plain = Rc::new(Recorder::default());
+        let with_sound = Rc::new(Recorder::default());
+        let notifier = Notifier {
+            plain: plain.clone(),
+            with_sound: with_sound.clone(),
+            on_sound: Rc::default(),
+        };
+        notifier.show(plain_request("chat"), None);
+        assert_eq!(plain.take(), ["show chat"]);
+        assert!(with_sound.take().is_empty());
+
+        notifier.show(plain_request("chat"), Some(SoundRequest::Play));
+        assert_eq!(plain.take(), ["withdraw chat"]);
+        notifier.show(plain_request("chat"), Some(SoundRequest::Silent));
+        assert!(plain.take().is_empty());
+        assert_eq!(with_sound.take(), ["show chat Play", "show chat Silent"]);
+
+        notifier.show(plain_request("chat"), None);
+        assert_eq!(with_sound.take(), ["withdraw chat"]);
+        assert_eq!(plain.take(), ["show chat"]);
+
+        notifier.withdraw("chat");
+        assert_eq!(plain.take(), ["withdraw chat"]);
+        assert!(with_sound.take().is_empty());
+        notifier.show(plain_request("chat"), Some(SoundRequest::Play));
+        plain.take();
+        notifier.withdraw("chat");
+        assert_eq!(with_sound.take(), ["show chat Play", "withdraw chat"]);
+        assert!(plain.take().is_empty());
+    }
+
+    #[test]
+    fn a_token_is_pinned_only_once_the_portal_version_is_known() {
+        let mut modes = HashMap::new();
+        assert_eq!(route(&mut modes, "early", None), Route::Gio);
+        assert!(modes.is_empty());
+        assert_eq!(
+            route(&mut modes, "early", Some(true)),
+            Route::PortalAfterGio
+        );
+        assert_eq!(route(&mut modes, "early", Some(true)), Route::Portal);
+        assert_eq!(route(&mut modes, "old-portal", Some(false)), Route::Gio);
+        assert_eq!(route(&mut modes, "old-portal", Some(true)), Route::Gio);
+        assert_eq!(route(&mut modes, "early", None), Route::Portal);
     }
 
     #[test]

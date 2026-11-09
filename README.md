@@ -80,18 +80,14 @@ Enter sends; Shift+Enter adds a line (configurable). Emoji selection returns foc
 to the input. Escape dismisses selection, edits or replies before closing the chat.
 **Close Chat** also returns home; both keep drafts and mark nothing as read.
 
-Notifications can carry a short sound, requested at most once per pause (30 seconds
-by default, from none to 2 minutes) across all chats and accounts. Both settings are
-under **Preferences → Notifications**. Flatpak requests the bundled sound through
-version 2 of the notification portal when supported. Outside Flatpak, including
-AppImage, ZapTide requests it through the desktop notification service when the
-service advertises sound support. Otherwise,
-ordinary notifications are sent without the bundled sound; the desktop may apply its
-own notification sound. Actual playback depends on the portal and desktop backend.
-An ambiguous notification transport failure quarantines that notification ID until it is
-no longer relevant. ZapTide does not automatically recover that ID or guarantee
-that a previously sent notification is cancelled; delivery can still be delayed.
-The sound is
+Notifications can carry a short sound, at most once per pause (30 seconds by
+default, from none to 2 minutes) across all chats and accounts. Both settings are
+under **Preferences → Notifications**. Flatpak offers the sound through version 2 of
+the notification portal; other builds, including AppImage, offer it to the desktop
+notification service when the service supports sounds. The desktop decides whether
+to play it, so Do Not Disturb and its own sound settings still apply. Where neither
+takes a sound, or with the sound turned off, notifications are sent as before and the
+desktop may play its own sound. The sound is
 [Message Notification 4](assets/sounds/README.md) by AnthonyRox (CC0).
 
 GIFs play silently while their rows are shown. Leaving the conversation or hiding

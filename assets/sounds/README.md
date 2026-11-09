@@ -1,6 +1,7 @@
 # Sounds
 
-`message-notification.wav` plays when a desktop notification is shown.
+`message-notification.wav` is offered to the desktop with notifications; the desktop
+decides whether to play it.
 
 - Title: Message Notification 4
 - Author: AnthonyRox

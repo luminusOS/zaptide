@@ -17,7 +17,7 @@ use std::future::Future;
 use std::io::{Seek, SeekFrom, Write};
 use std::os::fd::OwnedFd;
 use std::pin::Pin;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
@@ -80,8 +80,10 @@ impl Support {
         });
     }
 
-    pub fn supports_sound(&self) -> bool {
-        takes_sound(self.version.load(Ordering::Acquire))
+    /// Whether the portal takes a sound, or `None` until its version is read.
+    pub fn sound_support(&self) -> Option<bool> {
+        let version = self.version.load(Ordering::Acquire);
+        (version != UNKNOWN_VERSION).then(|| takes_sound(version))
     }
 }
 
@@ -152,31 +154,29 @@ async fn send(proxy: &NotificationProxy, request: Request) -> Result<(), String>
         notification: notification(&request).map_err(|error| error.to_string())?,
         sound: sound.value(),
     };
-    definitive(
-        proxy
-            .call_method("AddNotification", &(request.id.as_str(), body))
-            .await
-            .map(drop),
-    )
-    .await
+    proxy
+        .call_method("AddNotification", &(request.id.as_str(), body))
+        .await
+        .map(drop)
+        .map_err(|error| classify(&error))
 }
 
-async fn definitive(result: ashpd::zbus::Result<()>) -> Result<(), String> {
-    match result {
-        Ok(()) => Ok(()),
-        Err(error) => match &error {
-            ashpd::zbus::Error::MethodError(name, _, _)
-                if !matches!(
-                    name.as_str(),
-                    "org.freedesktop.DBus.Error.NoReply"
-                        | "org.freedesktop.DBus.Error.Timeout"
-                        | "org.freedesktop.DBus.Error.Disconnected"
-                ) =>
-            {
-                Err(error.to_string())
-            }
-            _ => Err(AMBIGUOUS.into()),
-        },
+/// The reason a D-Bus call failed. Only an error reply proves the desktop
+/// refused; a missing reply or a broken connection leaves unknown whether it
+/// acted, which is reported as [`AMBIGUOUS`].
+pub(super) fn classify(error: &ashpd::zbus::Error) -> String {
+    match error {
+        ashpd::zbus::Error::MethodError(name, _, _)
+            if !matches!(
+                name.as_str(),
+                "org.freedesktop.DBus.Error.NoReply"
+                    | "org.freedesktop.DBus.Error.Timeout"
+                    | "org.freedesktop.DBus.Error.Disconnected"
+            ) =>
+        {
+            error.to_string()
+        }
+        _ => AMBIGUOUS.to_owned(),
     }
 }
 
@@ -190,125 +190,173 @@ async fn send_to_desktop(request: Request) -> Result<(), String> {
 
 type LocalTask = Pin<Box<dyn Future<Output = Result<(), String>>>>;
 type Start = Box<dyn FnOnce() -> LocalTask>;
+/// Receives the outcome and whether the operation is still the newest for its ID.
 type Finish = Box<dyn FnOnce(Result<(), String>, bool)>;
+type Lanes = Rc<RefCell<HashMap<String, Lane>>>;
 
 struct Operation {
     generation: u64,
-    remove: bool,
     start: Start,
     finish: Finish,
 }
 
 struct Lane {
     generation: Rc<Cell<u64>>,
+    /// Operations that have run to the end, to tell a stuck lane from a busy one.
+    finished: Rc<Cell<u64>>,
     pending: Rc<RefCell<Option<Operation>>>,
     quarantined: Rc<Cell<bool>>,
     abort: futures_util::future::AbortHandle,
 }
 
-#[derive(Clone, Default)]
-pub struct Queue(Rc<RefCell<HashMap<String, Lane>>>);
+impl Lane {
+    fn spawn(lanes: Weak<RefCell<HashMap<String, Lane>>>, id: &str) -> Self {
+        let generation = Rc::new(Cell::new(0));
+        let finished = Rc::new(Cell::new(0));
+        let pending = Rc::new(RefCell::new(None));
+        let quarantined = Rc::new(Cell::new(false));
+        let (abort, registration) = futures_util::future::AbortHandle::new_pair();
+        relm4::gtk::glib::spawn_future_local(futures_util::future::Abortable::new(
+            run_lane(
+                lanes,
+                id.to_owned(),
+                generation.clone(),
+                finished.clone(),
+                pending.clone(),
+                quarantined.clone(),
+            ),
+            registration,
+        ));
+        Self {
+            generation,
+            finished,
+            pending,
+            quarantined,
+            abort,
+        }
+    }
+}
+
+async fn run_lane(
+    lanes: Weak<RefCell<HashMap<String, Lane>>>,
+    id: String,
+    generation: Rc<Cell<u64>>,
+    finished: Rc<Cell<u64>>,
+    pending: Rc<RefCell<Option<Operation>>>,
+    quarantined: Rc<Cell<bool>>,
+) {
+    loop {
+        let Some(operation) = pending.borrow_mut().take() else {
+            if let Some(lanes) = lanes.upgrade() {
+                lanes.borrow_mut().remove(&id);
+            }
+            return;
+        };
+        let result = (operation.start)().await;
+        finished.set(finished.get().wrapping_add(1));
+        if matches!(&result, Err(reason) if reason == AMBIGUOUS) {
+            quarantined.set(true);
+            return;
+        }
+        (operation.finish)(result, operation.generation == generation.get());
+    }
+}
+
+/// Runs notification operations in order, in one lane per notification ID.
+///
+/// A lane runs one operation at a time. While one is in flight only the newest
+/// request waits behind it: each add or removal replaces the waiting one and
+/// drops its payload, and `finish` learns whether its operation is still the
+/// newest, so a superseded add never falls back. A lane is abandoned, with
+/// whatever waits in it, when a removal is still waiting after the grace
+/// period or nothing in the lane has finished since that removal was queued.
+///
+/// An operation that fails with [`AMBIGUOUS`] may or may not have reached the
+/// desktop, so its lane is quarantined: nothing more runs for that ID, and the
+/// next removal drops the lane without asking the desktop. A notification the
+/// desktop showed late may then stay on screen.
+#[derive(Clone)]
+pub struct Queue {
+    lanes: Lanes,
+    grace: std::time::Duration,
+}
+
+impl Default for Queue {
+    fn default() -> Self {
+        Self {
+            lanes: Lanes::default(),
+            grace: WITHDRAW_GRACE,
+        }
+    }
+}
 
 impl Queue {
-    pub(super) fn has_pending(&self, id: &str) -> bool {
-        self.0.borrow().contains_key(id)
+    #[cfg(test)]
+    fn with_grace(grace: std::time::Duration) -> Self {
+        Self {
+            grace,
+            ..Self::default()
+        }
     }
+
+    pub(super) fn has_pending(&self, id: &str) -> bool {
+        self.lanes.borrow().contains_key(id)
+    }
+
     pub(super) fn enqueue(&self, id: &str, remove: bool, start: Start, finish: Finish) {
-        let mut lanes = self.0.borrow_mut();
+        let mut lanes = self.lanes.borrow_mut();
         if remove && lanes.get(id).is_some_and(|lane| lane.quarantined.get()) {
             if let Some(lane) = lanes.remove(id) {
                 lane.abort.abort();
             }
             return;
         }
-        let lane = lanes.entry(id.to_owned()).or_insert_with(|| {
-            let generation = Rc::new(Cell::new(0));
-            let current = generation.clone();
-            let pending = Rc::new(RefCell::new(None::<Operation>));
-            let next = pending.clone();
-            let quarantined = Rc::new(Cell::new(false));
-            let uncertain = quarantined.clone();
-            let (abort, registration) = futures_util::future::AbortHandle::new_pair();
-            let lanes = Rc::downgrade(&self.0);
-            let id = id.to_owned();
-            relm4::gtk::glib::spawn_future_local(futures_util::future::Abortable::new(
-                async move {
-                    loop {
-                        let Some(operation) = next.borrow_mut().take() else {
-                            if let Some(lanes) = lanes.upgrade() {
-                                lanes.borrow_mut().remove(&id);
-                            }
-                            break;
-                        };
-                        if operation.remove || operation.generation == current.get() {
-                            let result = (operation.start)().await;
-                            if matches!(&result, Err(reason) if reason == AMBIGUOUS) {
-                                uncertain.set(true);
-                                break;
-                            }
-                            (operation.finish)(result, operation.generation == current.get());
-                        }
-                    }
-                },
-                registration,
-            ));
-            Lane {
-                generation,
-                pending,
-                quarantined,
-                abort,
-            }
-        });
-        if !remove && lane.pending.borrow().as_ref().is_some_and(|op| op.remove) {
-            return;
-        }
+        let lane = lanes
+            .entry(id.to_owned())
+            .or_insert_with(|| Lane::spawn(Rc::downgrade(&self.lanes), id));
         let generation = lane.generation.get().wrapping_add(1);
         lane.generation.set(generation);
         *lane.pending.borrow_mut() = Some(Operation {
             generation,
-            remove,
             start,
             finish,
         });
         if remove {
-            let lanes = Rc::downgrade(&self.0);
-            let generation_ref = Rc::downgrade(&lane.generation);
-            let id = id.to_owned();
-            relm4::gtk::glib::spawn_future_local(async move {
-                let _ = on_runtime(async {
-                    tokio::time::sleep(WITHDRAW_GRACE).await;
-                    Ok(())
-                })
-                .await;
-                if let Some(lanes) = lanes.upgrade() {
-                    let mut lanes = lanes.borrow_mut();
-                    if lanes.get(&id).is_some_and(|lane| {
-                        lane.generation.get() == generation
-                            && generation_ref
-                                .upgrade()
-                                .is_some_and(|old| Rc::ptr_eq(&old, &lane.generation))
-                    }) && let Some(lane) = lanes.remove(&id)
-                    {
-                        lane.abort.abort();
-                    }
-                }
-            });
+            let finished = lane.finished.get();
+            self.abandon_after_grace(id, generation, finished, Rc::downgrade(&lane.generation));
         }
     }
 
-    pub fn add(&self, request: Request, supported: bool, fallback: impl FnOnce() + 'static) {
+    fn abandon_after_grace(&self, id: &str, generation: u64, finished: u64, lane: Weak<Cell<u64>>) {
+        let lanes = Rc::downgrade(&self.lanes);
+        let grace = self.grace;
+        let id = id.to_owned();
+        relm4::gtk::glib::spawn_future_local(async move {
+            relm4::gtk::glib::timeout_future(grace).await;
+            let Some(lanes) = lanes.upgrade() else {
+                return;
+            };
+            let mut lanes = lanes.borrow_mut();
+            let stuck = lanes.get(&id).is_some_and(|current| {
+                lane.upgrade()
+                    .is_some_and(|lane| Rc::ptr_eq(&lane, &current.generation))
+                    && (current.generation.get() == generation
+                        || current.finished.get() == finished)
+            });
+            if stuck && let Some(lane) = lanes.remove(&id) {
+                lane.abort.abort();
+            }
+        });
+    }
+
+    /// Sends `request` through the portal; `fallback` runs if the portal
+    /// refuses it and no newer request for its ID has arrived.
+    pub fn add(&self, request: Request, fallback: impl FnOnce() + 'static) {
         let id = request.id.clone();
         self.enqueue(
             &id,
             false,
-            Box::new(move || {
-                Box::pin(async move {
-                    if !supported {
-                        return Err("sound portal unavailable".into());
-                    }
-                    on_runtime(send_to_desktop(request)).await
-                })
-            }),
+            Box::new(move || Box::pin(on_runtime(send_to_desktop(request)))),
             Box::new(move |result, current| {
                 if result.is_err() && current {
                     fallback();
@@ -317,6 +365,9 @@ impl Queue {
         );
     }
 
+    /// Runs `withdraw` at once, then removes the portal's copy behind any
+    /// operation in flight. `portal_enabled` is false when the ID never went
+    /// through the portal.
     pub fn remove(&self, id: &str, portal_enabled: bool, withdraw: impl FnOnce()) {
         withdraw();
         let token = id.to_owned();
@@ -333,13 +384,11 @@ impl Queue {
                             .await
                             .map_err(|_| "the portal did not answer".to_owned())?
                             .map_err(|error| error.to_string())?;
-                        definitive(
-                            proxy
-                                .call_method("RemoveNotification", &(token.as_str(),))
-                                .await
-                                .map(drop),
-                        )
-                        .await
+                        proxy
+                            .call_method("RemoveNotification", &(token.as_str(),))
+                            .await
+                            .map(drop)
+                            .map_err(|error| classify(&error))
                     })
                     .await
                 })
@@ -360,24 +409,6 @@ pub(super) async fn on_runtime(
         }
     });
     receiver.recv().await.map_err(|_| AMBIGUOUS.to_owned())?
-}
-
-/// Runs `outcome` on the portal runtime and reports a failure to `on_error` on
-/// the calling thread, which must be running a main loop.
-#[cfg(test)]
-fn report_failure(
-    outcome: impl Future<Output = Result<(), String>> + Send + 'static,
-    on_error: impl FnOnce(String) + 'static,
-) {
-    let (failure, reported) = async_channel::bounded(1);
-    crate::portal::spawn(async move {
-        let _ = failure.send(outcome.await).await;
-    });
-    relm4::gtk::glib::spawn_future_local(async move {
-        if let Ok(Err(reason)) = reported.recv().await {
-            on_error(reason);
-        }
-    });
 }
 
 /// An anonymous file holding `bytes`, sealed against any later change. The
@@ -414,6 +445,8 @@ mod tests {
     use zbus::zvariant::OwnedValue;
 
     use super::*;
+
+    const SHORT_GRACE: std::time::Duration = std::time::Duration::from_millis(200);
 
     #[derive(Clone, Default)]
     struct QueuedFake {
@@ -485,7 +518,7 @@ mod tests {
             .with_thread_default(|| {
                 context.block_on(async {
                     let fake = QueuedFake::default();
-                    let queue = Queue::default();
+                    let queue = Queue::with_grace(SHORT_GRACE);
                     let (_gate, release) = async_channel::bounded(1);
                     let (started, started_rx) = async_channel::bounded(1);
                     let (done, done_rx) = async_channel::bounded(2);
@@ -512,13 +545,55 @@ mod tests {
                         Box::new(|_, _| panic!("abandoned remove ran")),
                     );
                     on_runtime(async {
-                        tokio::time::sleep(WITHDRAW_GRACE + std::time::Duration::from_millis(100))
-                            .await;
+                        tokio::time::sleep(SHORT_GRACE * 2).await;
                         Ok(())
                     })
                     .await
                     .unwrap();
-                    assert!(!queue.0.borrow().contains_key("chat"));
+                    assert!(!queue.lanes.borrow().contains_key("chat"));
+                    assert!(weak.upgrade().is_none());
+                    assert!(done_rx.try_recv().is_err());
+                })
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn an_add_that_replaced_a_withdrawal_behind_a_hung_call_is_released_after_grace() {
+        let context = relm4::gtk::glib::MainContext::new();
+        context
+            .with_thread_default(|| {
+                context.block_on(async {
+                    let fake = QueuedFake::default();
+                    let queue = Queue::with_grace(SHORT_GRACE);
+                    let (_gate, release) = async_channel::bounded(1);
+                    let (started, started_rx) = async_channel::bounded(1);
+                    let (done, done_rx) = async_channel::bounded(2);
+                    fake.add(
+                        &queue,
+                        ("chat", "old"),
+                        release,
+                        started,
+                        done.clone(),
+                        false,
+                    );
+                    started_rx.recv().await.unwrap();
+                    fake.remove(&queue, "chat", done.clone());
+                    let payload = Rc::new(());
+                    let weak = Rc::downgrade(&payload);
+                    queue.enqueue(
+                        "chat",
+                        false,
+                        Box::new(move || {
+                            Box::pin(async move {
+                                drop(payload);
+                                Ok(())
+                            })
+                        }),
+                        Box::new(|_, _| panic!("abandoned add ran")),
+                    );
+                    relm4::gtk::glib::timeout_future(SHORT_GRACE * 2).await;
+                    assert!(!queue.has_pending("chat"));
                     assert!(weak.upgrade().is_none());
                     assert!(done_rx.try_recv().is_err());
                 })
@@ -642,6 +717,49 @@ mod tests {
     }
 
     #[test]
+    fn an_add_after_a_waiting_withdrawal_replaces_it() {
+        let context = relm4::gtk::glib::MainContext::new();
+        context
+            .with_thread_default(|| {
+                context.block_on(async {
+                    let fake = QueuedFake::default();
+                    let queue = Queue::default();
+                    let (gate, release) = async_channel::bounded(1);
+                    let (started, started_rx) = async_channel::bounded(2);
+                    let (done, done_rx) = async_channel::bounded(2);
+                    fake.add(
+                        &queue,
+                        ("chat", "old"),
+                        release,
+                        started.clone(),
+                        done.clone(),
+                        false,
+                    );
+                    started_rx.recv().await.unwrap();
+                    fake.remove(&queue, "chat", done.clone());
+                    let (next_gate, next_release) = async_channel::bounded(1);
+                    next_gate.send(()).await.unwrap();
+                    fake.add(
+                        &queue,
+                        ("chat", "new"),
+                        next_release,
+                        started,
+                        done.clone(),
+                        false,
+                    );
+                    gate.send(()).await.unwrap();
+                    done_rx.recv().await.unwrap();
+                    done_rx.recv().await.unwrap();
+                    assert_eq!(
+                        fake.remote.borrow().get("chat").map(String::as_str),
+                        Some("new")
+                    );
+                })
+            })
+            .unwrap();
+    }
+
+    #[test]
     fn failed_old_add_never_falls_back_after_withdrawal_or_replacement() {
         let context = relm4::gtk::glib::MainContext::new();
         context
@@ -722,11 +840,11 @@ mod tests {
     #[test]
     fn support_is_unknown_until_the_version_is_read() {
         let support = Support::default();
-        assert!(!support.supports_sound());
+        assert_eq!(support.sound_support(), None);
         support.version.store(1, Ordering::Release);
-        assert!(!support.supports_sound());
+        assert_eq!(support.sound_support(), Some(false));
         support.version.store(2, Ordering::Release);
-        assert!(support.supports_sound());
+        assert_eq!(support.sound_support(), Some(true));
     }
 
     #[test]
@@ -884,13 +1002,11 @@ mod tests {
                         let proxy = NotificationProxy::with_connection(connection)
                             .await
                             .map_err(|e| e.to_string())?;
-                        definitive(
-                            proxy
-                                .call_method("RemoveNotification", &("token-1",))
-                                .await
-                                .map(drop),
-                        )
-                        .await
+                        proxy
+                            .call_method("RemoveNotification", &("token-1",))
+                            .await
+                            .map(drop)
+                            .map_err(|error| classify(&error))
                     })
                     .await
                 })
@@ -902,20 +1018,13 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_fallback_withdraws_locally_without_waiting_for_portal() {
+    fn removal_outside_the_portal_withdraws_locally_without_waiting_for_it() {
         let context = relm4::gtk::glib::MainContext::new();
         context
             .with_thread_default(|| {
                 context.block_on(async {
-                    let queue = Queue::default();
-                    let visible = Rc::new(Cell::new(false));
-                    let (fallback, fallback_rx) = async_channel::bounded(1);
-                    let show = visible.clone();
-                    queue.add(request(SoundRequest::Silent, None), false, move || {
-                        show.set(true);
-                        fallback.try_send(()).unwrap();
-                    });
-                    fallback_rx.recv().await.unwrap();
+                    let queue = Queue::with_grace(SHORT_GRACE);
+                    let visible = Rc::new(Cell::new(true));
                     let hide = visible.clone();
                     queue.remove("token-1", false, move || hide.set(false));
                     assert!(!visible.get());
@@ -926,7 +1035,7 @@ mod tests {
                     .await
                     .unwrap();
                     assert!(
-                        !queue.0.borrow().contains_key("token-1"),
+                        !queue.lanes.borrow().contains_key("token-1"),
                         "unsupported removal must not wait for a portal"
                     );
 
@@ -950,14 +1059,13 @@ mod tests {
                     queue.remove("token-2", false, move || hide.set(false));
                     assert!(!visible.get());
                     on_runtime(async {
-                        tokio::time::sleep(WITHDRAW_GRACE + std::time::Duration::from_millis(100))
-                            .await;
+                        tokio::time::sleep(SHORT_GRACE * 2).await;
                         Ok(())
                     })
                     .await
                     .unwrap();
                     assert!(!visible.get());
-                    assert!(!queue.0.borrow().contains_key("token-2"));
+                    assert!(!queue.lanes.borrow().contains_key("token-2"));
                 })
             })
             .unwrap();
@@ -984,14 +1092,7 @@ mod tests {
                         crate::portal::run(async move { connect(portal).await.unwrap() }).unwrap();
                     let queue = Queue::default();
                     let (done, done_rx) = async_channel::bounded(2);
-                    let visible = Rc::new(Cell::new(false));
-                    let show = visible.clone();
-                    let (fallback, fallback_rx) = async_channel::bounded(1);
-                    queue.add(request(SoundRequest::Silent, None), false, move || {
-                        show.set(true);
-                        fallback.try_send(()).unwrap();
-                    });
-                    fallback_rx.recv().await.unwrap();
+                    let visible = Rc::new(Cell::new(true));
                     queue_dbus_add(&queue, connection.clone(), "old", done.clone());
                     started_rx.recv().await.unwrap();
                     release.send(()).await.unwrap();
@@ -1001,7 +1102,15 @@ mod tests {
                     })
                     .await
                     .unwrap();
-                    assert!(queue.0.borrow().get("token-1").unwrap().quarantined.get());
+                    assert!(
+                        queue
+                            .lanes
+                            .borrow()
+                            .get("token-1")
+                            .unwrap()
+                            .quarantined
+                            .get()
+                    );
                     let mut payloads = Vec::new();
                     for _ in 0..1000 {
                         let payload = Rc::new(vec![0u8; 1024]);
@@ -1032,7 +1141,7 @@ mod tests {
                         "GIO fallback must be withdrawn during quarantine"
                     );
                     drop(connection);
-                    assert!(!queue.0.borrow().contains_key("token-1"));
+                    assert!(!queue.lanes.borrow().contains_key("token-1"));
                     assert!(payloads.iter().all(|payload| payload.strong_count() == 0));
                     assert!(done_rx.try_recv().is_err());
                     assert!(remote.lock().unwrap().is_empty());
@@ -1221,49 +1330,6 @@ mod tests {
     fn a_refused_notification_reports_why() {
         let (outcome, _) = deliver(request(SoundRequest::Silent, None), 2, true);
         assert!(outcome.unwrap_err().contains("refused"));
-    }
-
-    #[test]
-    fn a_failure_is_reported_on_the_calling_thread() {
-        let context = relm4::gtk::glib::MainContext::new();
-        let _owner = context.acquire().unwrap();
-        context
-            .with_thread_default(|| {
-                let reasons = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-                let sink = reasons.clone();
-                let thread = std::thread::current().id();
-                report_failure(async { Err("refused".into()) }, move |reason| {
-                    assert_eq!(std::thread::current().id(), thread);
-                    sink.borrow_mut().push(reason);
-                });
-                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-                while reasons.borrow().is_empty() {
-                    assert!(std::time::Instant::now() < deadline, "timed out");
-                    context.iteration(false);
-                    std::thread::sleep(std::time::Duration::from_millis(2));
-                }
-                assert_eq!(*reasons.borrow(), ["refused"]);
-            })
-            .unwrap();
-    }
-
-    #[test]
-    fn a_delivered_notification_reports_nothing() {
-        let context = relm4::gtk::glib::MainContext::new();
-        let _owner = context.acquire().unwrap();
-        context
-            .with_thread_default(|| {
-                let reported = std::rc::Rc::new(std::cell::Cell::new(false));
-                let flag = reported.clone();
-                report_failure(async { Ok(()) }, move |_| flag.set(true));
-                let until = std::time::Instant::now() + std::time::Duration::from_millis(200);
-                while std::time::Instant::now() < until {
-                    context.iteration(false);
-                    std::thread::sleep(std::time::Duration::from_millis(2));
-                }
-                assert!(!reported.get());
-            })
-            .unwrap();
     }
 
     #[test]

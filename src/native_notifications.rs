@@ -25,6 +25,7 @@ const MAX_PENDING_ACTIVATIONS: usize = 256;
 
 use crate::account::AccountId;
 use crate::i18n::gettext;
+use crate::notification_sound::SoundRequest;
 
 /// What the person chose on a call's notification.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,7 +45,6 @@ pub enum CallBanner {
     /// A call that came in during another: decline it or end the first and answer.
     Waiting,
 }
-use crate::notification_sound::SoundRequest;
 
 #[derive(Default)]
 pub struct ActivationTokens {
@@ -71,6 +71,11 @@ impl ActivationTokens {
     fn activate(&mut self, token: &str) -> Option<(AccountId, String)> {
         self.order.retain(|existing| existing != token);
         self.chats.remove(token)
+    }
+
+    /// Drops a token whose notification the person dismissed.
+    fn forget(&mut self, token: &str) {
+        self.activate(token);
     }
 
     /// The target of a token that stays valid, as the buttons of a call's
@@ -131,7 +136,7 @@ pub struct NativeNotifications {
     tokens: std::rc::Rc<std::cell::RefCell<ActivationTokens>>,
     calls: std::rc::Rc<std::cell::RefCell<ActivationTokens>>,
     #[cfg(target_os = "linux")]
-    chat_backend: std::rc::Rc<dyn adapters::Port>,
+    chat_backend: std::rc::Rc<adapters::Notifier>,
     body_format: std::cell::OnceCell<BodyFormat>,
 }
 
@@ -148,9 +153,11 @@ impl NativeNotifications {
         #[cfg(target_os = "linux")]
         let closed_tokens = tokens.clone();
         #[cfg(target_os = "linux")]
-        let chat_backend = adapters::create(application, portal::sandboxed(), move |token| {
-            closed_tokens.borrow_mut().activate(token);
-        });
+        let chat_backend = std::rc::Rc::new(adapters::create(
+            application,
+            portal::sandboxed(),
+            move |token| closed_tokens.borrow_mut().forget(token),
+        ));
         #[cfg(target_os = "linux")]
         let activation_backend = chat_backend.clone();
         let action_tokens = tokens.clone();
@@ -210,7 +217,8 @@ impl NativeNotifications {
 
     /// Shows or replaces the chat's notification; the chat ID stays in the
     /// in-memory token map. `sound` is passed on only where the desktop can
-    /// take it with the notification, and ignored elsewhere.
+    /// take it with the notification, and ignored elsewhere; `None` means the
+    /// person turned the sound off.
     pub fn show(
         &self,
         account: AccountId,
@@ -218,7 +226,7 @@ impl NativeNotifications {
         title: &str,
         body: &str,
         icon: Option<&std::path::Path>,
-        sound: SoundRequest,
+        sound: Option<SoundRequest>,
     ) -> Result<(), getrandom::Error> {
         use gtk::gio::prelude::*;
 
@@ -254,14 +262,16 @@ impl NativeNotifications {
             .set_default_action_and_target_value(&default_action, Some(&token.to_variant()));
 
         #[cfg(target_os = "linux")]
-        self.chat_backend.show(adapters::Request {
-            token,
-            title: title.to_owned(),
-            body: body.to_owned(),
-            icon: bytes.as_deref().map(<[u8]>::to_vec),
+        self.chat_backend.show(
+            adapters::Request {
+                token,
+                title: title.to_owned(),
+                body: body.to_owned(),
+                icon: bytes.as_deref().map(<[u8]>::to_vec),
+                notification,
+            },
             sound,
-            notification,
-        });
+        );
         #[cfg(not(target_os = "linux"))]
         {
             let _ = sound;
