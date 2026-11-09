@@ -123,7 +123,7 @@ const MAX_EARLY_HISTORY_IDS: usize = 16;
 /// Sticker download batch size for the picker.
 const STICKER_FETCH_LIMIT: usize = 40;
 /// Bump to re-derive stored rows after `classify` or `thumbnail_of` change.
-const DERIVED_VERSION: &str = "6";
+const DERIVED_VERSION: &str = "7";
 /// Rows visited per maintenance step; bounds how long a queued event waits.
 const MAINTENANCE_BATCH: usize = 256;
 /// Turns handled while maintenance waits before one step runs regardless,

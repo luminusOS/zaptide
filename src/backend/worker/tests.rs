@@ -1998,7 +1998,7 @@ fn version_three_archive_rederives_unsupported_buttons() {
     ));
     assert_eq!(
         worker.archive.meta("derived").unwrap().as_deref(),
-        Some("6")
+        Some(DERIVED_VERSION)
     );
 }
 
@@ -2045,7 +2045,7 @@ fn backfill_does_not_advance_checkpoint_when_a_row_write_fails() {
     worker.backfill();
     assert_eq!(
         worker.archive.meta("derived").unwrap().as_deref(),
-        Some("6")
+        Some(DERIVED_VERSION)
     );
     assert!(matches!(
         stored(&worker, PEER, "OLD").content,

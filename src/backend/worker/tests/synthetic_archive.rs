@@ -353,7 +353,7 @@ fn synthetic_archive_timings() {
     report_peak_memory("the re-derive pass");
     assert_eq!(
         fixture.worker.archive.meta("derived").unwrap().as_deref(),
-        Some("6")
+        Some(DERIVED_VERSION)
     );
     fixture.events.try_iter().for_each(drop);
 

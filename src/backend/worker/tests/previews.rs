@@ -149,16 +149,31 @@ fn a_wrapper_around_nothing_is_internal_traffic() {
 }
 
 #[test]
-fn animated_stickers_are_labelled_and_not_claimed_as_supported() {
+fn lottie_stickers_are_downloadable_animated_stickers() {
     let content = classify(&lottie_sticker()).expect("labelled content");
-    assert_eq!(
-        content,
-        Content::Unsupported {
-            what: unsupported::ANIMATED_STICKER.into()
-        }
-    );
-    assert_eq!(content.summary(), "Animated sticker");
-    assert!(content.media().is_none());
+    assert!(matches!(content, Content::Sticker { animated: true, .. }));
+    assert_eq!(content.media().unwrap().mime, "application/was");
+}
+
+#[test]
+fn archived_lottie_stickers_are_recovered_from_raw_messages() {
+    let (mut worker, _, _, _) = worker();
+    let chat = "fixture@s.whatsapp.net";
+    worker.archive.ensure_chat(chat, "Fixture").unwrap();
+    let mut row = crate::archive::tests::message(chat, "LOTTIE", 10, false);
+    row.content = Content::Unsupported {
+        what: unsupported::ANIMATED_STICKER.into(),
+    };
+    worker
+        .archive
+        .insert_message(&row, Some(&lottie_sticker().encode_to_vec()))
+        .unwrap();
+    worker.archive.set_meta("derived", "6").unwrap();
+    worker.backfill();
+    assert!(matches!(
+        stored(&worker, chat, "LOTTIE").content,
+        Content::Sticker { animated: true, .. }
+    ));
 }
 
 #[test]
@@ -181,5 +196,5 @@ fn a_quote_without_readable_content_still_has_a_summary() {
     assert_eq!(summary(Some(wa::Message::default())), "Message");
     assert_eq!(summary(None), "Message");
     assert_eq!(summary(Some(group_mentioned(sticker()))), "Sticker");
-    assert_eq!(summary(Some(lottie_sticker())), "Animated sticker");
+    assert_eq!(summary(Some(lottie_sticker())), "Sticker");
 }

@@ -108,6 +108,56 @@ pub(crate) use cards::open_web_link;
 
 #[cfg(test)]
 mod tests {
+    fn was(json: &str) -> Vec<u8> {
+        use std::io::Write;
+        let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        archive
+            .start_file("animation.json", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        archive.write_all(json.as_bytes()).unwrap();
+        archive.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn lottie_sticker_archive_renders_bounded_frames() {
+        let json = r#"{"v":"5.7.6","fr":10,"ip":0,"op":3,"w":64,"h":64,"layers":[{"ty":4,"ind":1,"ip":0,"op":3,"shapes":[{"ty":"rc","p":{"a":0,"k":[32,32]},"s":{"a":0,"k":[30,30]},"r":{"a":0,"k":0}},{"ty":"fl","c":{"a":0,"k":[1,0,0,1]},"o":{"a":0,"k":100}}]}]}"#;
+        let json = json.replace(
+            r#""p":{"a":0,"k":[32,32]}"#,
+            r#""p":{"a":1,"k":[{"t":0,"s":[20,32],"e":[44,32]},{"t":3,"s":[44,32]}]}"#,
+        );
+        let frames = super::sticker::decode_sticker(&was(&json), || true).expect("rendered");
+        assert_eq!(frames.len(), 3);
+        assert!(
+            frames[0]
+                .texture_rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| pixel[3] != 0)
+        );
+        assert_ne!(frames[0].texture_rgba, frames[2].texture_rgba);
+        assert!(
+            frames
+                .iter()
+                .all(|frame| frame.width <= 160 && frame.height <= 160)
+        );
+        assert!(super::sticker::decode_sticker(&was(&json), || false).is_none());
+    }
+
+    #[test]
+    fn lottie_sticker_rejects_invalid_or_excessive_animation() {
+        assert!(super::sticker::decode_sticker(&was("not json"), || true).is_none());
+        let excessive = r#"{"fr":30,"ip":0,"op":999999,"w":64,"h":64,"layers":[]}"#;
+        assert!(super::sticker::decode_sticker(&was(excessive), || true).is_none());
+        assert!(
+            super::sticker::decode_sticker(&was(&" ".repeat(1024 * 1024 + 1)), || true).is_none()
+        );
+        let repeater = r#"{"fr":30,"ip":0,"op":30,"w":64,"h":64,"layers":[{"ty":4,"shapes":[{"ty":"rp","c":{"a":0,"k":1000000000}}]}]}"#;
+        assert!(super::sticker::decode_sticker(&was(repeater), || true).is_none());
+        let cycle = r#"{"fr":30,"ip":0,"op":30,"w":64,"h":64,"layers":[{"ty":0,"refId":"a"}],"assets":[{"id":"a","layers":[{"ty":0,"refId":"a"}]}]}"#;
+        assert!(super::sticker::decode_sticker(&was(cycle), || true).is_none());
+    }
+
     fn gif(frames: usize) -> Vec<u8> {
         let mut bytes = Vec::new();
         {
