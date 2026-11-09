@@ -1,6 +1,8 @@
 use super::*;
 use relm4::typed_view::list::RelmListItem;
 
+mod bubble_frame;
+
 pub(super) struct ChatRowWidgets {
     name: gtk::Label,
     preview: gtk::Label,
@@ -300,7 +302,7 @@ impl RelmListItem for MessageRow {
         // Only cap the width: below the tightening threshold a Clamp narrows
         // its child and centres it, leaving wide bubbles off the row's edge.
         let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        column.append(&bubble);
+        column.append(&bubble_frame::BubbleFrame::new(&bubble, &body));
         let reactions = gtk::Box::builder()
             .spacing(4)
             .margin_top(3)
@@ -311,8 +313,8 @@ impl RelmListItem for MessageRow {
         // Not expanding: an expanding attachment row would otherwise make the
         // Clamp share the spacer's width and centre the bubble inside it.
         let clamp = adw::Clamp::builder()
-            .maximum_size(480)
-            .tightening_threshold(480)
+            .maximum_size(bubble_frame::MAX_WIDTH)
+            .tightening_threshold(bubble_frame::MAX_WIDTH)
             .hexpand(false)
             .child(&column)
             .build();
@@ -473,6 +475,11 @@ impl RelmListItem for MessageRow {
             }),
         ]);
         let outgoing = self.message.from_me;
+        widgets.bubble.set_halign(if outgoing {
+            gtk::Align::End
+        } else {
+            gtk::Align::Start
+        });
         widgets.check.set_visible(self.selected.is_some());
         widgets.check.set_active(self.selected == Some(true));
         // While selecting, clicks reach the list row instead of the bubble's
@@ -681,6 +688,13 @@ mod tests {
 
         gtk::init().unwrap();
         adw::init().unwrap();
+        let provider = gtk::CssProvider::new();
+        provider.load_from_string(include_str!("../../data/style.css"));
+        gtk::style_context_add_provider_for_display(
+            &gtk::gdk::Display::default().unwrap(),
+            &provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
         let item: gtk::ListItem = gtk::glib::Object::new();
         let (root, mut widgets) = <MessageRow as RelmListItem>::setup(&item);
         widgets.separator.set_visible(false);
@@ -718,6 +732,23 @@ mod tests {
                 assert!(bounds.x() > 200.0, "outgoing bubble: {bounds:?}");
             } else {
                 assert!(bounds.x() < 100.0, "incoming bubble: {bounds:?}");
+            }
+        }
+        for outgoing in [true, false] {
+            widgets.leading_space.set_visible(outgoing);
+            widgets.trailing_space.set_visible(!outgoing);
+            widgets.avatar.set_visible(!outgoing);
+            for text in ["Bom dia", "Boa tarde", "*Bom dia*", "_Boa tarde_"] {
+                widgets.set_body("short", text, &[]);
+                settle();
+                let view = widgets.body.view();
+                let buffer = view.buffer();
+                assert_eq!(
+                    view.iter_location(&buffer.start_iter()).y(),
+                    view.iter_location(&buffer.end_iter()).y(),
+                    "short message {text:?} wraps at width {}, outgoing: {outgoing}",
+                    view.width()
+                );
             }
         }
         window.close();

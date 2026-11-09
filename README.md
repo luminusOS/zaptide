@@ -111,8 +111,12 @@ numbered lists and quotes.
 The composer keeps the original delimiters visible and sends the original text.
 Formatting does not require a separate preview. Wrapped list items retain their
 indentation, and links remain selectable and clickable. Message bubbles size to
-their content up to the conversation's width limit; received messages appear on
+their content up to the conversation's width limit, keeping short sent and received
+messages on one line when space permits; received messages appear on
 the left and sent messages on the right.
+Wrapped text bubbles fit their longest displayed line instead of keeping unused
+space up to the width limit. Sender names, quotes, timestamps and attachments can
+still require a wider bubble.
 
 This implementation is not release-ready: large, densely formatted messages have
 not met the required work and whole-process memory bounds. The private GTK and
