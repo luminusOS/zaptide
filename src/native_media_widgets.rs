@@ -5,6 +5,8 @@ use std::{sync::atomic::AtomicUsize, thread};
 use relm4::adw::{self, prelude::AdwDialogExt};
 use relm4::gtk::{self, gdk, glib, prelude::*};
 
+pub(crate) mod text_bubble;
+
 use crate::{
     model::{Content, Message},
     native_media::{

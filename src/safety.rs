@@ -3,6 +3,8 @@
 #[cfg(test)]
 thread_local! {
     static PARSE_BYTES: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    static FORMATTING_STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static MENTION_STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 fn parse_url(value: &str) -> Result<url::Url, url::ParseError> {
@@ -45,13 +47,20 @@ pub const CHAT_SCHEME: &str = "zaptide-chat:";
 /// Digits of the number a WhatsApp deep link (`wa.me/<n>`, `.../send?phone=<n>`,
 /// `whatsapp://send?phone=<n>`) points at.
 fn whatsapp_number(url: &url::Url) -> Option<String> {
-    let digits = match (url.scheme(), url.host_str()?) {
-        ("http" | "https", "wa.me") => url.path().trim_matches('/').to_owned(),
-        ("http" | "https", "api.whatsapp.com" | "web.whatsapp.com") | ("whatsapp", "send") => url
-            .query_pairs()
-            .find(|(key, _)| key == "phone")?
-            .1
-            .into_owned(),
+    whatsapp_number_parts(url.scheme(), url.host_str(), url.path(), url.query_pairs())
+}
+
+fn whatsapp_number_parts<'a>(
+    scheme: &str,
+    host: Option<&str>,
+    path: &str,
+    mut query: impl Iterator<Item = (std::borrow::Cow<'a, str>, std::borrow::Cow<'a, str>)>,
+) -> Option<String> {
+    let digits = match (scheme, host?) {
+        ("http" | "https", "wa.me") => path.trim_matches('/').to_owned(),
+        ("http" | "https", "api.whatsapp.com" | "web.whatsapp.com") | ("whatsapp", "send") => {
+            query.find(|(key, _)| key == "phone")?.1.into_owned()
+        }
         _ => return None,
     };
     let digits: String = digits.chars().filter(char::is_ascii_digit).collect();
@@ -296,7 +305,7 @@ pub fn link_activation(uri: &str) -> LinkActivation<'_> {
     web_link(uri).map_or(LinkActivation::Ignore, LinkActivation::Web)
 }
 
-/// Phone number from an in-app chat link produced by [`linkify_markup`].
+/// Phone number from an in-app chat link produced by `linkify_markup`.
 pub fn chat_link_number(uri: &str) -> Option<&str> {
     uri.strip_prefix(CHAT_SCHEME)
 }
@@ -317,9 +326,8 @@ pub const MENTION_SCHEME: &str = "zaptide-mention:";
 
 /// Markup for the `@user` token at the start of `rest` when it names a known
 /// mention: a chat link when the phone is known, bold otherwise.
-fn mention_at(rest: &str, mentions: &[MentionLabel]) -> Option<(usize, String)> {
+fn mention_markup(end: usize, mention: &MentionLabel) -> (usize, String) {
     use gtk4::glib::markup_escape_text as esc;
-    let (end, mention) = mention_match(rest, mentions)?;
     let shown = format!("@{}", visible_mention_label(&mention.label));
     let title = mention.hint.as_deref().map_or_else(
         || "Message on WhatsApp".into(),
@@ -337,7 +345,13 @@ fn mention_at(rest: &str, mentions: &[MentionLabel]) -> Option<(usize, String)> 
         ),
         (None, None) => format!("<b>{}</b>", esc(&shown)),
     };
-    Some((end, markup))
+    (end, markup)
+}
+
+#[cfg(test)]
+fn mention_at(rest: &str, mentions: &[MentionLabel]) -> Option<(usize, String)> {
+    let (end, mention) = mention_match(rest, mentions)?;
+    Some(mention_markup(end, mention))
 }
 
 fn visible_mention_label(label: &str) -> String {
@@ -350,6 +364,7 @@ pub(crate) fn mention_token_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_' || (!c.is_ascii() && !c.is_whitespace())
 }
 
+#[cfg(test)]
 fn mention_match<'a>(
     rest: &str,
     mentions: &'a [MentionLabel],
@@ -366,13 +381,11 @@ fn mention_match<'a>(
 
 /// Visible mention names as plain text for accessibility and transcript copy.
 pub fn display_mentions(text: &str, mentions: &[MentionLabel]) -> String {
+    let mentions = mention_index::MentionIndex::new(mentions);
     let mut out = String::with_capacity(text.len());
     let (mut index, mut boundary) = (0, true);
     while let Some(c) = text[index..].chars().next() {
-        if let Some((len, mention)) = boundary
-            .then(|| mention_match(&text[index..], mentions))
-            .flatten()
-        {
+        if let Some((len, mention)) = boundary.then(|| mentions.find(&text[index..])).flatten() {
             out.push('@');
             out.push_str(&visible_mention_label(&mention.label));
             index += len;
@@ -389,11 +402,12 @@ pub fn display_mentions(text: &str, mentions: &[MentionLabel]) -> String {
 /// Pango markup for message text with web addresses, WhatsApp links and
 /// `+` phone numbers turned into links. Everything else is escaped, so
 /// message text can never inject markup.
+#[cfg(test)]
 pub fn linkify_markup(text: &str) -> String {
     linkify_markup_with_mentions(text, &[])
 }
 
-/// [`linkify_markup`] that also highlights the given `@user` mentions.
+/// Pango markup that also highlights the given `@user` mentions.
 pub fn linkify_markup_with_mentions(text: &str, mentions: &[MentionLabel]) -> String {
     // Pango rejects the character references GLib emits for control characters.
     let text: String = text
@@ -470,6 +484,8 @@ fn resume_search(
 ) -> Option<usize> {
     *cursor = (*cursor).max(start);
     while *cursor < len {
+        #[cfg(test)]
+        FORMATTING_STEPS.with(|steps| steps.set(steps.get() + 1));
         if matches(*cursor) {
             return Some(*cursor);
         }
@@ -483,6 +499,7 @@ const CODE_OPEN: &str = "<span font_family=\"monospace\" bgcolor=\"#808080\" bga
 
 /// Byte range of the code span covering `index` in text laid out from
 /// [`linkify_markup`] markup. Code is the only markup with a background.
+#[cfg(test)]
 pub fn code_range_at(
     attrs: &gtk4::pango::AttrList,
     index: usize,
@@ -498,7 +515,30 @@ pub fn code_range_at(
 /// Appends the Pango markup of `text` to `out`: WhatsApp formatting (`*bold*`,
 /// `_italic_`, `~strike~`, `` `code` ``, code blocks, `>` quotes, `-` lists),
 /// links and mentions. Everything else is escaped.
-fn render(text: &str, mentions: &[MentionLabel], mut line_start: bool, out: &mut String) {
+fn render(text: &str, mentions: &[MentionLabel], line_start: bool, out: &mut String) {
+    scan_formatting(text, mentions, line_start, Some(out), None, 0);
+}
+
+fn scan_formatting(
+    text: &str,
+    mentions: &[MentionLabel],
+    line_start: bool,
+    out: Option<&mut String>,
+    spans: Option<&mut Vec<FormattingSpan>>,
+    base: usize,
+) {
+    let mentions = mention_index::MentionIndex::new(mentions);
+    scan_formatting_indexed(text, &mentions, line_start, out, spans, base);
+}
+
+fn scan_formatting_indexed(
+    text: &str,
+    mentions: &mention_index::MentionIndex<'_>,
+    mut line_start: bool,
+    mut out: Option<&mut String>,
+    mut spans: Option<&mut Vec<FormattingSpan>>,
+    base: usize,
+) {
     use gtk4::glib::markup_escape_text as esc;
     let (mut plain, mut index, mut boundary) = (0, 0, true);
     let mut closers = SpanClosers::default();
@@ -506,8 +546,29 @@ fn render(text: &str, mentions: &[MentionLabel], mut line_start: bool, out: &mut
     let mut decisions = crate::safety::adapter::decisions(text);
     let mut web_links = web_link_spans(text).peekable();
     while let Some(c) = text[index..].chars().next() {
+        #[cfg(test)]
+        FORMATTING_STEPS.with(|steps| steps.set(steps.get() + 1));
         let rest = &text[index..];
         if line_start {
+            if let Some(spans) = spans.as_deref_mut() {
+                let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+                let kind = if rest.starts_with("> ") {
+                    Some(FormattingKind::Quote)
+                } else if rest.starts_with("- ") || rest.starts_with("* ") {
+                    Some(FormattingKind::Bullet)
+                } else if digits > 0 && rest[digits..].starts_with(". ") {
+                    Some(FormattingKind::Numbered)
+                } else {
+                    None
+                };
+                if let Some(kind) = kind {
+                    let end = rest.find('\n').unwrap_or(rest.len());
+                    spans.push(FormattingSpan {
+                        kind,
+                        range: base + index..base + index + end,
+                    });
+                }
+            }
             let block = if rest.starts_with("> ") {
                 Some("<span alpha=\"60%\">▎</span> ")
             } else if rest.starts_with("- ") || rest.starts_with("* ") {
@@ -516,8 +577,10 @@ fn render(text: &str, mentions: &[MentionLabel], mut line_start: bool, out: &mut
                 None
             };
             if let Some(markup) = block {
-                out.push_str(&esc(&text[plain..index]));
-                out.push_str(markup);
+                if let Some(out) = out.as_deref_mut() {
+                    out.push_str(&esc(&text[plain..index]));
+                    out.push_str(markup);
+                }
                 index += 2;
                 plain = index;
                 line_start = false;
@@ -529,11 +592,19 @@ fn render(text: &str, mentions: &[MentionLabel], mut line_start: bool, out: &mut
             && let Some(end) = code.find("```")
             && !code[..end].trim().is_empty()
         {
-            out.push_str(&esc(&text[plain..index]));
-            out.push_str(&format!(
-                "{CODE_OPEN}{}</span>",
-                esc(code[..end].trim_matches('\n'))
-            ));
+            let inner = &code[..end];
+            let trimmed = inner.trim_matches('\n');
+            if let Some(spans) = spans.as_deref_mut() {
+                let leading = inner.len() - inner.trim_start_matches('\n').len();
+                spans.push(FormattingSpan {
+                    kind: FormattingKind::Monospace,
+                    range: base + index + 3 + leading..base + index + 3 + leading + trimmed.len(),
+                });
+            }
+            if let Some(out) = out.as_deref_mut() {
+                out.push_str(&esc(&text[plain..index]));
+                out.push_str(&format!("{CODE_OPEN}{}</span>", esc(trimmed)));
+            }
             index += 6 + end;
             plain = index;
             boundary = false;
@@ -556,19 +627,45 @@ fn render(text: &str, mentions: &[MentionLabel], mut line_start: bool, out: &mut
             && let Some(tag) = tag
             && let Some(end) = closers.closing(text, index, c)
         {
-            out.push_str(&esc(&text[plain..index]));
             let inner = &rest[c.len_utf8()..end];
-            if tag == "span" {
-                out.push_str(CODE_OPEN);
-            } else {
-                out.push_str(&format!("<{tag}>"));
+            if let Some(spans) = spans.as_deref_mut() {
+                let kind = match c {
+                    '*' => FormattingKind::Bold,
+                    '_' => FormattingKind::Italic,
+                    '~' => FormattingKind::Strike,
+                    '`' => FormattingKind::Code,
+                    _ => unreachable!(),
+                };
+                spans.push(FormattingSpan {
+                    kind,
+                    range: base + index + c.len_utf8()..base + index + end,
+                });
+            }
+            if let Some(out) = out.as_deref_mut() {
+                out.push_str(&esc(&text[plain..index]));
+                if tag == "span" {
+                    out.push_str(CODE_OPEN);
+                } else {
+                    out.push_str(&format!("<{tag}>"));
+                }
             }
             if tag == "span" {
-                out.push_str(&esc(inner));
+                if let Some(out) = out.as_deref_mut() {
+                    out.push_str(&esc(inner));
+                }
             } else {
-                render(inner, mentions, false, out);
+                scan_formatting_indexed(
+                    inner,
+                    mentions,
+                    false,
+                    out.as_deref_mut(),
+                    spans.as_deref_mut(),
+                    base + index + c.len_utf8(),
+                );
             }
-            out.push_str(&format!("</{tag}>"));
+            if let Some(out) = out.as_deref_mut() {
+                out.push_str(&format!("</{tag}>"));
+            }
             index += end + c.len_utf8();
             plain = index;
             boundary = false;
@@ -576,9 +673,12 @@ fn render(text: &str, mentions: &[MentionLabel], mut line_start: bool, out: &mut
             continue;
         }
         // Only after whitespace or an opening mark, so `a@15581.com` stays an address.
-        if let Some((len, markup)) = boundary.then(|| mention_at(rest, mentions)).flatten() {
-            out.push_str(&esc(&text[plain..index]));
-            out.push_str(&markup);
+        if let Some((len, mention)) = boundary.then(|| mentions.find(rest)).flatten() {
+            let (_, markup) = mention_markup(len, mention);
+            if let Some(out) = out.as_deref_mut() {
+                out.push_str(&esc(&text[plain..index]));
+                out.push_str(&markup);
+            }
             index += len;
             plain = index;
             boundary = false;
@@ -595,13 +695,15 @@ fn render(text: &str, mentions: &[MentionLabel], mut line_start: bool, out: &mut
             })
             .flatten()
         {
-            out.push_str(&esc(&text[plain..index]));
-            let title = title.map_or_else(String::new, |t| format!(" title=\"{t}\""));
-            out.push_str(&format!(
-                "<a href=\"{}\"{title}>{}</a>",
-                esc(&href),
-                esc(&rest[..len])
-            ));
+            if let Some(out) = out.as_deref_mut() {
+                out.push_str(&esc(&text[plain..index]));
+                let title = title.map_or_else(String::new, |t| format!(" title=\"{t}\""));
+                out.push_str(&format!(
+                    "<a href=\"{}\"{title}>{}</a>",
+                    esc(&href),
+                    esc(&rest[..len])
+                ));
+            }
             index += len;
             plain = index;
             boundary = false;
@@ -613,7 +715,9 @@ fn render(text: &str, mentions: &[MentionLabel], mut line_start: bool, out: &mut
         }
         line_start = false;
     }
-    out.push_str(&esc(&text[plain..]));
+    if let Some(out) = out {
+        out.push_str(&esc(&text[plain..]));
+    }
 }
 
 fn batch_link_at(
@@ -646,16 +750,21 @@ fn batch_link_at(
                 s.consumed_web_bytes += link.len();
                 s.consumed_web_links += 1;
             });
-            let parsed = url::Url::parse(link)
+            let parsed = url_batch::Url::parse(link)
                 .or_else(|_| {
                     #[cfg(test)]
                     crate::safety::stats::update(|s| s.accepted_parser_bytes += 8 + link.len());
-                    url::Url::parse(&format!("https://{link}"))
+                    url_batch::Url::parse(&format!("https://{link}"))
                 })
                 .expect("batch accepted URL must parse");
             assert!(matches!(parsed.scheme(), "http" | "https") && parsed.host_str().is_some());
             let target = parsed.to_string();
-            match whatsapp_number(&parsed) {
+            match whatsapp_number_parts(
+                parsed.scheme(),
+                parsed.host_str(),
+                parsed.path(),
+                parsed.query_pairs(),
+            ) {
                 Some(digits) => Some((
                     end - index,
                     format!("{CHAT_SCHEME}{digits}"),
@@ -670,6 +779,129 @@ fn batch_link_at(
 #[cfg(test)]
 mod tests {
     use super::{CODE_OPEN, LinkActivation, link_activation, linkify_markup, web_link};
+
+    #[test]
+    fn mention_work_scales_with_text_and_metadata_bytes() {
+        for q in [32, 64] {
+            let token = "a".repeat(q);
+            let mentions: Vec<_> = (0..q)
+                .map(|_| super::MentionLabel {
+                    user: format!("{}b", "a".repeat(q - 1)),
+                    label: "n".into(),
+                    phone: None,
+                    hint: None,
+                })
+                .collect();
+            let text = format!("@{token} ").repeat(q);
+            super::MENTION_STEPS.with(|steps| steps.set(0));
+            assert_eq!(super::display_mentions(&text, &mentions), text);
+            let steps = super::MENTION_STEPS.with(std::cell::Cell::get);
+            assert!(steps <= 12 * (text.len() + q * q), "q={q}, steps={steps}");
+        }
+    }
+
+    #[test]
+    fn mention_index_matches_first_match_oracle_and_rendering() {
+        let mentions = [
+            super::MentionLabel {
+                user: "alice".into(),
+                label: "A<&".into(),
+                phone: Some("12345678".into()),
+                hint: None,
+            },
+            super::MentionLabel {
+                user: "alice".into(),
+                label: "wrong".into(),
+                phone: None,
+                hint: None,
+            },
+            super::MentionLabel {
+                user: "é😀".into(),
+                label: "אב\u{8}😀".into(),
+                phone: None,
+                hint: Some("x<&\u{8}".into()),
+            },
+            super::MentionLabel {
+                user: "".into(),
+                label: "empty".into(),
+                phone: None,
+                hint: None,
+            },
+        ];
+        let index = super::mention_index::MentionIndex::new(&mentions);
+        let reference: Vec<_> = mentions
+            .iter()
+            .map(|m| super::reference::MentionLabel {
+                user: m.user.clone(),
+                label: m.label.clone(),
+                phone: m.phone.clone(),
+                hint: m.hint.clone(),
+            })
+            .collect();
+        for token in [
+            "@alice",
+            "@alice!",
+            "@alice_foo",
+            "@é😀",
+            "@é😀\u{301}",
+            "@",
+            "@unknown",
+            "not-a-mention",
+        ] {
+            assert_eq!(
+                index.find(token),
+                super::mention_match(token, &mentions),
+                "{token:?}"
+            );
+        }
+        for text in [
+            "@alice @é😀 @unknown",
+            "*hello @alice* _@é😀_",
+            "x@alice @alice_foo @é😀\u{301}",
+            "@alice\u{8} @é😀",
+        ] {
+            assert_eq!(
+                super::linkify_markup_with_mentions(text, &mentions),
+                super::reference::linkify_markup_with_mentions(text, &reference),
+                "{text:?}"
+            );
+        }
+        assert_eq!(
+            super::display_mentions("@alice @é😀", &mentions),
+            "@A<& @אב😀"
+        );
+    }
+
+    #[test]
+    fn shared_scan_consumes_link_before_internal_markers() {
+        let text = "https://example.com/*word* *outside*";
+        let mut spans = Vec::new();
+        super::scan_formatting(text, &[], true, None, Some(&mut spans), 0);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(&text[spans[0].range.clone()], "outside");
+        assert_eq!(spans[0].kind, super::FormattingKind::Bold);
+    }
+
+    #[test]
+    fn shared_scan_matches_rendered_inline_content() {
+        let text = "*bold _é😀_* `code` ```\nmono\n```";
+        let mut spans = Vec::new();
+        let mut markup = String::new();
+        super::scan_formatting(text, &[], true, Some(&mut markup), Some(&mut spans), 0);
+        assert_eq!(markup, linkify_markup(text));
+        for (kind, content) in [
+            (super::FormattingKind::Bold, "bold _é😀_"),
+            (super::FormattingKind::Italic, "é😀"),
+            (super::FormattingKind::Code, "code"),
+            (super::FormattingKind::Monospace, "mono"),
+        ] {
+            assert!(
+                spans
+                    .iter()
+                    .any(|span| span.kind == kind && &text[span.range.clone()] == content)
+            );
+        }
+    }
 
     #[test]
     fn label_links_open_chats_and_checked_web_links_only() {
@@ -1361,8 +1593,74 @@ mod tests {
     }
 }
 mod adapter;
+mod formatting;
+mod mention_index;
+#[cfg(test)]
+pub(crate) use formatting::BlockRanges;
+pub(crate) use formatting::{FormattingKind, FormattingSpan, block_ranges, formatting_spans};
 #[cfg(test)]
 mod differential;
+#[cfg(test)]
+mod root_dot_regression {
+    #[test]
+    fn consumed_web_root_dot_matches_registry_and_reference() {
+        for n in [32, 128, 256] {
+            let host = "a".repeat(n);
+            let input = format!("https://{host}{}/x", "/..".repeat(n));
+            let expected = format!("https://{host}/x");
+            assert_eq!(url::Url::parse(&input).unwrap().as_str(), expected);
+            assert_eq!(url_batch::Url::parse(&input).unwrap().as_str(), expected);
+            let rendered = super::linkify_markup(&input);
+            assert_eq!(rendered, format!("<a href=\"{expected}\">{input}</a>"));
+            assert_eq!(rendered, super::reference::linkify_markup(&input));
+        }
+    }
+
+    #[test]
+    fn batch_parser_matches_registry_for_dot_and_drive_paths() {
+        for input in [
+            "https://example.com/../../../x",
+            "https://example.com/a/b/../../x?y=1#z",
+            "https://example.com/%2e/%2E%2e/x",
+            "file:///C:/../../x",
+            "file:///C:/a/../..",
+            "file://server/share/../../x",
+            "file:///C|/a/../x",
+            "custom://host/../../../x",
+            "custom:/a/../x",
+            "custom://host/a//../x",
+            "https://example.com/é/../x",
+        ] {
+            let reference = url::Url::parse(input).map(|url| url.to_string());
+            let actual = url_batch::Url::parse(input)
+                .map(|url| url.to_string())
+                .map_err(|error| format!("{error:?}"));
+            assert_eq!(
+                actual,
+                reference.map_err(|error| format!("{error:?}")),
+                "{input}"
+            );
+        }
+    }
+
+    #[test]
+    fn consumed_whatsapp_and_web_routing_matches_reference() {
+        for input in [
+            "https://wa.me/5511912345678",
+            "https://api.whatsapp.com/send?phone=%2B5511912345678&text=hi",
+            "https://web.whatsapp.com/send?x=1&phone=5511912345678",
+            "https://wa.me/a/../5511912345678",
+            "https://example.com/a/../b?x=1&y=2",
+            "www.example.com/a/../b",
+        ] {
+            assert_eq!(
+                super::linkify_markup(input),
+                super::reference::linkify_markup(input),
+                "{input}"
+            );
+        }
+    }
+}
 mod interval;
 mod path_index;
 #[cfg(test)]

@@ -167,18 +167,19 @@ pub(crate) fn open_web_link(widget: &impl IsA<gtk::Widget>, url: &url::Url) {
     );
 }
 
-/// A label for sender-written text: WhatsApp formatting and web links apply.
-/// In-app chat links need the message row, so they only show as text here.
-pub(super) fn add_formatted_label(parent: &gtk::Box, text: &str) -> gtk::Label {
-    let label = add_label(parent, text);
-    label.set_markup(&crate::safety::linkify_markup(text));
-    label.connect_activate_link(|label, uri| {
-        if let crate::safety::LinkActivation::Web(url) = crate::safety::link_activation(uri) {
-            open_web_link(label, &url);
+pub(super) fn add_formatted_label(parent: &gtk::Box, text: &str) -> super::text_bubble::TextBubble {
+    let body = super::text_bubble::TextBubble::new();
+    body.set_formatted(text, &[]);
+    let weak = body.downgrade();
+    body.connect_link_activation(move |action| {
+        if let crate::safety::LinkActivation::Web(url) = action
+            && let Some(body) = weak.upgrade()
+        {
+            open_web_link(&body, &url);
         }
-        gtk::glib::Propagation::Stop
     });
-    label
+    parent.append(&body);
+    body
 }
 
 pub(super) fn add_label(parent: &gtk::Box, text: &str) -> gtk::Label {

@@ -154,7 +154,8 @@ pub(super) struct MessageRowWidgets {
     header: gtk::Box,
     name: gtk::Label,
     quote: gtk::Label,
-    body: gtk::Label,
+    body: crate::native_media_widgets::text_bubble::TextBubble,
+    rendered_body: Option<(String, String, Vec<crate::safety::MentionLabel>)>,
     footer: FooterLabels,
     reactions: gtk::Box,
     status: gtk::DrawingArea,
@@ -170,9 +171,44 @@ pub(super) struct MessageRowWidgets {
     hover: reaction_drawer::HoverSlot,
 }
 
+impl MessageRowWidgets {
+    fn set_body(&mut self, id: &str, text: &str, mentions: &[crate::safety::MentionLabel]) {
+        if self
+            .rendered_body
+            .as_ref()
+            .is_none_or(|(previous_id, body, previous_mentions)| {
+                previous_id != id || body != text || previous_mentions != mentions
+            })
+        {
+            self.body.set_formatted(text, mentions);
+            self.rendered_body = Some((id.to_owned(), text.to_owned(), mentions.to_vec()));
+        }
+    }
+
+    fn bind_body(
+        &mut self,
+        id: &str,
+        text: &str,
+        mentions: &[crate::safety::MentionLabel],
+        send: RowAction,
+    ) {
+        self.set_body(id, text, mentions);
+        self.body.set_visible(!text.is_empty());
+        *self.menu_target.borrow_mut() = Some((id.to_owned(), send));
+    }
+
+    fn unbind_body(&mut self) {
+        *self.menu_target.borrow_mut() = None;
+        self.rendered_body = None;
+        self.body.set_formatted("", &[]);
+        self.body.set_visible(false);
+        *self.hover.borrow_mut() = None;
+    }
+}
+
 /// The bound message and its sender, read by the row's context-menu gesture.
-type MenuTarget =
-    std::rc::Rc<std::cell::RefCell<Option<(String, ComponentSender<NativeApplication>)>>>;
+type RowAction = std::rc::Rc<dyn Fn(Input)>;
+type MenuTarget = std::rc::Rc<std::cell::RefCell<Option<(String, RowAction)>>>;
 
 impl RelmListItem for MessageRow {
     type Root = gtk::Box;
@@ -244,15 +280,7 @@ impl RelmListItem for MessageRow {
             .css_classes(["zaptide-quote"])
             .build();
         bubble.append(&quote);
-        // A wrapped TextView inside a ListView measures its height at the wrong
-        // width and leaves tall blank rows; a Label measures height-for-width.
-        let body = gtk::Label::builder()
-            .xalign(0.0)
-            .wrap(true)
-            .wrap_mode(gtk::pango::WrapMode::WordChar)
-            .max_width_chars(52)
-            .selectable(true)
-            .build();
+        let body = crate::native_media_widgets::text_bubble::TextBubble::new();
         bubble.append(&body);
         let media = gtk::Box::new(gtk::Orientation::Vertical, 0);
         bubble.append(&media);
@@ -295,62 +323,29 @@ impl RelmListItem for MessageRow {
         root.append(&row);
         let menu_target: MenuTarget = std::rc::Rc::default();
         let link_target = menu_target.clone();
-        body.connect_activate_link(move |label, uri| {
-            match crate::safety::link_activation(uri) {
-                crate::safety::LinkActivation::Chat(phone) => {
-                    if let Some((_, sender)) = link_target.borrow().clone() {
-                        sender.input(Input::NewContact {
-                            phone: phone.to_owned(),
-                            name: None,
-                        });
-                    }
+        let link_widget = body.downgrade();
+        body.connect_link_activation(move |action| match action {
+            crate::safety::LinkActivation::Chat(phone) => {
+                if let Some((_, sender)) = link_target.borrow().clone() {
+                    sender(Input::NewContact {
+                        phone: phone.to_owned(),
+                        name: None,
+                    });
                 }
-                crate::safety::LinkActivation::Web(url) => {
-                    crate::native_media_widgets::open_web_link(label, &url);
-                }
-                crate::safety::LinkActivation::Ignore => {}
             }
-            gtk::glib::Propagation::Stop
+            crate::safety::LinkActivation::Web(url) => {
+                if let Some(widget) = link_widget.upgrade() {
+                    crate::native_media_widgets::open_web_link(&widget, &url);
+                }
+            }
+            crate::safety::LinkActivation::Ignore => {}
         });
-        // Double-clicking code selects and copies the whole span, not one word.
-        let code_click = gtk::GestureClick::new();
-        code_click.set_button(gtk::gdk::BUTTON_PRIMARY);
-        code_click.set_propagation_phase(gtk::PropagationPhase::Capture);
         let code_target = menu_target.clone();
-        code_click.connect_pressed(move |gesture, presses, x, y| {
-            let Some(label) = gesture.widget().and_downcast::<gtk::Label>() else {
-                return;
-            };
-            if presses != 2 {
-                return;
-            }
-            let layout = label.layout();
-            let (left, top) = label.layout_offsets();
-            let (inside, index, _) = layout.xy_to_index(
-                (x as i32 - left) * gtk::pango::SCALE,
-                (y as i32 - top) * gtk::pango::SCALE,
-            );
-            let Some(range) = layout
-                .attributes()
-                .filter(|_| inside)
-                .and_then(|attrs| crate::safety::code_range_at(&attrs, index as usize))
-            else {
-                return;
-            };
-            gesture.set_state(gtk::EventSequenceState::Claimed);
-            let text = layout.text();
-            let Some(code) = text.get(range.clone()) else {
-                return;
-            };
-            label.select_region(
-                text[..range.start].chars().count() as i32,
-                text[..range.end].chars().count() as i32,
-            );
+        body.connect_code_copied(move |code| {
             if let Some((_, sender)) = code_target.borrow().as_ref() {
-                sender.input(Input::CopyCode(code.to_owned()));
+                sender(Input::CopyCode(code.to_owned()));
             }
         });
-        body.add_controller(code_click);
         // Clicking a quote jumps to the message it quotes.
         quote.set_cursor_from_name(Some("pointer"));
         let quote_click = gtk::GestureClick::new();
@@ -359,7 +354,7 @@ impl RelmListItem for MessageRow {
         quote_click.connect_pressed(move |gesture, _, _, _| {
             if let Some((id, sender)) = quote_target.borrow().as_ref() {
                 gesture.set_state(gtk::EventSequenceState::Claimed);
-                sender.input(Input::OpenQuotedOf(id.clone()));
+                sender(Input::OpenQuotedOf(id.clone()));
             }
         });
         quote.add_controller(quote_click);
@@ -379,7 +374,7 @@ impl RelmListItem for MessageRow {
                     root.grab_focus();
                 }
                 if let Some(point) = message_menu_position(&row, x, y) {
-                    sender.input(Input::ShowMessageMenu {
+                    sender(Input::ShowMessageMenu {
                         id,
                         x: point.x(),
                         y: point.y(),
@@ -421,7 +416,7 @@ impl RelmListItem for MessageRow {
                 (key_target.borrow().clone(), controller.widget())
                 && let Some(point) = message_menu_position(&row, 24.0, row.height() as f64 / 2.0)
             {
-                sender.input(Input::ShowMessageMenu {
+                sender(Input::ShowMessageMenu {
                     id,
                     x: point.x(),
                     y: point.y(),
@@ -446,6 +441,7 @@ impl RelmListItem for MessageRow {
                 name,
                 quote,
                 body,
+                rendered_body: None,
                 footer,
                 reactions,
                 status,
@@ -518,17 +514,16 @@ impl RelmListItem for MessageRow {
             .set_css_classes(&["heading", self.sender_class]);
         widgets.quote.set_label(&self.quote);
         widgets.quote.set_visible(!self.quote.is_empty());
-        widgets
-            .body
-            .set_markup(&crate::safety::linkify_markup_with_mentions(
-                &self.body,
-                &self.mentions,
-            ));
-        widgets.body.set_visible(!self.body.is_empty());
+        let sender = self.pointer_sender.clone();
+        widgets.bind_body(
+            &self.id,
+            &self.body,
+            &self.mentions,
+            std::rc::Rc::new(move |input| sender.input(input)),
+        );
         widgets
             .body
             .update_property(&[gtk::accessible::Property::Label(&self.accessible_label)]);
-        *widgets.menu_target.borrow_mut() = Some((self.id.clone(), self.pointer_sender.clone()));
         *widgets.hover.borrow_mut() = (self.selected.is_none()
             && reaction_drawer::can_react(&self.message))
         .then(|| reaction_drawer::HoverTarget {
@@ -668,5 +663,266 @@ impl RelmListItem for MessageRow {
             }
         }
         widgets.audio.set_visible(self.audio.is_some());
+    }
+
+    fn unbind(&mut self, widgets: &mut Self::Widgets, _root: &mut Self::Root) {
+        widgets.unbind_body();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "needs a display"]
+    fn factory_recycles_production_body_with_current_actions() {
+        use std::{
+            cell::{Cell, RefCell},
+            rc::Rc,
+            time::{Duration, Instant},
+        };
+        gtk::init().unwrap();
+        adw::init().unwrap();
+        let current = Rc::new(RefCell::new(None::<MessageRowWidgets>));
+        let setups = Rc::new(Cell::new(0));
+        let unbinds = Rc::new(Cell::new(0));
+        let actions = Rc::new(RefCell::new(Vec::<String>::new()));
+        let list_item = Rc::new(RefCell::new(None::<gtk::ListItem>));
+        let active = Rc::new(RefCell::new("first".to_owned()));
+        let factory = gtk::SignalListItemFactory::new();
+        let (slot, setup_count, saved_item) = (current.clone(), setups.clone(), list_item.clone());
+        factory.connect_setup(move |_, item| {
+            let item = item.downcast_ref::<gtk::ListItem>().unwrap();
+            let (root, widgets) = <MessageRow as RelmListItem>::setup(item);
+            item.set_child(Some(&root));
+            *saved_item.borrow_mut() = Some(item.clone());
+            *slot.borrow_mut() = Some(widgets);
+            setup_count.set(setup_count.get() + 1);
+        });
+        let (slot, recorded, active_id) = (current.clone(), actions.clone(), active.clone());
+        factory.connect_bind(move |_, _| {
+            let id = active_id.borrow().clone();
+            let mentions = [crate::safety::MentionLabel {
+                user: "123".into(),
+                label: "Éva".into(),
+                phone: Some(if id == "first" { "111" } else { "222" }.into()),
+                hint: None,
+            }];
+            let text = if id == "first" {
+                "*old* @123 `old😀`"
+            } else {
+                "~new~ @123 `newé`"
+            };
+            let (owner, recorded) = (id.clone(), recorded.clone());
+            let send: RowAction = Rc::new(move |input| match input {
+                Input::NewContact { phone, .. } => {
+                    recorded.borrow_mut().push(format!("{owner}:chat:{phone}"))
+                }
+                Input::CopyCode(code) => recorded.borrow_mut().push(format!("{owner}:code:{code}")),
+                _ => {}
+            });
+            slot.borrow_mut()
+                .as_mut()
+                .unwrap()
+                .bind_body(&id, text, &mentions, send);
+        });
+        let (slot, unbind_count) = (current.clone(), unbinds.clone());
+        factory.connect_unbind(move |_, _| {
+            let mut slot = slot.borrow_mut();
+            let widgets = slot.as_mut().unwrap();
+            widgets.unbind_body();
+            let buffer = widgets.body.view().buffer();
+            assert_eq!(buffer.char_count(), 0);
+            assert!(buffer.selection_bounds().is_none());
+            assert!(buffer.start_iter().tags().is_empty());
+            assert!(widgets.menu_target.borrow().is_none());
+            unbind_count.set(unbind_count.get() + 1);
+        });
+        let strings = gtk::StringList::new(&["first"]);
+        let list = gtk::ListView::new(
+            Some(gtk::NoSelection::new(Some(strings))),
+            Some(factory.clone()),
+        );
+        let window = gtk::Window::builder()
+            .default_width(400)
+            .default_height(180)
+            .child(&list)
+            .build();
+        window.present();
+        let settle = || {
+            let context = gtk::glib::MainContext::default();
+            let until = Instant::now() + Duration::from_millis(300);
+            while Instant::now() < until {
+                while context.pending() {
+                    context.iteration(false);
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        };
+        settle();
+        let body = current.borrow().as_ref().unwrap().body.clone();
+        let narrow = body.measure(gtk::Orientation::Vertical, 40);
+        let wide = body.measure(gtk::Orientation::Vertical, 480);
+        assert!(
+            wide.0 <= narrow.1,
+            "wider minimum {} exceeds narrower natural {}",
+            wide.0,
+            narrow.1
+        );
+        let view = body.view();
+        let check_geometry = || {
+            let mut widget = Some(body.clone().upcast::<gtk::Widget>());
+            let mut clamp_seen = false;
+            while let Some(current) = widget {
+                clamp_seen |= current.is::<adw::Clamp>();
+                for width in [-1, 100, 372] {
+                    if width >= 0 && width < current.measure(gtk::Orientation::Horizontal, -1).0 {
+                        continue;
+                    }
+                    let (minimum, natural, _, _) =
+                        current.measure(gtk::Orientation::Vertical, width);
+                    assert!(
+                        minimum <= natural,
+                        "{} width {width}: {minimum} > {natural}",
+                        current.type_().name()
+                    );
+                }
+                widget = current.parent();
+            }
+            assert!(clamp_seen);
+            let end = view.iter_location(&view.buffer().end_iter());
+            let required = end.y() + end.height() + view.bottom_margin();
+            assert!(
+                view.height() >= required,
+                "text height {} < {required}",
+                view.height()
+            );
+        };
+        check_geometry();
+        let controllers = view.observe_controllers();
+        let keys = (0..controllers.n_items())
+            .filter_map(|i| {
+                controllers
+                    .item(i)?
+                    .downcast::<gtk::EventControllerKey>()
+                    .ok()
+            })
+            .find(|key| key.propagation_phase() == gtk::PropagationPhase::Capture)
+            .unwrap();
+        let click = (0..controllers.n_items())
+            .filter_map(|i| controllers.item(i)?.downcast::<gtk::GestureClick>().ok())
+            .find(|click| click.propagation_phase() == gtk::PropagationPhase::Capture)
+            .unwrap();
+        let activate = || {
+            for key in [gtk::gdk::Key::Tab, gtk::gdk::Key::Return] {
+                assert!(keys.emit_by_name::<bool>(
+                    "key-pressed",
+                    &[&key, &0u32, &gtk::gdk::ModifierType::empty()]
+                ));
+            }
+        };
+        activate();
+        assert_eq!(&*actions.borrow(), &["first:chat:111"]);
+        let copy_code = |offset| {
+            let rect = view.iter_location(&view.buffer().iter_at_offset(offset));
+            let (x, y) =
+                view.buffer_to_window_coords(gtk::TextWindowType::Widget, rect.x(), rect.y());
+            let (x, y) = (f64::from(x + 1), f64::from(y + rect.height() / 2));
+            click.emit_by_name::<()>("pressed", &[&2i32, &x, &y]);
+            click.emit_by_name::<()>("released", &[&2i32, &x, &y]);
+        };
+        copy_code(9);
+        assert_eq!(&*actions.borrow(), &["first:chat:111", "first:code:old😀"]);
+        let item = list_item.borrow().as_ref().unwrap().clone();
+        factory.emit_by_name::<()>("unbind", &[&item]);
+        *active.borrow_mut() = "second".to_owned();
+        factory.emit_by_name::<()>("bind", &[&item]);
+        settle();
+        assert_eq!(setups.get(), 1);
+        assert_eq!(unbinds.get(), 1);
+        assert_eq!(current.borrow().as_ref().unwrap().body, body);
+        check_geometry();
+        window.set_default_size(280, 240);
+        settle();
+        check_geometry();
+        let display = gtk::prelude::WidgetExt::display(&window);
+        let provider = gtk::CssProvider::new();
+        provider.load_from_string("textview { font-size: 20px; }");
+        gtk::style_context_add_provider_for_display(
+            &display,
+            &provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+        settle();
+        check_geometry();
+        gtk::style_context_remove_provider_for_display(&display, &provider);
+        settle();
+        let buffer = view.buffer();
+        assert_eq!(
+            buffer.text(&buffer.start_iter(), &buffer.end_iter(), true),
+            "new @Éva newé"
+        );
+        assert!(buffer.selection_bounds().is_none());
+        assert!(
+            buffer
+                .start_iter()
+                .tags()
+                .iter()
+                .any(|tag| tag.is_strikethrough())
+        );
+        assert!(
+            !buffer
+                .start_iter()
+                .tags()
+                .iter()
+                .any(|tag| tag.weight() >= 700)
+        );
+        activate();
+        copy_code(9);
+        assert_eq!(
+            &*actions.borrow(),
+            &[
+                "first:chat:111",
+                "first:code:old😀",
+                "second:chat:222",
+                "second:code:newé"
+            ]
+        );
+        window.close();
+    }
+
+    #[test]
+    #[ignore = "needs a display"]
+    fn message_factory_body_renders_and_rebinds_without_losing_selection_on_updates() {
+        gtk::init().unwrap();
+        adw::init().unwrap();
+        let item: gtk::ListItem = gtk::glib::Object::new();
+        let (root, mut widgets) = <MessageRow as RelmListItem>::setup(&item);
+        let mentions = [crate::safety::MentionLabel {
+            user: "123".into(),
+            label: "Éva".into(),
+            phone: Some("123".into()),
+            hint: None,
+        }];
+        let text = "123456789. *Hi* @123 `é😀` https://example.com";
+        widgets.set_body("first", text, &mentions);
+        let buffer = widgets.body.view().buffer();
+        assert_eq!(
+            buffer.text(&buffer.start_iter(), &buffer.end_iter(), true),
+            "123456789. Hi @Éva é😀 https://example.com"
+        );
+        buffer.select_range(&buffer.iter_at_offset(11), &buffer.iter_at_offset(13));
+        widgets.set_body("first", text, &mentions);
+        assert!(buffer.selection_bounds().is_some());
+        widgets.set_body("second", text, &mentions);
+        assert!(buffer.selection_bounds().is_none());
+        widgets.set_body("second", "- replacement", &[]);
+        assert_eq!(
+            buffer.text(&buffer.start_iter(), &buffer.end_iter(), true),
+            "• replacement"
+        );
+        assert!(widgets.body.parent().is_some());
+        drop(root);
     }
 }
