@@ -355,16 +355,6 @@ impl SimpleComponent for Sidebar {
                     #[watch]
                     set_description: Some(model.state.empty_description),
                 },
-                append = &gtk::Label {
-                    set_label: &gettext("Recent calls"),
-                    set_halign: gtk::Align::Start,
-                    set_margin_start: 18,
-                    set_margin_end: 12,
-                    set_margin_bottom: 6,
-                    add_css_class: "heading",
-                    #[watch]
-                    set_visible: model.state.calls && !model.state.calls_empty,
-                },
                 append = &gtk::ScrolledWindow {
                     set_vexpand: true,
                     set_hscrollbar_policy: gtk::PolicyType::Never,

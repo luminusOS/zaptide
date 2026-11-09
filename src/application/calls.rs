@@ -313,6 +313,7 @@ impl CallsUi {
         });
         for entry in &self.entries {
             let row = adw::ActionRow::new();
+            row.set_activatable(true);
             row.set_title(&gtk::glib::markup_escape_text(&chat_label(
                 chats,
                 &entry.chat,

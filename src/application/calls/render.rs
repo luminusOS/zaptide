@@ -317,7 +317,9 @@ fn render_call_screens() {
         host.destroy();
     }
 
-    let ui = CallsUi::new(|_| {}, || {}, || {});
+    let activated = std::rc::Rc::new(std::cell::Cell::new(None));
+    let selected = activated.clone();
+    let ui = CallsUi::new(move |index| selected.set(Some(index)), || {}, || {});
     let chats = [
         crate::model::Chat::new("1@s.whatsapp.net".into(), "Ana Souza".into()),
         crate::model::Chat::new("2@s.whatsapp.net".into(), "Bruno Lima".into()),
@@ -361,6 +363,16 @@ fn render_call_screens() {
     ];
     ui.selected = Some(1);
     ui.refill(&chats, &Default::default());
+    let host = adw::Window::new();
+    host.set_content(Some(&ui.list));
+    host.present();
+    settle();
+    let row = ui.list.row_at_index(0).unwrap();
+    assert!(row.is_activatable());
+    row.activate();
+    assert_eq!(activated.get(), Some(0));
+    host.set_content(None::<&gtk::Widget>);
+    host.destroy();
     ui.show_selected(&chats, &Default::default(), false);
     ui.selected = Some(0);
     ui.show_selected(&chats, &Default::default(), false);
@@ -396,10 +408,7 @@ fn render_call_screens() {
         let scroll = gtk::ScrolledWindow::new();
         scroll.set_child(Some(&ui.list));
         scroll.set_vexpand(true);
-        let header = adw::HeaderBar::new();
-        header.set_title_widget(Some(&adw::WindowTitle::new(&gettext("Recent calls"), "")));
         let side = adw::ToolbarView::new();
-        side.add_top_bar(&header);
         side.set_content(Some(&scroll));
         let split = adw::NavigationSplitView::new();
         split.set_sidebar(Some(&adw::NavigationPage::new(&side, "Calls")));
