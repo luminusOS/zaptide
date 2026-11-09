@@ -44,20 +44,16 @@ path = "src/main.rs"
 gettext-rs = { version = "0.8", features = ["gettext-system"] }
 anyhow = "1"
 hex = "0.4"
-# Hashes saved stickers by content. Already included through wacore.
 sha2 = "0.11"
-# Already in the tree through rustls; used for the locked-chat code verifier.
 ring = "0.17"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"
 env_logger = { version = "0.11", default-features = false, features = ["auto-color", "humantime"] }
 directories = "6"
-# Native GTK4/libadwaita/Relm4 stack.
 gtk4 = { version = "0.11", features = ["v4_14"] }
 libadwaita = { version = "0.9", features = ["v1_10"] }
 relm4 = { version = "0.11", default-features = false, features = ["macros", "libadwaita", "gnome_46"] }
-# Decodes JPEG, PNG, WebP, and GIF images.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
 rasterlottie = { version = "0.3", default-features = false }
 zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
@@ -72,7 +68,7 @@ whatsapp-rust = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "ae3c
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "fs"] }
 # SQLCipher encrypts the archive; the device store shares the same library.
 # Bundle OpenSSL so all release platforms use the same encryption provider.
-rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"] }
+rusqlite = { version = "0.41", features = ["bundled-sqlcipher-vendored-openssl"] }
 # Keys the device store's pooled connections. Already included through whatsapp-rust.
 diesel = { version = "2.3", default-features = false, features = ["sqlite"] }
 getrandom = "0.4"
@@ -85,13 +81,11 @@ qrcode = { version = "0.14", default-features = false }
 # Downloads profile pictures. The protocol library already includes this crate
 # and TLS stack.
 ureq = { version = "3", default-features = false, features = ["rustls"] }
-# Parses link-preview URLs.
 url = "2"
 url-batch = { package = "url", path = "vendor/absolute-url", features = ["batch-research"] }
 idna-batch = { package = "idna", path = "vendor/idna-1.1.0", features = ["research-batch"] }
 icu_normalizer = { version = "=2.3.0", default-features = false, features = ["experimental_linear_ccc"] }
 jiff = "0.2"
-# MIME detection for attachments.
 mime_guess = "2"
 # Promotes downloads with renameat2(RENAME_NOREPLACE). Already in the tree
 # through tempfile, polling and async-io.
@@ -102,14 +96,12 @@ ogg = "0.9"
 gstreamer = "0.25"
 gstreamer-app = "0.25"
 gstreamer-video = "0.25"
-# Channel types the VoIP runtime takes for call audio and video frames. Already included through whatsapp-rust.
 async-channel = "2"
 # Loads photos through GNOME's sandboxed image loaders (glycin-loaders).
 glycin = { version = "4", default-features = false, features = ["gdk4", "tokio"] }
 # XDG desktop portals over the zbus and tokio already in the tree. Only the
 # portals the app uses are enabled; no windowing or PipeWire bindings.
 ashpd = { version = "0.13", default-features = false, features = ["tokio", "background", "camera", "notification", "settings"] }
-# Reads ashpd's setting streams. Already in the tree through ashpd.
 futures-util = { version = "0.3", default-features = false }
 # Tray icon: StatusNotifierItem with its menu over com.canonical.dbusmenu.
 ksni = { version = "0.3", default-features = false, features = ["tokio", "blocking"] }
@@ -122,11 +114,12 @@ libc = "0.2"
 
 [dev-dependencies]
 url-batch = { package = "url", path = "vendor/absolute-url", features = ["batch-research", "batch-stats"] }
-# Encodes oversized clipboard images in portal tests. Already included through image.
 png = "0.18"
 
 [patch.crates-io]
 icu_normalizer = { path = "vendor/icu_normalizer" }
+diesel = { path = "vendor/diesel-2.3.14" }
+libsqlite3-sys = { path = "vendor/libsqlite3-sys-0.39.1" }
 
 [profile.release]
 lto = "thin"
