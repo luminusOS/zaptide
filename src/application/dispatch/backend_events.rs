@@ -260,6 +260,7 @@ pub(super) fn handle_backend_ready(
                         known,
                         &message,
                         app.settings.notification_previews,
+                        &app.contacts,
                     );
                     let sound = app.notification_sound.request(
                         app.settings.notification_sound,

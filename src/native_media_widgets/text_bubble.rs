@@ -10,6 +10,7 @@ struct LinkRange {
     start: i32,
     end: i32,
     uri: String,
+    mention: bool,
 }
 
 type LinkHandler = Box<dyn for<'a> Fn(crate::safety::LinkActivation<'a>)>;
@@ -42,7 +43,7 @@ fn text_view_markup(markup: &str) -> (String, Vec<LinkRange>, Vec<std::ops::Rang
     let mut output = String::with_capacity(markup.len());
     let mut links = Vec::new();
     let mut code = Vec::new();
-    let mut active_link: Option<(i32, String)> = None;
+    let mut active_link: Option<(i32, String, bool)> = None;
     let mut spans = Vec::new();
     let mut offset = 0i32;
     let mut remaining = markup;
@@ -52,16 +53,26 @@ fn text_view_markup(markup: &str) -> (String, Vec<LinkRange>, Vec<std::ops::Rang
         {
             let tag = &remaining[..=end];
             if let Some(rest) = tag.strip_prefix("<a href=\"") {
+                let mut mention = false;
                 if let Some(end) = rest.find('"') {
-                    active_link = Some((offset, unescape_attribute(&rest[..end])));
+                    let uri = unescape_attribute(&rest[..end]);
+                    mention = (uri.starts_with(crate::safety::CHAT_SCHEME)
+                        || uri == crate::safety::MENTION_SCHEME)
+                        && remaining[tag.len()..].starts_with('@');
+                    active_link = Some((offset, uri, mention));
                 }
-                output.push_str("<span underline=\"single\">");
+                output.push_str(if mention {
+                    "<span weight=\"bold\">"
+                } else {
+                    "<span underline=\"single\">"
+                });
             } else if tag == "</a>" {
-                if let Some((start, uri)) = active_link.take() {
+                if let Some((start, uri, mention)) = active_link.take() {
                     links.push(LinkRange {
                         start,
                         end: offset,
                         uri,
+                        mention,
                     });
                 }
                 output.push_str("</span>");
@@ -164,6 +175,8 @@ mod imp {
     #[derive(Default)]
     pub struct TextBubble {
         pub(super) view: OnceCell<gtk::TextView>,
+        pub(super) mention_color: OnceCell<gtk::Label>,
+        pub(super) mention_tag: RefCell<Option<gtk::TextTag>>,
         pub(super) width_attributes: RefCell<Option<gtk::pango::AttrList>>,
         pub(super) measured: Cell<Option<(i32, i32)>>,
         pub(super) resize_pending: Cell<bool>,
@@ -199,6 +212,12 @@ mod imp {
             view.add_css_class("zaptide-message-text");
             BUBBLE_STYLE.with(|_| {});
             view.set_parent(&*self.obj());
+            let mention_color = gtk::Label::new(None);
+            mention_color.add_css_class("accent");
+            mention_color.set_parent(&*self.obj());
+            self.mention_color
+                .set(mention_color)
+                .expect("color initialized once");
             let click = gtk::GestureClick::new();
             click.set_button(gtk::gdk::BUTTON_PRIMARY);
             click.set_propagation_phase(gtk::PropagationPhase::Capture);
@@ -283,6 +302,9 @@ mod imp {
             if let Some(view) = self.view.get() {
                 view.unparent();
             }
+            if let Some(color) = self.mention_color.get() {
+                color.unparent();
+            }
         }
     }
 
@@ -345,6 +367,7 @@ mod imp {
         }
 
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
+            self.obj().refresh_mention_color();
             if let Some(view) = self.view.get() {
                 self.obj().snapshot_child(view, snapshot);
             }
@@ -359,6 +382,17 @@ glib::wrapper! {
 }
 
 impl TextBubble {
+    fn refresh_mention_color(&self) {
+        if let Some(tag) = self.imp().mention_tag.borrow().as_ref()
+            && let Some(source) = self.imp().mention_color.get()
+        {
+            let color = source.color();
+            if tag.foreground_rgba() != Some(color) {
+                tag.set_foreground_rgba(Some(&color));
+            }
+        }
+    }
+
     pub(crate) fn new() -> Self {
         glib::Object::new()
     }
@@ -615,6 +649,16 @@ impl TextBubble {
         }
         buffer.set_text("");
         buffer.insert_markup(&mut buffer.start_iter(), &markup);
+        let mention_tag = buffer.create_tag(None, &[]).expect("new mention tag");
+        for link in links.iter().filter(|link| link.mention) {
+            buffer.apply_tag(
+                &mention_tag,
+                &buffer.iter_at_offset(link.start),
+                &buffer.iter_at_offset(link.end),
+            );
+        }
+        *self.imp().mention_tag.borrow_mut() = Some(mention_tag);
+        self.refresh_mention_color();
         table.foreach(|tag| self.imp().markup_tags.borrow_mut().push(tag.clone()));
         let displayed = buffer.text(&buffer.start_iter(), &buffer.end_iter(), true);
         *self.imp().blocks.borrow_mut() = rendered_blocks(text, &displayed);
@@ -690,6 +734,119 @@ impl TextBubble {
 mod tests {
     use super::*;
     use std::{cell::RefCell, rc::Rc, time::Duration};
+
+    #[test]
+    fn mention_links_are_bold_without_changing_web_links_or_offsets() {
+        let mentions = [crate::safety::MentionLabel {
+            user: "15551234567".into(),
+            label: "Ana & Bia".into(),
+            phone: Some("15551234567".into()),
+            hint: None,
+        }];
+        let markup = crate::safety::linkify_markup_with_mentions(
+            "😀 @15551234567 https://example.com",
+            &mentions,
+        );
+        let (markup, links, _) = text_view_markup(&markup);
+        assert!(markup.contains("<span weight=\"bold\">@Ana &amp; Bia</span>"));
+        assert!(markup.contains("<span underline=\"single\">https://example.com</span>"));
+        assert!(links[0].mention);
+        assert_eq!(links[0].start, 2);
+        assert_eq!(links[0].end, 12);
+        assert!(!links[1].mention);
+    }
+
+    #[test]
+    #[ignore = "needs a display"]
+    fn mentions_follow_the_theme_accent_and_keep_keyboard_activation() {
+        gtk::init().unwrap();
+        libadwaita::init().unwrap();
+        let bubble = TextBubble::new();
+        let mentions = [crate::safety::MentionLabel {
+            user: "15551234567".into(),
+            label: "Synthetic Contact".into(),
+            phone: Some("15551234567".into()),
+            hint: None,
+        }];
+        bubble.set_formatted("Hi @15551234567", &mentions);
+        let activated = Rc::new(RefCell::new(String::new()));
+        let result = activated.clone();
+        bubble.connect_link_activation(move |action| {
+            if let crate::safety::LinkActivation::Chat(phone) = action {
+                *result.borrow_mut() = phone.to_owned();
+            }
+        });
+        let window = gtk::Window::builder()
+            .default_width(360)
+            .child(&bubble)
+            .build();
+        window.present();
+        let context = glib::MainContext::default();
+        let settle = || {
+            let until = std::time::Instant::now() + Duration::from_millis(200);
+            while std::time::Instant::now() < until {
+                while context.pending() {
+                    context.iteration(false);
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        };
+        let provider = gtk::CssProvider::new();
+        let display = gtk::gdk::Display::default().unwrap();
+        gtk::style_context_add_provider_for_display(
+            &display,
+            &provider,
+            gtk::STYLE_PROVIDER_PRIORITY_USER,
+        );
+        for color in ["#3584e4", "#c061cb"] {
+            provider.load_from_string(&format!(":root {{ --accent-color: {color}; }}"));
+            bubble.queue_draw();
+            settle();
+            let tags = bubble.view().buffer().iter_at_offset(3).tags();
+            assert!(tags.iter().any(|tag| tag.weight() >= 700));
+            assert!(
+                tags.iter()
+                    .any(|tag| tag.foreground_rgba() == Some(color.parse().unwrap())),
+                "expected {color}, source {:?}, tags {:?}",
+                bubble.imp().mention_color.get().unwrap().color(),
+                tags.iter()
+                    .map(|tag| tag.foreground_rgba())
+                    .collect::<Vec<_>>()
+            );
+            assert!(
+                !tags
+                    .iter()
+                    .any(|tag| tag.underline() == gtk::pango::Underline::Single)
+            );
+            if let Some(directory) = std::env::var_os("RENDER_DIR") {
+                let directory = std::path::PathBuf::from(directory);
+                std::fs::create_dir_all(&directory).unwrap();
+                let snapshot = gtk::Snapshot::new();
+                gtk::WidgetPaintable::new(Some(&window)).snapshot(
+                    &snapshot,
+                    f64::from(window.width()),
+                    f64::from(window.height()),
+                );
+                window
+                    .renderer()
+                    .unwrap()
+                    .render_texture(snapshot.to_node().unwrap(), None)
+                    .save_to_png(directory.join(format!("mention-{}.png", &color[1..])))
+                    .unwrap();
+            }
+        }
+        assert_eq!(
+            bubble.handle_key(gtk::gdk::Key::Tab, gtk::gdk::ModifierType::empty()),
+            glib::Propagation::Stop
+        );
+        assert_eq!(
+            bubble.handle_key(gtk::gdk::Key::Return, gtk::gdk::ModifierType::empty()),
+            glib::Propagation::Stop
+        );
+        assert_eq!(&*activated.borrow(), "15551234567");
+        gtk::style_context_remove_provider_for_display(&display, &provider);
+        window.close();
+    }
 
     #[test]
     #[ignore = "needs a display"]

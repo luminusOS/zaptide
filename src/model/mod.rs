@@ -687,18 +687,25 @@ impl Contact {
     pub fn display_name(&self) -> Option<&str> {
         self.full_name
             .as_deref()
-            .filter(|name| !name.is_empty())
-            .or(self.push_name.as_deref().filter(|name| !name.is_empty()))
+            .filter(|name| !name.trim().is_empty())
+            .or(self
+                .push_name
+                .as_deref()
+                .filter(|name| !name.trim().is_empty()))
     }
 
     /// WhatsApp display name: address-book name or `~`-prefixed push name.
     pub fn label(&self) -> Option<String> {
-        if let Some(name) = self.full_name.as_deref().filter(|name| !name.is_empty()) {
+        if let Some(name) = self
+            .full_name
+            .as_deref()
+            .filter(|name| !name.trim().is_empty())
+        {
             return Some(name.to_owned());
         }
         self.push_name
             .as_deref()
-            .filter(|name| !name.is_empty())
+            .filter(|name| !name.trim().is_empty())
             .map(|name| format!("~{name}"))
     }
 }
@@ -1001,6 +1008,15 @@ mod tests {
         };
         assert_eq!(stranger.label().as_deref(), Some("~Bob"));
         assert_eq!(Contact::default().label(), None);
+        let mut blank = Contact {
+            full_name: Some(" \t ".into()),
+            ..stranger
+        };
+        assert_eq!(blank.label().as_deref(), Some("~Bob"));
+        assert_eq!(blank.display_name(), Some("Bob"));
+        blank.push_name = Some(" \n ".into());
+        assert_eq!(blank.label(), None);
+        assert_eq!(blank.display_name(), None);
     }
 
     #[test]

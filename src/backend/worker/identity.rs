@@ -80,7 +80,7 @@ impl Worker {
             .contacts
             .get(id)
             .and_then(|contact| contact.full_name.clone())
-            .filter(|name| !name.is_empty())
+            .filter(|name| !name.trim().is_empty())
     }
 
     pub(super) fn contact_name(&self, id: &str) -> Option<String> {
@@ -103,21 +103,19 @@ impl Worker {
         if id == self.me() {
             return "You".to_owned();
         }
-        if let Some(name) = self
-            .identity
-            .contacts
-            .get(id)
-            .and_then(|contact| contact.full_name.clone())
-            .filter(|name| !name.is_empty())
-        {
+        if let Some(name) = self.saved_name(id) {
             return name;
         }
-        if let Some(digits) = crate::model::phone_of(id) {
-            return crate::util::phone(digits);
-        }
         if let Some(name) = push_name
-            .filter(|name| !name.is_empty())
-            .or_else(|| self.identity.contacts.get(id)?.push_name.as_deref())
+            .filter(|name| !name.trim().is_empty())
+            .or_else(|| {
+                self.identity
+                    .contacts
+                    .get(id)?
+                    .push_name
+                    .as_deref()
+                    .filter(|name| !name.trim().is_empty())
+            })
         {
             return format!("~{name}");
         }

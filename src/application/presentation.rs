@@ -1,10 +1,21 @@
 pub(super) fn sender_label(name: Option<&str>, id: &str) -> String {
-    if let Some(name) = name.filter(|name| !name.is_empty()) {
+    if let Some(name) = name.filter(|name| !name.trim().is_empty()) {
         return name.to_owned();
     }
     crate::model::phone_of(id)
         .map(crate::util::phone)
         .unwrap_or_else(|| id.to_owned())
+}
+
+pub(super) fn contact_sender_label(
+    name: Option<&str>,
+    id: &str,
+    contacts: &std::collections::HashMap<String, crate::model::Contact>,
+) -> String {
+    contacts
+        .get(id)
+        .and_then(crate::model::Contact::label)
+        .unwrap_or_else(|| sender_label(name, id))
 }
 
 pub(super) fn delivery_label(delivery: crate::model::Delivery) -> &'static str {
@@ -37,23 +48,31 @@ pub(super) fn mention_labels(
     message: &crate::model::Message,
     contacts: &std::collections::HashMap<String, crate::model::Contact>,
 ) -> Vec<crate::safety::MentionLabel> {
-    message
-        .mentions
+    mention_ref_labels(&message.mentions, contacts)
+}
+
+pub(super) fn mention_ref_labels(
+    mentions: &[crate::model::MentionRef],
+    contacts: &std::collections::HashMap<String, crate::model::Contact>,
+) -> Vec<crate::safety::MentionLabel> {
+    mentions
         .iter()
         .map(|mention| {
             let phone = crate::model::phone_of(&mention.id);
-            let saved = contacts
+            let name = contacts
                 .get(&mention.id)
-                .and_then(|contact| contact.full_name.as_deref())
-                .filter(|name| !name.is_empty());
-            let label = saved
+                .and_then(crate::model::Contact::display_name)
+                .or_else(|| {
+                    mention
+                        .name
+                        .as_deref()
+                        .filter(|name| !name.trim().is_empty())
+                });
+            let label = name
                 .map(str::to_owned)
                 .or_else(|| phone.map(crate::util::phone))
                 .unwrap_or_else(|| mention.user.clone());
-            let hint = match (saved, &mention.name) {
-                (None, Some(name)) => Some(format!("~{name}")),
-                _ => None,
-            };
+            let hint = phone.is_none().then(|| label.clone());
             crate::safety::MentionLabel {
                 user: mention.user.clone(),
                 label,
@@ -110,7 +129,7 @@ pub(super) fn transcript_row(
     let sender = if message.from_me {
         "You".to_owned()
     } else {
-        sender_label(message.sender_name.as_deref(), &message.sender)
+        contact_sender_label(message.sender_name.as_deref(), &message.sender, contacts)
     };
     crate::native_transcript::TranscriptRow {
         header: format!(

@@ -793,21 +793,28 @@ pub(super) fn notice_text(
     known: Option<&crate::model::Chat>,
     message: &crate::model::Message,
     previews: bool,
+    contacts: &std::collections::HashMap<String, crate::model::Contact>,
 ) -> (String, String) {
-    let title = known.map_or_else(
-        || sender_label(message.sender_name.as_deref(), &message.sender),
-        |known| known.name.clone(),
-    );
+    let sender = || contact_sender_label(message.sender_name.as_deref(), &message.sender, contacts);
+    let title = match known {
+        Some(chat) if chat.is_group() => chat.name.clone(),
+        _ => contacts
+            .get(&message.chat)
+            .and_then(crate::model::Contact::label)
+            .unwrap_or_else(|| known.map_or_else(&sender, |known| known.name.clone())),
+    };
+    let summary = || {
+        crate::safety::display_mentions(
+            &message.summary(),
+            &super::mention_labels(message, contacts),
+        )
+    };
     let body = if !previews {
         "New message".to_owned()
     } else if known.is_some_and(crate::model::Chat::is_group) {
-        format!(
-            "{}: {}",
-            sender_label(message.sender_name.as_deref(), &message.sender),
-            message.summary()
-        )
+        format!("{}: {}", sender(), summary())
     } else {
-        message.summary()
+        summary()
     };
     (title, body)
 }
@@ -892,7 +899,7 @@ pub(super) fn apply_hidden_event(
 
             // Not on screen, so no chat counts as open.
             if notification_should_show(notifications, false, None, &chat, known) {
-                let (title, body) = notice_text(known, &message, previews);
+                let (title, body) = notice_text(known, &message, previews, &session.contacts);
                 return Some(Notice {
                     avatar: session.avatars.get(&chat).cloned(),
                     chat,
@@ -1037,11 +1044,20 @@ mod tests {
         for (content, preview) in kinds {
             let mut message = message("chat", "unused");
             message.content = content;
-            assert_eq!(notice_text(None, &message, true).1, preview);
-            assert_eq!(notice_text(None, &message, false).1, "New message");
-            assert_eq!(notice_text(Some(&group), &message, false).1, "New message");
             assert_eq!(
-                notice_text(Some(&group), &message, true).1,
+                notice_text(None, &message, true, &Default::default()).1,
+                preview
+            );
+            assert_eq!(
+                notice_text(None, &message, false, &Default::default()).1,
+                "New message"
+            );
+            assert_eq!(
+                notice_text(Some(&group), &message, false, &Default::default()).1,
+                "New message"
+            );
+            assert_eq!(
+                notice_text(Some(&group), &message, true, &Default::default()).1,
                 format!("Alice: {preview}")
             );
         }
