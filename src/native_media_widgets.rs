@@ -155,6 +155,26 @@ mod tests {
     }
 
     #[test]
+    fn lottie_stickers_accept_boolean_split_positions() {
+        let json = r#"{"fr":10,"ip":0,"op":3,"w":64,"h":64,"layers":[{"ty":4,"ind":1,"ip":0,"op":3,"ks":{"p":{"s":true,"x":{"a":0,"k":0},"y":{"a":1,"k":[{"t":0,"s":[0],"e":[20]},{"t":3,"s":[20]}]}}},"shapes":[{"ty":"rc","p":{"a":0,"k":[32,20]},"s":{"a":0,"k":[20,20]},"r":{"a":0,"k":0}},{"ty":"fl","c":{"a":0,"k":[1,0,0,1]},"o":{"a":0,"k":100}}]}]}"#;
+        let numeric = super::sticker::decode_sticker(&was(&json.replace("true", "1")), || true)
+            .expect("numeric split position renders");
+        let boolean = super::sticker::decode_sticker(&was(json), || true)
+            .expect("boolean split position renders");
+        assert_eq!(boolean.len(), 3);
+        assert_ne!(boolean[0].texture_rgba, boolean[2].texture_rgba);
+        for (boolean, numeric) in boolean.iter().zip(&numeric) {
+            assert_eq!(boolean.texture_rgba, numeric.texture_rgba);
+        }
+    }
+
+    #[test]
+    fn lottie_stickers_still_reject_position_expressions() {
+        let json = r#"{"fr":10,"ip":0,"op":3,"w":64,"h":64,"layers":[{"ty":4,"ind":1,"ip":0,"op":3,"ks":{"p":{"a":0,"k":[0,0],"x":"time * 10"}},"shapes":[]}]}"#;
+        assert!(super::sticker::decode_sticker(&was(json), || true).is_none());
+    }
+
+    #[test]
     fn lottie_sticker_rejects_invalid_or_excessive_animation() {
         assert!(super::sticker::decode_sticker(&was("not json"), || true).is_none());
         let excessive = r#"{"fr":30,"ip":0,"op":999999,"w":64,"h":64,"layers":[]}"#;
