@@ -134,8 +134,8 @@ impl NativeApplication {
                 )
                 .website(env!("CARGO_PKG_HOMEPAGE"))
                 .issue_url(concat!(env!("CARGO_PKG_REPOSITORY"), "/issues"))
-                .license_type(gtk::License::MitX11)
-                .copyright("© 2026 LuminusOS")
+                .license_type(gtk::License::Gpl30)
+                .copyright("© 2026 LuminusOS\nOriginal code © 2026 Carmine Paolino")
                 .debug_info(format!(
                     "ZapTide {}\nGTK {}.{}.{}\nlibadwaita {}.{}.{}",
                     env!("CARGO_PKG_VERSION"),

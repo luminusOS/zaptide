@@ -1,8 +1,7 @@
 # CI runs `cargo deny check --warn unmaintained advisories bans sources`:
 # cargo-deny has no warn level for unmaintained advisories in this file, and
-# they should be reported without failing the build. Licences are not
-# checked because the project is moving to a GPL-family licence that accepts
-# every dependency licence in use.
+# they should be reported without failing the build. Dependency licences
+# need separate review; these checks do not establish licence compliance.
 
 [graph]
 all-features = true

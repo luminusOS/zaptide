@@ -1,8 +1,10 @@
 # Contributing to ZapTide
 
-Bug reports, translations, documentation, accessibility improvements, and focused
-code changes are welcome. Read [ARCHITECTURE.md](ARCHITECTURE.md),
-[PACKAGING.md](PACKAGING.md), and the repository's [AGENTS.md](AGENTS.md) first.
+Contributions can be bug reports, translations, documentation or code. Read
+[ARCHITECTURE.md](ARCHITECTURE.md) for the code layout and
+[PACKAGING.md](PACKAGING.md) for dependencies. Coding agents must also follow
+[AGENTS.md](AGENTS.md) and the relevant
+[architecture contracts](docs/architecture-contracts.md).
 
 ## Discuss the change
 
@@ -42,6 +44,18 @@ Runtime image loading also needs `glycin-loaders` and `bubblewrap`; install emoj
 fonts such as `google-noto-emoji-color-fonts` for emoji UI testing. Flatpak builds
 and runtime dependencies are documented in `PACKAGING.md`.
 
+Clone and build with the pinned toolchain:
+
+```sh
+git clone https://github.com/luminusOS/zaptide.git
+cd zaptide
+cargo build --locked
+```
+
+Quit any running ZapTide before `cargo run --locked`. Use `just run` to compile
+translations before launching. Native runs use the desktop Secret Service and
+separate data directories from Flatpak, so they may need separate linking.
+
 ## Work on a branch
 
 Fork the repository if you do not have write access. Contributors with write
@@ -59,7 +73,7 @@ dependency change requires it; do not hand-edit resolved dependency entries.
 
 ## Verify your change
 
-Run the repository's quality gates before requesting review:
+For Rust code or build/dependency changes, run these checks before review:
 
 ```sh
 cargo fmt --all --check
@@ -68,6 +82,10 @@ cargo test --locked --all-targets
 RUSTDOCFLAGS='-D warnings' cargo doc --locked --no-deps
 git diff --check
 ```
+
+Documentation-only changes need link and path checks, commands compared with
+their definitions, and `git diff --check`, not a Cargo build. Use the relevant
+validators for workflows and packaging; Cargo alone does not cover them.
 
 When a pull request touches `Cargo.toml`, `Cargo.lock` or `deny.toml`, the
 Dependencies workflow runs
@@ -100,10 +118,13 @@ Do not equate compilation with visual verification. Use synthetic screenshots.
   problem and rationale in the body when the change is not self-evident.
 - Keep commits atomic. Write comments for non-obvious constraints and decisions,
   not for statements the code already expresses. Document public interfaces.
-- Open a PR against `main`, fill out the template, and link the issue. Use
+- Use a Conventional Commit title for the PR as well. Open it against `main`,
+  follow the template unless the maintainer requests another format, and link the issue. Use
   `Closes #NUMBER` only when merging the PR should resolve that issue.
 - Include commands/results, limitations, and synthetic UI evidence when useful.
-  Update user-facing documentation and translated strings when appropriate.
+  Update the relevant user guide or translated strings when behaviour changes.
+  The README is an entry point, not a record of each fix; edit it only when its
+  overview, installation steps or essential warnings need to change.
 - Respond to review and re-run affected checks after changes. Prefer a draft PR
   while work or validation is incomplete.
 
@@ -121,8 +142,20 @@ branch: enforcement must also be enabled in GitHub's repository settings.
 
 ## Releases
 
-Maintainers cut releases separately from ordinary fixes. Follow `AGENTS.md` and
-`PACKAGING.md`; do not bump versions, create tags, or publish packages as part of
-an unrelated PR. Release artifacts and checksums must finish before announcing a
-release. There is no CLA or DCO check; contributions use the repository's MIT
-license.
+Maintainers cut releases separately from ordinary fixes. Follow
+[the release procedure](PACKAGING.md#releases); do not bump versions, tag or
+publish packages in an unrelated PR.
+
+## License
+
+ZapTide is free software: you can redistribute it and/or modify it under the
+terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version. It is distributed without any warranty. See [LICENSE](LICENSE) for
+the full terms. Contributions use `GPL-3.0-or-later`; there is no CLA or DCO check.
+
+The inherited ZapFast code retains its MIT notice and copyright in
+[LICENSE-MIT](LICENSE-MIT). Earlier MIT releases remain MIT. Dependencies,
+vendored code and assets retain their own licences, including the
+[CC0 notification sound](assets/sounds/README.md). AppStream metadata remains
+`CC0-1.0`.

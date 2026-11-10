@@ -3,8 +3,15 @@
 ZapTide releases include Flatpak bundles and AppImages for x86_64 and aarch64.
 Native distribution packages are not available.
 
-ZapTide needs libadwaita 1.10 (GNOME 51). Linux release binaries build in
-Fedora 45, the first Fedora version to include it.
+The application is `GPL-3.0-or-later`. `packaging/install-licenses.sh` installs
+the GPL text, the inherited `LICENSE-MIT`, `NOTICE` and vendored notices in every
+distribution format. Keep those notices intact. Binary distribution also
+requires corresponding source under the applicable licences, including local
+patches and build scripts. These notices alone do not cover every dependency
+or bundled native library; review their source and notice obligations before
+publishing packages.
+
+ZapTide needs libadwaita 1.10 (GNOME 51). Release binaries build in Fedora 45.
 
 ## Flatpak
 
@@ -42,28 +49,27 @@ Flathub submission is a separate, manual step.
 prohibit AI agents from submitting or writing submission interactions and
 require disclosure of generated material.
 
-The release workflow builds a native binary for each architecture, packages
-both with `dev.luminusos.ZapTide.bundle.yml`, and lists each package file in
-`checksums.txt`. The same run builds `flatpak-release-manifest.json`, which
-records the tag, source revision, workflow run and the two bundle artifact IDs,
-sizes and SHA-256 hashes, and `flatpak-export-report.json`, which records the
-verified Flatpak refs, OSTree commits and runtimes for both architectures. Both
-stay as artifacts of the workflow run and are not attached to the GitHub
-release. The manifest follows the versioned distribution contract; the report
-is separate from that schema. The Luminus Flatpak repository does not read them:
-it rebuilds the same record from `checksums.txt`, the downloaded bundles and the
-verified run.
-Final tags export on the `stable` branch, while `-rcN` and `-rc.N` tags use
-`testing`.
+The release workflow builds native binaries for both architectures and packages
+them with `dev.luminusos.ZapTide.bundle.yml`. Package hashes go in `checksums.txt`.
+Two reports stay in the workflow artifacts, not the GitHub release:
+
+- `flatpak-release-manifest.json`: tag, source revision, workflow run, bundle
+  artifact IDs, sizes and SHA-256 hashes, following the versioned distribution
+  contract.
+- `flatpak-export-report.json`: verified Flatpak refs, OSTree commits and
+  runtimes for both architectures, separate from the manifest schema.
+
+The Luminus Flatpak repository rebuilds the record from `checksums.txt`,
+downloaded bundles and the verified run; it does not consume these reports.
+Final tags export on `stable`; `-rcN` and `-rc.N` tags use `testing`.
 
 ## AppImage
 
 The x86_64 AppImage is built with
 [quick-sharun](https://github.com/pkgforge-dev/Anylinux-AppImages) in an Arch
 Linux container. It bundles glibc, GTK, libadwaita, the Adwaita icon theme,
-GStreamer, the glycin loaders and bubblewrap, so it needs nothing from the host
-distribution. ZapTide uses the bundled icons whatever icon theme the desktop is
-set to, because GTK would otherwise look only in that theme. Arch
+GStreamer, the glycin loaders and bubblewrap. ZapTide uses its bundled icons
+regardless of the desktop's icon theme; GTK would otherwise search that theme. Arch
 stable has libadwaita 1.9, so `packaging/appimage/build.sh` enables the Arch
 testing repositories until 1.10 reaches `extra`. To build it locally:
 
@@ -130,18 +136,78 @@ appimageupdatetool zaptide.AppImage
 
 SQLCipher, OpenSSL and libopus are compiled from source by their `-sys` crates.
 
-Calls add the `rtc-*` crates (DTLS, SCTP and data channels), which are still 0.21 beta releases, and `rkyv`. Their licences are MIT or Apache-2.0. The AppImage does not yet check for the H.264 encoder, `v4l2src` or the autodetect source and sink plugins that calls use.
+Calls use the `rtc-*` crates (DTLS, SCTP and data channels), still at 0.21 beta,
+and `rkyv`, under MIT or Apache-2.0 licences. AppImage packaging does not yet
+check for an H.264 encoder, `v4l2src` or the autodetect source and sink plugins.
 
-## Flatpak limitations
+GTK's emoji chooser needs a colour emoji font: `google-noto-emoji-color-fonts`
+on Fedora or `noto-fonts-emoji` on Arch. Without it, emoji may be monochrome
+or boxes. Arch needs the `gstreamer` headers for audio builds.
 
-- **Calls**: voice calls and the ring use the PulseAudio socket. The ring looks for the freedesktop sound theme in the data directories and falls back to a tone it makes, so it works without that theme. Notification buttons go through the notification portal; the desktop's do-not-disturb setting is read through GSettings and may not be visible in the sandbox. Video calls read the camera through the camera portal (`org.freedesktop.portal.Camera`): ZapTide detects the sandbox from the `/.flatpak-info` file or a non-empty `FLATPAK_ID`, asks the portal for access, opens its PipeWire remote and runs `pipewiresrc` on the camera node, so the manifest needs no device permission, `--filesystem` or `--talk-name` for it, and `--device=all` stays out. The GNOME 51 runtime ships the GStreamer PipeWire plugin. It has no H.264 encoder of its own and ZapTide does not use the `org.freedesktop.Platform.openh264` extension: `x264enc` comes from `org.freedesktop.Platform.codecs-extra`, which the runtime declares and Flatpak installs with the app when a remote carries it, and `avdec_h264` was present in a sandbox with that extension installed. Without that extension a video call reports a missing H.264 decoder or encoder; that case was not run. The portal route was checked against a real session portal outside a sandbox; it has not been run inside a built Flatpak.
+## Flatpak permissions and limitations
 
-- **Keyring**: inside the sandbox oo7 keeps the archive keys in its own file keyring, `~/.var/app/dev.luminusos.ZapTide/data/keyrings/default.keyring`. That file is encrypted with a per-app secret that the Secret portal (`org.freedesktop.portal.Secret`) stores in the host keyring (GNOME Keyring, KWallet), so a backup or a move to another machine needs the file and the host keyring together. On a desktop without a Secret portal backend the keys stay in the host Secret Service, as outside the sandbox. Outside the sandbox nothing is migrated: keys are found in any Secret Service collection and created in the default one only when no item exists. Builds before oo7 stored the keys in the host Secret Service, so on first start ZapTide copies each missing key from there, reads the copy back, and leaves the original in place. Reading that original needs `--talk-name=org.freedesktop.secrets`, which is why both manifests still grant it. A later release drops the grant once existing installs have migrated; desktops without a Secret portal will then need one.
+### Calls
 
-  Synthetic credential and migration tests do not establish real-daemon or
-  Flatpak migration acceptance. That acceptance still requires a user-operated
-  test account, including the applicable capture checks. Keep the legacy
-  Secret Service permission until that migration window is deliberately closed;
-  closing superseded implementation PRs does not complete those manual checks.
+Voice calls and ringing use the PulseAudio socket. Ringing uses the freedesktop
+sound theme or a generated tone. Notification buttons use the notification
+portal. GSettings may not expose desktop Do Not Disturb inside the sandbox.
 
-- **Tray icon**: GNOME shows StatusNotifierItem only with an extension such as AppIndicator.
+Video uses `org.freedesktop.portal.Camera`. ZapTide detects the sandbox through
+`/.flatpak-info` or a non-empty `FLATPAK_ID`, requests access, opens the portal's
+PipeWire remote and runs `pipewiresrc` on its camera node. This needs no device,
+filesystem or bus-name permission in the manifest; do not add `--device=all`.
+
+GNOME 51 includes the GStreamer PipeWire plugin, but no H.264 encoder in the
+base runtime. ZapTide uses `x264enc` from `org.freedesktop.Platform.codecs-extra`,
+which the runtime declares and Flatpak installs when a remote carries it, not
+`org.freedesktop.Platform.openh264`. `avdec_h264` was present in a sandbox with
+`codecs-extra`. The missing-extension case has not been tested; it reports a
+missing encoder or decoder. The camera portal route was checked against a real
+session portal outside a sandbox, not inside a built Flatpak.
+
+### Keyring
+
+Inside Flatpak, oo7 keeps archive keys in
+`~/.var/app/dev.luminusos.ZapTide/data/keyrings/default.keyring`. The Secret
+portal stores the per-app secret that encrypts this file in the host keyring.
+Backups and moves need both. Desktops without a Secret portal backend use the
+host Secret Service directly. Outside Flatpak, keys are found in any Secret
+Service collection and created in the default collection only when absent;
+nothing is migrated.
+
+On first start after an upgrade from a pre-oo7 build, ZapTide copies each
+missing key from the host Secret Service, reads the copy back and leaves the
+original untouched. Both manifests retain `--talk-name=org.freedesktop.secrets`
+to read those legacy keys. Remove it only after deliberately closing the
+migration window; desktops without a Secret portal will then need one.
+
+Synthetic credential and migration tests do not prove real-daemon or Flatpak
+migration acceptance. That still needs a user-operated test account and the
+applicable capture checks. Closing superseded implementation PRs is not a
+substitute for those checks.
+
+### Tray
+
+GNOME shows StatusNotifierItem only with an extension such as AppIndicator.
+
+## Releases
+
+Cut releases for a feature or a batch of fixes worth announcing, not every
+commit. A regression in a just-released version can ship immediately. Agents
+need explicit authorization for commits, pushes, tags and publication.
+
+1. Bump `version` in `Cargo.toml` and update `Cargo.lock` with a build. Run the
+   full checks in [CONTRIBUTING.md](CONTRIBUTING.md#verify-your-change), then
+   commit and push before tagging so the binaries report the right version.
+2. Tag `vX.Y.Z` and push the tag. Wait for every build, package and `checksums.txt`.
+   A pushed tag alone does not complete a release.
+3. Replace generated GitHub notes with written release notes after the artifacts
+   are ready. Verify all media links before publishing.
+
+Before writing notes, read the previous two stable releases and match their
+style: a short plain-language summary, `New` and `Fixed` sections with bold
+user-facing results, a `Thanks` section and a full-changelog link comparing
+the previous tag. Credit contributors on the relevant item with issue or PR
+numbers, and acknowledge reporters separately. Include screenshots or short
+videos of the main features when useful, using synthetic data only. Describe
+known limitations and do not use em dashes.

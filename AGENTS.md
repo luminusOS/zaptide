@@ -1,259 +1,129 @@
 # ZapTide agent guide
 
-ZapTide is a Linux-only native WhatsApp client forked from ZapFast: Rust, GTK4/libadwaita through Relm4, and the
-[whatsapp-rust](https://github.com/oxidezap/whatsapp-rust) library for the
-protocol. These notes are for coding agents and new contributors.
+## Scope
 
-## Product boundaries
+ZapTide is a Linux-only WhatsApp client forked from ZapFast, built with Rust,
+GTK4, libadwaita, Relm4 and whatsapp-rust. Keep it a small native client: no
+browser engine, telemetry, hosted backend or second account system. Do not
+reimplement protocol features or claim support from a protobuf field alone.
+Keep changes within the requested task and preserve unrelated behaviour.
 
-- Keep it a small native client. No browser engine, no telemetry, no
-  hosted backend, no second account system.
-- The protocol comes from whatsapp-rust. Do not reimplement pieces of it
-  here, and do not advertise a capability merely because a protobuf field
-  for it exists.
-- Do not broaden a task into adjacent features or a general refactor.
-  Preserve existing user behaviour unless the task changes it.
+## Git policy
+
+Create commits, amend them, push, open PRs, tag or publish releases only when
+the user explicitly requests the corresponding operation. Otherwise leave
+changes local. Never discard someone else's work.
+
+When requested, use English Conventional Commits with an imperative subject
+under 72 characters. Explain the problem and rationale in the body, wrapped
+at about 72 characters. Preserve the configured author; add no AI attribution.
+PR titles use the same convention. Descriptions use concise English prose
+without hard-wrapped paragraphs, decorative headings or checklists unless
+the user or a mandatory repository template requires them.
 
 ## Privacy
 
-- The user's archive is personal data. Do not read chat rows, message
-  bodies, contacts, or other user content out of `archive.db` or any
-  exported log, not even read-only. Schema, column existence, and row
-  counts are fine; message contents are not.
-- When a bug report or feature needs the user's data, hand the user the
-  query or command to run and let them report the result back.
-- Never log message contents, phone numbers, keys, or QR payloads at a
-  level that ships (see the definition of done); treat existing
-  captures of them the same way.
+- Never read chat rows, messages, contacts or other personal content from
+  `archive.db` or exported logs, even read-only. Schema and row counts are fine.
+  Give the user a query to run when a diagnosis needs their data.
+- Use synthetic fixtures and mock credentials. Never capture real chats or
+  log message contents, phone numbers, keys or QR payloads at a shipping level.
+  Never log `CallError`, which contains relay addresses and JIDs.
+- Keep ZapTide's XDG paths and keyring service separate from ZapFast, FastsApp
+  and FastWhatsApp. Importing needs explicit consent and a separately reviewed
+  migration plan; never adopt their data automatically.
+- A missing or locked encryption key stops linking. Never create a disposable
+  archive or replace a key to hide the failure.
+
+## Commands and validation
+
+Use the pinned toolchain in `rust-toolchain.toml`. Native dependencies and
+container requirements are in [PACKAGING.md](PACKAGING.md). Run commands in a
+Toolbox with those dependencies when the host lacks them.
+
+```sh
+cargo build --locked
+just run
+just pot
+```
+
+`just run` compiles translations before launching. `just pot` refreshes and
+merges translation strings; use it when translatable strings change.
+
+For Rust code or build/dependency changes, run all checks before finishing:
+
+```sh
+cargo fmt --all --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked --all-targets
+RUSTDOCFLAGS='-D warnings' cargo doc --locked --no-deps
+git diff --check
+```
+
+Add focused tests for changed behaviour. Run affected display-dependent tests
+explicitly with synthetic data, using Xvfb or a graphical session. Check
+keyboard interaction, layout and accessibility where relevant. Report what
+ran, what only compiled and what remains untested. Never weaken lints,
+suppress errors, skip or delete tests merely to get green checks.
+
+For documentation-only changes, check links, paths, commands against their
+definitions and `git diff --check`; do not run Cargo builds or tests unless
+the documentation change needs them. Workflow and packaging changes need
+their own relevant checks, not an automatic claim that Cargo covers them.
 
 ## Architecture
 
-- `src/application.rs` is the Relm4 root component: the link page, the chat
-  sidebar, and the conversation. Widgets send `Input`s; `update` applies them.
-  Never mutate application state from a signal handler beyond the widget's own
-  value (composer text, search text, toggles).
-- `src/backend.rs` is the interface's handle to a tokio runtime on its own
-  thread; `src/backend/worker.rs` runs there. It owns the whatsapp-rust
-  `Bot`, the message archive, downloads, and profile pictures. The two
-  sides talk only through `Command` (interface to runtime) and `Event`
-  (runtime to interface); every event wakes the window through `Waker`.
-  Operation implementations live under `src/backend/worker/`; the parent retains
-  shared state, batch invariants and orchestration. Startup maintenance connects
-  first and yields between 256-row steps. Preserve commit-delayed events and
-  protected in-memory rollback state when moving archive operations.
-  Account completions use `Command::Completed(Completion { generation, done })`:
-  keep the central session guard separate from operation-specific generations.
-  A finished media sweep clears its running slot before stale-result rejection.
-  Stale or failed-enqueue results discard only owned staging paths and notify
-  waiting batch callbacks; never add cleanup `Drop` to cloneable payloads.
-- `application::OpenChatState` centralizes conversation reset state, but each
-  caller retains its cleanup ordering. Leaving an account preserves starred
-  messages; complete chat reset clears them. Keep request-token invalidation
-  and callback ownership intact.
-- Viewer implementation modules live under `src/native_media_widgets/viewer/`;
-  attachment, selection and theme helpers live under `src/application/`.
-  Resource permits in `src/shared_resource.rs` use distinct counters for distinct
-  workloads. Sharing a helper must not merge those limits.
-- The window owns the account's online presence (`src/application/presence.rs`,
-  `backend/worker/presence.rs`): WhatsApp holds the phone's notifications while
-  ZapTide is online. The bot uses `PresencePolicy::Manual`; reverting to
-  Automatic announces "available" on every connect and silently breaks phone
-  notifications.
-- `src/archive.rs` is the SQLite store of chats, messages, contacts, and
-  privacy-id mappings. WhatsApp replays history once, at link time, so the
-  archive is the only copy. It keeps each message's raw protobuf because
-  the keys to fetch an attachment live in it. `src/archive/encryption.rs` opens
-  the archive with SQLCipher and a random key stored in the OS keyring through
-  oo7 (`archive/secrets.rs`): the Secret portal's file keyring inside Flatpak,
-  the Secret Service (any collection, never duplicated) outside. Inside
-  Flatpak a key missing from the file keyring is copied once from the Secret
-  Service where older builds kept it and read back from disk before use; that
-  old item is only read, never written or deleted. All keyring work runs in
-  order on one keyring thread; the GTK thread only waits, for at most two
-  minutes, on the one-time key copy when the legacy layout moves. Plaintext
-  migration checkpoints the old WAL and verifies an encrypted staging file before
-  atomic replacement. A locked or missing key stops linking; never fall back to
-  a disposable archive. Tests use fixtures and mock credentials only.
-  `backend/worker/device_store.rs` encrypts whatsapp-rust's `session.db` the
-  same way, with an HKDF key derived from the folder's archive key (no second
-  keyring item), applied by a connection hook on every pooled connection. A new
-  key is only created while neither database in the folder is encrypted.
-- `src/model.rs` holds the app's own types. Views never touch a protobuf;
-  the worker translates in `classify()` and `parse_conversation()`.
-- Poll creation, voting, and decryption use whatsapp-rust's `Client::polls()`.
-  `backend/worker/polls.rs` retains the original creator identity and key in the
-  encrypted archive; `archive/polls.rs` keeps each voter's latest timestamp and
-  message id, including encrypted updates whose parent has not arrived yet.
-  History replay must not undo a newer vote or withdrawal. Decryption runs in
-  batches of eight, with failures retried after reconnecting. The interface only
-  receives option counts and its own selection, never keys or protobufs. Visible
-  polls request phone history automatically, anchored after the creation message
-  so the response includes its vote snapshot. `poll_history.rs` serializes these
-  requests and retries from 30 seconds to 15 minutes without an interface timer.
-  History request timestamps are Unix seconds: the library argument and wire
-  field misleadingly end in `Ms`. Do not multiply archive timestamps by 1,000.
-  A repeated poll question with no usable vote snapshot cannot finish recovery.
-- Chat ids are canonical strings: a chat behind a privacy id (`@lid`) is
-  filed under its phone number once the mapping is known. Use
-  `Worker::canonical` for anything that arrives as a `Jid`.
-- Updates belong to the package manager or Flatpak remote; the app has no
-  self-updater.
-- `src/theme/custom.rs` scans local JSON palettes off the UI thread, caching the
-  last usable choice in settings, with shared Spotifast palettes embedded as
-  defaults. Filesystem notifications reload the catalog without a repaint
-  timer. `reload-themes` uses the single-instance channel without
-  opening a window.
-- `src/native_theme.rs` turns a palette into GTK CSS; structural styling lives
-  beside `apply_theme` in `src/application.rs`. Use libadwaita style classes and
-  symbolic icons from the icon theme before adding custom CSS.
-- Message rows and media widgets live in `src/native_media_widgets.rs`; text
-  selection and copy across messages in `src/native_transcript.rs`.
-- Group names and members come from `groups().get_metadata`, asked one
-  turn at a time (two per 5 s tick, `pump_group_info`): dozens of unnamed
-  groups arrive with history sync and a burst of queries hits the
-  server's rate limit, which once left groups called "Group" forever.
-  Failures back off (30 s doubling, seven tries); item-not-found,
-  forbidden and not-authorized are final and stop the asking.
-- A download that answers 403/404/410 goes through
-  `client.media_reupload().request(..)` (a server-error receipt; WhatsApp
-  has the phone re-upload and answers with a fresh `direct_path`) and is
-  fetched once more before the bubble reports "No longer on WhatsApp's
-  servers". Download failures never toast; they live in the bubble as
-  "... · click to retry". Copied text is refined by
-  `transcript::refine`: emoji placeholders map back through each row's
-  `placements`.
-- History sync can bring a chat with a name and no messages at all; a
-  history request for such a chat is anchored at the present with an
-  empty message id (`worker::fetch_older`), and the app asks the phone
-  as soon as such a chat loads or opens, instead of never.
-- `src/voice.rs` is the codec for voice messages: OGG/Opus in and out
-  (the `ogg` crate for the container, `opus` with libopus bundled and
-  built by cmake for the codec, so cmake is a build dependency), plus
-  the 64-bar waveform WhatsApp draws and a mono/48 kHz resampler.
-  `src/services/media.rs` plays one clip at a time with GStreamer's
-  `playbin`; `scaletempo` (gst-plugins-good) keeps the pitch at 1.5x and
-  2x. Without it a clip still plays at 1x, and other speeds show an error
-  in the bubble. Bounded waveform decoding uses `src/audio.rs` on a worker
-  thread: Ogg Opus through the `opus` crate, anything else through a
-  GStreamer `decodebin` into an appsink. Waveforms decode without a click,
-  so that `decodebin` skips adaptive, source, video, image and subtitle
-  elements: a received file must never make it open a URL or another file. `Recorder` reads the default
-  microphone (`autoaudiosrc`, as calls do) as mono 48 kHz through an appsink
-  on a thread, refusing its silent fallback source when no sound server or
-  microphone exists, keeping a loudness per 50 ms for the live bars. Linux needs
-  the GStreamer headers to build (`gstreamer` on Arch). Audio controls live
-  in each message bubble;
-  `StartRecording/CancelRecording/SendRecording` drive the
-  microphone from the composer (the send button is a microphone when there
-  is nothing to send); `Command::SendVoice` normalizes
-  (`voice::normalize`, quiet takes up to just under full scale, gain
-  capped), encodes and sends push-to-talk with the waveform and the reply
-  quote if one was open; `Command::MarkPlayed` sends the played receipt
-  once per incoming voice message.
-- Calls: `backend/worker/calls.rs` owns the one call in progress and drives
-  whatsapp-rust's `voip()` runtime; `model/call.rs` is the state machine. A
-  call is filed as a `Content::Call` message in its chat, and the Calls tab is a
-  query over those messages (`archive/calls.rs`). Devices live in `src/calls/`
-  (GStreamer: microphone, speaker, camera, H.264 decoder). A call whose offer
-  was never answered with a handle is turned down with `voip().reject`, only
-  when we decided to end it, never when the caller or another device did. Close
-  and hang up are one command: the worker knows the real phase, the window may
-  not. Media is released before waiting on the network. The ring is
-  `calls/ringtone.rs`: one `Ringer` driven from `sync_ring`, never started
-  anywhere else, so every path that ends or closes a call must pass through
-  it. A call's notification buttons use their own token map keyed by account
-  and call id, separate from the chat's. A second incoming call becomes the
-  worker's `waiting` call and only rings; there is no hold and no busy reply,
-  because whatsapp-rust offers neither. Never log a
-  `CallError`: it carries relay addresses and JIDs.
-- `src/paths.rs` uses a ZapTide-only XDG namespace. Never adopt or open ZapFast,
-  FastsApp, or FastWhatsApp data automatically. The keyring service must remain
-  separate too. Any importer requires explicit consent and a
-  separately reviewed migration plan.
-- Quitting shuts the backend down on a thread and then calls
-  `relm4::main_application().quit()`. GApplication provides single-instance
-  activation. `src/native_notifications.rs` sends GNotifications for live
-  messages when the reader is away from that chat.
-- Group delivery uses `archive::receipts`: save the recipients when filing an
-  outgoing message, record each person's receipt, then take the least advanced
-  recipient. Never promote a group from one reader, apply a receipt to earlier
-  messages, or infer a historical audience from current membership. History
-  trusts the phone's aggregate status, not a partial `user_receipt` list.
-- Private read-state writes all use the `regular_low` app-state collection.
-  `backend::read_sync` permits one at a time and backs off the whole queue after
-  failure; per-chat retry queues would repeatedly rebuild the same failed
-  collection. Pending positions stay in the archive until acknowledged. Snapshot
-  recovery and no-progress conflict detection belong to whatsapp-rust.
-- The name and icon under the phone's Linked devices come from
-  `DevicePropsOverride` in `start_bot` (`os` is the name shown, the
-  platform type picks the icon); WhatsApp reads them at pairing only, so a
-  change shows after unlinking and linking again.
-- Older history comes from the phone on demand (`Command::FetchOlder` →
-  `Client::fetch_message_history` → a `HistorySync` chunk with
-  `sync_type == ON_DEMAND`); the archive is paged first, the phone only
-  when it is exhausted.
-- ZapTide builds only for Linux; other targets are not supported.
-- `Popup::context_menu` opens on the *response's* right-click, which those
-  inner widgets take for themselves; the bubble reads the right-click from
-  the input over its own rect and opens `Popup::menu` itself, so the menu
-  comes up anywhere on the message.
+Read [ARCHITECTURE.md](ARCHITECTURE.md) for layout and thread ownership. Before
+changing a subsystem, read its section in
+[architecture contracts](docs/architecture-contracts.md); those constraints
+remain mandatory even though they are outside this file.
 
-## Releasing
+- Widgets send `Input`; Relm4 `update` owns application state. Signal handlers
+  may change only their widget's value, not application state.
+- UI and worker exchange only `Command` and `Event`; each event wakes the UI
+  through `Waker`. Views use model types, never protobufs. Use
+  `Worker::canonical` for incoming JIDs.
+- Preserve archive transactions, generation guards, callback ownership and
+  cleanup ordering. Shared helpers must not merge separate workload limits.
+- The window owns presence. Keep `PresencePolicy::Manual`; Automatic breaks
+  phone notifications by announcing availability on reconnect.
 
-Never use em dashes in user-facing writing, including release titles, release
-notes, and agent responses. Use commas, colons, parentheses, or full stops.
+## Coding and review
 
-Before writing release notes, read the previous two stable releases of this
-repository and match their style: a short plain-language summary, `New`
-and `Fixed` sections with bold user-facing results, a `Thanks` section, and
-a full-changelog link. Credit who did what on the relevant item, with issue
-or PR numbers, and acknowledge reporters separately from implementers.
-Include screenshots or short videos of the main features when relevant.
-Never capture real chats. Verify every media link and do not leave
-generated notes in place. Describe known limitations honestly.
+Follow surrounding style and naming. Prefer explicit ownership and small
+domain-specific functions over speculative abstractions or forwarding
+wrappers. Do not compress control flow to shorten a file. Comments explain
+non-obvious constraints or decisions, not visible operations; document public
+interfaces and remove obsolete comments.
 
-Do not cut a release for every fix. Work accumulates on `main` until
-there is something substantial to announce: a feature, or a batch of
-fixes worth a changelog entry. Five patch releases in a day is what this
-rule exists to prevent. The exception is a regression in something just
-released, which goes out as soon as it is fixed.
+Use libadwaita classes and symbolic icons before custom CSS. Structural CSS
+belongs in `data/style.css`, not generated Rust strings. Use gettext for UI
+strings. Do not add compatibility paths for unsupported platforms or fake
+behaviour behind a label. Review the diff for correctness, privacy, resource
+lifetime and unnecessary complexity.
 
-A release is not finished when the tag is pushed. Do these in order:
+## Documentation policy
 
-1. Bump `version` in `Cargo.toml` and update `Cargo.lock` with a build. Run
-   the full checks, commit, and push before tagging so the binaries report
-   the right version.
-2. Tag `vX.Y.Z` and push the tag. Wait for every build, artifact,
-   and `checksums.txt`.
-3. Replace the generated GitHub notes with written release notes. Start with
-   a short summary, group user-visible changes under headings such as `New`
-   and `Fixed`, credit contributors and reporters where it helps, and end
-   with a full-changelog link comparing the previous tag. Write about what
-   changed for the user, not the commit history.
-## Platform dependencies
+The README is a short entry point: purpose, representative features,
+installation, essential warnings and links. It is not a changelog, test log,
+architecture notebook or catalogue of every fix.
 
-- `gtk::EmojiChooser` renders emoji through the system's color emoji font.
-  On Fedora, install `google-noto-emoji-color-fonts`; on Arch,
-  `noto-fonts-emoji`. Without the font, emoji fall back to monochrome glyphs
-  or render as boxes.
+Update it only when that entry-point information becomes wrong or incomplete.
+A code change or commit does not itself require a README change. Edit an
+existing statement instead of appending another bullet for the same feature.
+Put user instructions in `docs/user-guide.md`, architecture and invariants in
+`ARCHITECTURE.md` and `docs/architecture-contracts.md`, development guidance in
+`CONTRIBUTING.md`, and packaging/release procedures in `PACKAGING.md`.
 
-## Definition of done
+Write direct, factual prose. Remove generated filler, repeated explanations,
+decorative formatting and unsupported claims; use the humanizer workflow when
+available. Do not use em dashes in user-facing writing or agent responses.
+Preserve security warnings, licence notices, commands and known limitations
+when shortening documentation. Do not create a new document for each fix.
 
-- Add focused tests for changed behaviour.
-- Update the README when user-visible behaviour, settings, files, or network
-  access changes.
-- Run the full checks before finishing:
+## Releases
 
-  ```sh
-  cargo fmt --all --check
-  cargo clippy --locked --all-targets -- -D warnings
-  cargo test --locked --all-targets
-  RUSTDOCFLAGS='-D warnings' cargo doc --locked --no-deps
-  ```
-
-  Do not weaken a lint, delete a test, or add an `allow` merely to make
-  them pass without explaining why the rule does not apply.
-- Report platform coverage honestly: say what was run and what was only
-  compiled.
-- Never log message contents, phone numbers, keys, or QR payloads at a
-  level that ships. The log file is meant to be attached to bug reports.
+Releases require an explicit request and follow
+[the release procedure](PACKAGING.md#releases). Ordinary fixes accumulate on
+`main`; a regression in a just-released version is the exception. Never leave
+generated release notes in place or treat a pushed tag as a finished release.
