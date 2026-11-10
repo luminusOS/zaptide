@@ -22,7 +22,7 @@ without a browser engine. Messages stay in a local, encrypted archive.
 ## Features
 
 - Text, voice notes, polls, stickers and attachments.
-- Received Lottie stickers can play when their animation uses the supported Lottie subset; animations with unsupported features show a placeholder.
+- Received Lottie stickers can play when their animation uses the supported Lottie subset, including positions animated on separate axes; animations with unsupported features show a placeholder.
 - Voice and video calls with one contact, with a call history.
 - Multiple accounts with separate history and settings.
 - Chat search, starred messages and link previews.

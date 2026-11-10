@@ -158,12 +158,11 @@ fn decode_lottie_sticker(bytes: &[u8], current: impl Fn() -> bool) -> Option<Vec
     if json.len() as u64 > MAX_JSON_BYTES || !current() {
         return None;
     }
-    let value: serde_json::Value = serde_json::from_slice(&json).ok()?;
-    if !safe_lottie_shapes(&value) {
+    let mut value: serde_json::Value = serde_json::from_slice(&json).ok()?;
+    if !prepare_lottie_json(&mut value) {
         return None;
     }
-    let animation =
-        rasterlottie::Animation::from_json_str(std::str::from_utf8(&json).ok()?).ok()?;
+    let animation: rasterlottie::Animation = serde_json::from_value(value).ok()?;
     let frames = animation.out_point - animation.in_point;
     if animation.width == 0
         || animation.height == 0
@@ -217,7 +216,7 @@ fn decode_lottie_sticker(bytes: &[u8], current: impl Fn() -> bool) -> Option<Vec
     Some(output)
 }
 
-fn safe_lottie_shapes(root: &serde_json::Value) -> bool {
+fn prepare_lottie_json(root: &mut serde_json::Value) -> bool {
     let mut pending = vec![root];
     let mut visited = 0;
     while let Some(value) = pending.pop() {
@@ -230,7 +229,14 @@ fn safe_lottie_shapes(root: &serde_json::Value) -> bool {
                 if matches!(object.get("ty").and_then(|v| v.as_str()), Some("rp" | "sr")) {
                     return false;
                 }
-                pending.extend(object.values());
+                // rasterlottie 0.3 expects a numeric split flag; WhatsApp also sends booleans.
+                if object.get("s").and_then(|v| v.as_bool()) == Some(true)
+                    && object.get("x").is_some_and(|v| v.is_object())
+                    && object.get("y").is_some_and(|v| v.is_object())
+                {
+                    object.insert("s".into(), 1.into());
+                }
+                pending.extend(object.values_mut());
             }
             serde_json::Value::Array(array) => pending.extend(array),
             _ => {}
