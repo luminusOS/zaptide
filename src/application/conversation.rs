@@ -595,7 +595,11 @@ impl NativeApplication {
         let who = if message.from_me {
             "yourself".to_owned()
         } else {
-            sender_label(message.sender_name.as_deref(), &message.sender)
+            contact_sender_label(
+                message.sender_name.as_deref(),
+                &message.sender,
+                &self.contacts,
+            )
         };
         (format!("Replying to {who}"), message.summary())
     }
@@ -905,8 +909,7 @@ fn absorb_message_update(
     true
 }
 
-/// Whether new contact details can change the open window. Rows and copied
-/// text only read contacts for the saved names of mentioned people.
+/// Whether new contact details can change names in the open window.
 fn contacts_touch_window(
     ids: &[String],
     snapshots: &std::collections::HashMap<String, crate::model::Message>,
@@ -924,8 +927,20 @@ fn contacts_touch_window(
         .collect::<std::collections::HashSet<_>>();
     ids.iter()
         .filter_map(|id| snapshots.get(id))
-        .flat_map(|message| &message.mentions)
-        .any(|mention| changed.contains(mention.id.as_str()))
+        .any(|message| {
+            (!message.from_me && changed.contains(message.sender.as_str()))
+                || message.quoted.as_ref().is_some_and(|quote| {
+                    changed.contains(quote.sender.as_str())
+                        || quote
+                            .mentions
+                            .iter()
+                            .any(|mention| changed.contains(mention.id.as_str()))
+                })
+                || message
+                    .mentions
+                    .iter()
+                    .any(|mention| changed.contains(mention.id.as_str()))
+        })
 }
 
 pub(super) fn transcript_rows(
@@ -1355,7 +1370,7 @@ mod batch_tests {
     }
 
     #[test]
-    fn rows_without_mentions_read_nothing_from_contacts() {
+    fn rows_without_mentions_resolve_sender_and_quote_names_from_contacts() {
         let mut message = window_message(1);
         message.quoted = Some(crate::model::Quoted {
             id: "M00000".into(),
@@ -1405,18 +1420,29 @@ mod batch_tests {
         };
         let (bare, known) = (row(&HashMap::new()), row(&everyone));
         assert!(bare.renders_like(&known));
-        for (bare, known) in [
-            (&bare.sender, &known.sender),
-            (&bare.quote, &known.quote),
-            (&bare.body, &known.body),
-            (&bare.notes, &known.notes),
-            (&bare.accessible_label, &known.accessible_label),
-        ] {
+        assert_eq!(bare.sender, "Pushed 1");
+        assert_eq!(known.sender, format!("Saved {}", message.sender));
+        assert!(bare.quote.contains("Pushed 2"));
+        assert!(known.quote.contains(&format!("Saved {}", person(2))));
+        assert!(bare.accessible_label.contains("Pushed 1"));
+        assert!(known.accessible_label.contains(&known.sender));
+        assert!(
+            known
+                .accessible_label
+                .contains(&format!("Saved {}", person(2)))
+        );
+        for (bare, known) in [(&bare.body, &known.body), (&bare.notes, &known.notes)] {
             assert_eq!(bare, known);
         }
-        assert_eq!(
-            transcript_row(&message, &HashMap::new()),
+        assert!(
+            transcript_row(&message, &HashMap::new())
+                .header
+                .ends_with("Pushed 1: ")
+        );
+        assert!(
             transcript_row(&message, &everyone)
+                .header
+                .ends_with(&format!("Saved {}: ", message.sender))
         );
     }
 

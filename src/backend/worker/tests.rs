@@ -4859,6 +4859,43 @@ pub(super) mod receipt_tests {
     }
 
     #[test]
+    fn names_precede_phone_fallbacks_in_chats_messages_and_previews() {
+        let (mut worker, _events, _commands, _runtime) = worker();
+        worker.identity.contacts.insert(
+            PEER.into(),
+            Contact {
+                id: PEER.into(),
+                full_name: None,
+                push_name: Some("WhatsApp Name".into()),
+            },
+        );
+        assert_eq!(worker.chat_name(PEER, None), "~WhatsApp Name");
+        let mut message = incoming("M1", 1);
+        message.sender_name = None;
+        worker.polish(&mut message);
+        assert_eq!(message.sender_name.as_deref(), Some("~WhatsApp Name"));
+        let mut chat = Chat::new(PEER.into(), fallback_name(PEER));
+        chat.last = Some(crate::model::LastMessage {
+            from_me: false,
+            sender: PEER.into(),
+            sender_name: None,
+            summary: format!("Hi @{}", PEER.split('@').next().unwrap()),
+            status: Delivery::None,
+        });
+        worker.polish_chat(&mut chat);
+        assert_eq!(chat.name, "~WhatsApp Name");
+        assert_eq!(
+            chat.last.as_ref().unwrap().sender_name.as_deref(),
+            Some("~WhatsApp Name")
+        );
+        assert_eq!(chat.last.as_ref().unwrap().summary, "Hi @WhatsApp Name");
+        worker.identity.contacts.get_mut(PEER).unwrap().full_name = Some("Saved Name".into());
+        assert_eq!(worker.chat_name(PEER, Some("New Push")), "Saved Name");
+        worker.polish(&mut message);
+        assert_eq!(message.sender_name.as_deref(), Some("Saved Name"));
+    }
+
+    #[test]
     fn saved_contact_name_replaces_push_name_on_messages() {
         let (mut worker, _events, _commands, _runtime) = worker();
         let mut message = Message {

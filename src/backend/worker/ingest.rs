@@ -400,6 +400,30 @@ impl Worker {
         out
     }
 
+    pub(super) fn preview_mentions(&self, text: &str) -> String {
+        let text = self.pn_tokens(text);
+        let mentions: Vec<_> = self
+            .mention_tokens(&text)
+            .into_iter()
+            .filter_map(|mention| {
+                let name = self
+                    .identity
+                    .contacts
+                    .get(&mention.id)
+                    .and_then(Contact::display_name)
+                    .map(str::to_owned)
+                    .or_else(|| self.whatsapp_name(&mention))?;
+                Some(crate::safety::MentionLabel {
+                    user: mention.user,
+                    label: name,
+                    phone: None,
+                    hint: None,
+                })
+            })
+            .collect();
+        crate::safety::display_mentions(&text, &mentions)
+    }
+
     /// Infers canonical mention ids from `@user` tokens.
     pub(super) fn mention_tokens(&self, text: &str) -> Vec<MentionRef> {
         let mut found = Vec::new();

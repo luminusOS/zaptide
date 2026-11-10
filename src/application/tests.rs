@@ -516,6 +516,76 @@ fn transcript_keeps_full_text_message_body() {
 }
 
 #[test]
+fn mention_names_prefer_saved_then_whatsapp_then_phone() {
+    let mut message = crate::archive::tests::message("group@g.us", "M", 10, false);
+    let id = "15551234567@s.whatsapp.net";
+    message.mentions.push(crate::model::MentionRef {
+        user: "15551234567".into(),
+        id: id.into(),
+        name: Some("Message Name".into()),
+    });
+    let mut contacts = std::collections::HashMap::new();
+    assert_eq!(mention_labels(&message, &contacts)[0].label, "Message Name");
+    contacts.insert(
+        id.into(),
+        crate::model::Contact {
+            id: id.into(),
+            full_name: None,
+            push_name: Some("WhatsApp Name".into()),
+        },
+    );
+    assert_eq!(
+        mention_labels(&message, &contacts)[0].label,
+        "WhatsApp Name"
+    );
+    contacts.get_mut(id).unwrap().full_name = Some("Saved Name".into());
+    assert_eq!(mention_labels(&message, &contacts)[0].label, "Saved Name");
+    contacts.clear();
+    message.mentions[0].name = None;
+    assert_eq!(
+        mention_labels(&message, &contacts)[0].label,
+        crate::util::phone("15551234567")
+    );
+}
+
+#[test]
+fn notifications_prefer_current_names_and_resolve_mentions_in_plain_text() {
+    let mut message = crate::archive::tests::message("group@g.us", "M", 10, false);
+    message.content = crate::model::Content::text("Hi @15551234567");
+    message.mentions.push(crate::model::MentionRef {
+        user: "15551234567".into(),
+        id: "15551234567@s.whatsapp.net".into(),
+        name: Some("Mention Name".into()),
+    });
+    let mut contacts = std::collections::HashMap::from([(
+        message.sender.clone(),
+        crate::model::Contact {
+            id: message.sender.clone(),
+            full_name: None,
+            push_name: Some("WhatsApp Sender".into()),
+        },
+    )]);
+    let mut group = crate::model::Chat::new(message.chat.clone(), "Synthetic Group".into());
+    group.kind = crate::model::ChatKind::Group;
+    assert_eq!(
+        accounts::notice_text(Some(&group), &message, true, &contacts),
+        (
+            "Synthetic Group".into(),
+            "~WhatsApp Sender: Hi @Mention Name".into()
+        )
+    );
+    contacts.get_mut(&message.sender).unwrap().full_name = Some("Saved Sender".into());
+    assert_eq!(
+        accounts::notice_text(Some(&group), &message, true, &contacts).1,
+        "Saved Sender: Hi @Mention Name"
+    );
+    assert_eq!(
+        accounts::notice_text(Some(&group), &message, false, &contacts).1,
+        "New message"
+    );
+}
+
+#[test]
 fn copied_transcript_uses_the_name_shown_for_mentions() {
     let mut message = crate::archive::tests::message("group@g.us", "M", 10, false);
     message.content = crate::model::Content::text("hi @15581, not a@15581.com");

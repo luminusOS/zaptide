@@ -22,6 +22,7 @@ without a browser engine. Messages stay in a local, encrypted archive.
 ## Features
 
 - Text, voice notes, polls, stickers and attachments.
+- Contact names take priority over phone numbers in messages, sidebar previews and notifications: saved name first, then WhatsApp name, then phone number. Mentions in message bubbles use bold text and the theme's accent color.
 - Received Lottie stickers can play when their animation uses the supported Lottie subset, including positions animated on separate axes; animations with unsupported features show a placeholder.
 - Voice and video calls with one contact, with a call history.
 - Multiple accounts with separate history and settings.

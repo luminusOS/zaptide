@@ -1400,10 +1400,20 @@ impl Worker {
         }
     }
 
-    /// Resolves phone numbers in chat-row previews.
     fn polish_chat(&self, chat: &mut Chat) {
+        if !chat.is_group()
+            && chat.kind != ChatKind::Broadcast
+            && (self.contact_name(&chat.id).is_some() || chat.id == self.me())
+        {
+            chat.name = self.chat_name(&chat.id, None);
+        }
         if let Some(last) = chat.last.as_mut() {
-            last.summary = self.pn_tokens(&last.summary);
+            if !last.from_me
+                && let Some(name) = self.contact_name(&last.sender)
+            {
+                last.sender_name = Some(name);
+            }
+            last.summary = self.preview_mentions(&last.summary);
         }
     }
 
@@ -1502,9 +1512,9 @@ impl Worker {
     /// Refreshes stored quote ids and names with current mappings.
     fn polish(&self, message: &mut Message) {
         self.polish_poll(message);
-        // Stored names are the sender's push name; a saved contact wins.
+        // Archived messages may predate the contact's current name.
         if !message.from_me
-            && let Some(name) = self.saved_name(&message.sender)
+            && let Some(name) = self.contact_name(&message.sender)
         {
             message.sender_name = Some(name);
         }
@@ -1514,7 +1524,7 @@ impl Worker {
                 quoted.sender_name = self.name_for(&sender);
                 quoted.sender = sender;
             } else if quoted.sender_name.as_deref() != Some("You")
-                && let Some(name) = self.saved_name(&quoted.sender)
+                && let Some(name) = self.contact_name(&quoted.sender)
             {
                 quoted.sender_name = Some(name);
             }
@@ -1524,6 +1534,9 @@ impl Worker {
             }
             if quoted.mentions.is_empty() {
                 quoted.mentions = self.mention_tokens(&quoted.summary);
+            }
+            for mention in &mut quoted.mentions {
+                mention.name = self.whatsapp_name(mention);
             }
         }
         for mention in &mut message.mentions {

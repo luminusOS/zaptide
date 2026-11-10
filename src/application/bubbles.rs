@@ -170,7 +170,7 @@ pub(super) fn message_row<S>(
     let sender: std::borrow::Cow<'_, str> = if message.from_me {
         "You".into()
     } else {
-        sender_label(message.sender_name.as_deref(), &message.sender).into()
+        contact_sender_label(message.sender_name.as_deref(), &message.sender, contacts).into()
     };
     let mut unread_divider = false;
     let separator = prefix
@@ -196,8 +196,15 @@ pub(super) fn message_row<S>(
         .map(|quoted| {
             format!(
                 "{}: {}",
-                sender_label(quoted.sender_name.as_deref(), &quoted.sender),
-                quoted.summary
+                if quoted.sender_name.as_deref() == Some("You") {
+                    "You".into()
+                } else {
+                    contact_sender_label(quoted.sender_name.as_deref(), &quoted.sender, contacts)
+                },
+                crate::safety::display_mentions(
+                    &quoted.summary,
+                    &mention_ref_labels(&quoted.mentions, contacts)
+                )
             )
         })
         .unwrap_or_default();
