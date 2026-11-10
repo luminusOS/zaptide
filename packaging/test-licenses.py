@@ -5,13 +5,17 @@ from pathlib import Path
 import subprocess
 import tarfile
 import tempfile
+import tomllib
 import unittest
+import xml.etree.ElementTree as ET
 
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 NOTICES = (
     "LICENSE",
+    "LICENSE-MIT",
+    "NOTICE",
     "vendor/absolute-url/LICENSE-APACHE",
     "vendor/absolute-url/LICENSE-MIT",
     "vendor/idna-1.1.0/LICENSE-APACHE",
@@ -21,6 +25,13 @@ NOTICES = (
 
 
 class LicensePackaging(unittest.TestCase):
+    def test_project_and_metadata_licenses(self):
+        package = tomllib.loads((ROOT / "Cargo.toml").read_text())["package"]
+        self.assertEqual(package["license"], "GPL-3.0-or-later")
+        metadata = ET.parse(ROOT / "packaging/flatpak/dev.luminusos.ZapTide.metainfo.xml").getroot()
+        self.assertEqual(metadata.findtext("project_license"), package["license"])
+        self.assertEqual(metadata.findtext("metadata_license"), "CC0-1.0")
+
     def assert_notices(self, destination):
         self.assertEqual(
             {str(p.relative_to(destination)) for p in destination.rglob('*') if p.is_file()},

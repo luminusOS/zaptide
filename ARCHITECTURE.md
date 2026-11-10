@@ -1,22 +1,22 @@
 # ZapTide architecture
 
-How the code is laid out and how the pieces talk to each other. The rules for contributors and agents (privacy, boundaries,
-definition of done) are in [AGENTS.md](AGENTS.md); packaging and releases are in
-[PACKAGING.md](PACKAGING.md). Day-to-day commands are in the [justfile](justfile).
+ZapTide uses Rust, GTK4, libadwaita and Relm4. The WhatsApp protocol comes from
+[whatsapp-rust](https://github.com/oxidezap/whatsapp-rust).
+[AGENTS.md](AGENTS.md) sets agent policy;
+[architecture contracts](docs/architecture-contracts.md) record the invariants
+to preserve when changing a subsystem. Build and distribution details belong
+in [PACKAGING.md](PACKAGING.md).
 
-## Overview
+## Threads and ownership
 
-ZapTide is a GTK 4 / libadwaita WhatsApp client written in Rust. The protocol comes from
-[whatsapp-rust](https://github.com/oxidezap/whatsapp-rust); the interface is built with Relm4.
-
-The interface and the protocol run on separate threads and only exchange messages:
+The interface and protocol run on separate threads:
 
 ```mermaid
 flowchart LR
     subgraph gtk["GTK thread"]
         app["application.rs<br/>(Relm4)"]
     end
-    subgraph tokio["tokio thread"]
+    subgraph tokio["Tokio thread"]
         worker["backend/worker.rs"]
         archive[("archive.rs<br/>SQLCipher")]
     end
@@ -26,98 +26,52 @@ flowchart LR
     worker --> archive
 ```
 
-Several accounts can run at once. The window always shows the active account; the others are kept
-in `application/accounts.rs` and updated from their own backend.
+Widgets send `Input`s to Relm4's `update`. The worker owns the connection,
+archive, downloads and profile pictures; each emitted event wakes the window
+through `Waker`. The window shows one account while `application/accounts.rs`
+keeps inactive accounts updated through their own backends.
+
+The worker converts protobufs into model types in `classify()` and
+`parse_conversation()`. Views never handle protobufs. Chat IDs are canonical
+strings: known privacy IDs (`@lid`) resolve to phone-number IDs.
 
 ## Layout
 
-| Path | What lives there |
+| Path | Responsibility |
 | --- | --- |
-| `src/application.rs`, `src/application/` | The Relm4 root component and its pieces: sidebar, transcript, composer, dialogs, account switcher, profile dialog. |
-| `src/application/{icons,motion,bubbles,actions,helpers}.rs` | Pieces split out of `application.rs`: drawn and installed icons, scroll and fade animations, message bubble widgets, window actions, small pure helpers. |
-| `src/backend.rs`, `src/backend/` | The `Command` and `Event` types and the worker that owns the connection. |
-| `src/backend/worker/` | Worker operation modules, including history ingestion, bounded maintenance, downloads, outbound sends and identity handling. The parent retains shared state, batch invariants and orchestration. |
-| `src/application/{attachment_helpers,selection,themes}.rs` | Attachment presentation, selection actions and theme application extracted from the root component. |
-| `src/application/dispatch.rs` | Typed sidebar-filter selection and focused input handlers; the root retains its update entry point. |
-| `src/native_media_widgets/viewer/` | Viewer setup, navigation and media-specific presentation; the parent owns viewer state and lifecycle. |
-| `src/shared_resource.rs` | Separate resource counters with RAII permits and shared poisoned-mutex recovery. |
-| `src/archive.rs`, `src/archive/` | The encrypted SQLite store of chats, messages and contacts. |
-| `src/model/` | The app's own types. Views never see a protobuf. `model/call.rs` holds the call state machine and event text. |
-| `src/calls/`, `src/backend/worker/calls.rs`, `src/application/calls.rs` | Calls: GStreamer microphone, speaker, camera and H.264 pipelines (`calls/camera_portal.rs` opens the camera through the camera portal inside a sandbox); the worker that drives whatsapp-rust's VoIP runtime and files call events as chat messages; the call window and Calls tab. `calls/ringtone.rs` plays the ring (sound theme, or a made tone) and the call's notification carries its buttons through `native_notifications.rs`. |
-| `src/native_*.rs` | Toolkit-facing helpers: notifications, tray, portals, media widgets, preferences, theme. |
-| `src/portal.rs` | The tokio runtime ashpd portal calls run on, shared because ashpd keeps one session bus connection that dies with the runtime that opened it. |
-| `src/account.rs`, `src/paths.rs`, `src/settings.rs` | Account registry, per-account folders, saved settings. |
-| `data/` | Everything that is not code: `style.css`, `theme-defaults.css`, the desktop file, icons. |
-| `assets/themes/` | Bundled colour themes. |
-| `packaging/` | Flatpak and AppImage build files. |
-| `po/` | Translations. |
-| `tests/` | Integration tests. |
+| `src/application.rs`, `src/application/` | Relm4 root, sidebar, transcript, composer, dialogs and accounts. `dispatch.rs` handles focused input; the root keeps the update entry point. |
+| `src/backend.rs`, `src/backend/worker.rs` | Commands, events, shared worker state, batch invariants and orchestration. |
+| `src/backend/worker/` | History, identity, downloads, outbound sends, calls and maintenance operations. |
+| `src/archive.rs`, `src/archive/` | Encrypted SQLite archive, contacts, privacy-ID mappings, polls and receipts. |
+| `src/model/` | Application types; `call.rs` contains the call state machine. |
+| `src/native_media_widgets/`, `src/native_transcript.rs` | Message/media widgets and cross-message selection and copying. Viewer modules live in `native_media_widgets/viewer/`. |
+| `src/calls/`, `src/voice.rs`, `src/audio.rs`, `src/services/media.rs` | Call devices, ringing, voice-note codec, waveform decoding and playback. |
+| `src/native_*.rs` | GTK-facing integrations, including notifications, tray, portals, preferences and themes. |
+| `src/portal.rs` | Shared Tokio runtime for ashpd calls; its session bus connection lives as long as the runtime. |
+| `src/account.rs`, `src/paths.rs`, `src/settings.rs` | Account registry, data paths and saved settings. |
+| `src/shared_resource.rs` | Independent resource counters and RAII permits with poisoned-mutex recovery. |
+| `data/`, `assets/`, `po/` | CSS, desktop integration, icons, bundled themes/sounds and translations. |
+| `packaging/`, `tests/` | Distribution build files and integration tests. |
 
-## Presence
+## Themes and translations
 
-WhatsApp holds the phone's notifications while a linked device is online, so the window decides when
-ZapTide is online (`src/application/presence.rs`) and sends `Command::SetOnline`; the worker announces it
-(`src/backend/worker/presence.rs`). The bot is built with `PresencePolicy::Manual`. Reverting to Automatic
-announces "available" on every connect and silently breaks phone notifications.
+`apply_theme` embeds `data/style.css` and `data/theme-defaults.css`.
+`src/native_theme.rs` maps a palette to GTK CSS; only custom palettes and zoom
+need runtime-generated values. Local JSON themes are scanned off the UI
+thread, cached in settings and reloaded by filesystem notifications. Bundled
+defaults share Spotifast palettes. `reload-themes` uses the single-instance
+channel without opening a window.
 
-## Download cleanup
-
-Startup connects before scanning stale download staging files and re-deriving archived messages.
-Re-derivation proceeds in 256-row steps, interleaving incoming events. Archive batches delay events
-until commit and restore protected in-memory state on rollback; moving operations between modules
-must preserve these transaction boundaries.
-
-With "Delete old downloads" on, the window sends each account's backend the retention period
-(`Command::SetMediaRetention`). `backend/worker/retention.rs` then runs `media_retention::sweep` about 30 seconds
-after the setting arrives and every six hours, on a blocking thread, and nothing is scheduled while it is off.
-The sweep removes only files that an archived message points to (`Archive::expirable_media`), directly inside
-the account's media cache folder, older than the period by modification time, and not held by a viewer or a
-playing clip (`media_retention::hold`). The worker then clears those messages' `media.path`, so they offer the
-download again. Stickers, messages without the keys to fetch the file again, and pending or failed sends are never listed.
-
-Downloads stream into same-directory staging files created without clobbering existing files.
-Staging names use fallible OS entropy; failure is a local download error, not a fallback name.
-The reupload helper permits one request and one retry fetch for eligible typed HTTP errors;
-it does not introduce download caps or retry local staging failures.
-
-## Conversation reset
-
-`application::OpenChatState` owns conversation-scoped state. Its reset helpers preserve caller-specific
-cleanup stages and callback ordering. Leaving an account retains its starred messages; a complete chat
-reset clears them. Request tokens and asynchronous callbacks must not survive a reset as current work.
-
-## Worker completions
-
-Account-bound asynchronous results use `Command::Completed(Completion { generation, done })`.
-The central session-generation guard discards stale results before operation dispatch; avatar,
-request, attempt, call and privacy generations retain their independent checks. A completed media
-sweep releases its running slot before the session guard, even after an account change.
-
-Discard consumes successful downloaded staging paths, never their destination files, and replies
-`false` once to waiting outbound-batch and group-recipient callbacks. Failed enqueue and owned
-deferred-download drop use that cleanup path. Successful enqueue followed by receiver shutdown is
-not newly covered; cloneable completion payloads deliberately have no cleanup `Drop`.
-
-## Styling
-
-Static CSS is in `data/style.css` and `data/theme-defaults.css` and is embedded at build time by
-`apply_theme` in `src/application.rs`. Only the palette of a custom theme and the zoom are generated
-at run time. Add new rules to `data/style.css` rather than to the Rust code.
-
-## Translations
-
-UI strings go through `gettext("...")` from `src/i18n.rs`. `just pot` refreshes `po/zaptide.pot` and
-merges it into each language listed in `po/LINGUAS`; `just run` compiles the catalogues into
-`target/locale` first. The Flatpak manifests install the compiled catalogues under `/app/share/locale`.
-Brazilian Portuguese is the first translation. Strings built with `format!` and the AppImage build are
-not translated yet.
+UI strings use gettext through `src/i18n.rs`. `just pot` refreshes
+`po/zaptide.pot` and merges languages in `po/LINGUAS`; `just run` compiles them
+into `target/locale`. Flatpak installs catalogues under `/app/share/locale`.
+Brazilian Portuguese is the first translation. Strings built with `format!`
+and the AppImage build are not translated yet.
 
 ## Building
 
-```sh
-just check   # fmt, clippy, tests
-just run
-```
-
-Build inside a toolbox that has the GTK 4 and libadwaita development files; see
-[AGENTS.md](AGENTS.md) for the platform dependencies.
+Use the pinned Rust toolchain with the native dependencies in
+[PACKAGING.md](PACKAGING.md#build-dependencies). `just check` runs fmt, Clippy
+and tests; rustdoc is a separate check. See
+[CONTRIBUTING.md](CONTRIBUTING.md#verify-your-change) for the full validation
+procedure. `just run` compiles translations and launches the app.

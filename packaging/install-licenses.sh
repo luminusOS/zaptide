@@ -3,6 +3,8 @@ set -eu
 
 dest=${1:?license destination required}
 install -Dm644 LICENSE "$dest/LICENSE"
+install -Dm644 LICENSE-MIT "$dest/LICENSE-MIT"
+install -Dm644 NOTICE "$dest/NOTICE"
 for path in \
 	vendor/absolute-url/LICENSE-APACHE \
 	vendor/absolute-url/LICENSE-MIT \

@@ -6,7 +6,7 @@
 
 A native WhatsApp companion for Linux, built with Rust, GTK4 and libadwaita.
 
-[Download](https://github.com/luminusOS/zaptide/releases/latest) · [Features](#features) · [Install](#install) · [Report a bug](https://github.com/luminusOS/zaptide/issues)
+[Download](https://github.com/luminusOS/zaptide/releases/latest) · [User guide](docs/user-guide.md) · [Report a bug](https://github.com/luminusOS/zaptide/issues)
 
 </div>
 
@@ -21,255 +21,55 @@ without a browser engine. Messages stay in a local, encrypted archive.
 
 ## Features
 
-- Text, voice notes, polls, stickers and attachments.
-- Contact names take priority over phone numbers in messages, sidebar previews and notifications: saved name first, then WhatsApp name, then phone number. Mentions in message bubbles use bold text and the theme's accent color.
-- Received Lottie stickers can play when their animation uses the supported Lottie subset, including positions animated on separate axes; animations with unsupported features show a placeholder.
-- Voice and video calls with one contact, with a call history.
+- Messages, voice notes, polls, stickers and attachments.
 - Multiple accounts with separate history and settings.
 - Chat search, starred messages and link previews.
-- Desktop notifications with an optional sound, and synced read status.
-- Phone notifications while you do not use ZapTide: ZapTide goes offline soon
-  after you leave it or stop using it (Preferences, Notifications).
+- Desktop notifications, synced read status and call history.
 - Light, dark and custom themes.
-- Optional cleanup of old downloads (Preferences, Storage): attachments saved on
-  this computer are deleted after 30 days to a year, as you choose. Messages stay.
+
+Voice and video calls are experimental. Calls against a phone have not been
+verified; see [call limitations](docs/user-guide.md#calls) before relying on them.
+Group calls, status posts, communities and group administration are not supported.
 
 ## Install
 
-[Download a Flatpak or AppImage](https://github.com/luminusOS/zaptide/releases/latest)
-for x86_64 or aarch64 (ARM64). Native distribution packages are not available yet.
+Download a [Flatpak or AppImage](https://github.com/luminusOS/zaptide/releases/latest)
+for x86_64 or aarch64 (ARM64). Native distribution packages are not available.
 
-### Flatpak
-
-Configure [Flathub](https://flathub.org/setup), then install the bundle (replace the filename):
+For Flatpak, configure [Flathub](https://flathub.org/setup), then install the
+downloaded bundle (replace the filename):
 
 ```sh
 flatpak install --user ./zaptide-vX.Y.Z-x86_64.flatpak
 flatpak run dev.luminusos.ZapTide
 ```
 
-For a newer bundle, use `--reinstall`:
-
-```sh
-flatpak install --user --reinstall ./zaptide-vX.Y.Z-x86_64.flatpak
-```
-
-For a system installation, replace `--user` with `--system`.
-
-### AppImage
-
-Save the download as `zaptide.AppImage` and run it:
+For AppImage, save the download as `zaptide.AppImage`:
 
 ```sh
 chmod +x ./zaptide.AppImage
 ./zaptide.AppImage
 ```
 
-Update in place with [AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate),
-which downloads only changed blocks. Replace pre-0.7.2 AppImages manually once;
-they lack update information.
-
-After updating, quit from the menu or with Ctrl+Q and reopen. Closing the window
-(Ctrl+W) can leave the old version running.
-
-## First steps
-
-Scan the QR code from WhatsApp's **Linked devices**, or link with your phone number.
-History may take a few minutes. The avatar adds or switches accounts;
-**Remove Account…** unlinks one and deletes only its local data.
-
-Enter sends; Shift+Enter adds a line (configurable). Emoji selection returns focus
-to the input. Escape dismisses selection, edits or replies before closing the chat.
-**Close Chat** also returns home; both keep drafts and mark nothing as read.
-
-Notifications can carry a short sound, at most once per pause (30 seconds by
-default, from none to 2 minutes) across all chats and accounts. Both settings are
-under **Preferences → Notifications**. Flatpak offers the sound through version 2 of
-the notification portal; other builds, including AppImage, offer it to the desktop
-notification service when the service supports sounds. The desktop decides whether
-to play it, so Do Not Disturb and its own sound settings still apply. Where neither
-takes a sound, or with the sound turned off, notifications are sent as before and the
-desktop may play its own sound. The sound is
-[Message Notification 4](assets/sounds/README.md) by AnthonyRox (CC0).
-
-GIFs play silently while their rows are shown. Leaving the conversation or hiding
-the window releases their playback resources; showing them again restarts playback.
-
-## Message formatting (development)
-
-This development branch adds WhatsApp formatting to message bubbles and the
-composer: bold, italic, strikethrough, monospace, inline code, bulleted lists,
-numbered lists and quotes.
-
-````text
-*bold* _italic_ ~strikethrough~
-`inline code`
-```monospace```
-- bulleted item
-1. numbered item
-> quoted text
-````
-
-The composer keeps the original delimiters visible and sends the original text.
-Formatting does not require a separate preview. Wrapped list items retain their
-indentation, and links remain selectable and clickable. Message bubbles size to
-their content up to the conversation's width limit, keeping short sent and received
-messages on one line when space permits; received messages appear on
-the left and sent messages on the right.
-Wrapped text bubbles fit their longest displayed line instead of keeping unused
-space up to the width limit. Sender names, quotes, timestamps and attachments can
-still require a wider bubble.
-
-This implementation is not release-ready: large, densely formatted messages have
-not met the required work and whole-process memory bounds. The private GTK and
-Pango builds used for investigation are not application dependencies or supported
-runtime requirements.
-
-## Calls
-
-> [!WARNING]
-> Calls are new and have only been tested without a real call: no voice or video
-> call has been placed against a phone yet, so audio quality and video
-> interoperability are unverified. The ring and the notification buttons have
-> not been heard or clicked on a desktop either. Expect rough edges.
-
-Open a direct chat and use the phone or camera button in its header to call.
-Incoming calls appear in the main window, ring and send a desktop notification with
-Answer and Decline buttons, whichever account they belong to. Decline, answer,
-mute, and turn the camera on or off from the call screen as well: the choices are
-pill buttons, and Mute and the camera are round switches that show a crossed-out
-icon while the microphone or camera is off. The call screen rearranges itself below
-about 400 px wide, and the incoming call notification stays on screen until you
-use it. You can browse chats during a call and use **Return to call** in the sidebar
-to return to its controls. Calls are listed under the Calls tab beside Chats and Archived, and each one also
-appears in its chat as an event such as "Missed voice call". Calls placed from
-your phone show up in the history after syncing.
-
-A call rings with the desktop's sound theme (`phone-incoming-call`, and
-`phone-outgoing-calling` while you place one), or with a tone of its own when
-that sound is not installed. The incoming ring stops when you answer or decline,
-and it stays quiet when Notifications are turned off in
-Preferences or the desktop's do-not-disturb is on; the tone for a call you place
-is not affected. Inside a sandbox the do-not-disturb setting may not be
-readable, in which case the call rings.
-
-When a second person calls during a call, the call screen and a notification offer
-**Decline** and **End and answer**. Declining tells the caller the call
-was declined. If you do nothing, it rings out and shows up as a missed call. A
-second call does not interrupt the first: ZapTide holds one call at a time, with
-no hold, and WhatsApp's library cannot send a "busy" reply, so only one waiting
-call is announced and a third just rings.
-
-Calls connect to WhatsApp's relay servers over UDP and use the default
-microphone and speaker. Video needs a camera, an H.264 encoder (the GStreamer
-`openh264` or `x264` plugin) and a decoder (`libav` or `openh264`). Without them
-a voice call still works and a video call tells you what is missing. When a video
-call goes on without a camera, the window says "No camera available" and the camera
-button stays off. Outside a
-sandbox the camera is opened directly; when that finds none, ZapTide asks the
-camera portal, which also reaches cameras that only PipeWire exposes.
-
-- **Flatpak:** the camera is opened through the desktop's camera portal, which
-  asks for permission the first time and can be changed in the desktop's
-  settings. If you refuse, or do not answer within a minute, a video call you
-  place stops with a message saying so; one you answer carries on without your
-  picture. The sandbox grants no direct access to camera devices. The portal
-  route has been run against a real session portal and camera outside a
-  sandbox, but not yet inside a Flatpak. The GNOME runtime has no H.264 encoder
-  of its own: x264 comes from its `codecs-extra` extension, which Flatpak
-  installs with the app when a remote offers it. Without that extension a
-  video call reports a missing H.264 component (not tested).
-- **AppImage:** the bundle carries an H.264 decoder, but whether it carries an
-  encoder and the camera plugins has not been checked; voice calls are the
-  supported path.
-- Only one call is live at a time (see above), group calls do not ring, and a
-  call ends when the app quits.
-
-## Your data
+Open WhatsApp on your phone and scan the QR code from **Linked devices**, or
+link with your phone number. History may take a few minutes to arrive.
 
 > [!IMPORTANT]
-> Back up the archive with its OS keyring credential: `archive.db` alone cannot
-> be decrypted. Unlock a locked keyring; restore a missing credential instead of
-> replacing the key or deleting the archive. If the credential is gone for good,
-> remove the account and link it again: that deletes the unreadable files, and
-> only the history the phone sends while linking comes back.
->
-> Where the credential lives depends on how ZapTide runs. Outside Flatpak it is an
-> item in your desktop keyring (GNOME Keyring, KWallet or another Secret Service).
-> In the Flatpak it is in ZapTide's own keyring file,
-> `~/.var/app/dev.luminusos.ZapTide/data/keyrings/default.keyring`, and that file
-> is encrypted with a per-app secret the Secret portal keeps in your desktop
-> keyring. Back up both: the file without the desktop keyring cannot be opened.
-> On a desktop without a Secret portal the Flatpak keeps the credential in the
-> desktop keyring directly, as outside Flatpak.
+> Backups need the archive and its keyring credential. `archive.db` alone cannot
+> be decrypted. Downloads and settings are not encrypted. Read
+> [data and backups](docs/user-guide.md#data-and-backups) before moving or deleting files.
+> Disappearing messages remain in the local archive after they expire on your phone.
 
-The device credentials in `session.db` are encrypted with a key derived from the
-same keyring credential, so losing it also means linking the computer again. An
-older ZapTide build cannot open the encrypted `session.db`; going back to one
-requires linking again. Downloads, saved stickers and settings are unencrypted; use
-full-disk encryption for them and backups. Data and keyring entries are separate
-from ZapFast, FastsApp and FastWhatsApp. Link ZapTide separately.
+## Documentation
 
-Downloaded attachments live in the cache folder. When you turn on "Delete old
-downloads", ZapTide removes the ones saved longer ago than the period you pick, a
-little after it starts and every few hours while it runs. Only those files go, never
-messages, stickers or anything outside that folder. A removed file downloads again
-when you open it, if WhatsApp still has it; files WhatsApp no longer keeps are lost.
-
-Photos and playable videos open in the main panel, keeping the sidebar available in
-wide windows. Use Back or Escape to return to the conversation. Photos support zoom
-and album navigation; videos include playback, volume and fullscreen controls.
-Leaving the viewer stops playback and releases its files for download cleanup.
-Open With Another App remains available in the viewer.
-Long captions stay compact below the media; View Caption opens the complete,
-selectable text in a scrollable popover without shrinking the photo or video.
-
-Audio, PDF, EPUB, RTF, office documents (OpenDocument and Microsoft Office), plain
-text, Markdown, CSV and common archives open in their default app as before. Any other
-received document asks before it opens, and so does a file whose content does not match
-its name: scripts, launchers, installers, packages, web pages, SVG, PostScript,
-playlists and types the system cannot identify. Inside Flatpak the desktop then lets you
-pick the app. Very long sender file names are shortened in the download folder.
-Right-click a downloaded photo in the chat and choose Copy Image to put it on the clipboard.
-
-Previews contact websites directly while composing, without proxies or redirects.
-Private/reserved destinations are blocked. Disable previews per account or remove one.
-
-Stored chats remain available with a notice if phone settings cannot be read.
-Chats locked on your phone stay hidden in ZapTide, including their calls and starred
-messages. Manage chat locks on your phone; ZapTide does not offer a lock code or
-an option to open locked chats.
-
-## Limitations
-
-- Group calls, status posts, communities and group administration are not supported.
-  Newsletter channels are read-only.
-- Messages with disappearing timers remain in the local archive after they
-  expire on your phone.
-- Keyboard shortcuts and screen-reader labels are available; accessibility is incomplete.
-
-## Build from source
-
-Install Rust through rustup and the dependencies in [PACKAGING.md](PACKAGING.md).
-The toolchain is pinned. GTK 4.14+ and libadwaita 1.10+ are required; CI uses Fedora 45.
-Playing voice notes at 1.5x or 2x needs the GStreamer `scaletempo` plugin from gst-plugins-good.
-
-```sh
-git clone https://github.com/luminusOS/zaptide.git
-cd zaptide
-cargo build --locked
-```
-
-Run `cargo run --locked` from the checkout to use the pinned toolchain. Quit
-any running ZapTide first. Native runs use the desktop Secret Service and
-separate data directories from Flatpak, so they may need to be linked again.
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for checks and running with translations,
-and [ARCHITECTURE.md](ARCHITECTURE.md) for the code layout.
-Report vulnerabilities privately through [SECURITY.md](SECURITY.md).
-
-## About the project
+Read the [user guide](docs/user-guide.md) for updates, preferences, media and
+known limitations. For source builds, dependencies and development checks, see
+[CONTRIBUTING.md](CONTRIBUTING.md) and [PACKAGING.md](PACKAGING.md).
+[ARCHITECTURE.md](ARCHITECTURE.md) describes the code; [AGENTS.md](AGENTS.md)
+sets the rules for coding agents. Report vulnerabilities through
+[SECURITY.md](SECURITY.md).
 
 ZapTide is a [LuminusOS](https://luminusos.org) hard fork of
-[ZapFast](https://github.com/crmne/zapfast), with a Relm4 interface and multiple accounts.
-Original code © Carmine Paolino; see [LICENSE](LICENSE).
+[ZapFast](https://github.com/crmne/zapfast), distributed under
+[GPL-3.0-or-later](LICENSE). Original code © Carmine Paolino remains covered
+by its [MIT notice](LICENSE-MIT).
