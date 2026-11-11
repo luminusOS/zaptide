@@ -886,8 +886,8 @@ impl Backend {
         })
     }
 
-    /// Creates a disconnected backend and event sender for tests.
-    #[cfg(test)]
+    /// Creates a disconnected backend and event sender for tests and demos.
+    #[cfg(any(test, feature = "demo"))]
     pub fn detached() -> (Self, std::sync::mpsc::Sender<Event>) {
         let (command_tx, _command_rx) = mpsc::unbounded_channel();
         let (event_tx, event_rx) = std::sync::mpsc::channel();

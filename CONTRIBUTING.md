@@ -110,6 +110,20 @@ For UI changes, check keyboard focus, narrow windows, light/dark appearance, and
 accessibility where relevant. Report exactly what was tested and what was not.
 Do not equate compilation with visual verification. Use synthetic screenshots.
 
+The `demo` feature produces them: it replaces the backend with invented
+chats and saves two PNGs of the window, so no archive is opened and no chat
+is real. It is never part of a release build. Run it under a display, for
+example with `xvfb-run`:
+
+```sh
+ZAPTIDE_DEMO_DIR=/tmp/shots ZAPTIDE_DEMO_NAME=dark \
+  GDK_BACKEND=x11 GSK_RENDERER=cairo xvfb-run -a \
+  cargo run --features demo
+```
+
+Set `theme` (and `custom_theme`) in `settings.json` under a throwaway
+`XDG_CONFIG_HOME` to capture the light and custom palettes.
+
 ## Commits and pull requests
 
 - Use English Conventional Commit subjects, for example
