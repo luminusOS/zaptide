@@ -32,6 +32,10 @@ auto_link_exclude_list = [
   "libutil.so*",
 ]
 
+[features]
+# Offline demo data and window captures for the website; never part of a release.
+demo = []
+
 [lib]
 name = "zaptide"
 path = "src/lib.rs"
