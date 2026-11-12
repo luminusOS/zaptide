@@ -1,0 +1,81 @@
+name: Release AppImage
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  # Arch container with quick-sharun: the bundle carries glibc, GTK, GStreamer and
+  # the glycin loaders, so it runs on any distro. See packaging/appimage/build.sh.
+  appimage-x86_64:
+    name: Build AppImage (x86_64)
+    runs-on: ubuntu-24.04
+    container: docker.io/library/archlinux:latest@sha256:ece6c971fec3c532fd508bce299a446deaf469feecbfe7c353e995bc1a5e7bba
+    timeout-minutes: 90
+    steps:
+      - name: Git for checkout
+        run: |
+          pacman -Sy --noconfirm archlinux-keyring
+          pacman -Syu --noconfirm git
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Build AppImage
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: ./packaging/appimage/build.sh
+      - name: Check the AppImage starts
+        run: |
+          set -eu
+          export HOME=/tmp/home XDG_RUNTIME_DIR=/tmp/xdg
+          mkdir -p "$HOME" "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          # 124 means it was still running when the timeout hit.
+          status=0
+          timeout 20 xvfb-run -a dbus-run-session -- \
+            ./dist/zaptide-${{ github.ref_name }}-x86_64.AppImage --appimage-extract-and-run || status=$?
+          test "$status" -eq 124
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: appimage-x86_64
+          path: |
+            dist/*.AppImage
+            dist/*.AppImage.zsync
+          if-no-files-found: error
+
+  # Fedora container because Arch has no official ARM64 image and Arch Linux ARM lacks
+  # libadwaita 1.10. Same quick-sharun bundle as above. See packaging/appimage/build.sh.
+  appimage-aarch64:
+    name: Build AppImage (aarch64)
+    runs-on: ubuntu-24.04-arm
+    container: registry.fedoraproject.org/fedora:45@sha256:f5afe36c8ddb2aa5333597e900f53c5ed0267d9ebb27be765dc8ec2633aa1648
+    timeout-minutes: 90
+    steps:
+      - name: Git for checkout
+        run: dnf install -y git
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Build AppImage
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: ./packaging/appimage/build.sh
+      - name: Check the AppImage starts
+        run: |
+          set -eu
+          export HOME=/tmp/home XDG_RUNTIME_DIR=/tmp/xdg
+          mkdir -p "$HOME" "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          status=0
+          timeout 20 xvfb-run -a dbus-run-session -- \
+            ./dist/zaptide-${{ github.ref_name }}-aarch64.AppImage --appimage-extract-and-run || status=$?
+          test "$status" -eq 124
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: appimage-aarch64
+          path: |
+            dist/*.AppImage
+            dist/*.AppImage.zsync
+          if-no-files-found: error
