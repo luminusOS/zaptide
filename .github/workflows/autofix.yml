@@ -38,25 +38,35 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Verify repository checkout
+        run: |
+          echo "Workspace: $GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" rev-parse --show-toplevel
+
       - name: Update dependencies
+        working-directory: ${{ github.workspace }}
         run: cargo update -p async-executor
 
       - name: Format Rust code
+        working-directory: ${{ github.workspace }}
         run: cargo fmt --all
 
       - name: Apply Clippy fixes
+        working-directory: ${{ github.workspace }}
         run: cargo clippy --fix --allow-dirty --allow-staged --all-targets
 
       - name: Commit and push fixes
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          REPO="$GITHUB_WORKSPACE"
 
-          git add -A
+          git -C "$REPO" config user.name "github-actions[bot]"
+          git -C "$REPO" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          if ! git diff --cached --quiet; then
-            git commit -m "Apply automatic Rust fixes"
-            git push origin HEAD:main
+          git -C "$REPO" add -A
+
+          if ! git -C "$REPO" diff --cached --quiet; then
+            git -C "$REPO" commit -m "Apply automatic Rust fixes"
+            git -C "$REPO" push origin HEAD:main
           else
             echo "No automatic fixes were necessary."
           fi
