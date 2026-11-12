@@ -3,6 +3,7 @@ name: Release
 on:
   push:
     tags: ["v[0-9]*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -19,6 +20,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Match tag, manifest and lockfile
+        if: github.event_name == 'push'
         env:
           TAG: ${{ github.ref_name }}
         run: |
@@ -41,14 +43,9 @@ jobs:
           assert newest is not None and newest.get("version") == version, "Newest metainfo release does not match"
           PY
 
-  ci:
-    name: CI
-    needs: version
-    uses: ./.github/workflows/ci.yml
-
   build:
     name: Linux executable (x86_64)
-    needs: ci
+    needs: version
     runs-on: ubuntu-24.04
     # Use Fedora because this project needs a newer libadwaita than Ubuntu 24.04 provides.
     container:
