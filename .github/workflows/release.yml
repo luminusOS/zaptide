@@ -35,8 +35,6 @@ jobs:
           lock = tomllib.loads(Path("Cargo.lock").read_text())
           assert manifest["package"]["version"] == version, "Tag does not match Cargo.toml"
           assert any(p["name"] == "zaptide" and p["version"] == version for p in lock["package"]), "Cargo.lock does not match"
-          # `flatpak info` and software centres read the version from the
-          # newest <release> in the metainfo, not from the binary.
           import xml.etree.ElementTree as ET
           metainfo = ET.parse("packaging/flatpak/dev.luminusos.ZapTide.metainfo.xml").getroot()
           newest = metainfo.find("releases/release")
@@ -44,258 +42,32 @@ jobs:
           PY
 
   ci:
+    name: CI
     needs: version
     uses: ./.github/workflows/ci.yml
 
   build:
-    name: Linux archive (${{ matrix.arch }})
+    name: Linux executable (x86_64)
     needs: ci
-    runs-on: ${{ matrix.os }}
-    # Linux builds need libadwaita 1.10 (GNOME 51), which Ubuntu does not
-    # package yet.
-    container: ${{ matrix.container }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-24.04
-            container: registry.fedoraproject.org/fedora:45@sha256:f5afe36c8ddb2aa5333597e900f53c5ed0267d9ebb27be765dc8ec2633aa1648
-            target: x86_64-unknown-linux-gnu
-            arch: x86_64
-          # A native arm64 runner, so the GUI's system libraries need no
-          # cross-compilation sysroot.
-          - os: ubuntu-24.04-arm
-            container: registry.fedoraproject.org/fedora:45@sha256:f5afe36c8ddb2aa5333597e900f53c5ed0267d9ebb27be765dc8ec2633aa1648
-            target: aarch64-unknown-linux-gnu
-            arch: aarch64
+    runs-on: ubuntu-24.04
+    # Use Fedora because this project needs a newer libadwaita than Ubuntu 24.04 provides.
+    container:
+      image: registry.fedoraproject.org/fedora:45@sha256:f5afe36c8ddb2aa5333597e900f53c5ed0267d9ebb27be765dc8ec2633aa1648
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-        with:
-          targets: ${{ matrix.target }}
-      # The repository pins its toolchain; add the cross-target's standard
-      # library to the toolchain the pin actually resolves to.
-      - run: rustup target add ${{ matrix.target }}
+      - name: Add build target
+        run: rustup target add x86_64-unknown-linux-gnu
       - name: GUI build dependencies
-        run: dnf install -y --setopt=install_weak_deps=False gcc gcc-c++ git gtk4-devel libadwaita-devel gstreamer1-devel gstreamer1-plugins-base-devel cmake libseccomp-devel fontconfig-devel perl make tar zstd
-
-      - run: cargo build --locked --release --target ${{ matrix.target }}
-
-      - name: Package
-        shell: bash
-        run: |
-          name="zaptide-${GITHUB_REF_NAME}-${{ matrix.arch }}-linux-gnu"
-          mkdir -p "dist/$name"
-          cp "target/${{ matrix.target }}/release/zaptide" README.md LICENSE "dist/$name/"
-          # Desktop integration for package builds and hand-installs.
-          cp --parents data/dev.luminusos.ZapTide.desktop data/icons/zaptide.svg data/icons/zaptide-symbolic.svg data/icons/zaptide-unread-symbolic.svg "dist/$name/"
-          cp -r po "dist/$name/"
-          sh packaging/install-licenses.sh "dist/$name/licenses/zaptide"
-          cd dist
-          tar czf "$name.tar.gz" "$name"
-
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: linux-${{ matrix.arch }}-archive
-          path: dist/*.tar.gz
-          if-no-files-found: error
-
-  # The Linux build packaged as a Flatpak bundle: the same binary, in the
-  # sandbox packaging/flatpak describes, so nothing compiles twice. Flathub
-  # builds from source on its own machines, from the manifest beside it.
-  flatpak:
-    name: Flatpak bundle (${{ matrix.arch }})
-    needs: build
-    runs-on: ${{ matrix.os }}
-    permissions:
-      contents: read
-    container:
-      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08@sha256:c91a88269eee8fcdd73ecf43064232fbebe27411f926f63f38bdf70c51f2ceae
-      options: --privileged
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-24.04
-            arch: x86_64
-          - os: ubuntu-24.04-arm
-            arch: aarch64
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: linux-${{ matrix.arch }}-archive
-          path: dist
-      - name: Unpack the Linux build
-        run: |
-          tar xzf "dist/zaptide-${GITHUB_REF_NAME}-${{ matrix.arch }}-linux-gnu.tar.gz" -C packaging/flatpak
-          mv "packaging/flatpak/zaptide-${GITHUB_REF_NAME}-${{ matrix.arch }}-linux-gnu" packaging/flatpak/built
-      - id: flatpak-branch
-        name: Resolve Flatpak branch from release tag
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          branch="$(python3 packaging/flatpak/export_manifest.py branch --tag "$RELEASE_TAG")"
-          echo "branch=$branch" >> "$GITHUB_OUTPUT"
-      - uses: flatpak/flatpak-github-actions/flatpak-builder@79327416609af08178ad73b352877e51450790b3 # v6
-        with:
-          manifest-path: packaging/flatpak/dev.luminusos.ZapTide.bundle.yml
-          bundle: zaptide-${{ github.ref_name }}-${{ matrix.arch }}.flatpak
-          arch: ${{ matrix.arch }}
-          branch: ${{ steps.flatpak-branch.outputs.branch }}
-          cache: false
-          upload-artifact: false
-      - name: Verify Flatpak bundle
-        env:
-          ARCH: ${{ matrix.arch }}
-          BRANCH: ${{ steps.flatpak-branch.outputs.branch }}
-          BUNDLE: zaptide-${{ github.ref_name }}-${{ matrix.arch }}.flatpak
-        run: |
-          set -euo pipefail
-          repo="$RUNNER_TEMP/flatpak-check-${ARCH}.repo"
-          ostree init --repo="$repo" --mode=archive
-          flatpak build-import-bundle "$repo" "$BUNDLE"
-          ref="$(ostree refs --repo="$repo")"
-          expected_ref="app/dev.luminusos.ZapTide/${ARCH}/${BRANCH}"
-          test "$ref" = "$expected_ref"
-          commit="$(ostree rev-parse --repo="$repo" "$ref")"
-          ostree cat --repo="$repo" "$commit" metadata > "$RUNNER_TEMP/flatpak-metadata-${ARCH}"
-          python3 - "$RUNNER_TEMP/flatpak-metadata-${ARCH}" "$ARCH" "$commit" "$BRANCH" > "flatpak-export-report-${ARCH}.json" <<'PY'
-          import configparser
-          import json
-          import sys
-
-          metadata_path, arch, commit, branch = sys.argv[1:]
-          metadata = configparser.ConfigParser()
-          if not metadata.read(metadata_path) or "Application" not in metadata:
-              raise SystemExit("bundle metadata is missing its Application section")
-          app = metadata["Application"]
-          expected_runtime = f"org.gnome.Platform/{arch}/51"
-          if app.get("name") != "dev.luminusos.ZapTide":
-              raise SystemExit("bundle application id does not match")
-          if app.get("runtime") != expected_runtime:
-              raise SystemExit("bundle runtime or architecture does not match")
-          print(json.dumps({
-              "application": app["name"],
-              "architecture": arch,
-              "ref": f"app/{app['name']}/{arch}/{branch}",
-              "ostree_commit": commit,
-              "runtime": app["runtime"],
-          }, indent=2))
-          PY
-      - id: upload-bundle
+        run: dnf install -y --setopt=install_weak_deps=False gcc gcc-c++ git gtk4-devel libadwaita-devel gstreamer1-devel gstreamer1-plugins-base-devel cmake libseccomp-devel fontconfig-devel perl make
+      - name: Build executable
+        run: cargo build --locked --release --target x86_64-unknown-linux-gnu
+      - name: Upload the executable as the only artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: flatpak-${{ matrix.arch }}
-          path: "*.flatpak"
+          name: zaptide-linux-x86_64
+          path: target/x86_64-unknown-linux-gnu/release/zaptide
           if-no-files-found: error
-      - name: Record bundle artifact id and digest
-        env:
-          ARCH: ${{ matrix.arch }}
-          ARTIFACT_ID: ${{ steps.upload-bundle.outputs.artifact-id }}
-          BUNDLE: zaptide-${{ github.ref_name }}-${{ matrix.arch }}.flatpak
-        run: |
-          python3 packaging/flatpak/export_manifest.py record \
-            --arch "$ARCH" --artifact-id "$ARTIFACT_ID" \
-            --bundle "$BUNDLE" --output "flatpak-export-${ARCH}.json"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: flatpak-export-${{ matrix.arch }}
-          path: |
-            flatpak-export-${{ matrix.arch }}.json
-            flatpak-export-report-${{ matrix.arch }}.json
-          if-no-files-found: error
-
-  manifest:
-    name: Build release manifest
-    needs: flatpak
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: flatpak-x86_64
-          path: dist/bundles/x86_64
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: flatpak-aarch64
-          path: dist/bundles/aarch64
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: flatpak-export-x86_64
-          path: dist/metadata/x86_64
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: flatpak-export-aarch64
-          path: dist/metadata/aarch64
-      - name: Build contract manifest and export report
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-          SOURCE_REVISION: ${{ github.sha }}
-          SOURCE_RUN_ID: ${{ github.run_id }}
-          SOURCE_RUN_ATTEMPT: ${{ github.run_attempt }}
-        run: |
-          python3 -m venv /tmp/manifest-venv
-          /tmp/manifest-venv/bin/pip install jsonschema==4.26.0
-          /tmp/manifest-venv/bin/python packaging/flatpak/export_manifest.py manifest \
-            --tag "$RELEASE_TAG" --revision "$SOURCE_REVISION" \
-            --run-id "$SOURCE_RUN_ID" --run-attempt "$SOURCE_RUN_ATTEMPT" \
-            --metadata-dir dist/metadata --bundle-dir dist/bundles \
-            --report-dir dist/metadata --output flatpak-release-manifest.json \
-            --report-output flatpak-export-report.json
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: flatpak-release-manifest
-          path: |
-            flatpak-release-manifest.json
-            flatpak-export-report.json
-          if-no-files-found: error
-
-  appimage:
-    name: AppImage bundle
-    needs: ci
-    uses: ./.github/workflows/release-appimage.yml
-
-  publish:
-    name: GitHub release
-    needs: [build, flatpak, manifest, appimage]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          path: dist
-          merge-multiple: true
-      - name: Verify release assets
-        shell: bash
-        run: |
-          set -euo pipefail
-          for arch in x86_64 aarch64; do
-            test -s "dist/zaptide-${GITHUB_REF_NAME}-${arch}.flatpak"
-            test -s "dist/zaptide-${GITHUB_REF_NAME}-${arch}.AppImage"
-            test -s "dist/zaptide-${GITHUB_REF_NAME}-${arch}.AppImage.zsync"
-            test -s "dist/zaptide-${GITHUB_REF_NAME}-${arch}-linux-gnu.tar.gz"
-          done
-      - name: Checksums
-        working-directory: dist
-        run: sha256sum *.flatpak *.AppImage *.AppImage.zsync *.tar.gz > checksums.txt
-      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
-        with:
-          files: |
-            dist/*.flatpak
-            dist/*.AppImage
-            dist/*.AppImage.zsync
-            dist/*.tar.gz
-            dist/checksums.txt
-          fail_on_unmatched_files: true
-          generate_release_notes: true
-          prerelease: ${{ contains(github.ref_name, '-rc') }}
+          retention-days: 7

@@ -13,8 +13,6 @@ mod components;
 mod composer;
 mod contact_sharing;
 mod conversation;
-#[cfg(feature = "demo")]
-mod demo;
 mod dialogs;
 mod dispatch;
 mod document_safety;
@@ -91,6 +89,7 @@ fn dialog_action_callback(
             dialogs::DialogAction::InsertMentionId(id) => Input::InsertMentionId(id),
             dialogs::DialogAction::ForwardSelected(ids) => Input::ForwardSelected(ids),
             dialogs::DialogAction::SendSticker(path) => Input::SendSticker(path),
+            dialogs::DialogAction::RemoveSticker(path) => Input::RemoveSticker(path),
             dialogs::DialogAction::ShowStarred => Input::ShowStarred,
             dialogs::DialogAction::OpenStarred { chat, id } => Input::OpenStarred { chat, id },
         });
@@ -759,6 +758,7 @@ pub enum Input {
     },
     ContactActionFinished(Result<(), String>),
     SendSticker(std::path::PathBuf),
+    RemoveSticker(std::path::PathBuf),
     ClearTyping(String),
     StopComposing(String),
     InsertEmoji(String),
@@ -1090,12 +1090,6 @@ impl SimpleComponent for NativeApplication {
             log::error!("could not prepare the account folder: {error}");
         }
         let (notifier, drain) = EventNotifier::new();
-        #[cfg(feature = "demo")]
-        let (demo_notifier, demo_sender, demo_window) = (
-            notifier.clone(),
-            sender.clone(),
-            root.clone().upcast::<gtk::Window>(),
-        );
         let input = sender.clone();
         let event_drain = GlibEventDrain::install(
             &notifier,
@@ -1203,37 +1197,22 @@ impl SimpleComponent for NativeApplication {
         );
         let mut media = crate::services::media::MediaService::default();
         media.set_speed(settings.voice_speed);
-        #[cfg(feature = "demo")]
-        let demo_directory = demo::output_dir();
-        #[cfg(feature = "demo")]
-        let (demo_backend, demo_events) = if demo_directory.is_some() {
-            let (backend, events) = Backend::detached();
-            (Some(backend), Some(events))
-        } else {
-            (None, None)
-        };
-        #[cfg(feature = "demo")]
-        let spawned = match demo_backend {
-            Some(backend) => Ok(backend),
-            None => Backend::try_spawn(active_dirs.clone(), notifier.clone()),
-        };
-        #[cfg(not(feature = "demo"))]
-        let spawned = Backend::try_spawn(active_dirs.clone(), notifier.clone());
-        let (backend, page_title, status): (Option<Backend>, String, String) = match spawned {
-            Ok(backend) => (
-                Some(backend),
-                "Starting ZapTide".into(),
-                "Waiting for first native frame".into(),
-            ),
-            Err(_) => {
-                log::error!("native backend could not start");
-                (
-                    None,
-                    "ZapTide needs attention".into(),
-                    "Backend unavailable".into(),
-                )
-            }
-        };
+        let (backend, page_title, status): (Option<Backend>, String, String) =
+            match Backend::try_spawn(active_dirs.clone(), notifier.clone()) {
+                Ok(backend) => (
+                    Some(backend),
+                    "Starting ZapTide".into(),
+                    "Waiting for first native frame".into(),
+                ),
+                Err(_) => {
+                    log::error!("native backend could not start");
+                    (
+                        None,
+                        "ZapTide needs attention".into(),
+                        "Backend unavailable".into(),
+                    )
+                }
+            };
         let link_menu = gtk::gio::Menu::new();
         link_menu.append(Some(&gettext("_Remove Account…")), Some("win.unlink"));
         link_menu.append(Some(&gettext("_Preferences")), Some("win.preferences"));
@@ -1645,10 +1624,6 @@ impl SimpleComponent for NativeApplication {
             });
         model.install_zoom_provider();
         model.apply_runtime_settings();
-        #[cfg(feature = "demo")]
-        if let (Some(events), Some(directory)) = (demo_events, demo_directory) {
-            demo::start(events, demo_notifier, demo_sender, demo_window, directory);
-        }
         ComponentParts { model, widgets }
     }
 
@@ -2046,10 +2021,15 @@ impl NativeApplication {
                 .map(|scroller| scroller.vadjustment())
         };
         let offset = scroll(stack).map(|adjustment| adjustment.value());
+        let page = stack
+            .visible_child_name()
+            .map_or_else(|| "all".to_owned(), |name| name.to_string());
         let had_focus = popover.focus_child().is_some();
         let (content, new_stack) = sticker_picker_content(
             &self.recent_stickers,
             &self.favorite_stickers,
+            &self.active_dirs.saved_sticker_dir(),
+            &page,
             &dialog_action_callback(sender),
         );
         popover.set_child(Some(&content));

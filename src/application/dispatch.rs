@@ -443,6 +443,8 @@ impl NativeApplication {
         let (content, stack) = sticker_picker_content(
             &self.recent_stickers,
             &self.favorite_stickers,
+            &self.active_dirs.saved_sticker_dir(),
+            "all",
             &dialog_action_callback(&sender),
         );
         popover.set_child(Some(&content));
@@ -1074,6 +1076,11 @@ impl NativeApplication {
                         chat: chat.clone(),
                         path,
                     });
+                }
+            }
+            Input::RemoveSticker(path) => {
+                if let Some(backend) = &self.backend {
+                    backend.send(crate::backend::Command::RemoveSticker(path));
                 }
             }
             Input::InsertMention => self.show_mention_picker(sender),

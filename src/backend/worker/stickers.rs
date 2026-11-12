@@ -102,61 +102,92 @@ impl Worker {
         }
     }
 
-    /// Returns distinct downloaded stickers by most recent use.
+    /// Lists every distinct sticker for the picker, newest first, and the
+    /// starred ones among them. Files with the same content count once, so a
+    /// sticker that arrived in several chats or was copied in by hand does not
+    /// repeat.
     pub(super) fn emit_stickers(&mut self) {
         self.stickers_dirty = false;
-        let mut seen = HashSet::new();
-        let mut list: Vec<(i64, PathBuf)> = Vec::new();
+        // (last use, file, starred)
+        let mut candidates: Vec<(i64, PathBuf, bool)> = Vec::new();
         if let Ok(phone) = self.archive.phone_stickers() {
             for sticker in phone {
                 if let Some(path) = sticker.path
                     && path.exists()
-                    && seen.insert(sticker.hash)
                 {
-                    list.push((sticker.last_used, path));
+                    candidates.push((sticker.last_used, path, false));
                 }
             }
         }
         match self.archive.recent_stickers(80) {
             Ok(rows) => {
                 for sticker in rows {
-                    let hash = sticker
-                        .raw
-                        .as_deref()
-                        .and_then(|raw| wa::Message::decode_from_slice(raw).ok())
-                        .and_then(|message| {
-                            let base = message.get_base_message();
-                            let sticker = base.sticker_message.as_option()?;
-                            sticker_hash(
-                                sticker.file_sha256.as_deref(),
-                                sticker.file_enc_sha256.as_deref(),
-                            )
-                        })
-                        .unwrap_or_else(|| sticker.path.display().to_string());
-                    if seen.insert(hash) {
-                        list.push((sticker.last_used, sticker.path));
-                    }
+                    candidates.push((sticker.last_used, sticker.path, false));
                 }
             }
             Err(error) => log::warn!("could not list stickers: {error}"),
         }
-        list.sort_by_key(|(when, _)| std::cmp::Reverse(*when));
-        // Starred stickers come first, then the files saved locally.
-        let mut saved: Vec<PathBuf> = Vec::new();
         match self.archive.starred_stickers(STICKER_FETCH_LIMIT * 4) {
-            Ok(rows) => saved.extend(rows.into_iter().map(|sticker| sticker.path)),
+            Ok(rows) => {
+                for sticker in rows {
+                    candidates.push((sticker.last_used, sticker.path, true));
+                }
+            }
             Err(error) => log::warn!("could not list starred stickers: {error}"),
         }
-        for path in self.saved_stickers() {
-            if !saved.contains(&path) {
-                saved.push(path);
+        for (when, path) in self.folder_stickers() {
+            candidates.push((when, path, false));
+        }
+        candidates.sort_by_key(|(when, _, _)| std::cmp::Reverse(*when));
+        let mut seen: HashMap<String, usize> = HashMap::new();
+        let mut distinct: Vec<(PathBuf, bool)> = Vec::new();
+        for (_, path, starred) in candidates {
+            let key = sticker_content_key(&path)
+                .unwrap_or_else(|| format!("path:{}", path.display()));
+            match seen.get(&key) {
+                Some(&index) => distinct[index].1 |= starred,
+                None => {
+                    seen.insert(key, distinct.len());
+                    distinct.push((path, starred));
+                }
             }
         }
+        let starred = distinct
+            .iter()
+            .filter(|(_, starred)| *starred)
+            .map(|(path, _)| path.clone())
+            .collect();
         self.emit(Event::Stickers {
-            saved,
+            saved: starred,
             packs: self.sticker_packs(),
-            recent: list.into_iter().map(|(_, path)| path).collect(),
+            recent: distinct.into_iter().map(|(path, _)| path).collect(),
         });
+    }
+
+    /// Removes a sticker from the picker: deletes copies the person put in the
+    /// stickers folder and unstars every starred message with the same file.
+    pub(super) fn remove_sticker(&mut self, path: PathBuf) {
+        let Some(key) = sticker_content_key(&path) else {
+            return;
+        };
+        for (_, file) in self.folder_stickers() {
+            if sticker_content_key(&file).as_deref() == Some(key.as_str())
+                && let Err(error) = std::fs::remove_file(&file)
+            {
+                log::warn!("could not remove a saved sticker: {error}");
+            }
+        }
+        match self.archive.starred_sticker_keys() {
+            Ok(rows) => {
+                for (chat, id, file) in rows {
+                    if sticker_content_key(&file).as_deref() == Some(key.as_str()) {
+                        self.set_starred(chat, id, false);
+                    }
+                }
+            }
+            Err(error) => log::warn!("could not list starred stickers: {error}"),
+        }
+        self.emit_stickers();
     }
 
     pub(super) fn flush_stickers(&mut self) {
@@ -214,27 +245,56 @@ impl Worker {
         packs.into_iter().map(|(_, pack)| pack).collect()
     }
 
-    /// Returns saved sticker files, newest first.
-    pub(super) fn saved_stickers(&self) -> Vec<PathBuf> {
-        let Ok(entries) = std::fs::read_dir(self.dirs.saved_sticker_dir()) else {
+    /// Stickers the person copied into the account's stickers folder
+    /// (`<state>/stickers`), as (modified time in seconds, file), newest first.
+    /// The folder is created so it can be found and filled.
+    pub(super) fn folder_stickers(&self) -> Vec<(i64, PathBuf)> {
+        let dir = self.dirs.saved_sticker_dir();
+        let _ = std::fs::create_dir_all(&dir);
+        let Ok(entries) = std::fs::read_dir(&dir) else {
             return Vec::new();
         };
-        let mut saved: Vec<(std::time::SystemTime, PathBuf)> = entries
+        let mut saved: Vec<(i64, PathBuf)> = entries
             .flatten()
             .filter_map(|entry| {
                 let path = entry.path();
-                path.extension()
-                    .is_some_and(|extension| extension == "webp")
-                    .then(|| {
-                        let when = entry
-                            .metadata()
-                            .and_then(|metadata| metadata.modified())
-                            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-                        (when, path)
-                    })
+                let is_webp = path
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("webp"));
+                (is_webp && path.is_file()).then(|| {
+                    let when = entry
+                        .metadata()
+                        .and_then(|metadata| metadata.modified())
+                        .ok()
+                        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map_or(0, |elapsed| elapsed.as_secs() as i64);
+                    (when, path)
+                })
             })
             .collect();
         saved.sort_by_key(|(when, _)| std::cmp::Reverse(*when));
-        saved.into_iter().map(|(_, path)| path).collect()
+        saved
     }
+}
+
+/// Hash of a sticker file's bytes, cached by size and modification time.
+fn sticker_content_key(path: &Path) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    use std::sync::{Mutex, OnceLock};
+    type Entry = (u64, Option<std::time::SystemTime>, String);
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, Entry>>> = OnceLock::new();
+    let metadata = std::fs::metadata(path).ok()?;
+    let stamp = (metadata.len(), metadata.modified().ok());
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(cache) = cache.lock()
+        && let Some((len, modified, key)) = cache.get(path)
+        && (*len, *modified) == stamp
+    {
+        return Some(key.clone());
+    }
+    let key = hex::encode(Sha256::digest(std::fs::read(path).ok()?));
+    if let Ok(mut cache) = cache.lock() {
+        cache.insert(path.to_path_buf(), (stamp.0, stamp.1, key.clone()));
+    }
+    Some(key)
 }

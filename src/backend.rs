@@ -575,6 +575,8 @@ pub enum Command {
 
     /// Loads recent and saved stickers for the picker.
     RecentStickers,
+    /// Removes a sticker from the picker: deletes folder copies and unstars it.
+    RemoveSticker(PathBuf),
     React {
         chat: ChatId,
         message: String,
@@ -779,7 +781,7 @@ pub enum Event {
     },
     /// Starred messages of one chat, newest first.
     StarredList(Vec<crate::archive::StarredMessage>),
-    /// Saved stickers, imported packs, and recent stickers for the picker.
+    /// Starred stickers, imported packs, and every distinct sticker for the picker.
     Stickers {
         saved: Vec<PathBuf>,
         packs: Vec<StickerPack>,
@@ -886,8 +888,8 @@ impl Backend {
         })
     }
 
-    /// Creates a disconnected backend and event sender for tests and demos.
-    #[cfg(any(test, feature = "demo"))]
+    /// Creates a disconnected backend and event sender for tests.
+    #[cfg(test)]
     pub fn detached() -> (Self, std::sync::mpsc::Sender<Event>) {
         let (command_tx, _command_rx) = mpsc::unbounded_channel();
         let (event_tx, event_rx) = std::sync::mpsc::channel();

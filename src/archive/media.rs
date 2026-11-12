@@ -158,6 +158,25 @@ impl Archive {
             .collect())
     }
 
+    /// Every starred sticker message with its file, for unstarring by content.
+    pub fn starred_sticker_keys(&self) -> Result<Vec<(String, String, std::path::PathBuf)>> {
+        let mut statement = self.connection.prepare(
+            "SELECT chat, id, media_path FROM messages
+             WHERE kind = 'sticker' AND media_path IS NOT NULL
+               AND EXISTS (SELECT 1 FROM stars
+                           WHERE stars.chat = messages.chat AND stars.id = messages.id
+                             AND stars.starred = 1)",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                std::path::PathBuf::from(row.get::<_, String>(2)?),
+            ))
+        })?;
+        rows.collect()
+    }
+
     /// Starred stickers whose file is not on disk yet, so the picker can
     /// download them.
     pub fn starred_stickers_without_file(&self, limit: usize) -> Result<Vec<(String, String)>> {
