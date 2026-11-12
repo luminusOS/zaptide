@@ -7,6 +7,10 @@
 all-features = true
 
 [advisories]
+ignore = [
+    { id = "RUSTSEC-2026-0372", reason = "Transitive dependency through glycin and zbus; no safe compatible upgrade is currently available. Revisit when upstream dependencies migrate to zbus 6." },
+]
+
 yanked = "warn"
 
 [bans]
