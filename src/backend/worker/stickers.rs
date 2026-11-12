@@ -79,6 +79,27 @@ impl Worker {
             }
             Err(error) => log::warn!("could not list unfetched stickers: {error}"),
         }
+        // Starred stickers belong to the picker whoever sent them.
+        match self
+            .archive
+            .starred_stickers_without_file(STICKER_FETCH_LIMIT)
+        {
+            Ok(list) => {
+                for (chat, id) in list {
+                    let Some(raw) = self.archive.raw(&chat, &id).ok().flatten() else {
+                        continue;
+                    };
+                    let fingerprint = message_raw_fingerprint(&raw);
+                    if self
+                        .sticker_downloads
+                        .insert((chat.clone(), id.clone(), fingerprint))
+                    {
+                        self.download(chat, id);
+                    }
+                }
+            }
+            Err(error) => log::warn!("could not list unfetched starred stickers: {error}"),
+        }
     }
 
     /// Returns distinct downloaded stickers by most recent use.
@@ -120,8 +141,19 @@ impl Worker {
             Err(error) => log::warn!("could not list stickers: {error}"),
         }
         list.sort_by_key(|(when, _)| std::cmp::Reverse(*when));
+        // Starred stickers come first, then the files saved locally.
+        let mut saved: Vec<PathBuf> = Vec::new();
+        match self.archive.starred_stickers(STICKER_FETCH_LIMIT * 4) {
+            Ok(rows) => saved.extend(rows.into_iter().map(|sticker| sticker.path)),
+            Err(error) => log::warn!("could not list starred stickers: {error}"),
+        }
+        for path in self.saved_stickers() {
+            if !saved.contains(&path) {
+                saved.push(path);
+            }
+        }
         self.emit(Event::Stickers {
-            saved: self.saved_stickers(),
+            saved,
             packs: self.sticker_packs(),
             recent: list.into_iter().map(|(_, path)| path).collect(),
         });

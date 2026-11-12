@@ -232,6 +232,9 @@ impl Worker {
                         starred,
                         local: false,
                     });
+                    // The star may be on a sticker, which the picker lists.
+                    self.fetch_missing_stickers();
+                    self.stickers_dirty = true;
                 }
             }
             E::PinUpdate(update) => {
