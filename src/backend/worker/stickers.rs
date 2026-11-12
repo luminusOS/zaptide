@@ -142,8 +142,8 @@ impl Worker {
         let mut seen: HashMap<String, usize> = HashMap::new();
         let mut distinct: Vec<(PathBuf, bool)> = Vec::new();
         for (_, path, starred) in candidates {
-            let key = sticker_content_key(&path)
-                .unwrap_or_else(|| format!("path:{}", path.display()));
+            let key =
+                sticker_content_key(&path).unwrap_or_else(|| format!("path:{}", path.display()));
             match seen.get(&key) {
                 Some(&index) => distinct[index].1 |= starred,
                 None => {

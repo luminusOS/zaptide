@@ -1421,7 +1421,6 @@ mod sticker_tests {
         std::fs::remove_file(&file).ok();
         std::fs::remove_file(&received).ok();
         assert_eq!(recent.len(), 1);
-
     }
 }
 
