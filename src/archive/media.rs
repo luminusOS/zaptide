@@ -91,7 +91,7 @@ impl Archive {
 
     pub fn recent_stickers(&self, limit: usize) -> Result<Vec<ArchivedSticker>> {
         let mut statement = self.connection.prepare(
-            "SELECT media_path, MAX(timestamp), raw
+            "SELECT media_path, MAX(timestamp)
              FROM messages
              WHERE kind = 'sticker' AND media_path IS NOT NULL
                AND from_me = 1
@@ -105,7 +105,6 @@ impl Archive {
             Ok(ArchivedSticker {
                 last_used: row.get(1)?,
                 path: std::path::PathBuf::from(row.get::<_, String>(0)?),
-                raw: row.get(2)?,
             })
         })?;
         Ok(rows
@@ -134,7 +133,7 @@ impl Archive {
     /// first. Locked chats contribute none, as they show nothing elsewhere.
     pub fn starred_stickers(&self, limit: usize) -> Result<Vec<ArchivedSticker>> {
         let mut statement = self.connection.prepare(
-            "SELECT media_path, MAX(timestamp), raw
+            "SELECT media_path, MAX(timestamp)
              FROM messages
              WHERE kind = 'sticker' AND media_path IS NOT NULL
                AND EXISTS (SELECT 1 FROM stars
@@ -149,7 +148,6 @@ impl Archive {
             Ok(ArchivedSticker {
                 last_used: row.get(1)?,
                 path: std::path::PathBuf::from(row.get::<_, String>(0)?),
-                raw: row.get(2)?,
             })
         })?;
         Ok(rows

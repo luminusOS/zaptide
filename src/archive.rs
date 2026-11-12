@@ -38,7 +38,6 @@ pub struct PhoneSticker {
 pub struct ArchivedSticker {
     pub last_used: i64,
     pub path: std::path::PathBuf,
-    pub raw: Option<Vec<u8>>,
 }
 
 /// A stored row as a re-derive pass read it.
