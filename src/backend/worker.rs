@@ -1280,6 +1280,9 @@ impl Worker {
     }
 
     fn emit_profile(&self) {
+        self.emit(Event::AccountKnown(
+            self.identity.me_pn.is_some() || self.identity.me_lid.is_some(),
+        ));
         self.emit(Event::Profile {
             phone: self
                 .identity

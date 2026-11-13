@@ -76,10 +76,7 @@ pub(super) fn qr_texture(qr: &str) -> Option<gtk::gdk::Texture> {
 
 impl NativeApplication {
     pub(super) fn is_linked(&self) -> bool {
-        matches!(
-            self.link,
-            LinkStatus::Connected | LinkStatus::Connecting | LinkStatus::Disconnected { .. }
-        ) || (!self.chat_snapshots.is_empty() && !matches!(self.link, LinkStatus::LoggedOut))
+        account_is_linked(&self.link, self.account_known)
     }
 
     pub(super) fn pair_code(&self) -> Option<&str> {
@@ -112,5 +109,39 @@ impl NativeApplication {
             }
             _ => false,
         }
+    }
+}
+
+fn account_is_linked(link: &LinkStatus, account_known: bool) -> bool {
+    !matches!(link, LinkStatus::LoggedOut)
+        && (account_known || matches!(link, LinkStatus::Connected))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn first_connection_stays_on_link_page() {
+        assert!(!account_is_linked(&LinkStatus::Connecting, false));
+        assert!(!account_is_linked(
+            &LinkStatus::Disconnected {
+                reason: String::new()
+            },
+            false
+        ));
+    }
+
+    #[test]
+    fn known_account_remains_available_offline() {
+        assert!(account_is_linked(&LinkStatus::Connecting, true));
+        assert!(account_is_linked(
+            &LinkStatus::Disconnected {
+                reason: String::new()
+            },
+            true
+        ));
+        assert!(account_is_linked(&LinkStatus::Connected, false));
+        assert!(!account_is_linked(&LinkStatus::LoggedOut, true));
     }
 }

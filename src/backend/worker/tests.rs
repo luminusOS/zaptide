@@ -14,6 +14,26 @@ fn sticker_hash_golden_leading_zero_and_fallback() {
 }
 use crate::backend::{Completion, Done};
 
+#[test]
+fn startup_reports_persisted_account_identity_without_chats() {
+    let (mut worker, events, _, _) = worker();
+    worker.identity.me_pn = None;
+    worker.load_state();
+    assert!(
+        events
+            .try_iter()
+            .any(|event| matches!(event, Event::AccountKnown(false)))
+    );
+
+    worker.archive.set_meta("me_lid", "12345@lid").unwrap();
+    worker.load_state();
+    assert!(
+        events
+            .try_iter()
+            .any(|event| matches!(event, Event::AccountKnown(true)))
+    );
+}
+
 #[tokio::test]
 async fn completion_stale_media_sweep_releases_running_without_publishing() {
     let (mut worker, events, _inbox, _wa) = worker();
