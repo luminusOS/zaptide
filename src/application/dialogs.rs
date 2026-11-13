@@ -800,6 +800,9 @@ fn load_sticker_preview(button: &gtk::Button, path: &std::path::Path, size: i32)
             // picker slow and heavy.
             let decoded = gtk::gio::spawn_blocking(move || {
                 let bytes = std::fs::read(&source).ok()?;
+                if bytes.starts_with(b"PK\x03\x04") {
+                    return crate::native_media_widgets::decode_lottie_preview(&bytes);
+                }
                 let image = image::load_from_memory(&bytes)
                     .ok()?
                     .thumbnail(144, 144)
@@ -1460,6 +1463,45 @@ fn glib_escape(text: &str) -> String {
 #[cfg(test)]
 mod sticker_menu_tests {
     use super::*;
+
+    #[test]
+    #[ignore = "needs a display"]
+    fn lottie_picker_preview_displays_a_texture() {
+        use std::io::Write;
+        gtk::init().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sticker.webp");
+        let mut archive = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+        archive
+            .start_file("animation.json", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        archive.write_all(br#"{"v":"5.7.6","fr":10,"ip":0,"op":3,"w":64,"h":64,"layers":[{"ty":4,"ind":1,"ip":0,"op":3,"shapes":[{"ty":"rc","p":{"a":0,"k":[32,32]},"s":{"a":0,"k":[30,30]},"r":{"a":0,"k":0}},{"ty":"fl","c":{"a":0,"k":[1,0,0,1]},"o":{"a":0,"k":100}}]}]}"#).unwrap();
+        archive.finish().unwrap();
+        let window = gtk::Window::new();
+        let button = gtk::Button::new();
+        load_sticker_preview(&button, &path, 72);
+        window.set_child(Some(&button));
+        window.present();
+        let context = gtk::glib::MainContext::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while button
+            .child()
+            .is_some_and(|child| child.is::<adw::Spinner>())
+            && std::time::Instant::now() < deadline
+        {
+            while context.pending() {
+                context.iteration(false);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let image = button.child().unwrap().downcast::<gtk::Image>().unwrap();
+        assert!(
+            image
+                .paintable()
+                .is_some_and(|paintable| paintable.is::<gtk::gdk::Texture>())
+        );
+        window.destroy();
+    }
 
     #[test]
     #[ignore = "needs a display"]

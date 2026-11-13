@@ -103,7 +103,7 @@ mod playback_tests;
 pub use audio::{AudioControls, RecordingMeter};
 pub(crate) use contacts::contact_preview;
 pub use photo::{build_album_widget, show_in_folder};
-pub(crate) use sticker::{StickerAnimation, decode_sticker_file};
+pub(crate) use sticker::{StickerAnimation, decode_lottie_preview, decode_sticker_file};
 pub use widget::build_media_widget_with_action;
 
 use cards::{
