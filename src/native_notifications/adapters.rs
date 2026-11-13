@@ -942,16 +942,15 @@ mod tests {
                     refused.title = "refuse".into();
                     native.show(refused, SoundRequest::Silent);
                     wire_rx.recv().await.unwrap();
-                    while native.queue.has_pending("refused") {
-                        gtk::glib::timeout_future(std::time::Duration::from_millis(5)).await;
-                    }
-                    assert_eq!(*fallback.borrow(), 1);
+                    native.queue.wait_quarantined("refused").await;
+                    assert_eq!(*fallback.borrow(), 0);
+                    native.withdraw("refused");
                     let mut ambiguous = request("ambiguous");
                     ambiguous.title = "no-reply".into();
                     native.show(ambiguous, SoundRequest::Silent);
                     wire_rx.recv().await.unwrap();
-                    gtk::glib::timeout_future(std::time::Duration::from_millis(100)).await;
-                    assert_eq!(*fallback.borrow(), 1);
+                    native.queue.wait_quarantined("ambiguous").await;
+                    assert_eq!(*fallback.borrow(), 0);
                     assert!(native.queue.has_pending("ambiguous"));
                     native.withdraw("ambiguous");
                     assert!(!native.queue.has_pending("ambiguous"));
