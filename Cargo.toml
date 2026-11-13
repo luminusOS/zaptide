@@ -79,7 +79,7 @@ getrandom = "0.4"
 # Keyring: the Secret portal's file keyring inside a sandbox, the Secret
 # Service outside. OpenSSL is the one SQLCipher already links, so no second
 # crypto stack comes with it.
-oo7 = { version = "0.6", default-features = false, features = ["tokio", "openssl_crypto"] }
+oo7 = { version = "0.7", default-features = false, features = ["tokio", "openssl_crypto"] }
 zeroize = "1"
 qrcode = { version = "0.14", default-features = false }
 # Downloads profile pictures. The protocol library already includes this crate
