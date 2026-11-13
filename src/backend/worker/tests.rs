@@ -2068,6 +2068,18 @@ fn quoted_mentions_keep_tokens_aligned_with_phone_mapping() {
             push_name: Some("Synthetic Alice".into()),
         },
     );
+    worker
+        .identity
+        .lid_to_pn
+        .insert("15582".into(), "15551234567".into());
+    worker.identity.contacts.insert(
+        "15582@lid".into(),
+        Contact {
+            id: "15582@lid".into(),
+            full_name: None,
+            push_name: Some("Synthetic Bob".into()),
+        },
+    );
     let mut message = crate::archive::tests::message("group@g.us", "M1", 10, false);
     message.quoted = Some(Quoted {
         id: "Q1".into(),
