@@ -98,12 +98,8 @@ impl SimpleComponent for TranscriptView {
                     add_css_class: "flat",
                     add_css_class: "zaptide-load-older",
                     set_tooltip_text: Some(&gettext("Show earlier messages from the archive or your phone")),
-                    // Fading instead of hiding keeps its space, so the transcript
-                    // does not move when the reader scrolls past the threshold.
                     #[watch]
-                    set_visible: model.has_older(),
-                    #[watch]
-                    set_class_active: ("zaptide-load-older-away", !model.offers_older()),
+                    set_visible: model.offers_older(),
                     #[watch]
                     set_focusable: model.offers_older(),
                     // Stay sensitive while loading: insensitive styling would dim the
@@ -383,8 +379,7 @@ mod tests {
             "the fixture must overflow past the threshold"
         );
         let offered = |button: &gtk::Button, loading: bool| {
-            assert!(button.is_visible(), "the button always keeps its space");
-            let offered = !button.has_css_class("zaptide-load-older-away");
+            let offered = button.is_visible();
             assert_eq!(button.is_focusable(), offered);
             assert_eq!(button.can_target(), offered && !loading);
             offered
@@ -395,6 +390,16 @@ mod tests {
         adjustment.set_value(adjustment.upper() - adjustment.page_size());
         spin();
         assert!(!offered(&button, false), "scrolled to the end");
+        assert!(
+            scroller.height() > viewport_height,
+            "the transcript fills the released space"
+        );
+        let conversation = scroller.parent().unwrap().parent().unwrap();
+        assert_eq!(
+            scroller.height(),
+            conversation.height(),
+            "the hidden older-history control must not reserve transcript space"
+        );
 
         adjustment.set_value(NEAR_START - 1.0);
         spin();
@@ -404,7 +409,10 @@ mod tests {
         adjustment.set_value(NEAR_START + 100.0);
         spin();
         assert!(!offered(&button, false), "just past the threshold");
-        assert_eq!(scroller.height(), viewport_height, "the viewport moved");
+        assert!(
+            scroller.height() > viewport_height,
+            "the transcript fills the released space"
+        );
 
         controller.emit(TranscriptViewInput::Sync(TranscriptState {
             loading_older: true,
