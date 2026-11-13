@@ -563,6 +563,7 @@ pub struct NativeApplication {
     /// About row of the open contact-info dialog, filled when the fetch returns.
     info_about: Option<(String, adw::ActionRow)>,
     message_target: Option<String>,
+    message_target_selection: Option<String>,
     /// Unread count when the chat was opened, until the first page pins it
     /// to `unread_marker`, so live arrivals never move the "Unread" line.
     opened_unread: usize,
@@ -684,6 +685,7 @@ pub enum Input {
         id: String,
         x: f32,
         y: f32,
+        selected_text: Option<String>,
     },
     OpenQuoted,
     OpenQuotedOf(String),
@@ -1443,6 +1445,7 @@ impl SimpleComponent for NativeApplication {
             },
             info_about: None,
             message_target: None,
+            message_target_selection: None,
             opened_unread: 0,
             unread_marker: None,
             recent_messages_pending: false,
@@ -1762,6 +1765,7 @@ impl NativeApplication {
             return;
         };
         self.message_target = Some(id.to_owned());
+        self.message_target_selection = None;
         let view = self.messages.view.clone();
         let id = id.to_owned();
         gtk::glib::idle_add_local_once(move || {
@@ -1796,6 +1800,7 @@ impl NativeApplication {
         id: String,
         x: f32,
         y: f32,
+        selected_text: Option<String>,
         sender: &ComponentSender<NativeApplication>,
     ) {
         reaction_drawer::dismiss();
@@ -1817,6 +1822,7 @@ impl NativeApplication {
             return;
         };
         self.message_target = Some(id);
+        self.message_target_selection = selected_text;
         let rect = gtk::gdk::Rectangle::new(point.x() as i32, point.y() as i32, 1, 1);
         self.message_menu
             .set_menu_model(Some(&self.message_menu_model()));

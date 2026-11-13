@@ -365,6 +365,7 @@ impl RelmListItem for MessageRow {
         context_click.set_propagation_phase(gtk::PropagationPhase::Capture);
         let gesture_target = menu_target.clone();
         let focus_row = root.downgrade();
+        let context_body = body.downgrade();
         context_click.connect_pressed(move |gesture, _, x, y| {
             // Claim the click so a selectable label cannot also open its own
             // context menu over ours; two grabbing popovers freeze the app.
@@ -372,15 +373,23 @@ impl RelmListItem for MessageRow {
             if let (Some((id, sender)), Some(row)) =
                 (gesture_target.borrow().clone(), gesture.widget())
             {
+                let selected_text = context_body.upgrade().and_then(|body| body.selected_text());
                 if let Some(root) = focus_row.upgrade() {
                     root.grab_focus();
                 }
                 if let Some(point) = message_menu_position(&row, x, y) {
-                    let id = album_tile_at(&row, x, y).unwrap_or(id);
+                    let tile = album_tile_at(&row, x, y);
+                    let selected_text = if tile.as_ref().is_some_and(|tile| tile != &id) {
+                        None
+                    } else {
+                        selected_text
+                    };
+                    let id = tile.unwrap_or(id);
                     sender(Input::ShowMessageMenu {
                         id,
                         x: point.x(),
                         y: point.y(),
+                        selected_text,
                     });
                 }
             }
@@ -408,6 +417,7 @@ impl RelmListItem for MessageRow {
         let menu_keys = gtk::EventControllerKey::new();
         menu_keys.set_propagation_phase(gtk::PropagationPhase::Capture);
         let key_target = menu_target.clone();
+        let key_body = body.downgrade();
         menu_keys.connect_key_pressed(move |controller, key, _, modifiers| {
             if key != gtk::gdk::Key::Menu
                 && !(key == gtk::gdk::Key::F10
@@ -423,6 +433,7 @@ impl RelmListItem for MessageRow {
                     id,
                     x: point.x(),
                     y: point.y(),
+                    selected_text: key_body.upgrade().and_then(|body| body.selected_text()),
                 });
                 return gtk::glib::Propagation::Stop;
             }
@@ -845,6 +856,11 @@ mod tests {
                     recorded.borrow_mut().push(format!("{owner}:chat:{phone}"))
                 }
                 Input::CopyCode(code) => recorded.borrow_mut().push(format!("{owner}:code:{code}")),
+                Input::ShowMessageMenu {
+                    id, selected_text, ..
+                } => recorded
+                    .borrow_mut()
+                    .push(format!("{owner}:menu:{id}:{selected_text:?}")),
                 _ => {}
             });
             slot.borrow_mut()
@@ -1014,6 +1030,31 @@ mod tests {
                 "second:code:newé"
             ]
         );
+        buffer.select_range(&buffer.iter_at_offset(4), &buffer.iter_at_offset(8));
+        view.clipboard().set_text("previous");
+        view.emit_by_name::<()>("copy-clipboard", &[]);
+        assert_eq!(
+            gtk::glib::MainContext::default()
+                .block_on(view.clipboard().read_text_future())
+                .unwrap()
+                .as_deref(),
+            Some("@Éva")
+        );
+        let widgets = current.borrow();
+        let widgets = widgets.as_ref().unwrap();
+        let controllers = widgets.bubble.observe_controllers();
+        let context_click = (0..controllers.n_items())
+            .filter_map(|i| controllers.item(i)?.downcast::<gtk::GestureClick>().ok())
+            .find(|click| click.button() == gtk::gdk::BUTTON_SECONDARY)
+            .unwrap();
+        context_click.emit_by_name::<()>("pressed", &[&1i32, &1.0f64, &1.0f64]);
+        assert_eq!(
+            actions.borrow().last().unwrap(),
+            "second:menu:second:Some(\"@Éva\")"
+        );
+        buffer.place_cursor(&buffer.start_iter());
+        context_click.emit_by_name::<()>("pressed", &[&1i32, &1.0f64, &1.0f64]);
+        assert_eq!(actions.borrow().last().unwrap(), "second:menu:second:None");
         window.close();
     }
 
