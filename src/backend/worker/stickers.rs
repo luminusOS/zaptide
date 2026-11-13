@@ -102,27 +102,26 @@ impl Worker {
         }
     }
 
-    /// Lists every distinct sticker for the picker, newest first, and the
-    /// starred ones among them. Files with the same content count once, so a
-    /// sticker that arrived in several chats or was copied in by hand does not
-    /// repeat.
+    /// Lists distinct recent and saved stickers for the picker, newest first.
+    /// Files with the same content count once, so a sticker from multiple
+    /// sources appears only once while retaining each collection membership.
     pub(super) fn emit_stickers(&mut self) {
         self.stickers_dirty = false;
-        // (last use, file, starred)
-        let mut candidates: Vec<(i64, PathBuf, bool)> = Vec::new();
+        // (last use, file, starred, recent)
+        let mut candidates: Vec<(i64, PathBuf, bool, bool)> = Vec::new();
         if let Ok(phone) = self.archive.phone_stickers() {
             for sticker in phone {
                 if let Some(path) = sticker.path
                     && path.exists()
                 {
-                    candidates.push((sticker.last_used, path, false));
+                    candidates.push((sticker.last_used, path, false, true));
                 }
             }
         }
         match self.archive.recent_stickers(80) {
             Ok(rows) => {
                 for sticker in rows {
-                    candidates.push((sticker.last_used, sticker.path, false));
+                    candidates.push((sticker.last_used, sticker.path, false, true));
                 }
             }
             Err(error) => log::warn!("could not list stickers: {error}"),
@@ -130,37 +129,44 @@ impl Worker {
         match self.archive.starred_stickers(STICKER_FETCH_LIMIT * 4) {
             Ok(rows) => {
                 for sticker in rows {
-                    candidates.push((sticker.last_used, sticker.path, true));
+                    candidates.push((sticker.last_used, sticker.path, true, false));
                 }
             }
             Err(error) => log::warn!("could not list starred stickers: {error}"),
         }
         for (when, path) in self.folder_stickers() {
-            candidates.push((when, path, true));
+            candidates.push((when, path, true, false));
         }
         candidates.sort_by_key(|(when, _, _)| std::cmp::Reverse(*when));
         let mut seen: HashMap<String, usize> = HashMap::new();
-        let mut distinct: Vec<(PathBuf, bool)> = Vec::new();
-        for (_, path, starred) in candidates {
+        let mut distinct: Vec<(PathBuf, bool, bool)> = Vec::new();
+        for (_, path, starred, recent) in candidates {
             let key =
                 sticker_content_key(&path).unwrap_or_else(|| format!("path:{}", path.display()));
             match seen.get(&key) {
-                Some(&index) => distinct[index].1 |= starred,
+                Some(&index) => {
+                    distinct[index].1 |= starred;
+                    distinct[index].2 |= recent;
+                }
                 None => {
                     seen.insert(key, distinct.len());
-                    distinct.push((path, starred));
+                    distinct.push((path, starred, recent));
                 }
             }
         }
         let starred = distinct
             .iter()
-            .filter(|(_, starred)| *starred)
-            .map(|(path, _)| path.clone())
+            .filter(|(_, starred, _)| *starred)
+            .map(|(path, _, _)| path.clone())
             .collect();
         self.emit(Event::Stickers {
             saved: starred,
             packs: self.sticker_packs(),
-            recent: distinct.into_iter().map(|(path, _)| path).collect(),
+            recent: distinct
+                .into_iter()
+                .filter(|(_, _, recent)| *recent)
+                .map(|(path, _, _)| path)
+                .collect(),
         });
     }
 
