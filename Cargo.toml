@@ -105,7 +105,7 @@ async-channel = "2"
 glycin = { version = "4", default-features = false, features = ["gdk4", "tokio"] }
 # XDG desktop portals over the zbus and tokio already in the tree. Only the
 # portals the app uses are enabled; no windowing or PipeWire bindings.
-ashpd = { version = "0.13", default-features = false, features = ["tokio", "background", "camera", "notification", "settings"] }
+ashpd = { version = "0.14", default-features = false, features = ["tokio", "background", "camera", "notification", "settings"] }
 futures-util = { version = "0.3", default-features = false }
 # Tray icon: StatusNotifierItem with its menu over com.canonical.dbusmenu.
 ksni = { version = "0.3", default-features = false, features = ["tokio", "blocking"] }
