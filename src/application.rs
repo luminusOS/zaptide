@@ -382,6 +382,7 @@ impl<S> MessageRow<S> {
             && self.collapsed == other.collapsed
             && self.audio == other.audio
             && self.mentions == other.mentions
+            && self.quote == other.quote
             && self.separator == other.separator
             && self.unread_divider == other.unread_divider
             && self.avatar == other.avatar

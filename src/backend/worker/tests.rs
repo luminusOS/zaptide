@@ -2054,6 +2054,33 @@ fn backfill_does_not_advance_checkpoint_when_a_row_write_fails() {
 }
 
 #[test]
+fn quoted_mentions_keep_tokens_aligned_with_phone_mapping() {
+    let (mut worker, _, _, _) = worker();
+    worker
+        .identity
+        .lid_to_pn
+        .insert("15581".into(), "15551234567".into());
+    let mut message = crate::archive::tests::message("group@g.us", "M1", 10, false);
+    message.quoted = Some(Quoted {
+        id: "Q1".into(),
+        sender: "15551234567@s.whatsapp.net".into(),
+        sender_name: None,
+        summary: "Hello @15581".into(),
+        mentions: vec![MentionRef {
+            user: "15581".into(),
+            id: "15581@lid".into(),
+            name: None,
+        }],
+    });
+    worker.polish(&mut message);
+    worker.polish(&mut message);
+    let quote = message.quoted.unwrap();
+    assert_eq!(quote.summary, "Hello @15551234567");
+    assert_eq!(quote.mentions[0].user, "15551234567");
+    assert_eq!(quote.mentions[0].id, "15551234567@s.whatsapp.net");
+}
+
+#[test]
 fn mentions_missing_from_the_message_are_recovered_for_known_people_only() {
     let (mut worker, _, _, _) = worker();
     worker

@@ -1530,6 +1530,9 @@ impl Worker {
             }
             quoted.summary = self.pn_tokens(&quoted.summary);
             for mention in &mut quoted.mentions {
+                if let Some(phone) = self.identity.lid_to_pn.get(&mention.user) {
+                    mention.user = phone.clone();
+                }
                 mention.id = self.canonical_str(&mention.id);
             }
             if quoted.mentions.is_empty() {
