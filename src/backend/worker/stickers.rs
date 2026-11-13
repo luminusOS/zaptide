@@ -136,7 +136,7 @@ impl Worker {
             Err(error) => log::warn!("could not list starred stickers: {error}"),
         }
         for (when, path) in self.folder_stickers() {
-            candidates.push((when, path, false));
+            candidates.push((when, path, true));
         }
         candidates.sort_by_key(|(when, _, _)| std::cmp::Reverse(*when));
         let mut seen: HashMap<String, usize> = HashMap::new();
