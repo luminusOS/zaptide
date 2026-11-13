@@ -945,11 +945,13 @@ fn attach_sticker_menu(
             popover.set_child(Some(&item));
             popover.set_parent(button);
             {
-                let popover = popover.clone();
+                let popover = popover.downgrade();
                 let path = path.clone();
                 let on_action = on_action.clone();
                 item.connect_clicked(move |_| {
-                    popover.popdown();
+                    if let Some(popover) = popover.upgrade() {
+                        popover.popdown();
+                    }
                     on_action(action(path.clone()));
                 });
             }
@@ -1453,4 +1455,53 @@ pub(super) fn show_starred_dialog(
 
 fn glib_escape(text: &str) -> String {
     gtk::glib::markup_escape_text(text).to_string()
+}
+
+#[cfg(test)]
+mod sticker_menu_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "needs a display"]
+    fn closing_sticker_menu_releases_popover() {
+        gtk::init().unwrap();
+        let window = gtk::Window::new();
+        let button = gtk::Button::new();
+        window.set_child(Some(&button));
+        window.present();
+        let callback: DialogActionCallback = std::rc::Rc::new(|_| {});
+        attach_sticker_menu(
+            &button,
+            "Remove".into(),
+            "/synthetic/sticker.webp".into(),
+            DialogAction::RemoveSticker,
+            &callback,
+        );
+        let controllers = button.observe_controllers();
+        for index in 0..controllers.n_items() {
+            if let Ok(gesture) = controllers
+                .item(index)
+                .unwrap()
+                .downcast::<gtk::GestureClick>()
+                && gesture.button() == gtk::gdk::BUTTON_SECONDARY
+            {
+                gesture.emit_by_name::<()>("pressed", &[&1i32, &0.0f64, &0.0f64]);
+            }
+        }
+        let popover = button
+            .last_child()
+            .unwrap()
+            .downcast::<gtk::Popover>()
+            .unwrap();
+        let weak = popover.downgrade();
+        popover.popdown();
+        let context = gtk::glib::MainContext::default();
+        while context.pending() {
+            context.iteration(false);
+        }
+        assert!(popover.parent().is_none());
+        drop(popover);
+        assert!(weak.upgrade().is_none(), "closed menu must be released");
+        window.destroy();
+    }
 }
