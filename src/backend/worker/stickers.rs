@@ -137,7 +137,7 @@ impl Worker {
         for (when, path) in self.folder_stickers() {
             candidates.push((when, path, true, false));
         }
-        candidates.sort_by_key(|(when, _, _)| std::cmp::Reverse(*when));
+        candidates.sort_by_key(|(when, _, _, _)| std::cmp::Reverse(*when));
         let mut seen: HashMap<String, usize> = HashMap::new();
         let mut distinct: Vec<(PathBuf, bool, bool)> = Vec::new();
         for (_, path, starred, recent) in candidates {
