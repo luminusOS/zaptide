@@ -243,7 +243,7 @@ fn chats() -> Vec<Chat> {
         MAYA,
         "Maya Santos",
         minutes_ago(4),
-        "Perfect, see you at 7!",
+        "Perfect, café at 7! ☕",
         false,
         Delivery::None,
         None,
@@ -428,7 +428,7 @@ fn maya_conversation() -> Vec<Message> {
             Some("Maya Santos"),
             false,
             at(4),
-            text("Perfect, see you at 7!"),
+            text("Perfect, café at 7! ☕"),
             Delivery::None,
         ),
     ]
