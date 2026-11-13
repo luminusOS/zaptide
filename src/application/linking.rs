@@ -113,7 +113,7 @@ impl NativeApplication {
 }
 
 fn account_is_linked(link: &LinkStatus, account_known: bool) -> bool {
-    !matches!(link, LinkStatus::LoggedOut)
+    !matches!(link, LinkStatus::LoggedOut | LinkStatus::Unlinked { .. })
         && (account_known || matches!(link, LinkStatus::Connected))
 }
 
@@ -143,5 +143,13 @@ mod tests {
         ));
         assert!(account_is_linked(&LinkStatus::Connected, false));
         assert!(!account_is_linked(&LinkStatus::LoggedOut, true));
+        assert!(!account_is_linked(
+            &LinkStatus::Unlinked {
+                qr: Some("synthetic".into()),
+                pair_code: None,
+                pairing_phone: None,
+            },
+            true
+        ));
     }
 }
