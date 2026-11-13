@@ -48,7 +48,7 @@ pub(super) fn decode_sticker(
     current: impl Fn() -> bool,
 ) -> Option<Vec<StickerFrame>> {
     if bytes.starts_with(b"PK\x03\x04") {
-        return decode_lottie_sticker(bytes, current);
+        return decode_lottie_sticker(bytes, current, false);
     }
     use crate::native_media::{MAX_THUMBNAIL_DIMENSION, MAX_THUMBNAIL_PIXELS, image_limits};
     use image::{AnimationDecoder, ImageDecoder};
@@ -124,7 +124,21 @@ pub(super) fn decode_sticker(
     (!kept.is_empty()).then_some(kept)
 }
 
-fn decode_lottie_sticker(bytes: &[u8], current: impl Fn() -> bool) -> Option<Vec<StickerFrame>> {
+pub(crate) fn decode_lottie_preview(bytes: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
+    if bytes.len() > crate::native_media::MAX_THUMBNAIL_INPUT_BYTES {
+        return None;
+    }
+    let frame = decode_lottie_sticker(bytes, || true, true)?
+        .into_iter()
+        .next()?;
+    Some((frame.width, frame.height, frame.texture_rgba))
+}
+
+fn decode_lottie_sticker(
+    bytes: &[u8],
+    current: impl Fn() -> bool,
+    preview: bool,
+) -> Option<Vec<StickerFrame>> {
     use std::io::Read;
 
     const MAX_JSON_BYTES: u64 = 1024 * 1024;
@@ -178,7 +192,11 @@ fn decode_lottie_sticker(bytes: &[u8], current: impl Fn() -> bool) -> Option<Vec
     {
         return None;
     }
-    let count = (frames.ceil() as usize).min(MAX_STICKER_FRAMES);
+    let count = if preview {
+        1
+    } else {
+        (frames.ceil() as usize).min(MAX_STICKER_FRAMES)
+    };
     let duration_ms = (frames * 1000.0 / animation.frame_rate).round() as u32;
     let mut config = rasterlottie::RenderConfig::default();
     config.scale = STICKER_SIZE as f32 / animation.width.max(animation.height) as f32;
