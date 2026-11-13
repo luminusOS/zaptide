@@ -1047,8 +1047,7 @@ impl NativeApplication {
                 }
             }
             Input::InsertEmoji(emoji) => {
-                let mut end = self.composer_buffer.end_iter();
-                self.composer_buffer.insert(&mut end, &emoji);
+                self.composer_buffer.insert_at_cursor(&emoji);
             }
             Input::ShowStickerPicker => self.show_sticker_picker(sender),
             Input::ShowPollCreator => {
