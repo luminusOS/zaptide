@@ -156,14 +156,15 @@ impl Archive {
             .collect())
     }
 
-    /// Every starred sticker message with its file, for unstarring by content.
+    /// Starred sticker messages in unlocked chats, for unstarring by content.
     pub fn starred_sticker_keys(&self) -> Result<Vec<(String, String, std::path::PathBuf)>> {
         let mut statement = self.connection.prepare(
             "SELECT chat, id, media_path FROM messages
              WHERE kind = 'sticker' AND media_path IS NOT NULL
                AND EXISTS (SELECT 1 FROM stars
                            WHERE stars.chat = messages.chat AND stars.id = messages.id
-                             AND stars.starred = 1)",
+                              AND stars.starred = 1)
+               AND NOT COALESCE((SELECT locked FROM chats WHERE chats.id = messages.chat), 0)",
         )?;
         let rows = statement.query_map([], |row| {
             Ok((

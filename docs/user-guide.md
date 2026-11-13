@@ -81,6 +81,10 @@ showing them again restarts playback. Lottie stickers play only when they use
 the supported animation subset, including positions animated on separate axes.
 Unsupported animations show a placeholder.
 
+In the sticker picker, **Unstar** removes matching message stars from unlocked
+chats without deleting saved files. **Remove** deletes matching copies from the
+account's stickers folder without changing message stars.
+
 Audio, PDF, EPUB, RTF, office documents, plain text, Markdown, CSV and common
 archives open in their default app. Other documents, or files whose contents
 do not match their names, ask for confirmation. These include scripts,

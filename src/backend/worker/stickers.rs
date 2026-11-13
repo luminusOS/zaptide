@@ -170,8 +170,7 @@ impl Worker {
         });
     }
 
-    /// Removes a sticker from the picker: deletes copies the person put in the
-    /// stickers folder and unstars every starred message with the same file.
+    /// Deletes matching saved-folder copies without changing message stars.
     pub(super) fn remove_sticker(&mut self, path: PathBuf) {
         let Some(key) = sticker_content_key(&path) else {
             return;
@@ -183,6 +182,14 @@ impl Worker {
                 log::warn!("could not remove a saved sticker: {error}");
             }
         }
+        self.emit_stickers();
+    }
+
+    /// Unstars matching messages in unlocked chats without deleting files.
+    pub(super) fn unstar_sticker(&mut self, path: PathBuf) {
+        let Some(key) = sticker_content_key(&path) else {
+            return;
+        };
         match self.archive.starred_sticker_keys() {
             Ok(rows) => {
                 for (chat, id, file) in rows {
@@ -303,4 +310,113 @@ fn sticker_content_key(path: &Path) -> Option<String> {
         cache.insert(path.to_path_buf(), (stamp.0, stamp.1, key.clone()));
     }
     Some(key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::worker::tests::worker;
+
+    fn star_sticker(worker: &Worker, chat: &str, path: &Path, locked: bool) {
+        let mut message = crate::archive::tests::message(chat, "sticker", 100, false);
+        message.content = Content::Sticker {
+            media: crate::model::Media {
+                mime: "image/webp".into(),
+                size: 10,
+                width: Some(2),
+                height: Some(2),
+                path: Some(path.to_path_buf()),
+                state: Default::default(),
+            },
+            animated: false,
+        };
+        worker.archive.ensure_chat(chat, "Fixture").unwrap();
+        worker.archive.insert_message(&message, None).unwrap();
+        worker.archive.set_locked(chat, locked).unwrap();
+        worker
+            .archive
+            .set_starred(chat, "sticker", true, 1)
+            .unwrap();
+    }
+
+    #[test]
+    fn removing_saved_stickers_preserves_message_stars_and_cached_files() {
+        let (mut worker, _events, _, _) = worker();
+        let root = tempfile::tempdir().unwrap();
+        worker.dirs = AppDirs::under(root.path());
+        let saved = worker.dirs.saved_sticker_dir().join("saved.webp");
+        let duplicate = worker.dirs.saved_sticker_dir().join("duplicate.webp");
+        let unrelated = worker.dirs.saved_sticker_dir().join("unrelated.webp");
+        let cached = worker.dirs.sticker_cache_dir().join("cached.webp");
+        std::fs::create_dir_all(worker.dirs.saved_sticker_dir()).unwrap();
+        std::fs::create_dir_all(worker.dirs.sticker_cache_dir()).unwrap();
+        for path in [&saved, &duplicate, &cached] {
+            std::fs::write(path, b"synthetic sticker").unwrap();
+        }
+        std::fs::write(&unrelated, b"another sticker").unwrap();
+        star_sticker(&worker, "visible@s.whatsapp.net", &cached, false);
+
+        worker.remove_sticker(saved.clone());
+
+        assert!(!saved.exists());
+        assert!(!duplicate.exists());
+        assert!(unrelated.exists());
+        assert!(cached.exists());
+        assert_eq!(
+            worker
+                .archive
+                .starred_ids("visible@s.whatsapp.net")
+                .unwrap(),
+            ["sticker"]
+        );
+    }
+
+    #[test]
+    fn sticker_unstar_candidates_exclude_locked_chats() {
+        let (worker, _events, _, _) = worker();
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("sticker.webp");
+        std::fs::write(&path, b"synthetic sticker").unwrap();
+        star_sticker(&worker, "visible@s.whatsapp.net", &path, false);
+        star_sticker(&worker, "locked@s.whatsapp.net", &path, true);
+
+        assert_eq!(
+            worker.archive.starred_sticker_keys().unwrap(),
+            vec![("visible@s.whatsapp.net".into(), "sticker".into(), path)]
+        );
+    }
+
+    #[tokio::test]
+    async fn unstarring_stickers_preserves_saved_files_and_locked_stars() {
+        let (mut worker, _events, _, _) = worker();
+        let root = tempfile::tempdir().unwrap();
+        worker.dirs = AppDirs::under(root.path());
+        let saved = worker.dirs.saved_sticker_dir().join("saved.webp");
+        let cached = worker.dirs.sticker_cache_dir().join("cached.webp");
+        let other = worker.dirs.sticker_cache_dir().join("other.webp");
+        std::fs::create_dir_all(worker.dirs.saved_sticker_dir()).unwrap();
+        std::fs::create_dir_all(worker.dirs.sticker_cache_dir()).unwrap();
+        for path in [&saved, &cached] {
+            std::fs::write(path, b"synthetic sticker").unwrap();
+        }
+        std::fs::write(&other, b"another sticker").unwrap();
+        star_sticker(&worker, "visible@s.whatsapp.net", &cached, false);
+        star_sticker(&worker, "duplicate@s.whatsapp.net", &cached, false);
+        star_sticker(&worker, "locked@s.whatsapp.net", &cached, true);
+        star_sticker(&worker, "unrelated@s.whatsapp.net", &other, false);
+
+        worker
+            .handle_command(Command::UnstarSticker(cached.clone()))
+            .await;
+
+        assert!(saved.exists());
+        assert!(cached.exists());
+        assert!(other.exists());
+        for chat in ["visible@s.whatsapp.net", "duplicate@s.whatsapp.net"] {
+            assert!(worker.archive.starred_ids(chat).unwrap().is_empty());
+        }
+        for chat in ["locked@s.whatsapp.net", "unrelated@s.whatsapp.net"] {
+            assert_eq!(worker.archive.starred_ids(chat).unwrap(), ["sticker"]);
+        }
+    }
 }

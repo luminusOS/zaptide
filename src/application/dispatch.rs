@@ -1082,6 +1082,11 @@ impl NativeApplication {
                     backend.send(crate::backend::Command::RemoveSticker(path));
                 }
             }
+            Input::UnstarSticker(path) => {
+                if let Some(backend) = &self.backend {
+                    backend.send(crate::backend::Command::UnstarSticker(path));
+                }
+            }
             Input::InsertMention => self.show_mention_picker(sender),
             Input::InsertMentionId(participant) => self.insert_mention_id(participant),
             Input::SelectMention(candidate) => self.select_mention(candidate),

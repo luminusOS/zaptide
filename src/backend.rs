@@ -575,8 +575,10 @@ pub enum Command {
 
     /// Loads recent and saved stickers for the picker.
     RecentStickers,
-    /// Removes a sticker from the picker: deletes folder copies and unstars it.
+    /// Deletes saved-folder copies of a sticker without changing message stars.
     RemoveSticker(PathBuf),
+    /// Unstars matching sticker messages without deleting saved files.
+    UnstarSticker(PathBuf),
     React {
         chat: ChatId,
         message: String,

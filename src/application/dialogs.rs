@@ -13,6 +13,7 @@ pub(super) enum DialogAction {
     ForwardSelected(Vec<String>),
     SendSticker(std::path::PathBuf),
     RemoveSticker(std::path::PathBuf),
+    UnstarSticker(std::path::PathBuf),
     ShowStarred,
     OpenStarred { chat: String, id: String },
 }
@@ -930,6 +931,7 @@ fn attach_sticker_menu(
     button: &gtk::Button,
     label: String,
     path: std::path::PathBuf,
+    action: fn(std::path::PathBuf) -> DialogAction,
     on_action: &DialogActionCallback,
 ) {
     let show = {
@@ -948,7 +950,7 @@ fn attach_sticker_menu(
                 let on_action = on_action.clone();
                 item.connect_clicked(move |_| {
                     popover.popdown();
-                    on_action(DialogAction::RemoveSticker(path.clone()));
+                    on_action(action(path.clone()));
                 });
             }
             popover.connect_closed(|popover| {
@@ -1039,9 +1041,21 @@ pub(super) fn sticker_picker_content(
             load_sticker_preview(&button, path, 72);
             animate_sticker_on_hover(&button, path);
             if path.starts_with(saved_dir) {
-                attach_sticker_menu(&button, gettext("Remove"), path.clone(), on_action);
+                attach_sticker_menu(
+                    &button,
+                    gettext("Remove"),
+                    path.clone(),
+                    DialogAction::RemoveSticker,
+                    on_action,
+                );
             } else if favorites.contains(path) {
-                attach_sticker_menu(&button, gettext("Unstar"), path.clone(), on_action);
+                attach_sticker_menu(
+                    &button,
+                    gettext("Unstar"),
+                    path.clone(),
+                    DialogAction::UnstarSticker,
+                    on_action,
+                );
             }
             let path = path.clone();
             let on_action = on_action.clone();

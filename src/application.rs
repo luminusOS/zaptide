@@ -92,6 +92,7 @@ fn dialog_action_callback(
             dialogs::DialogAction::ForwardSelected(ids) => Input::ForwardSelected(ids),
             dialogs::DialogAction::SendSticker(path) => Input::SendSticker(path),
             dialogs::DialogAction::RemoveSticker(path) => Input::RemoveSticker(path),
+            dialogs::DialogAction::UnstarSticker(path) => Input::UnstarSticker(path),
             dialogs::DialogAction::ShowStarred => Input::ShowStarred,
             dialogs::DialogAction::OpenStarred { chat, id } => Input::OpenStarred { chat, id },
         });
@@ -761,6 +762,7 @@ pub enum Input {
     ContactActionFinished(Result<(), String>),
     SendSticker(std::path::PathBuf),
     RemoveSticker(std::path::PathBuf),
+    UnstarSticker(std::path::PathBuf),
     ClearTyping(String),
     StopComposing(String),
     InsertEmoji(String),
