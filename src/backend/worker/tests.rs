@@ -2060,6 +2060,14 @@ fn quoted_mentions_keep_tokens_aligned_with_phone_mapping() {
         .identity
         .lid_to_pn
         .insert("15581".into(), "15551234567".into());
+    worker.identity.contacts.insert(
+        "15581@lid".into(),
+        Contact {
+            id: "15581@lid".into(),
+            full_name: None,
+            push_name: Some("Synthetic Alice".into()),
+        },
+    );
     let mut message = crate::archive::tests::message("group@g.us", "M1", 10, false);
     message.quoted = Some(Quoted {
         id: "Q1".into(),
@@ -2078,6 +2086,7 @@ fn quoted_mentions_keep_tokens_aligned_with_phone_mapping() {
     assert_eq!(quote.summary, "Hello @15551234567");
     assert_eq!(quote.mentions[0].user, "15551234567");
     assert_eq!(quote.mentions[0].id, "15551234567@s.whatsapp.net");
+    assert_eq!(quote.mentions[0].name.as_deref(), Some("Synthetic Alice"));
 }
 
 #[test]

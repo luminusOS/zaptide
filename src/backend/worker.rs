@@ -1592,6 +1592,19 @@ impl Worker {
                 .clone()
                 .filter(|name| !name.is_empty())
         })
+        .or_else(|| {
+            self.identity.lid_to_pn.iter().find_map(|(lid, pn)| {
+                if pn != &mention.user {
+                    return None;
+                }
+                self.identity
+                    .contacts
+                    .get(&format!("{lid}@lid"))?
+                    .push_name
+                    .clone()
+                    .filter(|name| !name.is_empty())
+            })
+        })
     }
 }
 
