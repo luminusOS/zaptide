@@ -25,18 +25,22 @@ pub fn set_status(message: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ashpd::zvariant::serialized::Context;
-    use ashpd::zvariant::{LE, Type, Value, to_bytes};
+    use ashpd::zbus::wire::serialized::Context;
+    use ashpd::zbus::wire::{LE, to_bytes};
+    use ashpd::zbus::{Type, Variant};
     use std::collections::HashMap;
 
     #[test]
     fn the_status_is_sent_as_a_vardict_not_a_boxed_variant() {
         assert_eq!(SetStatusOptions::SIGNATURE.to_string(), "a{sv}");
-        let bytes = to_bytes(Context::new_dbus(LE, 0), &status_options("3 unread chats"))
+        let bytes = to_bytes(Context::new(LE, 0), &status_options("3 unread chats"))
             .expect("the options serialize");
-        let (options, _): (HashMap<String, Value>, _) =
+        let (options, _): (HashMap<String, Variant>, _) =
             bytes.deserialize().expect("the body is an a{sv}");
-        assert_eq!(options.get("message"), Some(&Value::from("3 unread chats")));
+        assert_eq!(
+            options.get("message"),
+            Some(&Variant::from("3 unread chats"))
+        );
     }
 
     #[test]

@@ -23,7 +23,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use ashpd::desktop::Icon;
 use ashpd::desktop::notification::{Notification, NotificationProxy};
-use ashpd::zvariant::{Fd, Type, Value, as_value};
+use ashpd::zbus::wire::as_variant;
+use ashpd::zbus::{Fd, Type, Variant};
 use serde::Serialize;
 
 use crate::notification_sound::{SOUND, SoundRequest};
@@ -113,12 +114,12 @@ impl Sound {
         }
     }
 
-    fn value(&self) -> Value<'_> {
+    fn value(&self) -> Variant<'_> {
         match self {
             Self::File(descriptor) => {
-                Value::new(("file-descriptor", Value::from(Fd::from(descriptor))))
+                Variant::new(("file-descriptor", Variant::from(Fd::from(descriptor))))
             }
-            Self::Silent => Value::from("silent"),
+            Self::Silent => Variant::from("silent"),
         }
     }
 }
@@ -126,12 +127,12 @@ impl Sound {
 /// The `AddNotification` body: ashpd's notification and the sound it cannot
 /// express.
 #[derive(Serialize, Type)]
-#[zvariant(signature = "dict", crate = "ashpd::zvariant")]
+#[zvariant(signature = "dict", crate = "ashpd::zbus::wire")]
 struct Body<'a> {
     #[serde(flatten)]
     notification: Notification,
-    #[serde(with = "as_value")]
-    sound: Value<'a>,
+    #[serde(with = "as_variant")]
+    sound: Variant<'a>,
 }
 
 fn notification(request: &Request) -> std::io::Result<Notification> {
@@ -442,7 +443,7 @@ mod tests {
     use std::sync::Mutex;
 
     use ashpd::zbus;
-    use zbus::zvariant::OwnedValue;
+    use zbus::OwnedVariant;
 
     use super::*;
 
@@ -867,7 +868,7 @@ mod tests {
 
     struct Received {
         id: String,
-        notification: std::collections::HashMap<String, OwnedValue>,
+        notification: std::collections::HashMap<String, OwnedVariant>,
     }
 
     /// A portal on a private peer-to-peer connection, so nothing touches the
@@ -901,7 +902,7 @@ mod tests {
         async fn add_notification(
             &self,
             id: String,
-            notification: std::collections::HashMap<String, OwnedValue>,
+            notification: std::collections::HashMap<String, OwnedVariant>,
         ) -> zbus::fdo::Result<()> {
             let body = notification
                 .get("body")
@@ -939,12 +940,12 @@ mod tests {
     }
 
     async fn connect(portal: FakePortal) -> zbus::Result<zbus::Connection> {
-        let (server_end, client_end) = tokio::net::UnixStream::pair()?;
+        let (server_end, client_end) = std::os::unix::net::UnixStream::pair()?;
         let guid = zbus::Guid::generate();
         let server = zbus::connection::Builder::unix_stream(server_end)
-            .server(guid)?
+            .server(guid)
             .p2p()
-            .serve_at("/org/freedesktop/portal/desktop", portal)?
+            .serve_at("/org/freedesktop/portal/desktop", portal)
             .build();
         let client = zbus::connection::Builder::unix_stream(client_end)
             .p2p()
@@ -1258,16 +1259,16 @@ mod tests {
     }
 
     /// The descriptor named by a serialized `(sv)`, read back as bytes.
-    fn descriptor_bytes(value: &OwnedValue) -> Vec<u8> {
-        fn find(value: &Value<'_>) -> Option<Vec<u8>> {
+    fn descriptor_bytes(value: &OwnedVariant) -> Vec<u8> {
+        fn find(value: &Variant<'_>) -> Option<Vec<u8>> {
             match value {
-                Value::Structure(structure) => {
+                Variant::Structure(structure) => {
                     let fields = structure.fields();
                     assert_eq!(<&str>::try_from(&fields[0]).unwrap(), "file-descriptor");
                     find(&fields[1])
                 }
-                Value::Value(inner) => find(inner),
-                Value::Fd(descriptor) => {
+                Variant::Variant(inner) => find(inner),
+                Variant::Fd(descriptor) => {
                     let owned = descriptor.as_fd().try_clone_to_owned().ok()?;
                     Some(read_all(owned))
                 }
@@ -1314,7 +1315,7 @@ mod tests {
         .unwrap();
         let received = received.lock().unwrap();
         let sound = &received[0].notification["sound"];
-        assert!(matches!(&**sound, Value::Fd(_)), "{sound:?}");
+        assert!(matches!(&**sound, Variant::Fd(_)), "{sound:?}");
     }
 
     #[test]
