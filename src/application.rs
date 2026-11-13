@@ -592,6 +592,7 @@ pub struct NativeApplication {
     pending_send: Option<PendingSend>,
     account_receipts_off: bool,
     link: LinkStatus,
+    account_known: bool,
     syncing: bool,
     /// Reconnecting after a suspend, until the link is back.
     resuming: bool,
@@ -1465,6 +1466,7 @@ impl SimpleComponent for NativeApplication {
             pending_send: None,
             account_receipts_off: false,
             link: LinkStatus::Starting,
+            account_known: false,
             syncing: false,
             resuming: false,
             resume_dropped: false,
