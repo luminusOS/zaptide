@@ -1056,7 +1056,11 @@ mod tests {
                     let hide = visible.clone();
                     queue.remove("token-1", false, move || hide.set(false));
                     assert!(!visible.get());
-                    queue.wait_quarantined("token-1").await;
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+                    while queue.has_pending("token-1") {
+                        assert!(std::time::Instant::now() < deadline);
+                        relm4::gtk::glib::timeout_future(std::time::Duration::from_millis(5)).await;
+                    }
                     assert!(
                         !queue.lanes.borrow().contains_key("token-1"),
                         "unsupported removal must not wait for a portal"
@@ -1119,12 +1123,7 @@ mod tests {
                     queue_dbus_add(&queue, connection.clone(), "old", done.clone());
                     started_rx.recv().await.unwrap();
                     release.send(()).await.unwrap();
-                    on_runtime(async {
-                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                        Ok(())
-                    })
-                    .await
-                    .unwrap();
+                    queue.wait_quarantined("token-1").await;
                     assert!(
                         queue
                             .lanes
