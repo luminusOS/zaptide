@@ -18,6 +18,7 @@ pub(super) struct AccountSession {
     pub(super) notifier: EventNotifier,
     pub(super) drain: Option<GlibEventDrain>,
     pub(super) link: LinkStatus,
+    pub(super) account_known: bool,
     pub(super) syncing: bool,
     pub(super) chat_snapshots: Vec<std::rc::Rc<crate::model::Chat>>,
     pub(super) contacts: std::collections::HashMap<String, crate::model::Contact>,
@@ -49,6 +50,7 @@ impl AccountSession {
                 LinkStatus::Failed("Couldn't start".into())
             },
             backend,
+            account_known: false,
             notifier,
             drain,
             syncing: false,
@@ -549,6 +551,7 @@ impl NativeApplication {
         std::mem::swap(&mut self.active_drain, &mut session.drain);
         std::mem::swap(&mut self.active_dirs, &mut session.dirs);
         std::mem::swap(&mut self.link, &mut session.link);
+        std::mem::swap(&mut self.account_known, &mut session.account_known);
         std::mem::swap(&mut self.syncing, &mut session.syncing);
         std::mem::swap(&mut self.chat_snapshots, &mut session.chat_snapshots);
         std::mem::swap(&mut self.contacts, &mut session.contacts);
@@ -830,6 +833,7 @@ pub(super) fn apply_hidden_event(
     match event {
         Event::Link(link) => {
             if matches!(link, LinkStatus::LoggedOut) {
+                session.account_known = false;
                 session.chat_snapshots.clear();
                 session.contacts.clear();
                 session.avatars.clear();
@@ -842,6 +846,8 @@ pub(super) fn apply_hidden_event(
             }
             session.link = link;
         }
+
+        Event::AccountKnown(known) => session.account_known = known,
 
         Event::Syncing(syncing) => session.syncing = syncing,
         Event::Chats(chats) => {
@@ -1104,6 +1110,8 @@ mod tests {
     #[test]
     fn a_hidden_account_that_logs_out_forgets_its_data() {
         let mut session = AccountSession::detached_for_tests(AccountId(2));
+        apply_hidden_event(&mut session, Event::AccountKnown(true), true, true);
+        assert!(session.account_known);
         apply_hidden_event(
             &mut session,
             Event::Chats(vec![unread_chat("chat", "Alice")]),
@@ -1115,6 +1123,7 @@ mod tests {
             .avatars
             .insert("chat".into(), "/synthetic/a.jpg".into());
         apply_hidden_event(&mut session, Event::Link(LinkStatus::LoggedOut), true, true);
+        assert!(!session.account_known);
         assert!(session.chat_snapshots.is_empty());
         assert!(session.drafts.is_empty());
         assert!(session.avatars.is_empty());
