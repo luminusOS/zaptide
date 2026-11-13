@@ -12,6 +12,8 @@ pub(super) enum DialogAction {
     InsertMentionId(String),
     ForwardSelected(Vec<String>),
     SendSticker(std::path::PathBuf),
+    RemoveSticker(std::path::PathBuf),
+    UnstarSticker(std::path::PathBuf),
     ShowStarred,
     OpenStarred { chat: String, id: String },
 }
@@ -924,10 +926,71 @@ fn animate_sticker_on_hover(button: &gtk::Button, path: &std::path::Path) {
     button.add_controller(hover);
 }
 
-/// Shows recently used own stickers, followed by locally saved stickers.
+/// Right-click or long-press menu on a picker sticker that can be removed.
+fn attach_sticker_menu(
+    button: &gtk::Button,
+    label: String,
+    path: std::path::PathBuf,
+    action: fn(std::path::PathBuf) -> DialogAction,
+    on_action: &DialogActionCallback,
+) {
+    let show = {
+        let on_action = on_action.clone();
+        std::rc::Rc::new(move |button: &gtk::Button| {
+            let popover = gtk::Popover::new();
+            let item = gtk::Button::builder()
+                .label(&label)
+                .css_classes(["flat"])
+                .build();
+            popover.set_child(Some(&item));
+            popover.set_parent(button);
+            {
+                let popover = popover.downgrade();
+                let path = path.clone();
+                let on_action = on_action.clone();
+                item.connect_clicked(move |_| {
+                    if let Some(popover) = popover.upgrade() {
+                        popover.popdown();
+                    }
+                    on_action(action(path.clone()));
+                });
+            }
+            popover.connect_closed(|popover| {
+                let popover = popover.clone();
+                gtk::glib::idle_add_local_once(move || popover.unparent());
+            });
+            popover.popup();
+        })
+    };
+    let click = gtk::GestureClick::builder()
+        .button(gtk::gdk::BUTTON_SECONDARY)
+        .build();
+    {
+        let show = show.clone();
+        click.connect_pressed(move |gesture, _, _, _| {
+            if let Some(button) = gesture.widget().and_downcast::<gtk::Button>() {
+                show(&button);
+            }
+        });
+    }
+    button.add_controller(click);
+    let press = gtk::GestureLongPress::new();
+    press.connect_pressed(move |gesture, _, _| {
+        if let Some(button) = gesture.widget().and_downcast::<gtk::Button>() {
+            show(&button);
+        }
+    });
+    button.add_controller(press);
+}
+
+/// Shows every sticker, with a switch at the bottom to the starred ones.
+/// `recent` lists each distinct sticker, `favorites` the starred subset.
+/// Stickers copied into `saved_dir` or starred can be removed from the menu.
 pub(super) fn sticker_picker_content(
     recent: &[std::path::PathBuf],
     favorites: &[std::path::PathBuf],
+    saved_dir: &std::path::Path,
+    page: &str,
     on_action: &DialogActionCallback,
 ) -> (gtk::Box, gtk::Stack) {
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -936,7 +999,7 @@ pub(super) fn sticker_picker_content(
         .vexpand(true)
         .transition_type(gtk::StackTransitionType::Crossfade)
         .build();
-    let stickers = recent
+    let all = recent
         .iter()
         .chain(favorites)
         .cloned()
@@ -946,16 +1009,17 @@ pub(super) fn sticker_picker_content(
             }
             paths
         });
-    if stickers.is_empty() {
-        let empty = adw::StatusPage::builder()
-            .icon_name("emoji-nature-symbolic")
-            .title(gettext("No Stickers Yet"))
-            .description(gettext("Your recently used stickers appear here."))
-            .vexpand(true)
-            .build();
-        empty.add_css_class("compact");
-        content.append(&empty);
-    } else {
+    let build_page = |stickers: &[std::path::PathBuf], title: String, text: String| {
+        if stickers.is_empty() {
+            let empty = adw::StatusPage::builder()
+                .icon_name("emoji-nature-symbolic")
+                .title(title)
+                .description(text)
+                .vexpand(true)
+                .build();
+            empty.add_css_class("compact");
+            return empty.upcast::<gtk::Widget>();
+        }
         let grid = gtk::FlowBox::builder()
             .selection_mode(gtk::SelectionMode::None)
             .homogeneous(true)
@@ -978,18 +1042,64 @@ pub(super) fn sticker_picker_content(
             button.update_property(&[gtk::accessible::Property::Label(&accessible_name)]);
             load_sticker_preview(&button, path, 72);
             animate_sticker_on_hover(&button, path);
+            if path.starts_with(saved_dir) {
+                attach_sticker_menu(
+                    &button,
+                    gettext("Remove"),
+                    path.clone(),
+                    DialogAction::RemoveSticker,
+                    on_action,
+                );
+            } else if favorites.contains(path) {
+                attach_sticker_menu(
+                    &button,
+                    gettext("Unstar"),
+                    path.clone(),
+                    DialogAction::UnstarSticker,
+                    on_action,
+                );
+            }
             let path = path.clone();
             let on_action = on_action.clone();
             button.connect_clicked(move |_| on_action(DialogAction::SendSticker(path.clone())));
             grid.append(&button);
         }
-        let scroller = gtk::ScrolledWindow::builder()
+        gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
             .child(&grid)
-            .build();
-        stack.add_titled(&scroller, Some("recent"), "Stickers");
-        content.append(&stack);
-    }
+            .build()
+            .upcast::<gtk::Widget>()
+    };
+    let folder = gtk::glib::markup_escape_text(&saved_dir.display().to_string());
+    let all_text = format!(
+        "{}\n\n{}\n{}",
+        gettext("Your recently used stickers appear here."),
+        gettext("To add your own, copy .webp files into:"),
+        folder
+    );
+    stack.add_titled(
+        &build_page(&all, gettext("No Stickers Yet"), all_text),
+        Some("all"),
+        &gettext("All"),
+    );
+    stack.add_titled(
+        &build_page(
+            favorites,
+            gettext("No Starred Stickers"),
+            gettext("Star a sticker in a chat to keep it here."),
+        ),
+        Some("starred"),
+        &gettext("Starred"),
+    );
+    stack.set_visible_child_name(if page == "starred" { "starred" } else { "all" });
+    let switcher = gtk::StackSwitcher::builder()
+        .stack(&stack)
+        .halign(gtk::Align::Center)
+        .margin_top(6)
+        .margin_bottom(6)
+        .build();
+    content.append(&stack);
+    content.append(&switcher);
     (content, stack)
 }
 
@@ -1345,4 +1455,53 @@ pub(super) fn show_starred_dialog(
 
 fn glib_escape(text: &str) -> String {
     gtk::glib::markup_escape_text(text).to_string()
+}
+
+#[cfg(test)]
+mod sticker_menu_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "needs a display"]
+    fn closing_sticker_menu_releases_popover() {
+        gtk::init().unwrap();
+        let window = gtk::Window::new();
+        let button = gtk::Button::new();
+        window.set_child(Some(&button));
+        window.present();
+        let callback: DialogActionCallback = std::rc::Rc::new(|_| {});
+        attach_sticker_menu(
+            &button,
+            "Remove".into(),
+            "/synthetic/sticker.webp".into(),
+            DialogAction::RemoveSticker,
+            &callback,
+        );
+        let controllers = button.observe_controllers();
+        for index in 0..controllers.n_items() {
+            if let Ok(gesture) = controllers
+                .item(index)
+                .unwrap()
+                .downcast::<gtk::GestureClick>()
+                && gesture.button() == gtk::gdk::BUTTON_SECONDARY
+            {
+                gesture.emit_by_name::<()>("pressed", &[&1i32, &0.0f64, &0.0f64]);
+            }
+        }
+        let popover = button
+            .last_child()
+            .unwrap()
+            .downcast::<gtk::Popover>()
+            .unwrap();
+        let weak = popover.downgrade();
+        popover.popdown();
+        let context = gtk::glib::MainContext::default();
+        while context.pending() {
+            context.iteration(false);
+        }
+        assert!(popover.parent().is_none());
+        drop(popover);
+        assert!(weak.upgrade().is_none(), "closed menu must be released");
+        window.destroy();
+    }
 }

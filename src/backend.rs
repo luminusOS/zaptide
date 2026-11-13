@@ -575,6 +575,10 @@ pub enum Command {
 
     /// Loads recent and saved stickers for the picker.
     RecentStickers,
+    /// Deletes saved-folder copies of a sticker without changing message stars.
+    RemoveSticker(PathBuf),
+    /// Unstars matching sticker messages without deleting saved files.
+    UnstarSticker(PathBuf),
     React {
         chat: ChatId,
         message: String,
@@ -779,7 +783,7 @@ pub enum Event {
     },
     /// Starred messages of one chat, newest first.
     StarredList(Vec<crate::archive::StarredMessage>),
-    /// Saved stickers, imported packs, and recent stickers for the picker.
+    /// Starred stickers, imported packs, and every distinct sticker for the picker.
     Stickers {
         saved: Vec<PathBuf>,
         packs: Vec<StickerPack>,

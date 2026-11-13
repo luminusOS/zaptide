@@ -454,6 +454,8 @@ impl Worker {
                 done: Done::ReceiptsPrivacy { disabled },
                 ..
             }) => self.emit(Event::ReceiptsPrivacy { disabled }),
+            Command::RemoveSticker(path) => self.remove_sticker(path),
+            Command::UnstarSticker(path) => self.unstar_sticker(path),
             Command::RecentStickers => {
                 self.fetch_missing_stickers();
                 self.emit_stickers();

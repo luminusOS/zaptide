@@ -91,7 +91,7 @@ impl Archive {
 
     pub fn recent_stickers(&self, limit: usize) -> Result<Vec<ArchivedSticker>> {
         let mut statement = self.connection.prepare(
-            "SELECT media_path, MAX(timestamp), raw
+            "SELECT media_path, MAX(timestamp)
              FROM messages
              WHERE kind = 'sticker' AND media_path IS NOT NULL
                AND from_me = 1
@@ -105,7 +105,6 @@ impl Archive {
             Ok(ArchivedSticker {
                 last_used: row.get(1)?,
                 path: std::path::PathBuf::from(row.get::<_, String>(0)?),
-                raw: row.get(2)?,
             })
         })?;
         Ok(rows
@@ -121,6 +120,74 @@ impl Archive {
                AND from_me = 1
                AND media_path IS NULL
                AND raw IS NOT NULL
+             ORDER BY timestamp DESC
+             LIMIT ?1",
+        )?;
+        let rows = statement.query_map(params![limit as i64], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.collect()
+    }
+
+    /// Downloaded stickers the person starred, whoever sent them, newest
+    /// first. Locked chats contribute none, as they show nothing elsewhere.
+    pub fn starred_stickers(&self, limit: usize) -> Result<Vec<ArchivedSticker>> {
+        let mut statement = self.connection.prepare(
+            "SELECT media_path, MAX(timestamp)
+             FROM messages
+             WHERE kind = 'sticker' AND media_path IS NOT NULL
+               AND EXISTS (SELECT 1 FROM stars
+                           WHERE stars.chat = messages.chat AND stars.id = messages.id
+                             AND stars.starred = 1)
+               AND NOT COALESCE((SELECT locked FROM chats WHERE chats.id = messages.chat), 0)
+             GROUP BY media_path
+             ORDER BY 2 DESC
+             LIMIT ?1",
+        )?;
+        let rows = statement.query_map(params![limit as i64], |row| {
+            Ok(ArchivedSticker {
+                last_used: row.get(1)?,
+                path: std::path::PathBuf::from(row.get::<_, String>(0)?),
+            })
+        })?;
+        Ok(rows
+            .flatten()
+            .filter(|sticker| sticker.path.exists())
+            .collect())
+    }
+
+    /// Starred sticker messages in unlocked chats, for unstarring by content.
+    pub fn starred_sticker_keys(&self) -> Result<Vec<(String, String, std::path::PathBuf)>> {
+        let mut statement = self.connection.prepare(
+            "SELECT chat, id, media_path FROM messages
+             WHERE kind = 'sticker' AND media_path IS NOT NULL
+               AND EXISTS (SELECT 1 FROM stars
+                           WHERE stars.chat = messages.chat AND stars.id = messages.id
+                              AND stars.starred = 1)
+               AND NOT COALESCE((SELECT locked FROM chats WHERE chats.id = messages.chat), 0)",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                std::path::PathBuf::from(row.get::<_, String>(2)?),
+            ))
+        })?;
+        rows.collect()
+    }
+
+    /// Starred stickers whose file is not on disk yet, so the picker can
+    /// download them.
+    pub fn starred_stickers_without_file(&self, limit: usize) -> Result<Vec<(String, String)>> {
+        let mut statement = self.connection.prepare(
+            "SELECT chat, id FROM messages
+             WHERE kind = 'sticker'
+               AND media_path IS NULL
+               AND raw IS NOT NULL
+               AND EXISTS (SELECT 1 FROM stars
+                           WHERE stars.chat = messages.chat AND stars.id = messages.id
+                             AND stars.starred = 1)
+               AND NOT COALESCE((SELECT locked FROM chats WHERE chats.id = messages.chat), 0)
              ORDER BY timestamp DESC
              LIMIT ?1",
         )?;

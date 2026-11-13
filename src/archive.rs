@@ -38,7 +38,6 @@ pub struct PhoneSticker {
 pub struct ArchivedSticker {
     pub last_used: i64,
     pub path: std::path::PathBuf,
-    pub raw: Option<Vec<u8>>,
 }
 
 /// A stored row as a re-derive pass read it.
@@ -1422,7 +1421,6 @@ mod sticker_tests {
         std::fs::remove_file(&file).ok();
         std::fs::remove_file(&received).ok();
         assert_eq!(recent.len(), 1);
-        assert_eq!(recent[0].raw.as_deref(), Some(&b"raw"[..]));
     }
 }
 

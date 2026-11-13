@@ -22,6 +22,10 @@ impl Worker {
                 starred,
                 local: true,
             });
+            if matches!(message.content, Content::Sticker { .. }) {
+                self.fetch_missing_stickers();
+                self.stickers_dirty = true;
+            }
         }
         // The phone names the sender of a group message from someone else;
         // everywhere else the key has no participant.

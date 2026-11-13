@@ -443,6 +443,8 @@ impl NativeApplication {
         let (content, stack) = sticker_picker_content(
             &self.recent_stickers,
             &self.favorite_stickers,
+            &self.active_dirs.saved_sticker_dir(),
+            "all",
             &dialog_action_callback(&sender),
         );
         popover.set_child(Some(&content));
@@ -1045,8 +1047,7 @@ impl NativeApplication {
                 }
             }
             Input::InsertEmoji(emoji) => {
-                let mut end = self.composer_buffer.end_iter();
-                self.composer_buffer.insert(&mut end, &emoji);
+                self.composer_buffer.insert_at_cursor(&emoji);
             }
             Input::ShowStickerPicker => self.show_sticker_picker(sender),
             Input::ShowPollCreator => {
@@ -1074,6 +1075,16 @@ impl NativeApplication {
                         chat: chat.clone(),
                         path,
                     });
+                }
+            }
+            Input::RemoveSticker(path) => {
+                if let Some(backend) = &self.backend {
+                    backend.send(crate::backend::Command::RemoveSticker(path));
+                }
+            }
+            Input::UnstarSticker(path) => {
+                if let Some(backend) = &self.backend {
+                    backend.send(crate::backend::Command::UnstarSticker(path));
                 }
             }
             Input::InsertMention => self.show_mention_picker(sender),

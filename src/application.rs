@@ -91,6 +91,8 @@ fn dialog_action_callback(
             dialogs::DialogAction::InsertMentionId(id) => Input::InsertMentionId(id),
             dialogs::DialogAction::ForwardSelected(ids) => Input::ForwardSelected(ids),
             dialogs::DialogAction::SendSticker(path) => Input::SendSticker(path),
+            dialogs::DialogAction::RemoveSticker(path) => Input::RemoveSticker(path),
+            dialogs::DialogAction::UnstarSticker(path) => Input::UnstarSticker(path),
             dialogs::DialogAction::ShowStarred => Input::ShowStarred,
             dialogs::DialogAction::OpenStarred { chat, id } => Input::OpenStarred { chat, id },
         });
@@ -759,6 +761,8 @@ pub enum Input {
     },
     ContactActionFinished(Result<(), String>),
     SendSticker(std::path::PathBuf),
+    RemoveSticker(std::path::PathBuf),
+    UnstarSticker(std::path::PathBuf),
     ClearTyping(String),
     StopComposing(String),
     InsertEmoji(String),
@@ -2046,10 +2050,15 @@ impl NativeApplication {
                 .map(|scroller| scroller.vadjustment())
         };
         let offset = scroll(stack).map(|adjustment| adjustment.value());
+        let page = stack
+            .visible_child_name()
+            .map_or_else(|| "all".to_owned(), |name| name.to_string());
         let had_focus = popover.focus_child().is_some();
         let (content, new_stack) = sticker_picker_content(
             &self.recent_stickers,
             &self.favorite_stickers,
+            &self.active_dirs.saved_sticker_dir(),
+            &page,
             &dialog_action_callback(sender),
         );
         popover.set_child(Some(&content));

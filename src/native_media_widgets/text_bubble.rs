@@ -521,7 +521,10 @@ impl TextBubble {
     fn offset_at(&self, x: f64, y: f64) -> Option<i32> {
         let view = self.view();
         let (x, y) = view.window_to_buffer_coords(gtk::TextWindowType::Widget, x as i32, y as i32);
-        let iter = view.iter_at_location(x, y)?;
+        // `iter_at_location` returns the nearest cursor position, so the right
+        // half of a character resolves to the next one and fails the bounds
+        // check below. `iter_at_position` returns the character under the point.
+        let (iter, _) = view.iter_at_position(x, y)?;
         let rect = view.iter_location(&iter);
         (x >= rect.x()
             && x < rect.x() + rect.width().max(1)
