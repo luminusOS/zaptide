@@ -138,6 +138,7 @@ impl Worker {
             candidates.push((when, path, true, false));
         }
         candidates.sort_by_key(|(when, _, _, _)| std::cmp::Reverse(*when));
+        let saved_dir = self.dirs.saved_sticker_dir();
         let mut seen: HashMap<String, usize> = HashMap::new();
         let mut distinct: Vec<(PathBuf, bool, bool)> = Vec::new();
         for (_, path, starred, recent) in candidates {
@@ -145,6 +146,9 @@ impl Worker {
                 sticker_content_key(&path).unwrap_or_else(|| format!("path:{}", path.display()));
             match seen.get(&key) {
                 Some(&index) => {
+                    if path.parent() == Some(saved_dir.as_path()) {
+                        distinct[index].0 = path;
+                    }
                     distinct[index].1 |= starred;
                     distinct[index].2 |= recent;
                 }
@@ -316,6 +320,86 @@ fn sticker_content_key(path: &Path) -> Option<String> {
 mod tests {
     use super::*;
     use crate::backend::worker::tests::worker;
+
+    #[test]
+    fn saved_copy_remains_removable_when_a_recent_duplicate_is_newer() {
+        let (mut worker, events, _, _) = worker();
+        let root = tempfile::tempdir().unwrap();
+        worker.dirs = AppDirs::under(root.path());
+        let saved = worker.dirs.saved_sticker_dir().join("saved.webp");
+        let cached = worker.dirs.sticker_cache_dir().join("recent.webp");
+        std::fs::create_dir_all(worker.dirs.saved_sticker_dir()).unwrap();
+        std::fs::create_dir_all(worker.dirs.sticker_cache_dir()).unwrap();
+        std::fs::write(&saved, b"synthetic sticker").unwrap();
+        std::fs::write(&cached, b"synthetic sticker").unwrap();
+        worker
+            .archive
+            .upsert_phone_sticker("recent", b"metadata", i64::MAX, 1.0)
+            .unwrap();
+        worker.archive.set_sticker_path("recent", &cached).unwrap();
+
+        worker.emit_stickers();
+        let Event::Stickers {
+            saved: favorites,
+            recent,
+            ..
+        } = events.try_recv().unwrap()
+        else {
+            panic!("expected stickers");
+        };
+        assert_eq!(favorites, vec![saved.clone()]);
+        assert_eq!(recent, vec![saved.clone()]);
+        worker.remove_sticker(saved.clone());
+        assert!(!saved.exists());
+        assert!(cached.exists());
+        let Event::Stickers {
+            saved: favorites,
+            recent,
+            ..
+        } = events.try_recv().unwrap()
+        else {
+            panic!("expected refreshed stickers");
+        };
+        assert!(favorites.is_empty());
+        assert_eq!(recent, vec![cached]);
+    }
+
+    #[test]
+    fn removing_saved_duplicate_leaves_starred_message_available() {
+        let (mut worker, events, _, _) = worker();
+        let root = tempfile::tempdir().unwrap();
+        worker.dirs = AppDirs::under(root.path());
+        let saved = worker.dirs.saved_sticker_dir().join("saved.webp");
+        let cached = worker.dirs.sticker_cache_dir().join("starred.webp");
+        std::fs::create_dir_all(worker.dirs.saved_sticker_dir()).unwrap();
+        std::fs::create_dir_all(worker.dirs.sticker_cache_dir()).unwrap();
+        std::fs::write(&saved, b"synthetic sticker").unwrap();
+        std::fs::write(&cached, b"synthetic sticker").unwrap();
+        star_sticker(&worker, "visible@s.whatsapp.net", &cached, false);
+        worker.emit_stickers();
+        let Event::Stickers {
+            saved: favorites, ..
+        } = events.try_recv().unwrap()
+        else {
+            panic!("expected stickers");
+        };
+        assert_eq!(favorites, vec![saved.clone()]);
+        worker.remove_sticker(saved);
+        let Event::Stickers {
+            saved: favorites, ..
+        } = events.try_recv().unwrap()
+        else {
+            panic!("expected refreshed stickers");
+        };
+        assert_eq!(favorites, vec![cached]);
+        assert_eq!(
+            worker
+                .archive
+                .starred_ids("visible@s.whatsapp.net")
+                .unwrap(),
+            ["sticker"]
+        );
+    }
 
     fn star_sticker(worker: &Worker, chat: &str, path: &Path, locked: bool) {
         let mut message = crate::archive::tests::message(chat, "sticker", 100, false);
