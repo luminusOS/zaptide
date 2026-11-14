@@ -147,7 +147,7 @@ pub fn picker(on_pick: impl Fn(&str) + 'static) -> gtk::Popover {
         .placeholder_text(gettext("Search emoji"))
         .build();
     let grid = gtk::GridView::builder()
-        .min_columns(COLUMNS)
+        .min_columns(1)
         .max_columns(COLUMNS)
         .single_click_activate(true)
         .build();
@@ -233,22 +233,16 @@ pub fn picker(on_pick: impl Fn(&str) + 'static) -> gtk::Popover {
         }
     });
     for (index, button) in buttons.iter().enumerate() {
-        let (starts, grid, scroller) = (starts.clone(), grid.downgrade(), scroller.downgrade());
+        let (starts, grid) = (starts.clone(), grid.downgrade());
         button.connect_clicked(move |_| {
-            let (Some(grid), Some(scroller), Some(Some(start))) = (
-                grid.upgrade(),
-                scroller.upgrade(),
-                starts.borrow().get(index).copied(),
-            ) else {
+            let (Some(grid), Some(Some(start))) =
+                (grid.upgrade(), starts.borrow().get(index).copied())
+            else {
                 return;
             };
-            // Cells are the same height, so a row's offset is proportional.
-            let rows = grid
-                .model()
-                .map_or(1, |model| model.n_items().div_ceil(COLUMNS).max(1));
-            let adjustment = scroller.vadjustment();
-            let row_height = adjustment.upper() / f64::from(rows);
-            adjustment.set_value(f64::from(start / COLUMNS) * row_height);
+            if grid.model().is_some_and(|model| start < model.n_items()) {
+                grid.scroll_to(start, gtk::ListScrollFlags::NONE, None);
+            }
         });
     }
 
@@ -350,6 +344,12 @@ mod tests {
             .and_downcast::<gtk::ScrolledWindow>()
             .unwrap();
         let grid = scroller.child().and_downcast::<gtk::GridView>().unwrap();
+        assert!(
+            grid.min_columns() < grid.max_columns(),
+            "the emoji grid must allow a narrower popup allocation"
+        );
+        assert_eq!(grid.min_columns(), 1);
+        assert_eq!(grid.max_columns(), COLUMNS);
         assert!(
             grid.model().is_some_and(|model| model.n_items() > 0),
             "initial popup sizing must include the emoji grid"

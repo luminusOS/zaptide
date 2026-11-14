@@ -296,7 +296,7 @@ impl Drawer {
         let label = gettext("More Reactions");
         more.set_tooltip_text(Some(&label));
         more.update_property(&[gtk::accessible::Property::Label(&label)]);
-        more.connect_clicked(|_| drawer().choose_another());
+        more.connect_clicked(|button| drawer().choose_another(button));
         pill.append(&more);
 
         overlay.add_overlay(&pill);
@@ -382,18 +382,16 @@ impl Drawer {
         });
     }
 
-    fn choose_another(&self) {
+    fn choose_another(&self, button: &gtk::Button) {
         let Some(Shown { target, bubble }) = self.shown.borrow_mut().take() else {
             return;
         };
+        let anchor = bubble
+            .upgrade()
+            .and_then(|bubble| bubble.ancestor(gtk::ListView::static_type()))
+            .and_then(|list| button.compute_bounds(&list).map(|bounds| (list, bounds)));
         self.hide();
-        let Some(bubble) = bubble.upgrade() else {
-            return;
-        };
-        let Some(list) = bubble.ancestor(gtk::ListView::static_type()) else {
-            return;
-        };
-        let Some(bounds) = bubble.compute_bounds(&list) else {
+        let Some((list, bounds)) = anchor else {
             return;
         };
         let HoverTarget { id, sender, .. } = target;
