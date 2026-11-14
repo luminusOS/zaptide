@@ -170,6 +170,7 @@ pub(super) fn classify(message: &wa::Message) -> Option<Content> {
             question: non_empty(&poll.name).unwrap_or_else(|| "Poll".to_owned()),
             state: crate::model::PollState {
                 selectable: poll.selectable_options_count.unwrap_or(0) as usize,
+                quiz: poll.poll_type == Some(wa::message::PollType::QUIZ),
                 ..Default::default()
             },
             options: poll

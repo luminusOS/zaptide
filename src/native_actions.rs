@@ -117,6 +117,7 @@ mod tests {
             question: "Lunch?".into(),
             options: vec!["Soup".into(), "Salad".into()],
             multiple: false,
+            correct: None,
         };
         assert_eq!(
             create_poll("group@g.us", draft.clone()),

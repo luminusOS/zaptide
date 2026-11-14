@@ -167,6 +167,7 @@ pub(super) struct MessageRowWidgets {
     audio_controls: Option<crate::native_media_widgets::AudioControls>,
     rendered_message: Option<crate::model::Message>,
     rendered_album: Vec<crate::model::Message>,
+    quiz_choice: std::rc::Rc<std::cell::Cell<Option<usize>>>,
     action_generation: std::rc::Rc<std::cell::Cell<u64>>,
     decode_token: Option<crate::native_media::DecodeToken>,
     menu_target: MenuTarget,
@@ -190,6 +191,85 @@ impl Drop for FocusOnClickGuard {
 }
 
 impl MessageRowWidgets {
+    fn clear_quiz_choice(&mut self) {
+        self.quiz_choice.set(None);
+        if self.rendered_message.as_ref().is_some_and(|message| {
+            matches!(&message.content, crate::model::Content::Poll { state, .. } if state.quiz)
+        }) {
+            self.action_generation.set(self.action_generation.get().wrapping_add(1));
+            if let Some(token) = self.decode_token.take() { token.cancel(); }
+            while let Some(child) = self.media.first_child() { self.media.remove(&child); }
+            self.rendered_message = None;
+        }
+    }
+
+    fn bind_media(
+        &mut self,
+        message: &crate::model::Message,
+        album: &[crate::model::Message],
+        send: RowAction,
+    ) {
+        let same_album = self.rendered_album.len() == album.len()
+            && self
+                .rendered_album
+                .iter()
+                .zip(album)
+                .all(|(previous, next)| same_media(previous, next));
+        if same_album
+            && self
+                .rendered_message
+                .as_ref()
+                .is_some_and(|previous| same_media(previous, message))
+        {
+            return;
+        }
+        let preserve_choice = self.rendered_message.as_ref().is_some_and(|previous| {
+            previous.id == message.id && previous.chat == message.chat
+                && matches!((&previous.content, &message.content),
+                    (crate::model::Content::Poll { question: old_question, options: old_options, state: old_state },
+                     crate::model::Content::Poll { question, options, state })
+                    if old_state.quiz && state.quiz && old_state.selected.is_empty() && state.selected.is_empty()
+                        && old_question == question && old_options == options)
+        });
+        if !preserve_choice {
+            self.quiz_choice.set(None);
+        }
+        if let Some(token) = self.decode_token.take() {
+            token.cancel();
+        }
+        while let Some(child) = self.media.first_child() {
+            self.media.remove(&child);
+        }
+        while let Some(child) = self.audio.first_child() {
+            self.audio.remove(&child);
+        }
+        self.audio_controls = None;
+        let generation = self.action_generation.get().wrapping_add(1);
+        self.action_generation.set(generation);
+        let active_generation = self.action_generation.clone();
+        let media = self.media.downgrade();
+        let forward = move |action| {
+            if active_generation.get() == generation && media.upgrade().is_some() {
+                send(Input::MediaAction(action));
+            }
+        };
+        let rendered = if album.is_empty() {
+            crate::native_media_widgets::build_media_widget_with_quiz_choice(
+                message,
+                forward,
+                self.quiz_choice.clone(),
+            )
+        } else {
+            crate::native_media_widgets::build_album_widget(album, forward)
+        };
+        self.media
+            .set_visible(rendered.widget.first_child().is_some());
+        self.media.append(&rendered.widget);
+        self.decode_token = Some(rendered.decode_token);
+        self.rendered_message = Some(message.clone());
+        self.rendered_album = album.to_vec();
+    }
+
     fn set_body(&mut self, id: &str, text: &str, mentions: &[crate::safety::MentionLabel]) {
         if self
             .rendered_body
@@ -524,6 +604,7 @@ impl RelmListItem for MessageRow {
                 audio_controls: None,
                 rendered_message: None,
                 rendered_album: Vec::new(),
+                quiz_choice: Default::default(),
                 action_generation,
                 decode_token: None,
                 menu_target,
@@ -655,58 +736,17 @@ impl RelmListItem for MessageRow {
         ] {
             widget.set_tooltip_text((!words.is_empty()).then_some(words));
         }
-        // Delivery and reaction updates must not rebuild media: a rebuilt
-        // sticker or photo blanks while it decodes again and the list jumps.
-        let same_album = widgets.rendered_album.len() == self.album.len()
-            && widgets
-                .rendered_album
-                .iter()
-                .zip(&self.album)
-                .all(|(previous, next)| same_media(previous, next));
-        if !(same_album
-            && widgets
-                .rendered_message
-                .as_ref()
-                .is_some_and(|previous| same_media(previous, &self.message)))
+        if let Some(previous) = widgets.rendered_message.as_ref()
+            && previous.id != self.id
         {
-            if let Some(previous) = widgets.rendered_message.as_ref()
-                && previous.id != self.id
-            {
-                self.audio_registry.borrow_mut().remove(&previous.id);
-            }
-            if let Some(token) = widgets.decode_token.take() {
-                token.cancel();
-            }
-            while let Some(child) = widgets.media.first_child() {
-                widgets.media.remove(&child);
-            }
-            while let Some(child) = widgets.audio.first_child() {
-                widgets.audio.remove(&child);
-            }
-            widgets.audio_controls = None;
-            let generation = widgets.action_generation.get().wrapping_add(1);
-            widgets.action_generation.set(generation);
-            let active_generation = widgets.action_generation.clone();
-            let media = widgets.media.downgrade();
-            let sender = self.pointer_sender.clone();
-            let forward = move |action| {
-                if active_generation.get() == generation && media.upgrade().is_some() {
-                    sender.input(Input::MediaAction(action));
-                }
-            };
-            let rendered = if self.album.is_empty() {
-                crate::native_media_widgets::build_media_widget_with_action(&self.message, forward)
-            } else {
-                crate::native_media_widgets::build_album_widget(&self.album, forward)
-            };
-            widgets
-                .media
-                .set_visible(rendered.widget.first_child().is_some());
-            widgets.media.append(&rendered.widget);
-            widgets.decode_token = Some(rendered.decode_token);
-            widgets.rendered_message = Some(self.message.clone());
-            widgets.rendered_album = self.album.clone();
+            self.audio_registry.borrow_mut().remove(&previous.id);
         }
+        let sender = self.pointer_sender.clone();
+        widgets.bind_media(
+            &self.message,
+            &self.album,
+            std::rc::Rc::new(move |input| sender.input(input)),
+        );
         if let Some(voice) = &self.audio {
             if widgets.audio_controls.is_none() {
                 let sender = self.pointer_sender.clone();
@@ -746,6 +786,7 @@ impl RelmListItem for MessageRow {
 
     fn unbind(&mut self, widgets: &mut Self::Widgets, _root: &mut Self::Root) {
         widgets.unbind_body();
+        widgets.clear_quiz_choice();
     }
 }
 
@@ -763,6 +804,94 @@ fn album_tile_at(row: &gtk::Widget, x: f64, y: f64) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "needs a display"]
+    fn quiz_row_retains_unsubmitted_choice_on_vote_update_and_clears_on_reuse() {
+        use std::{cell::RefCell, rc::Rc};
+        gtk::init().unwrap();
+        adw::init().unwrap();
+        let item: gtk::ListItem = gtk::glib::Object::new();
+        let (_root, mut widgets) = <MessageRow as RelmListItem>::setup(&item);
+        let mut message = super::super::tests::grouping_message("quiz", "sender", false, 1);
+        message.content = crate::model::Content::Poll {
+            question: "Question".into(),
+            options: vec!["A".into(), "B".into()],
+            state: crate::model::PollState {
+                quiz: true,
+                selectable: 1,
+                can_vote: true,
+                ..Default::default()
+            },
+        };
+        let actions = Rc::new(RefCell::new(Vec::new()));
+        let recorded = actions.clone();
+        let send: RowAction = Rc::new(move |input| recorded.borrow_mut().push(input));
+        let controls = |widgets: &MessageRowWidgets| {
+            let root = widgets.media.first_child().unwrap();
+            let mut child = root.first_child();
+            let mut choices = Vec::new();
+            let mut vote = None;
+            while let Some(current) = child {
+                child = current.next_sibling();
+                if let Ok(button) = current.clone().downcast::<gtk::CheckButton>() {
+                    choices.push(button);
+                } else if let Ok(button) = current.downcast::<gtk::Button>() {
+                    vote = Some(button);
+                }
+            }
+            (choices, vote)
+        };
+        widgets.bind_media(&message, &[], send.clone());
+        let (choices, _) = controls(&widgets);
+        choices[1].set_active(true);
+        if let crate::model::Content::Poll { state, .. } = &mut message.content {
+            state.counts = vec![1, 0];
+        }
+        widgets.bind_media(&message, &[], send.clone());
+        let (choices, vote) = controls(&widgets);
+        assert!(choices[1].is_active());
+        let vote = vote.unwrap();
+        assert!(vote.is_sensitive());
+        vote.emit_clicked();
+        assert!(matches!(
+            &actions.borrow()[0],
+            Input::MediaAction(crate::native_media::NativeMediaAction::VoteQuiz { choice: 1, .. })
+        ));
+        if let crate::model::Content::Poll { options, .. } = &mut message.content {
+            options[1] = "changed".into();
+        }
+        widgets.bind_media(&message, &[], send.clone());
+        assert!(
+            controls(&widgets)
+                .0
+                .iter()
+                .all(|choice| !choice.is_active())
+        );
+        controls(&widgets).0[0].set_active(true);
+        message.id = "other".into();
+        widgets.bind_media(&message, &[], send.clone());
+        assert!(
+            controls(&widgets)
+                .0
+                .iter()
+                .all(|choice| !choice.is_active())
+        );
+        controls(&widgets).0[0].set_active(true);
+        if let crate::model::Content::Poll { state, .. } = &mut message.content {
+            state.selected = vec![0];
+        }
+        widgets.bind_media(&message, &[], send.clone());
+        assert_eq!(widgets.quiz_choice.get(), None);
+        if let crate::model::Content::Poll { state, .. } = &mut message.content {
+            state.selected.clear();
+        }
+        widgets.bind_media(&message, &[], send);
+        controls(&widgets).0[0].set_active(true);
+        widgets.clear_quiz_choice();
+        assert_eq!(widgets.quiz_choice.get(), None);
+        assert!(widgets.media.first_child().is_none());
+    }
 
     #[test]
     #[ignore = "needs a display"]
