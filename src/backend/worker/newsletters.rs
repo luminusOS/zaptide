@@ -1,6 +1,11 @@
 use super::*;
 
 impl Worker {
+    fn newsletter_retry_delay(tries: u32) -> Duration {
+        Duration::from_secs(30 * 2u64.pow(tries.saturating_sub(1).min(5)))
+            .min(Duration::from_secs(600))
+    }
+
     pub(super) fn request_newsletter_info(&mut self, id: &str) {
         if !self.newsletter_names.contains_key(id)
             && self.newsletter_requested.insert(id.to_owned())
@@ -10,9 +15,15 @@ impl Worker {
     }
 
     pub(super) fn fetch_subscribed_newsletters(&mut self) {
-        if self.newsletter_list_running {
-            return;
-        }
+        self.newsletter_list_pending = true;
+        self.newsletter_tries.retain(|id, tries| {
+            if *tries > 7 {
+                self.newsletter_requested.remove(id);
+                false
+            } else {
+                true
+            }
+        });
         let Some(client) = self.client.clone() else {
             return;
         };
@@ -23,6 +34,10 @@ impl Worker {
                 }
             }
         }
+        if self.newsletter_running || self.newsletter_list_running {
+            return;
+        }
+        self.newsletter_list_pending = false;
         let commands = self.commands.clone();
         let generation = self.session_generation;
         self.newsletter_list_running = true;
@@ -54,10 +69,24 @@ impl Worker {
     }
 
     pub(super) fn pump_newsletter_info(&mut self) {
+        let now = Instant::now();
+        let (due, later): (Vec<_>, Vec<_>) = std::mem::take(&mut self.newsletter_retry)
+            .into_iter()
+            .partition(|(at, _)| *at <= now);
+        self.newsletter_retry = later;
+        for (_, id) in due {
+            if !self.newsletter_names.contains_key(&id) {
+                self.newsletter_queue.push_back(id);
+            }
+        }
         if self.newsletter_running
             || self.newsletter_list_running
             || !matches!(self.status, LinkStatus::Connected)
         {
+            return;
+        }
+        if self.newsletter_list_pending {
+            self.fetch_subscribed_newsletters();
             return;
         }
         let Some(client) = self.client.clone() else {
@@ -106,8 +135,18 @@ impl Worker {
     ) {
         if let Some(id) = requested {
             self.newsletter_running = false;
-            if names.is_empty() {
-                self.newsletter_requested.remove(&id);
+            if !names
+                .iter()
+                .any(|(name_id, name)| name_id == &id && !name.trim().is_empty())
+            {
+                let tries = self.newsletter_tries.entry(id.clone()).or_insert(0);
+                *tries += 1;
+                if *tries <= 7 {
+                    self.newsletter_retry
+                        .push((Instant::now() + Self::newsletter_retry_delay(*tries), id));
+                }
+            } else {
+                self.newsletter_tries.remove(&id);
             }
         } else {
             self.newsletter_list_running = false;

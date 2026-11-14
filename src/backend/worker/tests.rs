@@ -128,6 +128,57 @@ fn synthetic_newsletter_metadata_before_message_does_not_create_chat() {
     );
 }
 
+#[test]
+fn synthetic_newsletter_failed_lookup_retries_without_another_message() {
+    let (mut worker, _, _, _) = worker();
+    let id = "123456@newsletter";
+    worker.ensure_chat(id, None);
+    worker.newsletter_queue.clear();
+    worker.newsletter_running = true;
+    worker.apply_newsletter_names(Vec::new(), Some(id.into()));
+    assert!(worker.newsletter_requested.contains(id));
+    assert_eq!(worker.newsletter_retry.len(), 1);
+    worker.newsletter_retry[0].0 = Instant::now();
+    worker.pump_newsletter_info();
+    assert_eq!(worker.newsletter_queue.pop_front().as_deref(), Some(id));
+    worker.apply_newsletter_names(vec![(id.into(), "Channel".into())], Some(id.into()));
+    assert_eq!(worker.archive.chat(id).unwrap().unwrap().name, "Channel");
+}
+
+#[test]
+fn synthetic_newsletter_reconnect_defers_list_until_individual_lookup_finishes() {
+    let (mut worker, _, _, _) = worker();
+    let id = "123456@newsletter";
+    worker.ensure_chat(id, None);
+    worker.newsletter_running = true;
+    worker.fetch_subscribed_newsletters();
+    assert!(worker.newsletter_list_pending);
+    assert!(!worker.newsletter_list_running);
+    worker.apply_newsletter_names(vec![(id.into(), "Old name".into())], Some(id.into()));
+    assert!(worker.newsletter_list_pending);
+    worker.newsletter_list_pending = false;
+    worker.newsletter_list_running = true;
+    worker.apply_newsletter_names(vec![(id.into(), "New name".into())], None);
+    assert_eq!(worker.archive.chat(id).unwrap().unwrap().name, "New name");
+}
+
+#[test]
+fn synthetic_newsletter_retries_stop_until_reconnect_after_limit() {
+    let (mut worker, _, _, _) = worker();
+    let id = "123456@newsletter";
+    worker.ensure_chat(id, None);
+    worker.newsletter_queue.clear();
+    for attempt in 1..=8 {
+        worker.newsletter_running = true;
+        worker.apply_newsletter_names(Vec::new(), Some(id.into()));
+        assert_eq!(worker.newsletter_retry.len(), usize::from(attempt <= 7));
+        worker.newsletter_retry.clear();
+    }
+    worker.fetch_subscribed_newsletters();
+    assert!(!worker.newsletter_requested.contains(id));
+    assert!(!worker.newsletter_tries.contains_key(id));
+}
+
 #[tokio::test]
 async fn completion_stale_media_sweep_releases_running_without_publishing() {
     let (mut worker, events, _inbox, _wa) = worker();
