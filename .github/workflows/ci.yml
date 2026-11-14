@@ -73,6 +73,18 @@ jobs:
         run: |
           cargo test --locked --lib --no-run
           timeout 60s xvfb-run -a cargo test --locked --lib inline_gifs_release_playback_when_unmapped -- --ignored --nocapture
+      - name: Transcript scroll bounds
+        env:
+          GDK_BACKEND: x11
+          GSK_RENDERER: cairo
+          GSETTINGS_BACKEND: memory
+          GTK_A11Y: none
+          G_DEBUG: fatal-criticals
+        shell: bash
+        run: |
+          set -o pipefail
+          timeout 60s xvfb-run -a cargo test --locked --lib application::transcript_view::tests::jump_button_tracks_transcript_growth_without_scrolling -- --exact --ignored --test-threads=1 | tee "$RUNNER_TEMP/transcript-scroll-test.log"
+          grep -F 'test result: ok. 1 passed;' "$RUNNER_TEMP/transcript-scroll-test.log"
       - name: Rustdoc
         env:
           RUSTDOCFLAGS: -D warnings
