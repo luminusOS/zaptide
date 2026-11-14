@@ -220,6 +220,7 @@ pub enum NativeMediaContent {
     Poll {
         question: String,
         options: Vec<PollOptionPresentation>,
+        quiz: bool,
     },
     /// Quick-reply labels under the message text.
     Buttons {
@@ -286,6 +287,7 @@ pub struct PollOptionPresentation {
     pub text: String,
     pub votes: usize,
     pub selected: bool,
+    pub correct: bool,
 }
 
 impl fmt::Debug for PollOptionPresentation {
@@ -381,6 +383,7 @@ pub fn project_content(message: &Message) -> NativeMessageContent {
             state,
         } => NativeMediaContent::Poll {
             question: question.clone(),
+            quiz: state.quiz,
             options: options
                 .iter()
                 .enumerate()
@@ -388,6 +391,7 @@ pub fn project_content(message: &Message) -> NativeMessageContent {
                     text: text.clone(),
                     votes: state.counts.get(index).copied().unwrap_or(0),
                     selected: state.selected.contains(&index),
+                    correct: state.correct == Some(index) && !state.selected.is_empty(),
                 })
                 .collect(),
         },
@@ -523,6 +527,11 @@ pub enum NativeMediaAction {
         chat: String,
         message: String,
     },
+    VoteQuiz {
+        chat: String,
+        message: String,
+        choice: usize,
+    },
     /// Reply to an interactive message with one of its quick-reply buttons.
     AnswerButton {
         chat: String,
@@ -547,6 +556,7 @@ impl fmt::Debug for NativeMediaAction {
             Self::ViewPhotos { .. } => formatter.write_str("ViewPhotos { .. }"),
             Self::ViewVideo(_) => formatter.write_str("ViewVideo(..)"),
             Self::Download { .. } => formatter.write_str("Download { .. }"),
+            Self::VoteQuiz { .. } => formatter.write_str("VoteQuiz { .. }"),
             Self::AnswerButton { .. } => formatter.write_str("AnswerButton { .. }"),
             Self::AnswerListRow { .. } => formatter.write_str("AnswerListRow { .. }"),
         }
@@ -863,7 +873,10 @@ mod tests {
         ];
 
         let projected = project_content(&message);
-        let NativeMediaContent::Poll { question, options } = &projected.content else {
+        let NativeMediaContent::Poll {
+            question, options, ..
+        } = &projected.content
+        else {
             panic!("expected poll presentation");
         };
         assert_eq!(question, "Private poll question");

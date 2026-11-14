@@ -40,7 +40,7 @@ pub(super) fn choices_for(options: &[String], hashes: &[Vec<u8>]) -> Option<Vec<
 
 /// Preserve the library-created poll for later reply quotes and lazy archive upgrades.
 /// This body is never sent; Polls::create owns protocol construction and transmission.
-fn creation_archive(content: &Content, secret: &[u8]) -> wa::Message {
+fn creation_archive(content: &Content, secret: &[u8], correct: Option<usize>) -> wa::Message {
     let Content::Poll {
         question,
         options,
@@ -60,6 +60,18 @@ fn creation_archive(content: &Content, secret: &[u8]) -> wa::Message {
             .collect(),
         selectable_options_count: Some(state.selectable as u32),
         poll_content_type: Some(wa::message::PollContentType::TEXT),
+        poll_type: correct.map(|_| wa::message::PollType::QUIZ),
+        correct_answer: correct.and_then(|index| options.get(index)).map_or_else(
+            MessageField::none,
+            |name| {
+                MessageField::some(wa::message::poll_creation_message::Option {
+                    option_name: Some(name.clone()),
+                    option_hash: Some(hex::encode(
+                        whatsapp_rust::wacore::poll::compute_option_hash(name),
+                    )),
+                })
+            },
+        ),
         ..Default::default()
     };
     let mut message = wa::Message {
@@ -250,7 +262,9 @@ impl Worker {
         };
         if let Some(poll) = raw.as_ref().and_then(|raw| definition(base_message(raw))) {
             state.selectable = poll.selectable_options_count.unwrap_or(0) as usize;
+            state.quiz = poll.poll_type == Some(wa::message::PollType::QUIZ);
         }
+        state.correct = None;
         state.selectable = if state.selectable == 0 {
             options.len()
         } else {
@@ -301,6 +315,26 @@ impl Worker {
                     *count += 1;
                 }
             }
+        }
+        if state.quiz
+            && !state.selected.is_empty()
+            && let Some(answer) = raw
+                .as_ref()
+                .and_then(|raw| definition(base_message(raw)))
+                .and_then(|poll| poll.correct_answer.as_option())
+        {
+            state.correct = options.iter().position(|option| {
+                (answer.option_name.is_some() || answer.option_hash.is_some())
+                    && answer
+                        .option_name
+                        .as_deref()
+                        .is_none_or(|name| name == option)
+                    && answer.option_hash.as_ref().is_none_or(|hash| {
+                        hash.eq_ignore_ascii_case(&hex::encode(
+                            whatsapp_rust::wacore::poll::compute_option_hash(option),
+                        ))
+                    })
+            });
         }
     }
 
@@ -358,16 +392,23 @@ impl Worker {
                     .pn()
                     .ok_or("Not connected to WhatsApp")?
                     .to_non_ad_string();
-                let (sent, secret) = client
-                    .polls()
-                    .create(
-                        jid,
-                        &draft.question,
-                        &draft.options,
-                        draft.selectable() as u32,
-                    )
-                    .await
-                    .map_err(|_| "Could not send the poll. Please try again.")?;
+                let polls = client.polls();
+                let result = if let Some(correct) = draft.correct {
+                    polls
+                        .create_quiz(jid, &draft.question, &draft.options, correct)
+                        .await
+                } else {
+                    polls
+                        .create(
+                            jid,
+                            &draft.question,
+                            &draft.options,
+                            draft.selectable() as u32,
+                        )
+                        .await
+                };
+                let (sent, secret) =
+                    result.map_err(|_| "Could not send the poll. Please try again.")?;
                 Ok(super::super::CreatedPoll {
                     id: sent.message_id,
                     secret,
@@ -425,6 +466,7 @@ impl Worker {
                 options: draft.options,
                 state: PollState {
                     selectable,
+                    quiz: draft.correct.is_some(),
                     ..Default::default()
                 },
             },
@@ -449,7 +491,7 @@ impl Worker {
             });
             return;
         }
-        let raw = creation_archive(&row.content, &created.secret).encode_to_vec();
+        let raw = creation_archive(&row.content, &created.secret, draft.correct).encode_to_vec();
         let _ = self.archive.mark_poll_history(&chat, &row.id);
         self.poll_history.finish(&chat, &row.id);
         self.store_message(row, Some(raw), None);
@@ -729,6 +771,72 @@ mod tests {
         }
     }
 
+    #[test]
+    fn quiz_answer_is_hidden_until_own_vote_and_survives_archive_roundtrip() {
+        let (mut worker, _events, _commands, _wa) = super::super::tests::worker();
+        let directory = tempfile::tempdir().unwrap();
+        let archive_path = directory.path().join("quiz.db");
+        worker.archive =
+            crate::archive::Archive::open_encrypted_for_test(&archive_path, &[42; 32]).unwrap();
+        let mut row = crate::archive::tests::message("chat", "poll", 1, false);
+        row.content = content();
+        let raw = creation_archive(&row.content, &[7; 32], Some(1));
+        let poll = definition(&raw).unwrap();
+        assert_eq!(poll.poll_type, Some(wa::message::PollType::QUIZ));
+        assert_eq!(
+            poll.correct_answer
+                .as_option()
+                .unwrap()
+                .option_name
+                .as_deref(),
+            Some("Pasta")
+        );
+        worker
+            .archive
+            .insert_message(&row, Some(&raw.encode_to_vec()))
+            .unwrap();
+        worker.polish_poll(&mut row);
+        let Content::Poll { state, .. } = &row.content else {
+            panic!("poll")
+        };
+        assert!(state.quiz);
+        assert_eq!(state.correct, None);
+        for (choice, expected) in [(0, 1), (1, 1)] {
+            worker
+                .archive
+                .save_poll_vote(&PollVote {
+                    chat: "chat".into(),
+                    poll: "poll".into(),
+                    voter: "me".into(),
+                    sender: "me".into(),
+                    update_id: format!("vote-{choice}"),
+                    at: choice as i64 + 1,
+                    from_me: true,
+                    choices: Some(vec![choice]),
+                    encrypted: None,
+                })
+                .unwrap();
+            let mut restored = worker.archive.message("chat", "poll").unwrap().unwrap();
+            worker.polish_poll(&mut restored);
+            let Content::Poll { state, .. } = restored.content else {
+                panic!("poll")
+            };
+            assert_eq!(state.selected, vec![choice]);
+            assert_eq!(state.correct, Some(expected));
+        }
+        drop(worker);
+        let (mut worker, _events, _commands, _wa) = super::super::tests::worker();
+        worker.archive =
+            crate::archive::Archive::open_encrypted_for_test(&archive_path, &[42; 32]).unwrap();
+        let mut restored = worker.archive.message("chat", "poll").unwrap().unwrap();
+        worker.polish_poll(&mut restored);
+        let Content::Poll { state, .. } = restored.content else {
+            panic!("poll")
+        };
+        assert_eq!(state.selected, vec![1]);
+        assert_eq!(state.correct, Some(1));
+    }
+
     #[tokio::test]
     async fn stale_poll_results_cannot_save_or_decode_votes() {
         let (mut worker, _events, _commands, _wa) = super::super::tests::worker();
@@ -807,6 +915,7 @@ mod tests {
                         question: "Stale poll?".into(),
                         options: vec!["A".into(), "B".into()],
                         multiple: true,
+                        correct: None,
                     },
                     result: Ok(crate::backend::CreatedPoll {
                         id: "stale-poll".into(),
@@ -836,7 +945,7 @@ mod tests {
 
     #[test]
     fn creation_keys_and_exact_option_hashes_are_preserved() {
-        let raw = creation_archive(&content(), &[7; 32]);
+        let raw = creation_archive(&content(), &[7; 32], None);
         assert_eq!(secret(&raw), Some([7; 32].as_slice()));
         assert!(raw.poll_creation_message_v3.is_set());
         assert_eq!(classify(&raw), Some(content()));
@@ -888,7 +997,7 @@ mod tests {
         let mut row = crate::archive::tests::message("chat", "poll", 1, false);
         row.sender = creator.into();
         row.content = content();
-        let raw = creation_archive(&row.content, &key);
+        let raw = creation_archive(&row.content, &key, None);
         worker.remember_poll(&row, &raw, creator, None);
         worker.store_message(row.clone(), Some(raw.encode_to_vec()), None);
         worker.pump_poll_votes();
@@ -913,6 +1022,83 @@ mod tests {
         assert_eq!(state.voters, 1);
         assert!(state.can_vote);
         assert_eq!(worker.poll_decrypting, 0);
+    }
+
+    #[tokio::test]
+    async fn encrypted_quiz_votes_before_and_after_creation_reveal_the_answer() {
+        let (mut worker, _events, mut commands, _wa) = super::super::tests::worker();
+        let directory = tempfile::tempdir().unwrap();
+        let session_path = directory.path().join("session.db");
+        let bot = Bot::builder()
+            .with_backend(
+                whatsapp_rust::store::SqliteStore::new(session_path.to_str().unwrap())
+                    .await
+                    .unwrap(),
+            )
+            .build()
+            .await
+            .unwrap();
+        worker.client = Some(bot.client());
+        let creator = "100@s.whatsapp.net";
+        let voter = "15550001111@s.whatsapp.net";
+        let key = [7; 32];
+        for (id, answer, before) in [
+            ("quiz-before", "Pizza", true),
+            ("quiz-after", "Pasta", false),
+        ] {
+            let hash = whatsapp_rust::wacore::poll::compute_option_hash(answer).to_vec();
+            let (payload, iv) = whatsapp_rust::wacore::poll::encrypt_poll_vote_with_secret(
+                &[hash],
+                &key,
+                id,
+                creator,
+                voter,
+            )
+            .unwrap();
+            let update = wa::message::PollUpdateMessage {
+                poll_creation_message_key: MessageField::some(wa::MessageKey {
+                    id: Some(id.into()),
+                    ..Default::default()
+                }),
+                vote: MessageField::some(wa::message::PollEncValue {
+                    enc_payload: Some(payload),
+                    enc_iv: Some(iv.to_vec()),
+                }),
+                sender_timestamp_ms: Some(20_000),
+                ..Default::default()
+            };
+            if before {
+                worker.ingest_poll_vote("chat", "vote", voter, true, 20, &update);
+            }
+            let mut row = crate::archive::tests::message("chat", id, 1, false);
+            row.sender = creator.into();
+            row.content = content();
+            let raw = creation_archive(&row.content, &key, Some(1));
+            worker.remember_poll(&row, &raw, creator, None);
+            worker.store_message(row.clone(), Some(raw.encode_to_vec()), None);
+            worker.polish_poll(&mut row);
+            let Content::Poll { state, .. } = &row.content else {
+                panic!("poll")
+            };
+            assert_eq!(state.correct, None);
+            if before {
+                worker.pump_poll_votes();
+            } else {
+                worker.ingest_poll_vote("chat", "vote", voter, true, 20, &update);
+            }
+            let result = tokio::time::timeout(Duration::from_secs(5), commands.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            worker.handle_command(result).await;
+            let mut restored = worker.archive.message("chat", id).unwrap().unwrap();
+            worker.polish_poll(&mut restored);
+            let Content::Poll { state, .. } = restored.content else {
+                panic!("poll")
+            };
+            assert_eq!(state.correct, Some(1));
+            assert_eq!(state.selected, vec![if before { 0 } else { 1 }]);
+        }
     }
 
     #[test]

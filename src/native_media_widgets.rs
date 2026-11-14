@@ -104,7 +104,9 @@ pub use audio::{AudioControls, RecordingMeter};
 pub(crate) use contacts::contact_preview;
 pub use photo::{build_album_widget, show_in_folder};
 pub(crate) use sticker::{StickerAnimation, decode_lottie_preview, decode_sticker_file};
+#[cfg(test)]
 pub use widget::build_media_widget_with_action;
+pub(crate) use widget::build_media_widget_with_quiz_choice;
 
 use cards::{
     ListChoiceSection, add_formatted_label, add_label, decode_preview_async, link_button,
@@ -310,6 +312,49 @@ mod tests {
             let projection = project_content(&message);
             assert!(!format!("{projection:?}").contains("private"));
         }
+    }
+
+    #[test]
+    #[ignore = "needs a display"]
+    fn quiz_vote_requires_selection_and_dispatches_the_selected_option() {
+        use std::{cell::RefCell, rc::Rc};
+        gtk::init().unwrap();
+        adw::init().unwrap();
+        let message = message(Content::Poll {
+            question: "Question".into(),
+            options: vec!["A".into(), "B".into()],
+            state: crate::model::PollState {
+                quiz: true,
+                can_vote: true,
+                selectable: 1,
+                ..Default::default()
+            },
+        });
+        let actions = Rc::new(RefCell::new(Vec::new()));
+        let captured = actions.clone();
+        let widget = build_media_widget_with_action(&message, move |action| {
+            captured.borrow_mut().push(action)
+        });
+        let mut child = widget.widget.first_child();
+        let mut choices = Vec::new();
+        let mut vote = None;
+        while let Some(current) = child {
+            child = current.next_sibling();
+            if let Ok(button) = current.clone().downcast::<gtk::CheckButton>() {
+                choices.push(button);
+            } else if let Ok(button) = current.downcast::<gtk::Button>() {
+                vote = Some(button);
+            }
+        }
+        let vote = vote.unwrap();
+        assert!(!vote.is_sensitive());
+        choices[1].set_active(true);
+        assert!(vote.is_sensitive());
+        vote.emit_clicked();
+        assert!(matches!(
+            &actions.borrow()[0],
+            NativeMediaAction::VoteQuiz { choice: 1, .. }
+        ));
     }
 
     /// Fictional contact-card rendering and action checks, no account/backend access.
