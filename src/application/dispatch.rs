@@ -826,6 +826,7 @@ impl NativeApplication {
                 }
             }
             Input::LoadOlder => self.load_older(),
+            Input::OlderAvailabilityChanged(_) => {}
             Input::OpenAccountChat(account, chat) => {
                 if account != self.active_account {
                     self.switch_account_with_restore(account, &sender, false);

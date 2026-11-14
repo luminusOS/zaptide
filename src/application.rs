@@ -549,6 +549,7 @@ pub struct NativeApplication {
     qr_texture: Option<gtk::gdk::Texture>,
     link_page: relm4::Controller<LinkPage>,
     transcript_view: relm4::Controller<TranscriptView>,
+    older_button: gtk::Button,
     composer_view: relm4::Controller<ComposerView>,
     history_complete: bool,
     loading_older: bool,
@@ -657,6 +658,7 @@ pub enum Input {
     ScrollToRecentMessages,
     TranscriptAtEnd,
     LoadOlder,
+    OlderAvailabilityChanged(bool),
     SearchChats(String),
     Filter(ChatFilterInput),
     ShowCalls(bool),
@@ -892,6 +894,7 @@ impl SimpleComponent for NativeApplication {
                             add_named[Some("calls")] = model.calls_details(),
                             add_named[Some("chat")] = &adw::ToolbarView {
                             add_top_bar = &adw::HeaderBar {
+                                pack_start = &model.older_button.clone(),
                                 // The title opens the chat's details, as in GNOME's
                                 // chat apps.
                                 #[wrap(Some)]
@@ -1345,11 +1348,18 @@ impl SimpleComponent for NativeApplication {
                 message_view: messages.view.clone(),
             })
             .forward(sender.input_sender(), |output| match output {
-                TranscriptViewOutput::LoadOlder => Input::LoadOlder,
+                TranscriptViewOutput::OlderAvailable(available) => {
+                    Input::OlderAvailabilityChanged(available)
+                }
                 TranscriptViewOutput::SelectMessage(position) => Input::SelectMessage(position),
                 TranscriptViewOutput::AtEnd => Input::TranscriptAtEnd,
                 TranscriptViewOutput::ScrollToRecentMessages => Input::ScrollToRecentMessages,
             });
+        let older_button = older_history_button();
+        let input = sender.input_sender().clone();
+        older_button.connect_clicked(move |_| {
+            let _ = input.send(Input::LoadOlder);
+        });
         let recording_meter = crate::native_media_widgets::RecordingMeter::default();
         let composer_view = ComposerView::builder()
             .launch(ComposerViewInit {
@@ -1420,6 +1430,7 @@ impl SimpleComponent for NativeApplication {
             qr_texture: None,
             link_page,
             transcript_view,
+            older_button,
             composer_view,
             history_complete: false,
             loading_older: false,
@@ -1663,6 +1674,12 @@ impl SimpleComponent for NativeApplication {
     }
 
     fn update(&mut self, input: Self::Input, sender: ComponentSender<Self>) {
+        let previous_chat = self.open_chat.active_chat.clone();
+        let previous_account = self.active_account;
+        let reported_availability = match &input {
+            Input::OlderAvailabilityChanged(available) => Some(*available),
+            _ => None,
+        };
         let draft_empty_before = match &input {
             Input::DraftChanged(text) => {
                 Some((self.draft.trim().is_empty(), text.trim().is_empty()))
@@ -1671,15 +1688,83 @@ impl SimpleComponent for NativeApplication {
         };
         let draft_changed = matches!(&input, Input::DraftChanged(_));
         self.handle_input(input, sender.clone());
+        let chat_changed =
+            previous_chat != self.open_chat.active_chat || previous_account != self.active_account;
+        let child_available = self.transcript_view.model().offers_older();
+        let reported_current =
+            reported_availability.filter(|reported| *reported == child_available);
+        let available = !chat_changed
+            && self.open_chat.active_chat.is_some()
+            && !self.open_chat.message_ids.is_empty()
+            && !self.history_complete
+            && !self.loading_older
+            && reported_current.unwrap_or(child_available);
+        set_older_button_available(
+            &self.older_button,
+            available,
+            self.open_chat.active_chat.is_some(),
+            self.loading_older,
+        );
         self.sync_presence(&sender);
         if draft_changed {
             self.sync_composer_view();
         } else {
             self.sync_components(draft_empty_before);
         }
+        if chat_changed {
+            self.transcript_view.emit(TranscriptViewInput::ReportOlder);
+        }
         self.sync_chat_menu();
         self.sync_tray();
     }
+}
+
+fn older_history_button() -> gtk::Button {
+    let button = gtk::Button::new();
+    button.add_css_class("zaptide-load-older");
+    let stack = gtk::Stack::new();
+    stack.set_hhomogeneous(true);
+    stack.set_vhomogeneous(true);
+    let icon = gtk::Image::from_icon_name("go-up-symbolic");
+    icon.set_pixel_size(16);
+    let spinner = adw::Spinner::new();
+    spinner.set_size_request(16, 16);
+    stack.add_named(&icon, Some("ready"));
+    stack.add_named(&spinner, Some("loading"));
+    button.set_child(Some(&stack));
+    set_older_button_available(&button, false, false, false);
+    button
+}
+
+fn set_older_button_available(
+    button: &gtk::Button,
+    available: bool,
+    has_chat: bool,
+    loading: bool,
+) {
+    if !available && button.has_focus() {
+        let focused_title = has_chat
+            && button
+                .ancestor(adw::HeaderBar::static_type())
+                .and_downcast::<adw::HeaderBar>()
+                .and_then(|header| header.title_widget())
+                .is_some_and(|title| title.grab_focus());
+        if !focused_title && let Some(root) = button.root().and_downcast::<gtk::Window>() {
+            gtk::prelude::GtkWindowExt::set_focus(&root, None::<&gtk::Widget>);
+        }
+    }
+    button.set_sensitive(available);
+    if let Some(stack) = button.child().and_downcast::<gtk::Stack>() {
+        stack.set_visible_child_name(if loading { "loading" } else { "ready" });
+    }
+    let label = if loading {
+        gettext("Loading older messages…")
+    } else {
+        gettext("Load older messages")
+    };
+    button.set_tooltip_text(Some(&label));
+    button.update_property(&[gtk::accessible::Property::Label(&label)]);
+    button.update_state(&[gtk::accessible::State::Busy(loading)]);
 }
 
 fn apply_theme(settings: &crate::settings::Settings, theme_provider: &gtk::CssProvider) {
