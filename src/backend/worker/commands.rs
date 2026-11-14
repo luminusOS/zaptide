@@ -754,6 +754,12 @@ impl Worker {
             }
             Command::Completed(Completion {
                 generation: _,
+                done: Done::NewsletterNames { names, requested },
+            }) => {
+                self.apply_newsletter_names(names, requested);
+            }
+            Command::Completed(Completion {
+                generation: _,
                 done:
                     Done::Edited {
                         chat,

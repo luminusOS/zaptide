@@ -160,7 +160,7 @@ impl Worker {
         let Ok(Some(chat)) = self.archive.chat(id) else {
             return;
         };
-        if chat.kind == ChatKind::Group {
+        if chat.kind != ChatKind::Direct {
             return;
         }
         let name = self.chat_name(id, None);
@@ -173,7 +173,7 @@ impl Worker {
     pub(super) fn ensure_chat(&mut self, id: &str, push_name: Option<&str>) {
         match self.archive.chat(id) {
             Ok(Some(chat)) => {
-                if chat.kind != ChatKind::Group {
+                if chat.kind == ChatKind::Direct {
                     let name = self.chat_name(id, push_name);
                     if name != chat.name {
                         let _ = self.archive.rename_chat(id, &name);
@@ -181,7 +181,11 @@ impl Worker {
                 }
             }
             Ok(None) => {
-                let name = self.chat_name(id, push_name);
+                let name = self
+                    .newsletter_names
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_else(|| self.chat_name(id, push_name));
                 if self.archive.ensure_chat(id, &name).is_err() {
                     log::warn!("could not create a chat");
                 }
@@ -190,6 +194,8 @@ impl Worker {
         }
         if ChatKind::from_id(id) == ChatKind::Group {
             self.request_group_info(id, false);
+        } else if id.ends_with("@newsletter") {
+            self.request_newsletter_info(id);
         }
     }
 
