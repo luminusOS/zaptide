@@ -261,14 +261,17 @@ fn file_keyring_dir() -> Option<PathBuf> {
 enum Backend {
     /// A sandbox with a Secret portal: oo7's file keyring.
     File(oo7::Keyring),
-    /// Outside a sandbox, or a sandbox without a Secret portal, which oo7 0.6
-    /// means to handle but reports as an error instead: the host Secret
-    /// Service, every collection, as builds before oo7 used it.
+    /// The host Secret Service, searching every collection.
     Host(oo7::dbus::Service),
 }
 
 struct Oo7 {
     backend: Arc<Backend>,
+}
+
+fn portal_unavailable(error: &oo7::Error) -> bool {
+    matches!(error, oo7::Error::File(error)
+        if matches!(**error, oo7::file::Error::Portal(ashpd::Error::PortalNotFound(_))))
 }
 
 impl Oo7 {
@@ -277,16 +280,14 @@ impl Oo7 {
             if !ashpd::is_sandboxed() {
                 return Ok(Backend::Host(oo7::dbus::Service::new().await?));
             }
-            match oo7::Keyring::new().await {
+            match oo7::Keyring::sandboxed().await {
                 Ok(keyring) => {
                     if keyring.is_locked().await? {
                         keyring.unlock().await?;
                     }
                     Ok(Backend::File(keyring))
                 }
-                Err(oo7::Error::File(oo7::file::Error::Portal(ashpd::Error::PortalNotFound(
-                    _,
-                )))) => {
+                Err(error) if portal_unavailable(&error) => {
                     log::warn!("no Secret portal; keeping keys in the host Secret Service");
                     Ok(Backend::Host(oo7::dbus::Service::new().await?))
                 }
@@ -524,6 +525,116 @@ pub(super) mod memory {
 mod tests {
     use super::memory::Store;
     use super::*;
+
+    #[test]
+    fn only_missing_portal_allows_host_fallback() {
+        let missing = oo7::Error::from(oo7::file::Error::Portal(ashpd::Error::PortalNotFound(
+            "org.freedesktop.portal.Secret".try_into().unwrap(),
+        )));
+        let denied = oo7::Error::from(oo7::file::Error::Portal(ashpd::Error::NoResponse));
+        assert!(portal_unavailable(&missing));
+        assert!(!portal_unavailable(&denied));
+    }
+
+    #[test]
+    fn file_backend_reads_oo7_06_fixture() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("default.keyring");
+        std::fs::write(
+            &path,
+            include_bytes!("../../tests/fixtures/oo7-0.6/default.keyring"),
+        )
+        .unwrap();
+        block_on(async move {
+            let keyring =
+                oo7::Keyring::sandboxed_with_path(&path, oo7::Secret::blob("test")).await?;
+            let items = keyring.items().await?;
+            assert_eq!(items.len(), 1);
+            assert_eq!(items[0].secret().await?.as_bytes(), b"foo");
+            keyring
+                .create_item(
+                    &label("synthetic-archive"),
+                    &attributes("synthetic-archive"),
+                    oo7::Secret::blob(b"synthetic archive key"),
+                    true,
+                )
+                .await?;
+            keyring
+                .create_item(
+                    &label("synthetic-archive"),
+                    &attributes("synthetic-archive"),
+                    oo7::Secret::blob(b"updated synthetic archive key"),
+                    true,
+                )
+                .await?;
+            drop(keyring);
+            let reopened =
+                oo7::Keyring::sandboxed_with_path(&path, oo7::Secret::blob("test")).await?;
+            let matches = reopened
+                .search_items(&attributes("synthetic-archive"))
+                .await?;
+            assert_eq!(matches.len(), 1);
+            assert_eq!(
+                matches[0].secret().await?.as_bytes(),
+                b"updated synthetic archive key"
+            );
+            let all_items = reopened.items().await?;
+            assert_eq!(all_items.len(), 2);
+            let mut original_preserved = false;
+            for item in all_items {
+                if item.secret().await?.as_bytes() == b"foo" {
+                    original_preserved = true;
+                }
+            }
+            assert!(original_preserved);
+            assert!(
+                oo7::Keyring::sandboxed_with_path(&path, oo7::Secret::blob("wrong"))
+                    .await
+                    .is_err()
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn file_backend_reopens_existing_key_and_rejects_wrong_secret() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("default.keyring");
+        let path_copy = path.clone();
+        block_on(async move {
+            let password = oo7::Secret::blob(b"synthetic portal secret");
+            let keyring = oo7::Keyring::sandboxed_with_path(&path_copy, password.clone()).await?;
+            keyring
+                .create_item(
+                    &label("synthetic"),
+                    &attributes("synthetic"),
+                    oo7::Secret::blob(b"synthetic archive key"),
+                    true,
+                )
+                .await?;
+            drop(keyring);
+            let reopened = oo7::Keyring::sandboxed_with_path(&path_copy, password).await?;
+            let backend = Oo7 {
+                backend: Arc::new(Backend::File(reopened)),
+            };
+            let items = match &*backend.backend {
+                Backend::File(keyring) => keyring.search_items(&attributes("synthetic")).await?,
+                Backend::Host(_) => unreachable!(),
+            };
+            assert_eq!(
+                items[0].secret().await?.as_bytes(),
+                b"synthetic archive key"
+            );
+            assert!(
+                oo7::Keyring::sandboxed_with_path(&path_copy, oo7::Secret::blob(b"wrong secret"))
+                    .await
+                    .is_err()
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
 
     #[test]
     fn keyring_jobs_can_spawn_cleanup_on_drop_and_process_the_next_job() {

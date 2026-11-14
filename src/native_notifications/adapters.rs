@@ -164,7 +164,7 @@ impl SoundPort for Portal {
     }
 }
 
-pub(super) fn image_data(icon: &[u8]) -> Result<ashpd::zbus::zvariant::OwnedValue, String> {
+pub(super) fn image_data(icon: &[u8]) -> Result<ashpd::zbus::OwnedVariant, String> {
     let crate::native_media::ThumbnailResult::Image(thumbnail) =
         crate::native_media::decode_thumbnail(icon)
     else {
@@ -177,7 +177,7 @@ pub(super) fn image_data(icon: &[u8]) -> Result<ashpd::zbus::zvariant::OwnedValu
         .into_rgba8();
     let width = i32::try_from(image.width()).map_err(|e| e.to_string())?;
     let height = i32::try_from(image.height()).map_err(|e| e.to_string())?;
-    ashpd::zbus::zvariant::Value::new((
+    ashpd::zbus::Variant::new((
         width,
         height,
         width * 4,
@@ -187,7 +187,7 @@ pub(super) fn image_data(icon: &[u8]) -> Result<ashpd::zbus::zvariant::OwnedValu
         image.into_raw(),
     ))
     .try_into()
-    .map_err(|e: ashpd::zbus::zvariant::Error| e.to_string())
+    .map_err(|e: ashpd::zbus::wire::Error| e.to_string())
 }
 
 type SharedSession = Arc<tokio::sync::Mutex<Option<freedesktop::Session>>>;
@@ -363,7 +363,7 @@ async fn notify(session: &freedesktop::Session, id: &str, content: Content) -> R
     let mut hints = HashMap::new();
     hints.insert(
         "desktop-entry".into(),
-        ashpd::zbus::zvariant::Str::from(content.desktop_entry).into(),
+        ashpd::zbus::Str::from(content.desktop_entry).into(),
     );
     if let Some(icon) = content.icon {
         hints.insert("image-data".into(), image_data(&icon)?);
@@ -375,10 +375,7 @@ async fn notify(session: &freedesktop::Session, id: &str, content: Content) -> R
         SoundRequest::Play if session.supports("sound") => {
             let path = crate::notification_sound::native_sound_file().map_err(|e| e.to_string())?;
             let path = path.to_str().ok_or("sound path is not UTF-8")?;
-            hints.insert(
-                "sound-file".into(),
-                ashpd::zbus::zvariant::Str::from(path).into(),
-            );
+            hints.insert("sound-file".into(), ashpd::zbus::Str::from(path).into());
         }
         SoundRequest::Play => {}
     }
@@ -524,9 +521,9 @@ fn native(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ashpd::zbus::{self, zvariant::OwnedValue};
+    use ashpd::zbus::{self, OwnedVariant};
 
-    type Wire = (String, Vec<String>, HashMap<String, OwnedValue>);
+    type Wire = (String, Vec<String>, HashMap<String, OwnedVariant>);
 
     struct FakeServer(async_channel::Sender<Wire>);
 
@@ -547,7 +544,7 @@ mod tests {
             title: String,
             body: String,
             actions: Vec<String>,
-            hints: HashMap<String, OwnedValue>,
+            hints: HashMap<String, OwnedVariant>,
             _timeout: i32,
         ) -> zbus::fdo::Result<u32> {
             self.0.try_send((body, actions, hints)).unwrap();
@@ -597,7 +594,7 @@ mod tests {
             _title: String,
             _body: String,
             _actions: Vec<String>,
-            _hints: HashMap<String, OwnedValue>,
+            _hints: HashMap<String, OwnedVariant>,
             _timeout: i32,
         ) -> u32 {
             self.wire.send(('n', replace)).await.unwrap();
@@ -619,10 +616,9 @@ mod tests {
                     let (gate, release) = async_channel::bounded(1);
                     let (setup, ready) = async_channel::bounded(1);
                     crate::portal::spawn(async move {
-                        let (a, b) = tokio::net::UnixStream::pair().unwrap();
+                        let (a, b) = std::os::unix::net::UnixStream::pair().unwrap();
                         let server = zbus::connection::Builder::unix_stream(a)
                             .server(zbus::Guid::generate())
-                            .unwrap()
                             .p2p()
                             .serve_at(
                                 "/org/freedesktop/Notifications",
@@ -631,7 +627,6 @@ mod tests {
                                     gate: release,
                                 },
                             )
-                            .unwrap()
                             .build();
                         let client = zbus::connection::Builder::unix_stream(b).p2p().build();
                         let (server, connection) = tokio::try_join!(server, client).unwrap();
@@ -699,7 +694,7 @@ mod tests {
             _title: String,
             _body: String,
             _actions: Vec<String>,
-            _hints: HashMap<String, OwnedValue>,
+            _hints: HashMap<String, OwnedVariant>,
             _timeout: i32,
         ) -> u32 {
             self.wire.try_send(('n', replace)).unwrap();
@@ -735,9 +730,7 @@ mod tests {
                     let first_wire = wire.clone();
                     crate::portal::spawn(async move {
                         let server = zbus::connection::Builder::address(bus_address.as_str())
-                            .unwrap()
                             .name("org.freedesktop.Notifications")
-                            .unwrap()
                             .serve_at(
                                 "/org/freedesktop/Notifications",
                                 RestartServer {
@@ -745,12 +738,10 @@ mod tests {
                                     actions: true,
                                 },
                             )
-                            .unwrap()
                             .build()
                             .await
                             .unwrap();
                         let connection = zbus::connection::Builder::address(bus_address.as_str())
-                            .unwrap()
                             .build()
                             .await
                             .unwrap();
@@ -810,9 +801,7 @@ mod tests {
                             .await
                             .unwrap();
                         let server = zbus::connection::Builder::address(next_address.as_str())
-                            .unwrap()
                             .name("org.freedesktop.Notifications")
-                            .unwrap()
                             .serve_at(
                                 "/org/freedesktop/Notifications",
                                 RestartServer {
@@ -820,7 +809,6 @@ mod tests {
                                     actions: true,
                                 },
                             )
-                            .unwrap()
                             .build()
                             .await
                             .unwrap();
@@ -843,9 +831,7 @@ mod tests {
                             .await
                             .unwrap();
                         let server = zbus::connection::Builder::address(address.as_str())
-                            .unwrap()
                             .name("org.freedesktop.Notifications")
-                            .unwrap()
                             .serve_at(
                                 "/org/freedesktop/Notifications",
                                 RestartServer {
@@ -853,7 +839,6 @@ mod tests {
                                     actions: false,
                                 },
                             )
-                            .unwrap()
                             .build()
                             .await
                             .unwrap();
@@ -882,13 +867,11 @@ mod tests {
                     let (setup_tx, setup_rx) = async_channel::bounded(1);
                     let (wire_tx, wire_rx) = async_channel::unbounded();
                     crate::portal::spawn(async move {
-                        let (a, b) = tokio::net::UnixStream::pair().unwrap();
+                        let (a, b) = std::os::unix::net::UnixStream::pair().unwrap();
                         let server = zbus::connection::Builder::unix_stream(a)
                             .server(zbus::Guid::generate())
-                            .unwrap()
                             .p2p()
                             .serve_at("/org/freedesktop/Notifications", FakeServer(wire_tx))
-                            .unwrap()
                             .build();
                         let client = zbus::connection::Builder::unix_stream(b).p2p().build();
                         let (server, connection) = tokio::try_join!(server, client).unwrap();
@@ -931,8 +914,7 @@ mod tests {
                     let (body, actions, hints) = wire_rx.recv().await.unwrap();
                     assert_eq!(body, "&lt;hello&gt; &amp;");
                     assert_eq!(actions, ["default", "Open"]);
-                    let structure =
-                        <&zbus::zvariant::Structure<'_>>::try_from(&hints["image-data"]).unwrap();
+                    let structure = <&zbus::Structure<'_>>::try_from(&hints["image-data"]).unwrap();
                     let fields = structure.fields();
                     assert_eq!(i32::try_from(&fields[0]).unwrap(), 128);
                     assert_eq!(i32::try_from(&fields[1]).unwrap(), 64);
@@ -960,16 +942,15 @@ mod tests {
                     refused.title = "refuse".into();
                     native.show(refused, SoundRequest::Silent);
                     wire_rx.recv().await.unwrap();
-                    while native.queue.has_pending("refused") {
-                        gtk::glib::timeout_future(std::time::Duration::from_millis(5)).await;
-                    }
-                    assert_eq!(*fallback.borrow(), 1);
+                    native.queue.wait_quarantined("refused").await;
+                    assert_eq!(*fallback.borrow(), 0);
+                    native.withdraw("refused");
                     let mut ambiguous = request("ambiguous");
                     ambiguous.title = "no-reply".into();
                     native.show(ambiguous, SoundRequest::Silent);
                     wire_rx.recv().await.unwrap();
-                    gtk::glib::timeout_future(std::time::Duration::from_millis(100)).await;
-                    assert_eq!(*fallback.borrow(), 1);
+                    native.queue.wait_quarantined("ambiguous").await;
+                    assert_eq!(*fallback.borrow(), 0);
                     assert!(native.queue.has_pending("ambiguous"));
                     native.withdraw("ambiguous");
                     assert!(!native.queue.has_pending("ambiguous"));

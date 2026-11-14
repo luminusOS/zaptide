@@ -79,7 +79,7 @@ getrandom = "0.4"
 # Keyring: the Secret portal's file keyring inside a sandbox, the Secret
 # Service outside. OpenSSL is the one SQLCipher already links, so no second
 # crypto stack comes with it.
-oo7 = { version = "0.6", default-features = false, features = ["tokio", "openssl_crypto"] }
+oo7 = { version = "0.7", default-features = false, features = ["tokio", "openssl_crypto"] }
 zeroize = "1"
 qrcode = { version = "0.14", default-features = false }
 # Downloads profile pictures. The protocol library already includes this crate
@@ -105,7 +105,7 @@ async-channel = "2"
 glycin = { version = "4", default-features = false, features = ["gdk4", "tokio"] }
 # XDG desktop portals over the zbus and tokio already in the tree. Only the
 # portals the app uses are enabled; no windowing or PipeWire bindings.
-ashpd = { version = "0.13", default-features = false, features = ["tokio", "background", "camera", "notification", "settings"] }
+ashpd = { version = "0.14", default-features = false, features = ["tokio", "background", "camera", "notification", "settings"] }
 futures-util = { version = "0.3", default-features = false }
 # Tray icon: StatusNotifierItem with its menu over com.canonical.dbusmenu.
 ksni = { version = "0.3", default-features = false, features = ["tokio", "blocking"] }
@@ -117,6 +117,7 @@ tempfile = "3"
 libc = "0.2"
 
 [dev-dependencies]
+zbus = { version = "6", default-features = false, features = ["tokio", "p2p"] }
 url-batch = { package = "url", path = "vendor/absolute-url", features = ["batch-research", "batch-stats"] }
 png = "0.18"
 
