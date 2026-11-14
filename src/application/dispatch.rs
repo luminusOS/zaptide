@@ -676,6 +676,21 @@ impl NativeApplication {
             crate::native_media::NativeMediaAction::Download { message, .. } => {
                 self.activate_attachment(&message)
             }
+            crate::native_media::NativeMediaAction::VoteQuiz {
+                chat,
+                message,
+                choice,
+            } => {
+                if let Some(backend) = &self.backend {
+                    backend.send(crate::backend::Command::VotePoll {
+                        chat,
+                        message,
+                        choices: vec![choice],
+                    });
+                } else {
+                    self.status = gettext("Backend unavailable");
+                }
+            }
             crate::native_media::NativeMediaAction::AnswerButton {
                 chat,
                 message,

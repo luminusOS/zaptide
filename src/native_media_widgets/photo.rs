@@ -278,7 +278,8 @@ fn append_photo_sized(
             parent.append(&frame);
         }
         Some(
-            NativeMediaAction::AnswerButton { .. }
+            NativeMediaAction::VoteQuiz { .. }
+            | NativeMediaAction::AnswerButton { .. }
             | NativeMediaAction::AnswerListRow { .. }
             | NativeMediaAction::CopyContactPhone(_)
             | NativeMediaAction::OpenContact(_)
@@ -404,7 +405,8 @@ pub(super) fn append_video(
             parent.append(&frame);
         }
         Some(
-            NativeMediaAction::AnswerButton { .. }
+            NativeMediaAction::VoteQuiz { .. }
+            | NativeMediaAction::AnswerButton { .. }
             | NativeMediaAction::AnswerListRow { .. }
             | NativeMediaAction::CopyContactPhone(_)
             | NativeMediaAction::OpenContact(_)
@@ -528,7 +530,8 @@ pub(super) fn document_card(
             actions.append(&download);
         }
         Some(
-            NativeMediaAction::AnswerButton { .. }
+            NativeMediaAction::VoteQuiz { .. }
+            | NativeMediaAction::AnswerButton { .. }
             | NativeMediaAction::AnswerListRow { .. }
             | NativeMediaAction::CopyContactPhone(_)
             | NativeMediaAction::OpenContact(_)

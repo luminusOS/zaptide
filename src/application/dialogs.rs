@@ -116,18 +116,26 @@ pub(super) fn show_poll_dialog(parent: &adw::ApplicationWindow, on_action: &Dial
     let multiple = adw::SwitchRow::builder()
         .title(gettext("Allow Multiple Answers"))
         .build();
+    let quiz = adw::SwitchRow::builder()
+        .title(gettext("Quiz"))
+        .subtitle(gettext("Choose the correct answer"))
+        .build();
     let create = gtk::Button::builder()
         .label(gettext("Create"))
         .css_classes(["suggested-action"])
         .sensitive(false)
         .build();
-    let options: Rc<RefCell<Vec<(adw::EntryRow, gtk::Button)>>> = Rc::default();
+    let options: Rc<RefCell<Vec<(adw::EntryRow, gtk::Button, gtk::CheckButton)>>> = Rc::default();
 
     // Closures below hold widgets weakly and `options` is emptied when the
     // dialog closes, so no reference cycle keeps the dialog alive.
     let draft = {
-        let (question, options, multiple) =
-            (question.downgrade(), options.clone(), multiple.downgrade());
+        let (question, options, multiple, quiz) = (
+            question.downgrade(),
+            options.clone(),
+            multiple.downgrade(),
+            quiz.downgrade(),
+        );
         move || crate::model::PollDraft {
             question: question
                 .upgrade()
@@ -135,33 +143,59 @@ pub(super) fn show_poll_dialog(parent: &adw::ApplicationWindow, on_action: &Dial
             options: options
                 .borrow()
                 .iter()
-                .map(|(row, _)| row.text().into())
+                .map(|(row, _, _)| row.text().into())
                 .collect(),
             multiple: multiple
                 .upgrade()
                 .is_some_and(|multiple| multiple.is_active()),
+            correct: quiz
+                .upgrade()
+                .filter(|quiz| quiz.is_active())
+                .and_then(|_| {
+                    options
+                        .borrow()
+                        .iter()
+                        .position(|(_, _, correct)| correct.is_active())
+                }),
         }
     };
     let refresh: Rc<dyn Fn()> = {
-        let (draft, options, create, add) = (
+        let (draft, options, create, add, quiz, multiple) = (
             draft.clone(),
             options.clone(),
             create.downgrade(),
             add.downgrade(),
+            quiz.downgrade(),
+            multiple.downgrade(),
         );
         Rc::new(move || {
-            let (Some(create), Some(add)) = (create.upgrade(), add.upgrade()) else {
+            let (Some(create), Some(add), Some(quiz), Some(multiple)) = (
+                create.upgrade(),
+                add.upgrade(),
+                quiz.upgrade(),
+                multiple.upgrade(),
+            ) else {
                 return;
             };
             let rows = options.borrow();
-            for (index, (row, remove)) in rows.iter().enumerate() {
+            for (index, (row, remove, correct)) in rows.iter().enumerate() {
                 row.set_title(&format!("Option {}", index + 1));
                 remove.set_visible(rows.len() > 2);
+                correct.set_visible(quiz.is_active());
+                let label = gettext("Correct answer for option {number}")
+                    .replace("{number}", &(index + 1).to_string());
+                correct.update_property(&[gtk::accessible::Property::Label(&label)]);
             }
+            multiple.set_sensitive(!quiz.is_active());
             add.set_visible(rows.len() < MAX_OPTIONS);
             let valid = draft().validated();
-            create.set_sensitive(valid.is_ok());
-            create.set_tooltip_text(valid.err());
+            let missing_answer = quiz.is_active() && draft().correct.is_none();
+            create.set_sensitive(valid.is_ok() && !missing_answer);
+            let error = valid
+                .err()
+                .map(gettext)
+                .or_else(|| missing_answer.then(|| gettext("Choose the correct answer")));
+            create.set_tooltip_text(error.as_deref());
         })
     };
     let add_option: Rc<dyn Fn()> = {
@@ -171,6 +205,16 @@ pub(super) fn show_poll_dialog(parent: &adw::ApplicationWindow, on_action: &Dial
                 return;
             };
             let row = adw::EntryRow::builder().activates_default(true).build();
+            let correct = gtk::CheckButton::builder()
+                .tooltip_text(gettext("Correct answer"))
+                .valign(gtk::Align::Center)
+                .build();
+            correct
+                .update_property(&[gtk::accessible::Property::Label(&gettext("Correct answer"))]);
+            if let Some((_, _, first)) = options.borrow().first() {
+                correct.set_group(Some(first));
+            }
+            row.add_suffix(&correct);
             let remove = gtk::Button::builder()
                 .icon_name("list-remove-symbolic")
                 .tooltip_text(gettext("Remove option"))
@@ -190,13 +234,23 @@ pub(super) fn show_poll_dialog(parent: &adw::ApplicationWindow, on_action: &Dial
                 let (Some(list), Some(target)) = (list_ref.upgrade(), target.upgrade()) else {
                     return;
                 };
-                options_ref.borrow_mut().retain(|(row, _)| row != &target);
+                let removed = {
+                    let mut rows = options_ref.borrow_mut();
+                    rows.iter()
+                        .position(|(row, _, _)| row == &target)
+                        .map(|index| rows.remove(index))
+                };
                 list.remove(&target);
+                drop(removed);
                 refresh_ref();
             });
             let position = options.borrow().len() as i32;
             list.insert(&row, position);
-            options.borrow_mut().push((row.clone(), remove));
+            options
+                .borrow_mut()
+                .push((row.clone(), remove, correct.clone()));
+            let refresh_correct = refresh.clone();
+            correct.connect_toggled(move |_| refresh_correct());
             refresh();
             row.grab_focus();
         })
@@ -209,6 +263,8 @@ pub(super) fn show_poll_dialog(parent: &adw::ApplicationWindow, on_action: &Dial
     question.connect_changed(move |_| refresh_question());
     let refresh_multiple = refresh.clone();
     multiple.connect_active_notify(move |_| refresh_multiple());
+    let refresh_quiz = refresh.clone();
+    quiz.connect_active_notify(move |_| refresh_quiz());
 
     let page = adw::PreferencesPage::new();
     let group = adw::PreferencesGroup::new();
@@ -221,6 +277,7 @@ pub(super) fn show_poll_dialog(parent: &adw::ApplicationWindow, on_action: &Dial
     page.add(&group);
     let group = adw::PreferencesGroup::new();
     group.add(&multiple);
+    group.add(&quiz);
     page.add(&group);
 
     let cancel = gtk::Button::with_label(&gettext("Cancel"));
@@ -239,7 +296,10 @@ pub(super) fn show_poll_dialog(parent: &adw::ApplicationWindow, on_action: &Dial
             }
         }
     });
-    dialog.connect_closed(move |_| options.borrow_mut().clear());
+    dialog.connect_closed(move |_| {
+        let rows = std::mem::take(&mut *options.borrow_mut());
+        drop(rows);
+    });
     let header = adw::HeaderBar::builder()
         .show_start_title_buttons(false)
         .show_end_title_buttons(false)

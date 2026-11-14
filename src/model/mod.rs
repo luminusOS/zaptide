@@ -369,6 +369,8 @@ pub struct ListRow {
 #[serde(default)]
 pub struct PollState {
     pub selectable: usize,
+    pub quiz: bool,
+    pub correct: Option<usize>,
     pub counts: Vec<usize>,
     pub selected: Vec<usize>,
     pub voters: usize,
@@ -384,6 +386,7 @@ pub struct PollDraft {
     pub question: String,
     pub options: Vec<String>,
     pub multiple: bool,
+    pub correct: Option<usize>,
 }
 
 impl Default for PollDraft {
@@ -392,6 +395,7 @@ impl Default for PollDraft {
             question: String::new(),
             options: vec![String::new(); 2],
             multiple: true,
+            correct: None,
         }
     }
 }
@@ -418,15 +422,23 @@ impl PollDraft {
         if options.iter().any(|option| !unique.insert(option)) {
             return Err("Each answer must be different.");
         }
+        if self.correct.is_some_and(|index| index >= options.len()) {
+            return Err("Choose a correct answer.");
+        }
         Ok(Self {
             question,
             options,
             multiple: self.multiple,
+            correct: self.correct,
         })
     }
 
     pub fn selectable(&self) -> usize {
-        if self.multiple { self.options.len() } else { 1 }
+        if self.multiple && self.correct.is_none() {
+            self.options.len()
+        } else {
+            1
+        }
     }
 }
 
@@ -786,6 +798,7 @@ mod tests {
             question: " Lunch? ".into(),
             options: vec![" Pizza ".into(), "Pasta".into()],
             multiple: false,
+            correct: None,
         };
         let valid = draft.validated().unwrap();
         assert_eq!(valid.question, "Lunch?");
@@ -801,6 +814,19 @@ mod tests {
         draft.multiple = true;
         assert_eq!(draft.validated().unwrap().selectable(), 12);
         draft.question = "🍕".repeat(256);
+        assert!(draft.validated().is_err());
+    }
+
+    #[test]
+    fn quiz_requires_an_existing_correct_answer_and_is_single_select() {
+        let mut draft = PollDraft {
+            question: "Question".into(),
+            options: vec!["A".into(), "B".into()],
+            multiple: true,
+            correct: Some(1),
+        };
+        assert_eq!(draft.validated().unwrap().selectable(), 1);
+        draft.correct = Some(2);
         assert!(draft.validated().is_err());
     }
 
