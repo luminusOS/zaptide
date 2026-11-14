@@ -573,9 +573,21 @@ mod tests {
         }
     }
 
+    async fn wait_for_lane(queue: &portal::Queue, token: &str) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while queue.has_pending(token) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "lane {token} did not finish"
+            );
+            gtk::glib::timeout_future(std::time::Duration::from_millis(5)).await;
+        }
+    }
+
     struct BlockingServer {
         wire: async_channel::Sender<(char, u32)>,
         gate: async_channel::Receiver<()>,
+        close_gate: async_channel::Receiver<()>,
     }
     #[zbus::interface(name = "org.freedesktop.Notifications", crate = "ashpd::zbus")]
     impl BlockingServer {
@@ -601,8 +613,9 @@ mod tests {
             self.gate.recv().await.unwrap();
             42
         }
-        fn close_notification(&self, id: u32) {
-            self.wire.try_send(('c', id)).unwrap();
+        async fn close_notification(&self, id: u32) {
+            self.wire.send(('c', id)).await.unwrap();
+            self.close_gate.recv().await.unwrap();
         }
     }
 
@@ -614,6 +627,7 @@ mod tests {
                 context.block_on(async {
                     let (wire, received) = async_channel::unbounded();
                     let (gate, release) = async_channel::bounded(1);
+                    let (close_gate, close_release) = async_channel::bounded(1);
                     let (setup, ready) = async_channel::bounded(1);
                     crate::portal::spawn(async move {
                         let (a, b) = std::os::unix::net::UnixStream::pair().unwrap();
@@ -625,6 +639,7 @@ mod tests {
                                 BlockingServer {
                                     wire,
                                     gate: release,
+                                    close_gate: close_release,
                                 },
                             )
                             .build();
@@ -664,6 +679,9 @@ mod tests {
                     gate.send(()).await.unwrap();
                     assert_eq!(received.recv().await.unwrap(), ('c', 42));
                     assert!(received.try_recv().is_err());
+                    assert!(native.queue.has_pending("one"));
+                    close_gate.send(()).await.unwrap();
+                    wait_for_lane(&native.queue, "one").await;
                 })
             })
             .unwrap();
@@ -824,6 +842,7 @@ mod tests {
                     while native.queue.has_pending("new") {
                         gtk::glib::timeout_future(std::time::Duration::from_millis(5)).await;
                     }
+                    wait_for_lane(&native.queue, "old").await;
                     let (setup, ready) = async_channel::bounded(1);
                     crate::portal::spawn(async move {
                         second
@@ -954,6 +973,8 @@ mod tests {
                     assert!(native.queue.has_pending("ambiguous"));
                     native.withdraw("ambiguous");
                     assert!(!native.queue.has_pending("ambiguous"));
+                    wait_for_lane(&native.queue, "one").await;
+                    wait_for_lane(&native.queue, "two").await;
                 })
             })
             .unwrap();
