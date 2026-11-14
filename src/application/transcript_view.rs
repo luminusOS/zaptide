@@ -161,17 +161,27 @@ impl SimpleComponent for TranscriptView {
         let widgets = view_output!();
         let adjustment = widgets.message_scroller.vadjustment();
         let output = sender.clone();
-        let away = std::cell::Cell::new(false);
+        let away = std::rc::Rc::new(std::cell::Cell::new(false));
+        let report_away = {
+            let sender = sender.clone();
+            move |adjustment: &gtk::Adjustment| {
+                let gap = adjustment.upper() - adjustment.value() - adjustment.page_size();
+                let now_away = gap > AWAY_FROM_END;
+                if away.replace(now_away) != now_away {
+                    sender.input(TranscriptViewInput::AwayFromEnd(now_away));
+                }
+            }
+        };
+        let report_away = std::rc::Rc::new(report_away);
+        let on_value_changed = report_away.clone();
         adjustment.connect_value_changed(move |adjustment| {
             let gap = adjustment.upper() - adjustment.value() - adjustment.page_size();
             if gap <= 48.0 {
                 output.output(TranscriptViewOutput::AtEnd).unwrap();
             }
-            let now_away = gap > AWAY_FROM_END;
-            if away.replace(now_away) != now_away {
-                output.input(TranscriptViewInput::AwayFromEnd(now_away));
-            }
+            on_value_changed(adjustment);
         });
+        adjustment.connect_changed(move |adjustment| report_away(adjustment));
         // Bounds change as rows load without moving the value, which can leave
         // a short transcript at its start with nothing scrolled.
         let near = std::rc::Rc::new(std::cell::Cell::new(false));
@@ -243,6 +253,143 @@ mod tests {
         assert!(is_near_start(0.0));
         assert!(is_near_start(NEAR_START));
         assert!(!is_near_start(NEAR_START + 0.5));
+    }
+
+    #[test]
+    #[ignore = "needs a display"]
+    fn jump_button_tracks_transcript_growth_without_scrolling() {
+        use relm4::typed_view::list::{RelmListItem, TypedListView};
+
+        struct Row;
+        impl RelmListItem for Row {
+            type Root = gtk::Box;
+            type Widgets = ();
+            fn setup(_item: &gtk::ListItem) -> (gtk::Box, ()) {
+                let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+                root.set_height_request(100);
+                (root, ())
+            }
+            fn bind(&mut self, _widgets: &mut (), _root: &mut gtk::Box) {}
+        }
+
+        gtk::init().expect("display");
+        adw::init().expect("libadwaita");
+        let context = gtk::glib::MainContext::default();
+        let spin = || {
+            let end = std::time::Instant::now() + std::time::Duration::from_millis(400);
+            while std::time::Instant::now() < end {
+                context.iteration(false);
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        };
+        let mut list = TypedListView::<Row, gtk::NoSelection>::new();
+        let events = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let captured_events = events.clone();
+        let controller = TranscriptView::builder()
+            .launch(TranscriptViewInit {
+                state: TranscriptState {
+                    active: true,
+                    has_messages: true,
+                    history_complete: true,
+                    loading_older: false,
+                    recent_messages_pending: false,
+                },
+                message_view: list.view.clone(),
+            })
+            .connect_receiver(move |_, output| captured_events.borrow_mut().push(output));
+        let window = gtk::Window::builder()
+            .default_width(360)
+            .default_height(400)
+            .child(controller.widget())
+            .build();
+        window.present();
+        spin();
+        list.extend_from_iter((0..60).map(|_| Row));
+        spin();
+
+        fn find(widget: &gtk::Widget) -> Option<gtk::Button> {
+            if let Some(button) = widget.downcast_ref::<gtk::Button>()
+                && button.has_css_class("zaptide-jump-button")
+            {
+                return Some(button.clone());
+            }
+            let mut child = widget.first_child();
+            while let Some(current) = child {
+                if let Some(button) = find(&current) {
+                    return Some(button);
+                }
+                child = current.next_sibling();
+            }
+            None
+        }
+        let button = find(controller.widget().upcast_ref()).expect("jump button");
+        let adjustment = list
+            .view
+            .ancestor(gtk::ScrolledWindow::static_type())
+            .and_downcast::<gtk::ScrolledWindow>()
+            .expect("scroller")
+            .vadjustment();
+        window.set_visible(false);
+        spin();
+        adjustment.configure(0.0, 0.0, 100.0, 1.0, 10.0, 100.0);
+        spin();
+        events.borrow_mut().clear();
+        let changed = std::rc::Rc::new(std::cell::Cell::new(0));
+        let value_changed = std::rc::Rc::new(std::cell::Cell::new(0));
+        adjustment.connect_changed({
+            let changed = changed.clone();
+            move |_| changed.set(changed.get() + 1)
+        });
+        adjustment.connect_value_changed({
+            let value_changed = value_changed.clone();
+            move |_| value_changed.set(value_changed.get() + 1)
+        });
+
+        adjustment.set_upper(1000.0);
+        spin();
+        assert_eq!(adjustment.value(), 0.0);
+        assert!(changed.get() > 0, "upper growth emits changed");
+        assert_eq!(value_changed.get(), 0, "upper growth does not move value");
+        assert!(button.get_visible(), "newer rows are below the viewport");
+        assert!(
+            !events
+                .borrow()
+                .iter()
+                .any(|event| matches!(event, TranscriptViewOutput::AtEnd))
+        );
+
+        changed.set(0);
+        adjustment.set_upper(100.0);
+        spin();
+        assert_eq!(adjustment.value(), 0.0);
+        assert!(changed.get() > 0, "upper reduction emits changed");
+        assert_eq!(
+            value_changed.get(),
+            0,
+            "upper reduction does not move value"
+        );
+        assert!(!button.get_visible(), "button hides when bounds shrink");
+        assert!(
+            !events
+                .borrow()
+                .iter()
+                .any(|event| matches!(event, TranscriptViewOutput::AtEnd))
+        );
+
+        adjustment.set_upper(1000.0);
+        spin();
+        assert!(button.get_visible());
+        events.borrow_mut().clear();
+        adjustment.set_value(900.0);
+        spin();
+        assert!(value_changed.get() > 0, "scrolling emits value-changed");
+        assert!(!button.get_visible(), "button hides at the end");
+        assert!(
+            events
+                .borrow()
+                .iter()
+                .any(|event| matches!(event, TranscriptViewOutput::AtEnd))
+        );
     }
 
     /// Run under a display, preferably a virtual one:
