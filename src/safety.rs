@@ -355,7 +355,12 @@ fn mention_at(rest: &str, mentions: &[MentionLabel]) -> Option<(usize, String)> 
 }
 
 fn visible_mention_label(label: &str) -> String {
-    label.chars().filter(|c| !c.is_control()).collect()
+    label
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect::<String>()
+        .trim_start_matches('@')
+        .to_owned()
 }
 
 /// Conservatively keep Unicode marks and symbols next to a token from

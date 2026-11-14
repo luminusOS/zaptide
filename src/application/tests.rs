@@ -516,6 +516,24 @@ fn transcript_keeps_full_text_message_body() {
 }
 
 #[test]
+fn mention_labels_with_at_sign_show_one_prefix() {
+    let mentions = [crate::safety::MentionLabel {
+        user: "15581".into(),
+        label: "@Alice".into(),
+        phone: None,
+        hint: None,
+    }];
+    assert_eq!(
+        crate::safety::display_mentions("Hi @15581", &mentions),
+        "Hi @Alice"
+    );
+    assert_eq!(
+        crate::safety::linkify_markup_with_mentions("@15581", &mentions),
+        "<b>@Alice</b>"
+    );
+}
+
+#[test]
 fn mention_names_prefer_saved_then_whatsapp_then_phone() {
     let mut message = crate::archive::tests::message("group@g.us", "M", 10, false);
     let id = "15551234567@s.whatsapp.net";
