@@ -558,6 +558,18 @@ impl Worker {
             let existing = self.archive.chat(&id).ok().flatten();
             if metadata || existing.is_none() {
                 let name = match chat.name.filter(|name| !name.is_empty()) {
+                    name if id.ends_with("@newsletter") => self
+                        .newsletter_names
+                        .get(&id)
+                        .cloned()
+                        .or_else(|| {
+                            existing
+                                .as_ref()
+                                .filter(|row| row.name != fallback_name(&id))
+                                .map(|row| row.name.clone())
+                        })
+                        .or(name)
+                        .unwrap_or_else(|| fallback_name(&id)),
                     Some(name) if ChatKind::from_id(&id) == ChatKind::Group => name,
                     Some(name) => {
                         // Prefer the phone's address-book name for direct chats.
@@ -828,6 +840,9 @@ impl Worker {
         }
         for (id, _, _) in &filed {
             self.emit_chat(id);
+            if id.ends_with("@newsletter") {
+                self.request_newsletter_info(id);
+            }
         }
         Ok((filed, effects))
     }

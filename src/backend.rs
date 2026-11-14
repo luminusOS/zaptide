@@ -298,6 +298,10 @@ pub enum Done {
         /// Whether the server refusal is permanent.
         permanent: bool,
     },
+    NewsletterNames {
+        names: Vec<(ChatId, String)>,
+        requested: Option<ChatId>,
+    },
     /// Internal completion of an edit request.
     Edited {
         chat: ChatId,

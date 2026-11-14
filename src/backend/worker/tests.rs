@@ -34,6 +34,151 @@ fn startup_reports_persisted_account_identity_without_chats() {
     );
 }
 
+#[test]
+fn synthetic_newsletter_without_metadata_displays_numeric_id() {
+    let (mut worker, _events, _inbox, _wa) = worker();
+    let id = "123456@newsletter";
+    worker.ensure_chat(id, None);
+    assert_eq!(worker.archive.chat(id).unwrap().unwrap().name, "123456");
+}
+
+#[test]
+fn synthetic_newsletter_existing_name_survives_incoming_message() {
+    let (mut worker, _events, _inbox, _wa) = worker();
+    let id = "123456@newsletter";
+    worker.archive.ensure_chat(id, "Synthetic Channel").unwrap();
+    worker.ensure_chat(id, None);
+    assert_eq!(
+        worker.archive.chat(id).unwrap().unwrap().name,
+        "Synthetic Channel"
+    );
+}
+
+#[tokio::test]
+async fn synthetic_newsletter_metadata_updates_existing_chat_and_rejects_stale_session() {
+    let (mut worker, events, _, _) = worker();
+    let id = "123456@newsletter";
+    worker.ensure_chat(id, None);
+    worker.session_generation = 2;
+    worker
+        .handle_command(Command::Completed(Completion {
+            generation: 1,
+            done: Done::NewsletterNames {
+                names: vec![(id.into(), "Old channel".into())],
+                requested: None,
+            },
+        }))
+        .await;
+    assert_eq!(worker.archive.chat(id).unwrap().unwrap().name, "123456");
+    worker
+        .handle_command(Command::Completed(Completion {
+            generation: 2,
+            done: Done::NewsletterNames {
+                names: vec![(id.into(), "Synthetic Channel".into())],
+                requested: None,
+            },
+        }))
+        .await;
+    assert_eq!(
+        worker.archive.chat(id).unwrap().unwrap().name,
+        "Synthetic Channel"
+    );
+    assert!(events.try_iter().any(
+        |event| matches!(event, Event::ChatUpdated(chat) if chat.name == "Synthetic Channel")
+    ));
+    worker.ensure_chat(id, None);
+    assert_eq!(
+        worker.archive.chat(id).unwrap().unwrap().name,
+        "Synthetic Channel"
+    );
+}
+
+#[test]
+fn synthetic_newsletter_history_does_not_replace_metadata_with_fallback() {
+    let (mut worker, _, _, _) = worker();
+    let id = "123456@newsletter";
+    worker.archive.ensure_chat(id, "Synthetic Channel").unwrap();
+    let conversation = wa::Conversation {
+        id: id.into(),
+        ..Default::default()
+    };
+    let history = ParsedHistory {
+        chats: vec![parse_conversation(conversation)],
+        push_names: vec![],
+        lids: vec![],
+        stickers: vec![],
+    };
+    assert!(worker.apply_history(history, true).1);
+    assert_eq!(
+        worker.archive.chat(id).unwrap().unwrap().name,
+        "Synthetic Channel"
+    );
+}
+
+#[test]
+fn synthetic_newsletter_metadata_before_message_does_not_create_chat() {
+    let (mut worker, _, _, _) = worker();
+    let id = "123456@newsletter";
+    worker.apply_newsletter_names(vec![(id.into(), "Synthetic Channel".into())], None);
+    assert!(worker.archive.chat(id).unwrap().is_none());
+    worker.ensure_chat(id, None);
+    assert_eq!(
+        worker.archive.chat(id).unwrap().unwrap().name,
+        "Synthetic Channel"
+    );
+}
+
+#[test]
+fn synthetic_newsletter_failed_lookup_retries_without_another_message() {
+    let (mut worker, _, _, _) = worker();
+    let id = "123456@newsletter";
+    worker.ensure_chat(id, None);
+    worker.newsletter_queue.clear();
+    worker.newsletter_running = true;
+    worker.apply_newsletter_names(Vec::new(), Some(id.into()));
+    assert!(worker.newsletter_requested.contains(id));
+    assert_eq!(worker.newsletter_retry.len(), 1);
+    worker.newsletter_retry[0].0 = Instant::now();
+    worker.pump_newsletter_info();
+    assert_eq!(worker.newsletter_queue.pop_front().as_deref(), Some(id));
+    worker.apply_newsletter_names(vec![(id.into(), "Channel".into())], Some(id.into()));
+    assert_eq!(worker.archive.chat(id).unwrap().unwrap().name, "Channel");
+}
+
+#[test]
+fn synthetic_newsletter_reconnect_defers_list_until_individual_lookup_finishes() {
+    let (mut worker, _, _, _) = worker();
+    let id = "123456@newsletter";
+    worker.ensure_chat(id, None);
+    worker.newsletter_running = true;
+    worker.fetch_subscribed_newsletters();
+    assert!(worker.newsletter_list_pending);
+    assert!(!worker.newsletter_list_running);
+    worker.apply_newsletter_names(vec![(id.into(), "Old name".into())], Some(id.into()));
+    assert!(worker.newsletter_list_pending);
+    worker.newsletter_list_pending = false;
+    worker.newsletter_list_running = true;
+    worker.apply_newsletter_names(vec![(id.into(), "New name".into())], None);
+    assert_eq!(worker.archive.chat(id).unwrap().unwrap().name, "New name");
+}
+
+#[test]
+fn synthetic_newsletter_retries_stop_until_reconnect_after_limit() {
+    let (mut worker, _, _, _) = worker();
+    let id = "123456@newsletter";
+    worker.ensure_chat(id, None);
+    worker.newsletter_queue.clear();
+    for attempt in 1..=8 {
+        worker.newsletter_running = true;
+        worker.apply_newsletter_names(Vec::new(), Some(id.into()));
+        assert_eq!(worker.newsletter_retry.len(), usize::from(attempt <= 7));
+        worker.newsletter_retry.clear();
+    }
+    worker.fetch_subscribed_newsletters();
+    assert!(!worker.newsletter_requested.contains(id));
+    assert!(!worker.newsletter_tries.contains_key(id));
+}
+
 #[tokio::test]
 async fn completion_stale_media_sweep_releases_running_without_publishing() {
     let (mut worker, events, _inbox, _wa) = worker();
