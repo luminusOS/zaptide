@@ -592,6 +592,18 @@ fn photo_runtime() -> &'static tokio::runtime::Runtime {
     &RUNTIME
 }
 
+#[cfg(test)]
+struct DecodeHook {
+    ready: std::sync::mpsc::Sender<bool>,
+    release: tokio::sync::oneshot::Receiver<()>,
+    finished: std::sync::mpsc::Sender<()>,
+}
+
+#[cfg(test)]
+thread_local! {
+    static DECODE_HOOK: std::cell::RefCell<Option<DecodeHook>> = const { std::cell::RefCell::new(None) };
+}
+
 /// Loads `path` through glycin's sandboxed loaders, scaled to fit
 /// `width` by `height`, into `picture`, unless its row moved on first.
 fn load_photo(
@@ -605,13 +617,27 @@ fn load_photo(
     let picture = glib::SendWeakRef::from(picture.downgrade());
     let main_context = glib::MainContext::default();
     let current = ticket.clone();
+    #[cfg(test)]
+    let hook = DECODE_HOOK.take();
     photo_runtime().spawn(async move {
         let texture = decode_photo_file(&path, width, height, &current).await;
+        #[cfg(test)]
+        let finished = if let Some(hook) = hook {
+            let _ = hook.ready.send(texture.is_some());
+            let _ = hook.release.await;
+            Some(hook.finished)
+        } else {
+            None
+        };
         main_context.invoke(move || {
             if let (true, Some(picture), Some(texture)) =
                 (ticket.is_current(), picture.upgrade(), texture)
             {
                 picture.set_paintable(Some(&texture));
+            }
+            #[cfg(test)]
+            if let Some(finished) = finished {
+                let _ = finished.send(());
             }
         });
     });
@@ -719,6 +745,71 @@ fn photo_error(error: &impl std::fmt::Display) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "needs display, glycin and bubblewrap; run: cargo test --lib stale_photo_completion_after_manual_cancel_and_widget_replacement -- --ignored"]
+    fn stale_photo_completion_after_manual_cancel_and_widget_replacement() {
+        use std::time::{Duration, Instant};
+
+        gtk::init().expect("display");
+        let context = glib::MainContext::default();
+        let _owner = context.acquire().expect("own main context");
+        let directory = tempfile::tempdir().unwrap();
+        let old_path = directory.path().join("old.png");
+        image::RgbImage::from_pixel(8, 8, image::Rgb([230, 10, 10]))
+            .save(&old_path)
+            .unwrap();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let (finished_tx, finished_rx) = std::sync::mpsc::channel();
+        DECODE_HOOK.set(Some(DecodeHook {
+            ready: ready_tx,
+            release: release_rx,
+            finished: finished_tx,
+        }));
+        let container = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let old_picture = gtk::Picture::new();
+        container.append(&old_picture);
+        let token = DecodeToken::default();
+        load_photo(&old_picture, old_path, 8, 8, &token);
+        assert!(
+            ready_rx
+                .recv_timeout(Duration::from_secs(30))
+                .expect("decode finished")
+        );
+        token.cancel();
+        container.remove(&old_picture);
+        let replacement = gtk::Picture::new();
+        let bytes = glib::Bytes::from_owned(vec![10u8, 230, 10, 255]);
+        let replacement_texture =
+            gdk::MemoryTexture::new(1, 1, gdk::MemoryFormat::R8g8b8a8, &bytes, 4);
+        replacement.set_paintable(Some(&replacement_texture));
+        container.append(&replacement);
+        release_tx.send(()).expect("release old decode");
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if context.pending() {
+                context.iteration(false);
+            }
+            match finished_rx.try_recv() {
+                Ok(()) => break,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(error) => panic!("callback completion: {error}"),
+            }
+            assert!(Instant::now() < deadline, "old callback did not run");
+            std::thread::yield_now();
+        }
+        assert!(old_picture.paintable().is_none());
+        assert_eq!(
+            container.first_child().as_ref(),
+            Some(replacement.upcast_ref())
+        );
+        assert!(replacement.next_sibling().is_none());
+        assert_eq!(
+            replacement.paintable().as_ref(),
+            Some(replacement_texture.upcast_ref())
+        );
+    }
 
     fn open_sockets() -> usize {
         std::fs::read_dir("/proc/self/fd")

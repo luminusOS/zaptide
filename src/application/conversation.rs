@@ -1051,6 +1051,89 @@ mod tests {
     use super::new_messages_need_notice;
 
     #[test]
+    fn album_follower_file_updates_invalidate_the_leader_row() {
+        use super::{RowInputs, message_rows};
+        use crate::model::{Content, Media, MediaState};
+        let directory = tempfile::tempdir().unwrap();
+        let paths: Vec<_> = (0..3)
+            .map(|index| {
+                let path = directory.path().join(format!("{index}.png"));
+                image::RgbImage::from_pixel(24, 16, image::Rgb([230, 10, 10]))
+                    .save(&path)
+                    .unwrap();
+                path
+            })
+            .collect();
+        let messages: Vec<_> = paths
+            .iter()
+            .enumerate()
+            .map(|(index, path)| {
+                let mut message = super::super::tests::grouping_message(
+                    &format!("photo-{index}"),
+                    "sender",
+                    false,
+                    1_700_000_000 + index as i64,
+                );
+                message.content = Content::Image {
+                    caption: None,
+                    media: Media {
+                        mime: "image/png".into(),
+                        size: 1,
+                        width: Some(24),
+                        height: Some(16),
+                        path: Some(path.clone()),
+                        state: MediaState::Idle,
+                    },
+                };
+                message
+            })
+            .collect();
+        let contacts = Default::default();
+        let avatars = Default::default();
+        let starred = Default::default();
+        let registry = Default::default();
+        let rows = |messages| {
+            message_rows(
+                messages,
+                0,
+                RowInputs {
+                    contacts: &contacts,
+                    avatars: &avatars,
+                    starred: &starred,
+                    selection: None,
+                    link_previews: true,
+                    pointer_sender: &(),
+                    audio_registry: &registry,
+                    voice: &|_| None,
+                },
+            )
+            .0
+        };
+        let before = rows(messages.clone());
+        assert_eq!(before[0].album.len(), 3);
+        assert!(!before[0].collapsed);
+        assert!(before[1..].iter().all(|row| row.collapsed));
+        let replacement = directory.path().join("replacement.webp");
+        image::RgbImage::from_pixel(24, 16, image::Rgb([10, 230, 10]))
+            .save(&replacement)
+            .unwrap();
+        let mut changed = messages;
+        let Content::Image { media, .. } = &mut changed[2].content else {
+            unreachable!()
+        };
+        media.path = Some(replacement.clone());
+        let after = rows(changed);
+        assert!(!before[0].renders_like(&after[0]));
+        assert!(before[1].renders_like(&after[1]));
+        assert!(!before[2].renders_like(&after[2]));
+        let Content::Image { media, .. } = &after[0].album[2].content else {
+            unreachable!()
+        };
+        assert_eq!(media.path.as_ref(), Some(&replacement));
+        assert!(after[2].collapsed);
+    }
+
+    #[test]
     fn only_new_tail_messages_away_from_end_need_notice() {
         assert!(new_messages_need_notice(false, true));
         assert!(!new_messages_need_notice(true, true));
