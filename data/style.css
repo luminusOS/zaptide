@@ -32,6 +32,8 @@
 .zaptide-bubble { padding: 8px 11px; border-radius: 13px; }
 .zaptide-bubble.incoming { background-color: var(--zaptide-bubble-in); color: var(--zaptide-bubble-in-text); }
 .zaptide-bubble.outgoing { background-color: var(--zaptide-bubble-out); color: var(--zaptide-bubble-out-text); }
+.zaptide-bubble.incoming .zaptide-link-background { color: var(--zaptide-bubble-in); }
+.zaptide-bubble.outgoing .zaptide-link-background { color: var(--zaptide-bubble-out); }
 .zaptide-message-selected { border-radius: 12px; background-color: color-mix(in srgb, var(--accent-bg-color) 15%, transparent); }
 .zaptide-typing-bubble { padding: 13px 14px; border-bottom-left-radius: 4px; }
 .zaptide-typing-dot { min-width: 7px; min-height: 7px; border-radius: 9999px; background-color: currentColor; opacity: 0.35; animation: zaptide-typing 1.2s ease-in-out infinite; }
