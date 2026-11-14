@@ -21,7 +21,7 @@ fn luminance(color: crate::color::Color) -> f32 {
         + 0.0722 * linear_channel(color.b())
 }
 
-fn contrast_ratio(first: crate::color::Color, second: crate::color::Color) -> f32 {
+pub(crate) fn contrast_ratio(first: crate::color::Color, second: crate::color::Color) -> f32 {
     let first = luminance(first);
     let second = luminance(second);
     (first.max(second) + 0.05) / (first.min(second) + 0.05)
