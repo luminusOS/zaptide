@@ -401,6 +401,12 @@ impl TextBubble {
         self.imp().view.get().expect("view initialized").clone()
     }
 
+    pub(crate) fn selected_text(&self) -> Option<String> {
+        let buffer = self.view().buffer();
+        let (start, end) = buffer.selection_bounds()?;
+        Some(buffer.text(&start, &end, true).to_string())
+    }
+
     fn text_layout(&self) -> gtk::pango::Layout {
         let view = self.view();
         let buffer = view.buffer();

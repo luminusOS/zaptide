@@ -1003,7 +1003,12 @@ impl NativeApplication {
                 }
             }
             Input::NewContact { phone, name } => self.new_contact(phone, name, sender),
-            Input::ShowMessageMenu { id, x, y } => self.show_message_menu(id, x, y, &sender),
+            Input::ShowMessageMenu {
+                id,
+                x,
+                y,
+                selected_text,
+            } => self.show_message_menu(id, x, y, selected_text, &sender),
             Input::SelectMessage(position) => self.select_message(position),
             Input::OpenQuoted => {
                 if let Some(message) = self.selected_message().cloned() {
@@ -1141,7 +1146,11 @@ impl NativeApplication {
             Input::RemoveAttachment(path) => attachments::remove_attachment(self, &path),
             Input::CopyTranscript => self.copy_transcript(),
             Input::CopySelectedText => {
-                if let Some(text) = self.selected_message().and_then(message_text) {
+                let selected_text = self.message_target_selection.take();
+                if let Some(text) = self
+                    .selected_message()
+                    .and_then(|message| selected_text.or_else(|| message_text(message)))
+                {
                     crate::native_portals::NativePortals::write_clipboard_text(
                         &self.window.clipboard(),
                         &text,
@@ -1174,6 +1183,7 @@ impl NativeApplication {
             Input::ReactSelected(emoji) => self.react_selected(emoji),
             Input::ReactTo { id, emoji } => {
                 self.message_target = Some(id);
+                self.message_target_selection = None;
                 self.react_selected(emoji);
             }
             Input::ShowForward => self.show_forward(sender),

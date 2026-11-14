@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use ashpd::zbus::{self, zvariant::OwnedValue};
+use ashpd::zbus::{self, OwnedVariant};
 use futures_util::StreamExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -93,7 +93,7 @@ pub(super) struct Notification<'a> {
     pub summary: &'a str,
     pub body: &'a str,
     pub actions: Vec<String>,
-    pub hints: HashMap<String, OwnedValue>,
+    pub hints: HashMap<String, OwnedVariant>,
     pub expire_timeout: i32,
 }
 
@@ -334,7 +334,7 @@ mod tests {
 
     #[derive(Default)]
     struct State {
-        received: Vec<(u32, HashMap<String, OwnedValue>)>,
+        received: Vec<(u32, HashMap<String, OwnedVariant>)>,
         closed: Vec<u32>,
     }
 
@@ -385,7 +385,7 @@ mod tests {
             summary: String,
             body: String,
             actions: Vec<String>,
-            hints: HashMap<String, OwnedValue>,
+            hints: HashMap<String, OwnedVariant>,
             expire_timeout: i32,
         ) -> u32 {
             assert_eq!((app_name.as_str(), app_icon.as_str()), ("ZapTide", ""));
@@ -425,16 +425,12 @@ mod tests {
         let address = address.trim();
         let state = Arc::new(Mutex::new(State::default()));
         let server = zbus::connection::Builder::address(address)
-            .unwrap()
             .name(DESTINATION)
-            .unwrap()
             .serve_at(PATH, Fake(state.clone()))
-            .unwrap()
             .build()
             .await
             .unwrap();
         let connection = zbus::connection::Builder::address(address)
-            .unwrap()
             .build()
             .await
             .unwrap();
@@ -470,11 +466,8 @@ mod tests {
         server.release_name(DESTINATION).await.unwrap();
         let new_state = Arc::new(Mutex::new(State::default()));
         let _new_server = zbus::connection::Builder::address(address)
-            .unwrap()
             .name(DESTINATION)
-            .unwrap()
             .serve_at(PATH, Fake(new_state.clone()))
-            .unwrap()
             .build()
             .await
             .unwrap();
@@ -487,13 +480,11 @@ mod tests {
     #[tokio::test]
     async fn session_routes_peer_signals_and_withdraws_server_id() {
         let state = Arc::new(Mutex::new(State::default()));
-        let (server_end, client_end) = tokio::net::UnixStream::pair().unwrap();
+        let (server_end, client_end) = std::os::unix::net::UnixStream::pair().unwrap();
         let server = zbus::connection::Builder::unix_stream(server_end)
             .server(zbus::Guid::generate())
-            .unwrap()
             .p2p()
             .serve_at(PATH, Fake(state.clone()))
-            .unwrap()
             .build();
         let client = zbus::connection::Builder::unix_stream(client_end)
             .p2p()
@@ -586,13 +577,11 @@ mod tests {
     #[tokio::test]
     async fn private_peer_notify_and_close_preserve_wire_payload() {
         let state = Arc::new(Mutex::new(State::default()));
-        let (server_end, client_end) = tokio::net::UnixStream::pair().unwrap();
+        let (server_end, client_end) = std::os::unix::net::UnixStream::pair().unwrap();
         let server = zbus::connection::Builder::unix_stream(server_end)
             .server(zbus::Guid::generate())
-            .unwrap()
             .p2p()
             .serve_at(PATH, Fake(state.clone()))
-            .unwrap()
             .build();
         let client = zbus::connection::Builder::unix_stream(client_end)
             .p2p()
@@ -604,7 +593,7 @@ mod tests {
             let mut hints = HashMap::new();
             hints.insert(
                 "sound-file".into(),
-                zbus::zvariant::Str::from("/synthetic/sound.wav").into(),
+                zbus::Str::from("/synthetic/sound.wav").into(),
             );
             hints.insert("suppress-sound".into(), true.into());
             let id = client

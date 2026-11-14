@@ -339,12 +339,12 @@ pub use imp::TrayHandle;
 #[cfg(test)]
 mod tests {
     use ashpd::desktop::settings::ColorScheme;
-    use ashpd::zvariant::{OwnedValue, Value};
+    use ashpd::zbus::{OwnedVariant, Variant};
 
     #[test]
     fn desktop_color_scheme_controls_tray_contrast() {
         for (scheme, light) in [(0_u32, true), (1, false), (2, true), (99, true)] {
-            let value = OwnedValue::try_from(Value::from(scheme)).expect("a plain value");
+            let value = OwnedVariant::try_from(Variant::from(scheme)).expect("a plain value");
             let scheme = ColorScheme::try_from(value).expect("a known or unknown scheme");
             assert_eq!(super::imp::light_theme(scheme), light);
         }
@@ -352,7 +352,7 @@ mod tests {
 
     #[test]
     fn a_malformed_color_scheme_does_not_change_tray_contrast() {
-        let value = OwnedValue::try_from(Value::from("dark")).expect("a plain value");
+        let value = OwnedVariant::try_from(Variant::from("dark")).expect("a plain value");
         assert!(ColorScheme::try_from(value).is_err());
     }
 

@@ -23,7 +23,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use ashpd::desktop::Icon;
 use ashpd::desktop::notification::{Notification, NotificationProxy};
-use ashpd::zvariant::{Fd, Type, Value, as_value};
+use ashpd::zbus::wire::as_variant;
+use ashpd::zbus::{Fd, Type, Variant};
 use serde::Serialize;
 
 use crate::notification_sound::{SOUND, SoundRequest};
@@ -113,12 +114,12 @@ impl Sound {
         }
     }
 
-    fn value(&self) -> Value<'_> {
+    fn value(&self) -> Variant<'_> {
         match self {
             Self::File(descriptor) => {
-                Value::new(("file-descriptor", Value::from(Fd::from(descriptor))))
+                Variant::new(("file-descriptor", Variant::from(Fd::from(descriptor))))
             }
-            Self::Silent => Value::from("silent"),
+            Self::Silent => Variant::from("silent"),
         }
     }
 }
@@ -126,12 +127,12 @@ impl Sound {
 /// The `AddNotification` body: ashpd's notification and the sound it cannot
 /// express.
 #[derive(Serialize, Type)]
-#[zvariant(signature = "dict", crate = "ashpd::zvariant")]
+#[zvariant(signature = "dict", crate = "ashpd::zbus::wire")]
 struct Body<'a> {
     #[serde(flatten)]
     notification: Notification,
-    #[serde(with = "as_value")]
-    sound: Value<'a>,
+    #[serde(with = "as_variant")]
+    sound: Variant<'a>,
 }
 
 fn notification(request: &Request) -> std::io::Result<Notification> {
@@ -161,23 +162,9 @@ async fn send(proxy: &NotificationProxy, request: Request) -> Result<(), String>
         .map_err(|error| classify(&error))
 }
 
-/// The reason a D-Bus call failed. Only an error reply proves the desktop
-/// refused; a missing reply or a broken connection leaves unknown whether it
-/// acted, which is reported as [`AMBIGUOUS`].
-pub(super) fn classify(error: &ashpd::zbus::Error) -> String {
-    match error {
-        ashpd::zbus::Error::MethodError(name, _, _)
-            if !matches!(
-                name.as_str(),
-                "org.freedesktop.DBus.Error.NoReply"
-                    | "org.freedesktop.DBus.Error.Timeout"
-                    | "org.freedesktop.DBus.Error.Disconnected"
-            ) =>
-        {
-            error.to_string()
-        }
-        _ => AMBIGUOUS.to_owned(),
-    }
+/// An error reply does not guarantee that the desktop had no side effects.
+pub(super) fn classify(_error: &ashpd::zbus::Error) -> String {
+    AMBIGUOUS.to_owned()
 }
 
 async fn send_to_desktop(request: Request) -> Result<(), String> {
@@ -303,6 +290,26 @@ impl Queue {
         self.lanes.borrow().contains_key(id)
     }
 
+    #[cfg(test)]
+    pub(super) async fn wait_quarantined(&self, id: &str) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            if self
+                .lanes
+                .borrow()
+                .get(id)
+                .is_some_and(|lane| lane.quarantined.get())
+            {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "lane {id} was not quarantined"
+            );
+            relm4::gtk::glib::timeout_future(std::time::Duration::from_millis(5)).await;
+        }
+    }
+
     pub(super) fn enqueue(&self, id: &str, remove: bool, start: Start, finish: Finish) {
         let mut lanes = self.lanes.borrow_mut();
         if remove && lanes.get(id).is_some_and(|lane| lane.quarantined.get()) {
@@ -349,8 +356,8 @@ impl Queue {
         });
     }
 
-    /// Sends `request` through the portal; `fallback` runs if the portal
-    /// refuses it and no newer request for its ID has arrived.
+    /// Sends `request` through the portal; `fallback` runs for a failure before
+    /// sending if no newer request for its ID has arrived.
     pub fn add(&self, request: Request, fallback: impl FnOnce() + 'static) {
         let id = request.id.clone();
         self.enqueue(
@@ -442,7 +449,7 @@ mod tests {
     use std::sync::Mutex;
 
     use ashpd::zbus;
-    use zbus::zvariant::OwnedValue;
+    use zbus::OwnedVariant;
 
     use super::*;
 
@@ -829,6 +836,26 @@ mod tests {
     }
 
     #[test]
+    fn dbus_errors_leave_delivery_uncertain() {
+        use zbus::fdo::Error;
+
+        for uncertain in [
+            Error::Failed("failed after delivery".into()),
+            Error::UnknownMethod("unknown method".into()),
+            Error::UnknownInterface("unknown interface".into()),
+            Error::AccessDenied("access denied".into()),
+            Error::NotSupported("not supported".into()),
+            Error::NoReply("no reply".into()),
+            Error::Timeout("timeout".into()),
+            Error::TimedOut("timed out".into()),
+            Error::Disconnected("disconnected".into()),
+            Error::IOError("I/O error".into()),
+        ] {
+            assert_eq!(classify(&zbus::Error::from(uncertain)), AMBIGUOUS);
+        }
+    }
+
+    #[test]
     fn only_version_two_and_later_take_a_sound() {
         assert!(!takes_sound(UNKNOWN_VERSION));
         assert!(!takes_sound(0));
@@ -867,7 +894,7 @@ mod tests {
 
     struct Received {
         id: String,
-        notification: std::collections::HashMap<String, OwnedValue>,
+        notification: std::collections::HashMap<String, OwnedVariant>,
     }
 
     /// A portal on a private peer-to-peer connection, so nothing touches the
@@ -901,7 +928,7 @@ mod tests {
         async fn add_notification(
             &self,
             id: String,
-            notification: std::collections::HashMap<String, OwnedValue>,
+            notification: std::collections::HashMap<String, OwnedVariant>,
         ) -> zbus::fdo::Result<()> {
             let body = notification
                 .get("body")
@@ -916,6 +943,7 @@ mod tests {
                         return Err(zbus::fdo::Error::NoReply("ambiguous".into()));
                     }
                     if race.fail {
+                        race.remote.lock().unwrap().insert(id.clone(), body.clone());
                         return Err(zbus::fdo::Error::Failed("refused".into()));
                     }
                 }
@@ -939,12 +967,12 @@ mod tests {
     }
 
     async fn connect(portal: FakePortal) -> zbus::Result<zbus::Connection> {
-        let (server_end, client_end) = tokio::net::UnixStream::pair()?;
+        let (server_end, client_end) = std::os::unix::net::UnixStream::pair()?;
         let guid = zbus::Guid::generate();
         let server = zbus::connection::Builder::unix_stream(server_end)
-            .server(guid)?
+            .server(guid)
             .p2p()
-            .serve_at("/org/freedesktop/portal/desktop", portal)?
+            .serve_at("/org/freedesktop/portal/desktop", portal)
             .build();
         let client = zbus::connection::Builder::unix_stream(client_end)
             .p2p()
@@ -1028,12 +1056,11 @@ mod tests {
                     let hide = visible.clone();
                     queue.remove("token-1", false, move || hide.set(false));
                     assert!(!visible.get());
-                    on_runtime(async {
-                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                        Ok(())
-                    })
-                    .await
-                    .unwrap();
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+                    while queue.has_pending("token-1") {
+                        assert!(std::time::Instant::now() < deadline);
+                        relm4::gtk::glib::timeout_future(std::time::Duration::from_millis(5)).await;
+                    }
                     assert!(
                         !queue.lanes.borrow().contains_key("token-1"),
                         "unsupported removal must not wait for a portal"
@@ -1096,12 +1123,7 @@ mod tests {
                     queue_dbus_add(&queue, connection.clone(), "old", done.clone());
                     started_rx.recv().await.unwrap();
                     release.send(()).await.unwrap();
-                    on_runtime(async {
-                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                        Ok(())
-                    })
-                    .await
-                    .unwrap();
+                    queue.wait_quarantined("token-1").await;
                     assert!(
                         queue
                             .lanes
@@ -1203,6 +1225,25 @@ mod tests {
                         .unwrap();
                         assert!(done_rx.try_recv().is_err());
                         release.send(()).await.unwrap();
+                        if fail {
+                            queue.wait_quarantined("token-1").await;
+                            assert!(done_rx.try_recv().is_err());
+                            assert!(
+                                queue
+                                    .lanes
+                                    .borrow()
+                                    .get("token-1")
+                                    .unwrap()
+                                    .quarantined
+                                    .get()
+                            );
+                            assert_eq!(
+                                remote.lock().unwrap().get("token-1").map(String::as_str),
+                                Some("old")
+                            );
+                            queue.remove("token-1", true, || {});
+                            continue;
+                        }
                         assert!(!done_rx.recv().await.unwrap());
                         assert!(!done_rx.recv().await.unwrap());
                         let state = remote.lock().unwrap();
@@ -1258,16 +1299,16 @@ mod tests {
     }
 
     /// The descriptor named by a serialized `(sv)`, read back as bytes.
-    fn descriptor_bytes(value: &OwnedValue) -> Vec<u8> {
-        fn find(value: &Value<'_>) -> Option<Vec<u8>> {
+    fn descriptor_bytes(value: &OwnedVariant) -> Vec<u8> {
+        fn find(value: &Variant<'_>) -> Option<Vec<u8>> {
             match value {
-                Value::Structure(structure) => {
+                Variant::Structure(structure) => {
                     let fields = structure.fields();
                     assert_eq!(<&str>::try_from(&fields[0]).unwrap(), "file-descriptor");
                     find(&fields[1])
                 }
-                Value::Value(inner) => find(inner),
-                Value::Fd(descriptor) => {
+                Variant::Variant(inner) => find(inner),
+                Variant::Fd(descriptor) => {
                     let owned = descriptor.as_fd().try_clone_to_owned().ok()?;
                     Some(read_all(owned))
                 }
@@ -1314,7 +1355,7 @@ mod tests {
         .unwrap();
         let received = received.lock().unwrap();
         let sound = &received[0].notification["sound"];
-        assert!(matches!(&**sound, Value::Fd(_)), "{sound:?}");
+        assert!(matches!(&**sound, Variant::Fd(_)), "{sound:?}");
     }
 
     #[test]
@@ -1327,9 +1368,9 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_notification_reports_why() {
+    fn a_failed_notification_has_an_ambiguous_outcome() {
         let (outcome, _) = deliver(request(SoundRequest::Silent, None), 2, true);
-        assert!(outcome.unwrap_err().contains("refused"));
+        assert_eq!(outcome.unwrap_err(), AMBIGUOUS);
     }
 
     #[test]
