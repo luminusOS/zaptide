@@ -1377,8 +1377,12 @@ mod batch_tests {
             id: "M00000".into(),
             sender: person(2),
             sender_name: Some("Pushed 2".into()),
-            summary: "earlier".into(),
-            mentions: Vec::new(),
+            summary: "earlier @3".into(),
+            mentions: vec![crate::model::MentionRef {
+                user: "3".into(),
+                id: person(3),
+                name: None,
+            }],
         });
         message.reactions.push(Reaction {
             sender: person(3),
@@ -1420,11 +1424,12 @@ mod batch_tests {
             )
         };
         let (bare, known) = (row(&HashMap::new()), row(&everyone));
-        assert!(bare.renders_like(&known));
+        assert!(!bare.renders_like(&known));
         assert_eq!(bare.sender, "Pushed 1");
         assert_eq!(known.sender, format!("Saved {}", message.sender));
         assert!(bare.quote.contains("Pushed 2"));
         assert!(known.quote.contains(&format!("Saved {}", person(2))));
+        assert!(known.quote.contains(&format!("@Saved {}", person(3))));
         assert!(bare.accessible_label.contains("Pushed 1"));
         assert!(known.accessible_label.contains(&known.sender));
         assert!(

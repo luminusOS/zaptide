@@ -1280,6 +1280,9 @@ impl Worker {
     }
 
     fn emit_profile(&self) {
+        self.emit(Event::AccountKnown(
+            self.identity.me_pn.is_some() || self.identity.me_lid.is_some(),
+        ));
         self.emit(Event::Profile {
             phone: self
                 .identity
@@ -1530,13 +1533,21 @@ impl Worker {
             }
             quoted.summary = self.pn_tokens(&quoted.summary);
             for mention in &mut quoted.mentions {
+                let original_name = self.whatsapp_name(mention);
+                if let Some(phone) = self.identity.lid_to_pn.get(&mention.user) {
+                    mention.user = phone.clone();
+                }
                 mention.id = self.canonical_str(&mention.id);
+                mention.name = self
+                    .whatsapp_name(mention)
+                    .or(original_name)
+                    .or_else(|| mention.name.take());
             }
             if quoted.mentions.is_empty() {
                 quoted.mentions = self.mention_tokens(&quoted.summary);
-            }
-            for mention in &mut quoted.mentions {
-                mention.name = self.whatsapp_name(mention);
+                for mention in &mut quoted.mentions {
+                    mention.name = self.whatsapp_name(mention);
+                }
             }
         }
         for mention in &mut message.mentions {

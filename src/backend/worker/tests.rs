@@ -14,6 +14,26 @@ fn sticker_hash_golden_leading_zero_and_fallback() {
 }
 use crate::backend::{Completion, Done};
 
+#[test]
+fn startup_reports_persisted_account_identity_without_chats() {
+    let (mut worker, events, _, _) = worker();
+    worker.identity.me_pn = None;
+    worker.load_state();
+    assert!(
+        events
+            .try_iter()
+            .any(|event| matches!(event, Event::AccountKnown(false)))
+    );
+
+    worker.archive.set_meta("me_lid", "12345@lid").unwrap();
+    worker.load_state();
+    assert!(
+        events
+            .try_iter()
+            .any(|event| matches!(event, Event::AccountKnown(true)))
+    );
+}
+
 #[tokio::test]
 async fn completion_stale_media_sweep_releases_running_without_publishing() {
     let (mut worker, events, _inbox, _wa) = worker();
@@ -2051,6 +2071,54 @@ fn backfill_does_not_advance_checkpoint_when_a_row_write_fails() {
         stored(&worker, PEER, "OLD").content,
         Content::Buttons { .. }
     ));
+}
+
+#[test]
+fn quoted_mentions_keep_tokens_aligned_with_phone_mapping() {
+    let (mut worker, _, _, _) = worker();
+    worker
+        .identity
+        .lid_to_pn
+        .insert("15581".into(), "15551234567".into());
+    worker.identity.contacts.insert(
+        "15581@lid".into(),
+        Contact {
+            id: "15581@lid".into(),
+            full_name: None,
+            push_name: Some("Synthetic Alice".into()),
+        },
+    );
+    worker
+        .identity
+        .lid_to_pn
+        .insert("15582".into(), "15551234567".into());
+    worker.identity.contacts.insert(
+        "15582@lid".into(),
+        Contact {
+            id: "15582@lid".into(),
+            full_name: None,
+            push_name: Some("Synthetic Bob".into()),
+        },
+    );
+    let mut message = crate::archive::tests::message("group@g.us", "M1", 10, false);
+    message.quoted = Some(Quoted {
+        id: "Q1".into(),
+        sender: "15551234567@s.whatsapp.net".into(),
+        sender_name: None,
+        summary: "Hello @15581".into(),
+        mentions: vec![MentionRef {
+            user: "15581".into(),
+            id: "15581@lid".into(),
+            name: None,
+        }],
+    });
+    worker.polish(&mut message);
+    worker.polish(&mut message);
+    let quote = message.quoted.unwrap();
+    assert_eq!(quote.summary, "Hello @15551234567");
+    assert_eq!(quote.mentions[0].user, "15551234567");
+    assert_eq!(quote.mentions[0].id, "15551234567@s.whatsapp.net");
+    assert_eq!(quote.mentions[0].name.as_deref(), Some("Synthetic Alice"));
 }
 
 #[test]
