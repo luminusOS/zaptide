@@ -171,6 +171,22 @@ pub(super) struct MessageRowWidgets {
     decode_token: Option<crate::native_media::DecodeToken>,
     menu_target: MenuTarget,
     hover: reaction_drawer::HoverSlot,
+    text_click_focus: TextClickFocus,
+}
+
+type TextClickFocus = std::rc::Rc<std::cell::RefCell<Option<FocusOnClickGuard>>>;
+
+struct FocusOnClickGuard {
+    row: gtk::glib::WeakRef<gtk::Widget>,
+    previous: bool,
+}
+
+impl Drop for FocusOnClickGuard {
+    fn drop(&mut self) {
+        if let Some(row) = self.row.upgrade() {
+            row.set_focus_on_click(self.previous);
+        }
+    }
 }
 
 impl MessageRowWidgets {
@@ -200,6 +216,7 @@ impl MessageRowWidgets {
     }
 
     fn unbind_body(&mut self) {
+        self.text_click_focus.borrow_mut().take();
         *self.menu_target.borrow_mut() = None;
         self.rendered_body = None;
         self.body.set_formatted("", &[]);
@@ -324,6 +341,48 @@ impl RelmListItem for MessageRow {
         row.append(&trailing_space);
         root.append(&row);
         let menu_target: MenuTarget = std::rc::Rc::default();
+        let text_click_focus: TextClickFocus = Default::default();
+        let text_click = gtk::GestureClick::new();
+        text_click.set_button(gtk::gdk::BUTTON_PRIMARY);
+        text_click.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let focus_guard = text_click_focus.clone();
+        let text_body = body.downgrade();
+        text_click.connect_pressed(move |gesture, _, x, y| {
+            focus_guard.borrow_mut().take();
+            let (Some(root), Some(body)) = (gesture.widget(), text_body.upgrade()) else {
+                return;
+            };
+            let Some(picked) = root.pick(x, y, gtk::PickFlags::DEFAULT) else {
+                return;
+            };
+            if !picked.is_ancestor(&body) {
+                return;
+            }
+            let Some(row) = root.parent() else {
+                return;
+            };
+            if !row
+                .parent()
+                .is_some_and(|parent| parent.is::<gtk::ListView>())
+            {
+                return;
+            }
+            let previous = row.gets_focus_on_click();
+            row.set_focus_on_click(false);
+            *focus_guard.borrow_mut() = Some(FocusOnClickGuard {
+                row: row.downgrade(),
+                previous,
+            });
+        });
+        let focus_guard = text_click_focus.clone();
+        text_click.connect_released(move |_, _, _, _| {
+            focus_guard.borrow_mut().take();
+        });
+        let focus_guard = text_click_focus.clone();
+        text_click.connect_cancel(move |_, _| {
+            focus_guard.borrow_mut().take();
+        });
+        root.add_controller(text_click);
         let link_target = menu_target.clone();
         let link_widget = body.downgrade();
         body.connect_link_activation(move |action| match action {
@@ -469,6 +528,7 @@ impl RelmListItem for MessageRow {
                 decode_token: None,
                 menu_target,
                 hover,
+                text_click_focus,
             },
         )
     }
@@ -903,6 +963,25 @@ mod tests {
         };
         settle();
         let body = current.borrow().as_ref().unwrap().body.clone();
+        let row = list_item
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .child()
+            .unwrap()
+            .parent()
+            .unwrap();
+        for previous in [true, false] {
+            row.set_focus_on_click(previous);
+            let guard = FocusOnClickGuard {
+                row: row.downgrade(),
+                previous: row.gets_focus_on_click(),
+            };
+            row.set_focus_on_click(false);
+            drop(guard);
+            assert_eq!(row.gets_focus_on_click(), previous);
+        }
+        row.set_focus_on_click(true);
         let narrow = body.measure(gtk::Orientation::Vertical, 40);
         let wide = body.measure(gtk::Orientation::Vertical, 480);
         assert!(
