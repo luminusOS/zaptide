@@ -537,6 +537,14 @@ impl NativeApplication {
         }
         self.close_media_viewer();
         self.leave_screen();
+        if let Some(bridge) = self
+            .chats
+            .view
+            .parent()
+            .and_downcast::<super::sidebar_coordinates::SidebarCoordinates>()
+        {
+            bridge.reset_account_geometry();
+        }
         std::mem::swap(&mut self.backend, &mut session.backend);
         // The account leaving the screen goes offline; `update` reports the new one.
         // One in a call stays online until the call ends: `call_changed` then

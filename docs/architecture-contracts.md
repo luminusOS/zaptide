@@ -91,6 +91,24 @@ The linked-device name and icon come from `DevicePropsOverride` in `start_bot`:
 `os` names the device and platform type picks its icon. Changes take effect
 only after unlinking and pairing again.
 
+## Sidebar scrolling
+
+The scrolled window owns the proxy adjustment; the list owns the real
+adjustment. Outside a pending restoration, keep `real = proxy + origin` and
+translate adjustment limits by the same origin. Ordinary layout must not
+change the origin or replay input.
+
+Projection updates commit the model immediately and preserve a surviving
+visible chat by identity and offset before its first snapshot. Pending input
+must be applied once, including input received before the model update.
+Exhausting materialization attempts is cancellation, not a successful restore.
+
+Cancel pending restoration coherently on navigation, unmap or adjustment
+replacement. Reentrant signals and old callbacks must not modify a newer
+transaction or publish to a replaced adjustment. Release Rust borrows before
+calling GTK setters that can emit signals. Selection and application state
+remain owned by Relm4; the bridge owns only widget coordinates and geometry.
+
 ## Polls
 
 Use whatsapp-rust's `Client::polls()` for creation, voting and decryption.

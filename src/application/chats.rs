@@ -57,8 +57,72 @@ fn chat_row(chat: &crate::model::Chat, avatar: Option<std::path::PathBuf>, open:
     }
 }
 
+fn update_chat_rows(
+    chats: &mut TypedListView<ChatRow, gtk::SingleSelection>,
+    rows: Vec<ChatRow>,
+    selected: Option<&str>,
+    at_top: bool,
+) {
+    use super::sidebar_coordinates::RestorePlan;
+    let old_len = chats.len() as usize;
+    let (prefix, removed, inserted) = changed_span(old_len, &rows, |position, row| {
+        chats
+            .get(position as u32)
+            .is_some_and(|item| *item.borrow() == *row)
+    });
+    let coordinates = chats
+        .view
+        .parent()
+        .and_downcast::<super::sidebar_coordinates::SidebarCoordinates>();
+    let changed = removed != 0 || inserted != 0;
+    let destination = if changed && !at_top {
+        let ids: Vec<_> = rows.iter().map(|row| row.id.clone()).collect();
+        coordinates
+            .as_ref()
+            .map_or(RestorePlan::NoGeometry, |bridge| bridge.begin_restore(&ids))
+    } else {
+        if at_top
+            && changed
+            && let Some(bridge) = coordinates.as_ref()
+        {
+            bridge.cancel_restore();
+        }
+        RestorePlan::NoGeometry
+    };
+    let selected_position = selected.and_then(|id| rows.iter().position(|row| row.id == id));
+    if removed + inserted > old_len.max(rows.len()) / 2 {
+        chats.clear();
+        chats.extend_from_iter(rows);
+    } else {
+        for _ in 0..removed {
+            chats.remove(prefix as u32);
+        }
+        for (offset, row) in rows.into_iter().skip(prefix).take(inserted).enumerate() {
+            chats.insert((prefix + offset) as u32, row);
+        }
+    }
+    chats
+        .selection_model
+        .set_selected(selected_position.map_or(gtk::INVALID_LIST_POSITION, |i| i as u32));
+    if let RestorePlan::Anchor(position) = destination {
+        chats
+            .view
+            .scroll_to(position, gtk::ListScrollFlags::NONE, None);
+    } else if (at_top || matches!(destination, RestorePlan::NoSurvivor)) && !chats.is_empty() {
+        chats.view.scroll_to(0, gtk::ListScrollFlags::NONE, None);
+    }
+}
+
 impl NativeApplication {
     pub(super) fn select_chat(&mut self, position: u32) {
+        if let Some(bridge) = self
+            .chats
+            .view
+            .parent()
+            .and_downcast::<super::sidebar_coordinates::SidebarCoordinates>()
+        {
+            bridge.cancel_restore();
+        }
         self.close_media_viewer();
         let Some(chat) = self.chat_ids.get(position as usize).cloned() else {
             return;
@@ -415,8 +479,9 @@ impl NativeApplication {
         let at_top = self
             .chats
             .view
-            .vadjustment()
-            .is_none_or(|adjustment| adjustment.value() <= 0.0);
+            .parent()
+            .and_downcast::<super::sidebar_coordinates::SidebarCoordinates>()
+            .is_none_or(|bridge| bridge.at_top());
         if std::mem::take(&mut self.chats_dirty) {
             self.chat_projection
                 .replace_shared_snapshot(self.chat_snapshots.iter().cloned());
@@ -433,46 +498,344 @@ impl NativeApplication {
         self.chat_targets
             .borrow_mut()
             .sync(self.active_account, &self.chat_ids);
-        // Replace only the changed middle so scrolling and a click in progress
-        // survive the frequent small reorders of history sync.
-        let old_len = self.chats.len() as usize;
-        let (prefix, removed, inserted) = changed_span(old_len, &rows, |position, row| {
-            self.chats
-                .get(position as u32)
-                .is_some_and(|item| *item.borrow() == *row)
-        });
-        if removed + inserted > old_len.max(rows.len()) / 2 {
-            self.chats.clear();
-            self.chats.extend_from_iter(rows);
-        } else {
-            for _ in 0..removed {
-                self.chats.remove(prefix as u32);
-            }
-            for (offset, row) in rows.into_iter().skip(prefix).take(inserted).enumerate() {
-                self.chats.insert((prefix + offset) as u32, row);
-            }
-        }
-        if let Some(position) = selected
-            .as_deref()
-            .and_then(|id| self.chat_ids.iter().position(|known| known == id))
-        {
-            self.chats.selection_model.set_selected(position as u32);
-        } else {
-            self.chats
-                .selection_model
-                .set_selected(gtk::INVALID_LIST_POSITION);
-        }
-        if at_top && !self.chat_ids.is_empty() {
-            self.chats
-                .view
-                .scroll_to(0, gtk::ListScrollFlags::NONE, None);
-        }
+        update_chat_rows(&mut self.chats, rows, selected.as_deref(), at_top);
     }
 }
 
 #[cfg(test)]
 mod account_selection_tests {
     use super::*;
+
+    #[derive(Default)]
+    struct ReorderCase {
+        remove_anchor: bool,
+        repeat: bool,
+        remove_all: bool,
+        input: bool,
+        lose_target: bool,
+        no_geometry: bool,
+        early_restore: bool,
+        delayed_attempts: u32,
+    }
+
+    fn verify_reordered_chat_rows(case: ReorderCase) {
+        let ReorderCase {
+            remove_anchor,
+            repeat,
+            remove_all,
+            input,
+            lose_target,
+            no_geometry,
+            early_restore,
+            delayed_attempts,
+        } = case;
+        gtk::init().unwrap();
+        adw::init().unwrap();
+        let mut chats: TypedListView<ChatRow, gtk::SingleSelection> = TypedListView::new();
+        let row = |index: usize| ChatRow {
+            id: format!("synthetic-{index}"),
+            last_activity: index as i64,
+            name: format!("Chat {index}"),
+            preview: "Synthetic preview".into(),
+            unread: None,
+            avatar: None,
+            pinned: false,
+            muted: false,
+            quiet: false,
+            delivery: crate::model::Delivery::None,
+            open: false,
+        };
+        chats.extend_from_iter((0..300).map(row));
+        let bridge = super::super::sidebar_coordinates::SidebarCoordinates::new(&chats.view);
+        let scrolled = gtk::ScrolledWindow::new();
+        scrolled.set_child(Some(&bridge));
+        let window = gtk::Window::builder()
+            .default_width(320)
+            .default_height(400)
+            .child(&scrolled)
+            .build();
+        window.present();
+        let context = gtk::glib::MainContext::default();
+        let settle = || {
+            for _ in 0..100 {
+                while context.pending() {
+                    context.iteration(false);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        };
+        settle();
+        chats.view.scroll_to(130, gtk::ListScrollFlags::NONE, None);
+        settle();
+        if no_geometry {
+            chats.selection_model.set_selected(123);
+            settle();
+        }
+        let visible = || {
+            let mut result = Vec::new();
+            let mut item = chats.view.first_child();
+            while let Some(current) = item {
+                if let Some(root) = current.first_child()
+                    && current.is_mapped()
+                    && let Some(bounds) = root.compute_bounds(&chats.view)
+                    && bounds.y() >= 0.0
+                    && bounds.y() < chats.view.height() as f32
+                {
+                    result.push((root.widget_name().to_string(), bounds.y()));
+                }
+                item = current.next_sibling();
+            }
+            result
+        };
+        let visible = visible();
+        let removed_id = remove_anchor.then(|| visible[0].0.clone());
+        let (id, before) = visible[usize::from(remove_anchor)].clone();
+        let proxy = scrolled.vadjustment();
+        let original_proxy = proxy.value();
+        if input {
+            proxy.set_value(proxy.value() + 5.0);
+        }
+        let accepted_before_commit = proxy.value() - original_proxy;
+        if input {
+            assert_eq!(accepted_before_commit, 5.0);
+        }
+        let proxy_before = proxy.value();
+        let snapshots = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let observed = snapshots.clone();
+        let observed_id = id.clone();
+        let weak_bridge = bridge.downgrade();
+        bridge.observe_snapshot(move |view| {
+            let mut item = view.first_child();
+            let mut y = None;
+            while let Some(current) = item {
+                if current.is_mapped()
+                    && let Some(root) = current.first_child()
+                    && root.widget_name() == observed_id
+                    && let Some(bounds) = root.compute_bounds(view)
+                {
+                    y = Some(bounds.y());
+                    break;
+                }
+                item = current.next_sibling();
+            }
+            observed
+                .borrow_mut()
+                .push((y, weak_bridge.upgrade().unwrap().restore_pending()));
+        });
+        if no_geometry {
+            bridge.forget_geometry();
+        }
+        if delayed_attempts > 0 {
+            bridge.delay_materialization(delayed_attempts);
+        }
+        let indices: Vec<_> = if no_geometry {
+            (0..300).collect()
+        } else {
+            (0..300).rev().collect()
+        };
+        let mut rows: Vec<_> = indices
+            .into_iter()
+            .map(row)
+            .filter(|row| removed_id.as_ref() != Some(&row.id))
+            .collect();
+        if no_geometry {
+            rows[299].preview = "Updated synthetic preview".into();
+        }
+        let selected = rows.iter_mut().find(|row| row.id == id).unwrap();
+        selected.open = !no_geometry;
+        update_chat_rows(&mut chats, rows, Some(&id), false);
+        if early_restore {
+            chats.view.scroll_to(0, gtk::ListScrollFlags::NONE, None);
+            chats.view.queue_allocate();
+            chats
+                .view
+                .allocate(chats.view.width(), chats.view.height(), -1, None);
+            bridge.attempt_restore_before_layout(&chats.view);
+            assert!(
+                bridge.restore_pending(),
+                "existing but unmaterialized anchor must remain pending"
+            );
+        }
+        if repeat {
+            let rows: Vec<_> = (0..300)
+                .rev()
+                .map(|i| {
+                    let mut item = row(i);
+                    item.open = item.id == id;
+                    item
+                })
+                .collect();
+            update_chat_rows(&mut chats, rows, Some(&id), false);
+        }
+        assert_eq!(
+            scrolled.vadjustment().value().to_bits(),
+            proxy_before.to_bits()
+        );
+        let before_second_input = proxy.value();
+        if input {
+            proxy.set_value(proxy.value() + 5.0);
+        }
+        let expected_proxy = proxy.value();
+        let accepted_after_commit = expected_proxy - before_second_input;
+        if input {
+            assert_eq!(accepted_after_commit, 5.0);
+        }
+        let expected_y = before - (accepted_before_commit + accepted_after_commit) as f32;
+        assert!(snapshots.borrow().is_empty());
+        assert_eq!(
+            chats.get(0).unwrap().borrow().id,
+            if no_geometry {
+                "synthetic-0"
+            } else {
+                "synthetic-299"
+            }
+        );
+        let selected = chats.selection_model.selected();
+        assert_eq!(chats.get(selected).unwrap().borrow().id, id);
+        assert_eq!(chats.get(selected).unwrap().borrow().open, !no_geometry);
+        if remove_all {
+            let rows = (0..300)
+                .map(|i| {
+                    let mut item = row(i);
+                    item.id = format!("replacement-{i}");
+                    item
+                })
+                .collect();
+            if lose_target {
+                chats.clear();
+                chats.extend_from_iter(rows);
+            } else {
+                update_chat_rows(&mut chats, rows, None, false);
+            }
+            assert_eq!(chats.get(0).unwrap().borrow().id, "replacement-0");
+            assert!(snapshots.borrow().is_empty());
+            settle();
+            let (old_anchor, pending) = snapshots.borrow().first().copied().unwrap();
+            assert_eq!(old_anchor, None);
+            assert!(!pending);
+            let proxy = scrolled.vadjustment();
+            let real = chats.view.vadjustment().unwrap();
+            assert_eq!(real.value(), real.lower());
+            proxy.set_value(proxy.value() + 100.0);
+            assert!(real.value() > real.lower());
+            window.close();
+            return;
+        }
+        settle();
+        if delayed_attempts > 0 {
+            assert_eq!(bridge.materialization_attempts(), 3);
+            assert!(!bridge.restore_pending());
+            window.close();
+            return;
+        }
+        assert_eq!(
+            scrolled.vadjustment().value().to_bits(),
+            expected_proxy.to_bits()
+        );
+        let (first_snapshot, pending) = snapshots.borrow().first().copied().unwrap();
+        assert!(!pending, "first snapshot must not paint a pending restore");
+        assert!(
+            first_snapshot.is_some_and(|y| (y - expected_y).abs() <= 2.0),
+            "{id}: expected={expected_y}, first snapshot={first_snapshot:?}"
+        );
+        let mut item = chats.view.first_child();
+        let mut after = None;
+        while let Some(current) = item {
+            if let Some(root) = current.first_child()
+                && current.is_mapped()
+                && root.widget_name() == id
+                && let Some(bounds) = root.compute_bounds(&chats.view)
+            {
+                after = Some(bounds.y());
+                break;
+            }
+            item = current.next_sibling();
+        }
+        assert!(
+            after.is_some_and(|y| (y - expected_y).abs() <= 2.0),
+            "{id}: expected={expected_y}, after={after:?}"
+        );
+        window.close();
+    }
+
+    #[test]
+    #[ignore = "requires a display and a separate GTK process"]
+    fn reordered_chat_rows_keep_visible_anchor() {
+        verify_reordered_chat_rows(ReorderCase::default());
+    }
+
+    #[test]
+    #[ignore = "requires a display and a separate GTK process"]
+    fn removed_anchor_uses_visible_survivor() {
+        verify_reordered_chat_rows(ReorderCase {
+            remove_anchor: true,
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    #[ignore = "requires a display and a separate GTK process"]
+    fn unchanged_update_keeps_pending_restore() {
+        verify_reordered_chat_rows(ReorderCase {
+            repeat: true,
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    #[ignore = "requires a display and a separate GTK process"]
+    fn chained_removal_falls_back_before_first_snapshot() {
+        verify_reordered_chat_rows(ReorderCase {
+            remove_all: true,
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    #[ignore = "requires a display and a separate GTK process"]
+    fn proxy_input_before_and_after_commit_is_preserved() {
+        verify_reordered_chat_rows(ReorderCase {
+            input: true,
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    #[ignore = "requires a display and a separate GTK process"]
+    fn missing_materialized_target_falls_back_before_snapshot() {
+        verify_reordered_chat_rows(ReorderCase {
+            remove_all: true,
+            lose_target: true,
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    #[ignore = "requires a display and a separate GTK process"]
+    fn missing_geometry_does_not_force_top() {
+        verify_reordered_chat_rows(ReorderCase {
+            no_geometry: true,
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    #[ignore = "requires a display and a separate GTK process"]
+    fn existing_unmaterialized_anchor_is_retried() {
+        verify_reordered_chat_rows(ReorderCase {
+            early_restore: true,
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    #[ignore = "requires a display and a separate GTK process"]
+    fn artificial_materialization_exhaustion_cancels_restore() {
+        verify_reordered_chat_rows(ReorderCase {
+            delayed_attempts: 4,
+            ..Default::default()
+        });
+    }
 
     #[test]
     fn queued_selection_is_rejected_after_an_account_switch() {

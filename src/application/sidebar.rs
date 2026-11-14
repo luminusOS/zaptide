@@ -346,16 +346,7 @@ impl SimpleComponent for Sidebar {
                     #[watch]
                     set_visible: !model.state.empty && !model.state.calls,
                     #[local_ref]
-                    chat_view -> gtk::ListView {
-                        add_css_class: "navigation-sidebar",
-                        add_css_class: "zaptide-chat-list",
-                        set_single_click_activate: true,
-                        connect_activate[sender, chat_targets] => move |_, position| {
-                            if let Some((account, chat)) = chat_targets.borrow().get(position) {
-                                sender.output(SidebarOutput::SelectChat(account, chat)).unwrap();
-                            }
-                        },
-                    },
+                    chat_coordinates -> super::sidebar_coordinates::SidebarCoordinates {},
                 },
                 append = &adw::StatusPage {
                     add_css_class: "compact",
@@ -400,6 +391,18 @@ impl SimpleComponent for Sidebar {
         };
         let chat_view = &init.chat_view;
         let chat_targets = init.chat_targets;
+        chat_view.add_css_class("navigation-sidebar");
+        chat_view.add_css_class("zaptide-chat-list");
+        chat_view.set_single_click_activate(true);
+        let chat_sender = sender.clone();
+        chat_view.connect_activate(move |_, position| {
+            if let Some((account, chat)) = chat_targets.borrow().get(position) {
+                chat_sender
+                    .output(SidebarOutput::SelectChat(account, chat))
+                    .unwrap();
+            }
+        });
+        let chat_coordinates = super::sidebar_coordinates::SidebarCoordinates::new(chat_view);
         let calls_view = &init.calls_view;
         let widgets = view_output!();
         model.search_entry = Some(widgets.search_entry.clone());
