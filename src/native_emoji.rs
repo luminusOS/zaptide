@@ -306,6 +306,7 @@ pub fn picker(on_pick: impl Fn(&str) + 'static) -> gtk::Popover {
             }
         }
     });
+    show_all();
     popover.connect_show({
         let (search, scroller) = (search.downgrade(), scroller.downgrade());
         move |_| {
@@ -335,6 +336,26 @@ fn category_button(title: &str, icon: &str) -> gtk::Button {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "needs a display"]
+    fn picker_has_items_before_its_first_popup_measurement() {
+        gtk::init().expect("GTK initialization");
+        let picker = picker(|_| {});
+        let content = picker.child().and_downcast::<gtk::Box>().unwrap();
+        let scroller = content
+            .first_child()
+            .and_then(|search| search.next_sibling())
+            .and_downcast::<gtk::ScrolledWindow>()
+            .unwrap();
+        let grid = scroller.child().and_downcast::<gtk::GridView>().unwrap();
+        assert!(
+            grid.model().is_some_and(|model| model.n_items() > 0),
+            "initial popup sizing must include the emoji grid"
+        );
+    }
+
     #[test]
     fn skin_tone_slots_are_dropped_or_filled() {
         assert_eq!(super::text(&[0x1F44B, 0], 0), "👋\u{FE0F}");

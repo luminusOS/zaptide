@@ -1,6 +1,6 @@
 //! Quick reactions shown over the message under the pointer.
 //!
-//! One popover serves every row. It is built on the first hover and moved to
+//! One pill serves every row. It is built on the first hover and moved to
 //! the bubble the pointer enters, so a long transcript pays nothing per row.
 
 use super::*;
@@ -109,7 +109,7 @@ struct Drawer {
     quick: RefCell<Vec<String>>,
     shown: RefCell<Option<Shown>>,
     timer: RefCell<Option<glib::SourceId>>,
-    popover: RefCell<Option<glib::WeakRef<gtk::Popover>>>,
+    pill: RefCell<Option<glib::WeakRef<gtk::Box>>>,
     /// The message menu is open and already offers the same reactions.
     suspended: Cell<bool>,
 }
@@ -215,13 +215,9 @@ impl Drawer {
     fn hide(&self) {
         self.cancel_timer();
         self.shown.borrow_mut().take();
-        let popover = self
-            .popover
-            .borrow()
-            .as_ref()
-            .and_then(|weak| weak.upgrade());
-        if let Some(popover) = popover {
-            popover.popdown();
+        let pill = self.pill.borrow().as_ref().and_then(|weak| weak.upgrade());
+        if let Some(pill) = pill {
+            pill.set_visible(false);
         }
     }
 
@@ -243,53 +239,53 @@ impl Drawer {
         let Some(list) = bubble.ancestor(gtk::ListView::static_type()) else {
             return;
         };
-        let Some(bounds) = bubble.compute_bounds(&list) else {
+        if bubble.compute_bounds(&list).is_none() {
+            return;
+        }
+        let Some(pill) = self.pill_in(&list) else {
             return;
         };
-        let popover = self.popover_in(&list);
         let quick = quick_reactions(&self.recent.borrow());
-        refresh_buttons(&popover, &quick, target.mine.as_deref());
+        refresh_buttons(&pill, &quick, target.mine.as_deref());
         *self.quick.borrow_mut() = quick;
-        popover.set_halign(if target.outgoing {
-            gtk::Align::End
-        } else {
-            gtk::Align::Start
-        });
-        let top = pill_anchor_top(bounds.y());
-        popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(
-            bounds.x() as i32,
-            top,
-            bounds.width() as i32,
-            1,
-        )));
         *self.shown.borrow_mut() = Some(Shown {
             target,
             bubble: bubble.downgrade(),
         });
-        if !popover.is_visible() {
-            popover.popup();
+        pill.set_visible(true);
+        if let Some(parent) = pill.parent() {
+            parent.queue_allocate();
         }
     }
 
-    fn popover_in(self: &Rc<Self>, list: &gtk::Widget) -> gtk::Popover {
-        let existing = self
-            .popover
-            .borrow()
-            .as_ref()
-            .and_then(|weak| weak.upgrade());
-        if let Some(popover) = existing {
-            if popover.parent().as_ref() == Some(list) {
-                return popover;
+    fn pill_in(self: &Rc<Self>, list: &gtk::Widget) -> Option<gtk::Box> {
+        let overlay = list
+            .ancestor(gtk::Overlay::static_type())?
+            .downcast::<gtk::Overlay>()
+            .ok()?;
+        let existing = self.pill.borrow().as_ref().and_then(|weak| weak.upgrade());
+        if let Some(pill) = existing {
+            if pill.parent().as_ref() == Some(overlay.upcast_ref()) {
+                return Some(pill);
             }
-            popover.unparent();
+            if let Some(parent) = pill.parent().and_downcast::<gtk::Overlay>() {
+                parent.remove_overlay(&pill);
+            }
         }
-        let popover = self.build(list);
-        *self.popover.borrow_mut() = Some(popover.downgrade());
-        popover
+        let pill = self.build(list, &overlay);
+        *self.pill.borrow_mut() = Some(pill.downgrade());
+        Some(pill)
     }
 
-    fn build(self: &Rc<Self>, list: &gtk::Widget) -> gtk::Popover {
-        let pill = gtk::Box::builder().spacing(2).build();
+    fn build(self: &Rc<Self>, list: &gtk::Widget, overlay: &gtk::Overlay) -> gtk::Box {
+        let pill = gtk::Box::builder()
+            .spacing(2)
+            .halign(gtk::Align::Start)
+            .valign(gtk::Align::Start)
+            .can_focus(false)
+            .visible(false)
+            .css_classes(["card", "zaptide-quick-reactions"])
+            .build();
         for index in 0..QUICK_SLOTS {
             let button = pill_button();
             button.connect_clicked(move |_| drawer().choose(index));
@@ -303,15 +299,46 @@ impl Drawer {
         more.connect_clicked(|_| drawer().choose_another());
         pill.append(&more);
 
-        let popover = gtk::Popover::builder()
-            .has_arrow(false)
-            .autohide(false)
-            .can_focus(false)
-            .position(gtk::PositionType::Top)
-            .css_classes(["zaptide-quick-reactions"])
-            .child(&pill)
-            .build();
-        popover.set_parent(list);
+        overlay.add_overlay(&pill);
+        overlay.set_measure_overlay(&pill, false);
+
+        let drawer = Rc::downgrade(self);
+        let weak_pill = pill.downgrade();
+        let position = overlay.connect_get_child_position(move |overlay, child| {
+            let pill = weak_pill.upgrade()?;
+            if child != pill.upcast_ref::<gtk::Widget>() {
+                return None;
+            }
+            let drawer = drawer.upgrade()?;
+            let shown = drawer.shown.borrow();
+            let shown = shown.as_ref()?;
+            let bubble = shown.bubble.upgrade()?;
+            let list = bubble.ancestor(gtk::ListView::static_type())?;
+            let bounds = bubble.compute_bounds(&list)?;
+            let anchor = list.compute_point(
+                overlay,
+                &gtk::graphene::Point::new(bounds.x(), pill_anchor_top(bounds.y()) as f32),
+            )?;
+            let (_, width, _, _) = pill.measure(gtk::Orientation::Horizontal, -1);
+            let (_, height, _, _) = pill.measure(gtk::Orientation::Vertical, width);
+            Some(pill_bounds(
+                anchor,
+                bounds.width(),
+                (overlay.width(), overlay.height()),
+                (width, height),
+                shown.target.outgoing != (overlay.direction() == gtk::TextDirection::Rtl),
+            ))
+        });
+        let weak_overlay = overlay.downgrade();
+        let position = RefCell::new(Some(position));
+        pill.connect_parent_notify(move |pill| {
+            if let Some(overlay) = weak_overlay.upgrade()
+                && pill.parent().as_ref() != Some(overlay.upcast_ref())
+                && let Some(position) = position.borrow_mut().take()
+            {
+                overlay.disconnect(position);
+            }
+        });
 
         let motion = gtk::EventControllerMotion::new();
         let (entered, left) = (self.clone(), self.clone());
@@ -321,7 +348,7 @@ impl Drawer {
                 left.hide_soon();
             }
         });
-        popover.add_controller(motion);
+        pill.add_controller(motion);
 
         if let Some(scroll) = list
             .dynamic_cast_ref::<gtk::Scrollable>()
@@ -329,7 +356,7 @@ impl Drawer {
         {
             scroll.connect_value_changed(|_| dismiss());
         }
-        popover
+        pill
     }
 
     fn choose(&self, index: usize) {
@@ -396,6 +423,26 @@ fn pill_anchor_top(bubble_top: f32) -> i32 {
     ((bubble_top - GAP) as i32).max(MIN_TOP)
 }
 
+fn pill_bounds(
+    anchor: gtk::graphene::Point,
+    bubble_width: f32,
+    available: (i32, i32),
+    size: (i32, i32),
+    align_end: bool,
+) -> gtk::gdk::Rectangle {
+    let x = if align_end {
+        anchor.x() as i32 + bubble_width as i32 - size.0
+    } else {
+        anchor.x() as i32
+    };
+    gtk::gdk::Rectangle::new(
+        x.clamp(0, (available.0 - size.0).max(0)),
+        (anchor.y() as i32 - size.1).clamp(0, (available.1 - size.1).max(0)),
+        size.0,
+        size.1,
+    )
+}
+
 /// Not focusable: clicking a quick reaction must leave the composer's focus alone.
 fn pill_button() -> gtk::Button {
     gtk::Button::builder()
@@ -405,8 +452,8 @@ fn pill_button() -> gtk::Button {
         .build()
 }
 
-fn refresh_buttons(popover: &gtk::Popover, quick: &[String], mine: Option<&str>) {
-    let mut child = popover.child().and_then(|pill| pill.first_child());
+fn refresh_buttons(pill: &gtk::Box, quick: &[String], mine: Option<&str>) {
+    let mut child = pill.first_child();
     for emoji in quick {
         let Some(button) = child.take().and_downcast::<gtk::Button>() else {
             return;
@@ -546,21 +593,22 @@ mod tests {
     fn pill_buttons_follow_the_recent_reactions_and_mark_ours() {
         gtk::init().expect("display");
         let list = gtk::ListView::new(None::<gtk::SelectionModel>, None::<gtk::ListItemFactory>);
-        let window = gtk::Window::builder().child(&list).build();
+        let overlay = gtk::Overlay::builder().child(&list).build();
+        let window = gtk::Window::builder().child(&overlay).build();
         let drawer = Rc::new(Drawer::default());
-        let popover = drawer.popover_in(list.upcast_ref());
-        assert!(!popover.can_focus());
-        assert_eq!(popover.position(), gtk::PositionType::Top);
+        let pill = drawer.pill_in(list.upcast_ref()).expect("overlay");
+        assert!(!pill.can_focus());
+        assert!(!overlay.is_measure_overlay(&pill));
         assert_eq!(
-            drawer.popover_in(list.upcast_ref()),
-            popover,
-            "the one popover is reused"
+            drawer.pill_in(list.upcast_ref()).expect("overlay"),
+            pill,
+            "the one pill is reused"
         );
 
         let quick = quick_reactions(&strings(&["🎉", "😂"]));
-        refresh_buttons(&popover, &quick, Some("🎉"));
+        refresh_buttons(&pill, &quick, Some("🎉"));
         let mut buttons = Vec::new();
-        let mut child = popover.child().and_then(|pill| pill.first_child());
+        let mut child = pill.first_child();
         while let Some(widget) = child {
             child = widget.next_sibling();
             buttons.push(widget.downcast::<gtk::Button>().expect("button"));
@@ -580,7 +628,7 @@ mod tests {
             Some("list-add-symbolic")
         );
 
-        refresh_buttons(&popover, &quick, None);
+        refresh_buttons(&pill, &quick, None);
         assert!(!buttons[0].has_css_class("chosen"));
 
         let provider = gtk::CssProvider::new();
@@ -591,10 +639,63 @@ mod tests {
             gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
         );
         window.present();
-        popover.popup();
-        let (_, size) = popover.preferred_size();
+        pill.set_visible(true);
+        let (_, size) = pill.preferred_size();
         assert!(size.width() < 600, "pill is {} px wide", size.width());
         assert!(size.height() < 200, "pill is {} px tall", size.height());
+
+        drawer.hide_soon();
+        assert!(drawer.timer.borrow().is_some());
+        drawer.hide();
+        assert!(drawer.timer.borrow().is_none());
+        assert!(!pill.is_visible());
+
+        overlay.remove_overlay(&pill);
+        let replacement = drawer.pill_in(list.upcast_ref()).expect("overlay");
+        assert_ne!(replacement, pill);
+        let weak = pill.downgrade();
+        drop(pill);
+        assert!(
+            weak.upgrade().is_none(),
+            "position callback retains the pill"
+        );
+    }
+
+    #[test]
+    fn pill_alignment_follows_the_bubble_without_covering_it() {
+        let anchor = gtk::graphene::Point::new(50.0, 100.0);
+        assert_eq!(
+            pill_bounds(anchor, 180.0, (400, 300), (100, 40), false),
+            gtk::gdk::Rectangle::new(50, 60, 100, 40)
+        );
+        assert_eq!(
+            pill_bounds(anchor, 180.0, (400, 300), (100, 40), true),
+            gtk::gdk::Rectangle::new(130, 60, 100, 40)
+        );
+    }
+
+    #[test]
+    fn pill_position_stays_inside_the_available_viewport() {
+        assert_eq!(
+            pill_bounds(
+                gtk::graphene::Point::new(500.0, 10.0),
+                180.0,
+                (300, 200),
+                (100, 40),
+                false,
+            ),
+            gtk::gdk::Rectangle::new(200, 0, 100, 40)
+        );
+        assert_eq!(
+            pill_bounds(
+                gtk::graphene::Point::new(-50.0, 300.0),
+                80.0,
+                (300, 200),
+                (100, 40),
+                true,
+            ),
+            gtk::gdk::Rectangle::new(0, 160, 100, 40)
+        );
     }
 
     #[test]
