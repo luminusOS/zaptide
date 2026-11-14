@@ -65,6 +65,7 @@ mod revoke;
 mod session;
 mod stars;
 mod stickers;
+mod transport;
 use stars::STARRED_LIMIT;
 
 #[cfg(test)]

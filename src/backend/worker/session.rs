@@ -18,6 +18,7 @@ impl Worker {
         let sender = self.wa_sender.clone();
         let bot = Bot::builder()
             .with_backend(store)
+            .with_transport_factory(super::transport::WebSocketTransportFactory::new())
             // The window owns presence; see `worker::presence`.
             .with_presence_policy(PresencePolicy::Manual)
             // WhatsApp reads the linked-device name, version, and icon at pairing.
