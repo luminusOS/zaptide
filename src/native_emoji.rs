@@ -147,7 +147,7 @@ pub fn picker(on_pick: impl Fn(&str) + 'static) -> gtk::Popover {
         .placeholder_text(gettext("Search emoji"))
         .build();
     let grid = gtk::GridView::builder()
-        .min_columns(COLUMNS)
+        .min_columns(1)
         .max_columns(COLUMNS)
         .single_click_activate(true)
         .build();
@@ -233,22 +233,16 @@ pub fn picker(on_pick: impl Fn(&str) + 'static) -> gtk::Popover {
         }
     });
     for (index, button) in buttons.iter().enumerate() {
-        let (starts, grid, scroller) = (starts.clone(), grid.downgrade(), scroller.downgrade());
+        let (starts, grid) = (starts.clone(), grid.downgrade());
         button.connect_clicked(move |_| {
-            let (Some(grid), Some(scroller), Some(Some(start))) = (
-                grid.upgrade(),
-                scroller.upgrade(),
-                starts.borrow().get(index).copied(),
-            ) else {
+            let (Some(grid), Some(Some(start))) =
+                (grid.upgrade(), starts.borrow().get(index).copied())
+            else {
                 return;
             };
-            // Cells are the same height, so a row's offset is proportional.
-            let rows = grid
-                .model()
-                .map_or(1, |model| model.n_items().div_ceil(COLUMNS).max(1));
-            let adjustment = scroller.vadjustment();
-            let row_height = adjustment.upper() / f64::from(rows);
-            adjustment.set_value(f64::from(start / COLUMNS) * row_height);
+            if grid.model().is_some_and(|model| start < model.n_items()) {
+                grid.scroll_to(start, gtk::ListScrollFlags::NONE, None);
+            }
         });
     }
 
@@ -306,6 +300,7 @@ pub fn picker(on_pick: impl Fn(&str) + 'static) -> gtk::Popover {
             }
         }
     });
+    show_all();
     popover.connect_show({
         let (search, scroller) = (search.downgrade(), scroller.downgrade());
         move |_| {
@@ -335,6 +330,32 @@ fn category_button(title: &str, icon: &str) -> gtk::Button {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "needs a display"]
+    fn picker_has_items_before_its_first_popup_measurement() {
+        gtk::init().expect("GTK initialization");
+        let picker = picker(|_| {});
+        let content = picker.child().and_downcast::<gtk::Box>().unwrap();
+        let scroller = content
+            .first_child()
+            .and_then(|search| search.next_sibling())
+            .and_downcast::<gtk::ScrolledWindow>()
+            .unwrap();
+        let grid = scroller.child().and_downcast::<gtk::GridView>().unwrap();
+        assert!(
+            grid.min_columns() < grid.max_columns(),
+            "the emoji grid must allow a narrower popup allocation"
+        );
+        assert_eq!(grid.min_columns(), 1);
+        assert_eq!(grid.max_columns(), COLUMNS);
+        assert!(
+            grid.model().is_some_and(|model| model.n_items() > 0),
+            "initial popup sizing must include the emoji grid"
+        );
+    }
+
     #[test]
     fn skin_tone_slots_are_dropped_or_filled() {
         assert_eq!(super::text(&[0x1F44B, 0], 0), "👋\u{FE0F}");
