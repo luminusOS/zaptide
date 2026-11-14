@@ -662,6 +662,7 @@ impl NativeApplication {
         self.pending_quote_navigation = None;
         self.message_selection = None;
         self.message_target = None;
+        self.message_target_selection = None;
         self.info_about = None;
         self.history_complete = false;
         self.loading_older = false;

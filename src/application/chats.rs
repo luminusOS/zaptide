@@ -110,6 +110,7 @@ impl NativeApplication {
         self.composer_buffer.set_text(&self.draft);
         self.messages.clear();
         self.message_target = None;
+        self.message_target_selection = None;
         self.opened_unread = self
             .chat_snapshots
             .iter()
