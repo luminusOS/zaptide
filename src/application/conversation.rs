@@ -74,6 +74,7 @@ impl NativeApplication {
         self.history_complete = false;
         self.loading_older = false;
         self.message_target = None;
+        self.message_target_selection = None;
         self.message_selection = None;
         self.page_title = String::new();
         self.status = String::new();

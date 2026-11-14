@@ -36,11 +36,8 @@ fn is_near_start(distance_from_top: f64) -> bool {
     distance_from_top <= NEAR_START
 }
 
-/// Older history is offered only when some may exist and the reader is at the
-/// start of what is loaded. A running request keeps the control up so its
-/// progress does not vanish mid-load.
 fn should_offer_older(has_more: bool, loading: bool, near_start: bool) -> bool {
-    has_more && (loading || near_start)
+    has_more && !loading && near_start
 }
 
 #[derive(Debug)]
@@ -48,11 +45,12 @@ pub(super) enum TranscriptViewInput {
     Sync(TranscriptState),
     AwayFromEnd(bool),
     NearStart(bool),
+    ReportOlder,
 }
 
 #[derive(Debug)]
 pub(super) enum TranscriptViewOutput {
-    LoadOlder,
+    OlderAvailable(bool),
     SelectMessage(u32),
     ScrollToRecentMessages,
     AtEnd,
@@ -64,10 +62,10 @@ impl TranscriptView {
     }
 
     fn has_older(&self) -> bool {
-        self.state.has_messages && !self.state.history_complete
+        self.state.active && self.state.has_messages && !self.state.history_complete
     }
 
-    fn offers_older(&self) -> bool {
+    pub(super) fn offers_older(&self) -> bool {
         should_offer_older(self.has_older(), self.state.loading_older, self.near_start)
     }
 }
@@ -88,70 +86,9 @@ impl SimpleComponent for TranscriptView {
                 set_description: Some("Choose a chat from the list to start messaging."),
             },
 
-            add_named[Some("conversation")] = &gtk::Box {
-                set_orientation: gtk::Orientation::Vertical,
-
-                append = &gtk::Button {
-                    set_halign: gtk::Align::Center,
-                    set_margin_top: 4,
-                    set_margin_bottom: 4,
-                    add_css_class: "flat",
-                    add_css_class: "zaptide-load-older",
-                    set_tooltip_text: Some(&gettext("Show earlier messages from the archive or your phone")),
-                    // Fading instead of hiding keeps its space, so the transcript
-                    // does not move when the reader scrolls past the threshold.
-                    #[watch]
-                    set_visible: model.has_older(),
-                    #[watch]
-                    set_class_active: ("zaptide-load-older-away", !model.offers_older()),
-                    #[watch]
-                    set_focusable: model.offers_older(),
-                    // Stay sensitive while loading: insensitive styling would dim the
-                    // spinner twice. `Input::LoadOlder` already ignores repeat clicks.
-                    #[watch]
-                    set_can_target: model.offers_older() && !model.state.loading_older,
-                    #[watch]
-                    update_state: &[
-                        gtk::accessible::State::Busy(model.state.loading_older),
-                        gtk::accessible::State::Hidden(!model.offers_older()),
-                    ],
-                    connect_clicked[sender] => move |_| sender.output(TranscriptViewOutput::LoadOlder).unwrap(),
-                    #[wrap(Some)]
-                    set_child = &gtk::Stack {
-                        // Reserve the same space for both states to avoid shifting the transcript.
-                        set_hhomogeneous: true,
-                        set_vhomogeneous: true,
-                        add_named[Some("ready")] = &gtk::Box {
-                            set_spacing: 6,
-                            set_halign: gtk::Align::Center,
-                            append = &gtk::Image {
-                                set_icon_name: Some("go-up-symbolic"),
-                                set_pixel_size: 16,
-                                add_css_class: "dim-label",
-                            },
-                            append = &gtk::Label {
-                                set_label: &gettext("Load older messages"),
-                                add_css_class: "dim-label",
-                            },
-                        },
-                        add_named[Some("loading")] = &gtk::Box {
-                            set_spacing: 6,
-                            set_halign: gtk::Align::Center,
-                            append = &adw::Spinner {
-                                set_size_request: (16, 16),
-                                set_valign: gtk::Align::Center,
-                            },
-                            append = &gtk::Label {
-                                set_label: &gettext("Loading older messages…"),
-                                add_css_class: "dim-label",
-                            },
-                        },
-                        #[watch]
-                        set_visible_child_name: if model.state.loading_older { "loading" } else { "ready" },
-                    },
-                },
-
-                append = &gtk::Overlay {
+            add_named[Some("conversation")] = &gtk::Overlay {
+                #[wrap(Some)]
+                set_child = &gtk::Overlay {
                     #[name = "message_scroller"]
                     #[wrap(Some)]
                     set_child = &gtk::ScrolledWindow {
@@ -267,11 +204,18 @@ impl SimpleComponent for TranscriptView {
         ComponentParts { model, widgets }
     }
 
-    fn update(&mut self, input: Self::Input, _sender: ComponentSender<Self>) {
+    fn update(&mut self, input: Self::Input, sender: ComponentSender<Self>) {
+        let was_available = self.offers_older();
+        let report = matches!(input, TranscriptViewInput::ReportOlder);
         match input {
             TranscriptViewInput::Sync(state) => self.state = state,
             TranscriptViewInput::AwayFromEnd(away) => self.away_from_end = away,
             TranscriptViewInput::NearStart(near) => self.near_start = near,
+            TranscriptViewInput::ReportOlder => {}
+        }
+        let available = self.offers_older();
+        if report || available != was_available {
+            let _ = sender.output(TranscriptViewOutput::OlderAvailable(available));
         }
     }
 }
@@ -289,8 +233,8 @@ mod tests {
     }
 
     #[test]
-    fn running_request_keeps_the_control_up_only_while_more_may_exist() {
-        assert!(should_offer_older(true, true, false));
+    fn running_request_disables_the_control() {
+        assert!(!should_offer_older(true, true, true));
         assert!(!should_offer_older(false, true, false));
     }
 
@@ -301,22 +245,6 @@ mod tests {
         assert!(!is_near_start(NEAR_START + 0.5));
     }
 
-    fn find_older_button(widget: &gtk::Widget) -> Option<gtk::Button> {
-        if let Some(button) = widget.downcast_ref::<gtk::Button>()
-            && button.has_css_class("zaptide-load-older")
-        {
-            return Some(button.clone());
-        }
-        let mut child = widget.first_child();
-        while let Some(current) = child {
-            if let Some(found) = find_older_button(&current) {
-                return Some(found);
-            }
-            child = current.next_sibling();
-        }
-        None
-    }
-
     /// Run under a display, preferably a virtual one:
     /// `GSETTINGS_BACKEND=memory GDK_BACKEND=x11 xvfb-run -a cargo test --lib older_button -- --ignored`.
     #[test]
@@ -324,16 +252,20 @@ mod tests {
     fn older_button_follows_the_scroll_position() {
         use relm4::typed_view::list::{RelmListItem, TypedListView};
 
-        struct Row;
+        struct Row(bool);
         impl RelmListItem for Row {
             type Root = gtk::Box;
             type Widgets = ();
             fn setup(_item: &gtk::ListItem) -> (gtk::Box, ()) {
                 let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
-                root.set_height_request(100);
+                let label = gtk::Label::new(Some("Synthetic message"));
+                label.set_valign(gtk::Align::Start);
+                root.append(&label);
                 (root, ())
             }
-            fn bind(&mut self, _widgets: &mut (), _root: &mut gtk::Box) {}
+            fn bind(&mut self, _widgets: &mut (), root: &mut gtk::Box) {
+                root.set_height_request(if self.0 { 800 } else { 100 });
+            }
         }
 
         gtk::init().expect("display");
@@ -348,7 +280,7 @@ mod tests {
         };
 
         let mut list = TypedListView::<Row, gtk::NoSelection>::new();
-        list.extend_from_iter((0..60).map(|_| Row));
+        list.extend_from_iter((0..60).map(|index| Row(index == 0)));
         let state = TranscriptState {
             active: true,
             has_messages: true,
@@ -356,21 +288,38 @@ mod tests {
             loading_older: false,
             recent_messages_pending: false,
         };
+        let button = super::super::older_history_button();
+        let button_for_output = button.clone();
         let controller = TranscriptView::builder()
             .launch(TranscriptViewInit {
                 state,
                 message_view: list.view.clone(),
             })
-            .connect_receiver(|_, _| {});
+            .connect_receiver(move |_, output| {
+                if let TranscriptViewOutput::OlderAvailable(available) = output {
+                    super::super::set_older_button_available(
+                        &button_for_output,
+                        available,
+                        true,
+                        false,
+                    );
+                }
+            });
+        let header = adw::HeaderBar::new();
+        let title = gtk::Button::with_label("Chat details");
+        header.set_title_widget(Some(&title));
+        header.pack_start(&button);
+        let toolbar = adw::ToolbarView::new();
+        toolbar.add_top_bar(&header);
+        toolbar.set_content(Some(controller.widget()));
         let window = gtk::Window::builder()
             .default_width(360)
             .default_height(400)
-            .child(controller.widget())
+            .child(&toolbar)
             .build();
         window.present();
         spin();
 
-        let button = find_older_button(controller.widget().upcast_ref()).expect("button");
         let scroller = list
             .view
             .ancestor(gtk::ScrolledWindow::static_type())
@@ -382,36 +331,91 @@ mod tests {
             adjustment.upper() > adjustment.page_size() + NEAR_START,
             "the fixture must overflow past the threshold"
         );
-        let offered = |button: &gtk::Button, loading: bool| {
-            assert!(button.is_visible(), "the button always keeps its space");
-            let offered = !button.has_css_class("zaptide-load-older-away");
-            assert_eq!(button.is_focusable(), offered);
-            assert_eq!(button.can_target(), offered && !loading);
-            offered
-        };
-
-        assert!(offered(&button, false), "scrolled to the start");
+        assert!(button.is_sensitive(), "scrolled to the start");
+        let button_bounds = button.compute_bounds(&window).expect("button bounds");
+        let scroller_bounds = scroller.compute_bounds(&window).expect("scroller bounds");
+        assert!(button_bounds.y() + button_bounds.height() <= scroller_bounds.y());
 
         adjustment.set_value(adjustment.upper() - adjustment.page_size());
         spin();
-        assert!(!offered(&button, false), "scrolled to the end");
-
+        assert!(!button.is_sensitive(), "scrolled to the end");
+        assert_eq!(scroller.height(), viewport_height, "viewport must not move");
         adjustment.set_value(NEAR_START - 1.0);
         spin();
-        assert!(offered(&button, false), "back within the threshold");
+        assert!(button.is_sensitive(), "back within the threshold");
         assert_eq!(scroller.height(), viewport_height, "the viewport moved");
+        assert_eq!(adjustment.value(), NEAR_START - 1.0);
 
         adjustment.set_value(NEAR_START + 100.0);
         spin();
-        assert!(!offered(&button, false), "just past the threshold");
-        assert_eq!(scroller.height(), viewport_height, "the viewport moved");
+        assert!(!button.is_sensitive(), "just past the threshold");
+        assert_eq!(scroller.height(), viewport_height, "viewport must not move");
+        assert_eq!(adjustment.value(), NEAR_START + 100.0);
 
+        adjustment.set_value(NEAR_START - 1.0);
+        spin();
+        assert!(
+            button.grab_focus(),
+            "older-history action is keyboard focusable"
+        );
+        adjustment.set_value(NEAR_START + 1.0);
+        spin();
+        assert!(!button.has_focus(), "focus leaves the disabled action");
+        assert!(title.has_focus(), "focus moves to the chat title");
+        assert!(!button.is_sensitive());
+        assert_eq!(
+            scroller.height(),
+            viewport_height,
+            "focus must not move the viewport"
+        );
+        adjustment.set_value(0.0);
+        spin();
+        assert!(button.grab_focus());
         controller.emit(TranscriptViewInput::Sync(TranscriptState {
             loading_older: true,
             ..state
         }));
         spin();
-        assert!(offered(&button, true), "a running request keeps it up");
+        super::super::set_older_button_available(&button, false, true, true);
+        assert!(
+            !button.is_sensitive(),
+            "a running request disables the action"
+        );
+        assert!(title.has_focus(), "loading transfers focus to the title");
+        let stack = button
+            .child()
+            .and_downcast::<gtk::Stack>()
+            .expect("button stack");
+        assert_eq!(stack.visible_child_name().as_deref(), Some("loading"));
+        assert_eq!(
+            button.tooltip_text().as_deref(),
+            Some(gettext("Loading older messages…").as_str())
+        );
+        spin();
+        assert_eq!(
+            scroller.height(),
+            viewport_height,
+            "loading must not move the viewport"
+        );
+        assert_eq!(
+            button
+                .compute_bounds(&window)
+                .expect("button bounds")
+                .width(),
+            button_bounds.width()
+        );
+
+        controller.emit(TranscriptViewInput::Sync(state));
+        spin();
+        assert!(button.is_sensitive());
+        assert_eq!(stack.visible_child_name().as_deref(), Some("ready"));
+        assert!(title.grab_focus());
+        adjustment.set_value(NEAR_START + 1.0);
+        spin();
+        assert!(
+            title.has_focus(),
+            "disabling does not steal unrelated focus"
+        );
 
         adjustment.set_value(0.0);
         controller.emit(TranscriptViewInput::Sync(TranscriptState {
@@ -419,6 +423,31 @@ mod tests {
             ..state
         }));
         spin();
-        assert!(!button.is_visible(), "nothing older to offer");
+        assert!(!button.is_sensitive(), "nothing older to offer");
+
+        controller.emit(TranscriptViewInput::Sync(state));
+        spin();
+        assert!(button.grab_focus());
+        super::super::set_older_button_available(&button, false, true, false);
+        assert!(title.has_focus(), "switching chats transfers focus");
+        controller.emit(TranscriptViewInput::ReportOlder);
+        spin();
+        assert!(
+            button.is_sensitive(),
+            "the new chat can report an unchanged availability"
+        );
+
+        assert!(button.grab_focus());
+        super::super::set_older_button_available(&button, false, false, false);
+        controller.emit(TranscriptViewInput::Sync(TranscriptState {
+            active: false,
+            ..state
+        }));
+        spin();
+        assert!(!button.has_focus(), "closing the chat clears button focus");
+        assert!(
+            !button.is_sensitive(),
+            "closing the chat disables the action"
+        );
     }
 }
