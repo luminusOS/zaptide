@@ -163,6 +163,14 @@ impl Worker {
         self.group_info.group_info_queue.clear();
         self.group_info.group_info_tries.clear();
         self.group_info.group_info_retry.clear();
+        self.newsletter_names.clear();
+        self.newsletter_requested.clear();
+        self.newsletter_queue.clear();
+        self.newsletter_running = false;
+        self.newsletter_list_running = false;
+        self.newsletter_list_pending = false;
+        self.newsletter_retry.clear();
+        self.newsletter_tries.clear();
         self.presence_subscribed.clear();
         self.read_sync = ReadSync::default();
         self.poll_decrypting = 0;

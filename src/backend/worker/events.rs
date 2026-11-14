@@ -68,6 +68,7 @@ impl Worker {
                 }
                 self.remember_identity(pn, lid, name);
                 self.set_status(LinkStatus::Connected);
+                self.fetch_subscribed_newsletters();
                 self.refresh_legacy_preferences();
                 self.retry_avatars();
                 self.pump_read_sync();
