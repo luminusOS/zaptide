@@ -60,6 +60,7 @@ pub(super) fn handle_backend_ready(
         match event {
             Event::Link(link) => {
                 if matches!(link, LinkStatus::LoggedOut) {
+                    app.account_known = false;
                     app.leave_screen();
                     clear_avatar_textures();
                     app.notifications.clear_account(account);
@@ -93,6 +94,7 @@ pub(super) fn handle_backend_ready(
                 (app.page_title, app.status) = link_page(&app.link);
                 app.sync_translucent_sidebar();
             }
+            Event::AccountKnown(known) => app.account_known = known,
             Event::Profile { phone, name } => app.remember_profile(account, phone, name, &sender),
             Event::Syncing(syncing) => app.syncing = syncing,
             Event::Chats(chats) => {

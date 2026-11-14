@@ -382,6 +382,7 @@ impl<S> MessageRow<S> {
             && self.collapsed == other.collapsed
             && self.audio == other.audio
             && self.mentions == other.mentions
+            && self.quote == other.quote
             && self.separator == other.separator
             && self.unread_divider == other.unread_divider
             && self.avatar == other.avatar
@@ -591,6 +592,7 @@ pub struct NativeApplication {
     pending_send: Option<PendingSend>,
     account_receipts_off: bool,
     link: LinkStatus,
+    account_known: bool,
     syncing: bool,
     /// Reconnecting after a suspend, until the link is back.
     resuming: bool,
@@ -1464,6 +1466,7 @@ impl SimpleComponent for NativeApplication {
             pending_send: None,
             account_receipts_off: false,
             link: LinkStatus::Starting,
+            account_known: false,
             syncing: false,
             resuming: false,
             resume_dropped: false,

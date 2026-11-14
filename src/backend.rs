@@ -680,6 +680,8 @@ pub enum DownloadFailure {
 
 #[derive(Debug)]
 pub enum Event {
+    /// Whether this archive has a previously authenticated account identity.
+    AccountKnown(bool),
     /// The phone changed this account's link-preview setting.
     LinkPreviewsChanged(bool),
     /// The result of saving this account's own profile.
