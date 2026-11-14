@@ -58,7 +58,7 @@ jobs:
         with:
           components: clippy
       - name: System dependencies
-        run: dnf install -y --setopt=install_weak_deps=False gcc gcc-c++ git gtk4-devel libadwaita-devel gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugins-bad-free gstreamer1-plugin-openh264 xorg-x11-server-Xvfb dbus-daemon cmake libseccomp-devel fontconfig-devel perl make tar zstd
+        run: dnf install -y --setopt=install_weak_deps=False gcc gcc-c++ git gtk4-devel libadwaita-devel gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugins-bad-free gstreamer1-plugin-openh264 xorg-x11-server-Xvfb dbus-daemon python3 libXtst cmake libseccomp-devel fontconfig-devel perl make tar zstd
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
       - run: cargo clippy --locked --all-targets -- -D warnings
@@ -73,6 +73,45 @@ jobs:
         run: |
           cargo test --locked --lib --no-run
           timeout 60s xvfb-run -a cargo test --locked --lib inline_gifs_release_playback_when_unmapped -- --ignored --nocapture
+      - name: Sidebar scroll regressions
+        env:
+          ZAPTIDE_TEST_PRIVATE_XVFB: '1'
+          GDK_BACKEND: x11
+          GSETTINGS_BACKEND: memory
+          GSK_RENDERER: cairo
+          GTK_A11Y: none
+          G_DEBUG: fatal-criticals
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --lib -- --list --ignored > "$RUNNER_TEMP/ignored-tests.log"
+          sed -n 's/: test$//p' "$RUNNER_TEMP/ignored-tests.log" > "$RUNNER_TEMP/ignored-test-names.log"
+          sidebar=application::sidebar_coordinates::tests::
+          chats=application::chats::account_selection_tests::
+          grep -F "${sidebar}" "$RUNNER_TEMP/ignored-test-names.log" > "$RUNNER_TEMP/sidebar-tests.log"
+          grep -F "${chats}" "$RUNNER_TEMP/ignored-test-names.log" >> "$RUNNER_TEMP/sidebar-tests.log"
+          grep -F 'application::sidebar_runtime_tests::' "$RUNNER_TEMP/ignored-test-names.log" >> "$RUNNER_TEMP/sidebar-tests.log"
+          for name in \
+            reordered_chat_rows_keep_visible_anchor \
+            removed_anchor_uses_visible_survivor \
+            unchanged_update_keeps_pending_restore \
+            chained_removal_falls_back_before_first_snapshot \
+            proxy_input_before_and_after_commit_is_preserved \
+            missing_materialized_target_falls_back_before_snapshot \
+            missing_geometry_does_not_force_top \
+            existing_unmaterialized_anchor_is_retried; do
+            grep -Fx "${chats}${name}" "$RUNNER_TEMP/ignored-test-names.log" > /dev/null
+          done
+          for name in \
+            backend_reorder_preserves_the_first_snapshot_and_open_chat \
+            native_wheel_and_keyboard_survive_backend_reorder \
+            logout_and_account_switch_cancel_pending_restore; do
+            grep -Fx "application::sidebar_runtime_tests::${name}" "$RUNNER_TEMP/ignored-test-names.log" > /dev/null
+          done
+          while IFS= read -r test; do
+            timeout 60s dbus-run-session -- xvfb-run -a -s '-screen 0 1600x1000x24' cargo test --locked --lib "$test" -- --ignored --exact --nocapture | tee "$RUNNER_TEMP/sidebar-test-output.log"
+            grep -F 'test result: ok. 1 passed;' "$RUNNER_TEMP/sidebar-test-output.log"
+          done < "$RUNNER_TEMP/sidebar-tests.log"
       - name: Transcript scroll bounds
         env:
           GDK_BACKEND: x11

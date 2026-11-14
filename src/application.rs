@@ -31,6 +31,7 @@ mod resume;
 mod rows;
 mod selection;
 mod sidebar;
+mod sidebar_coordinates;
 mod stars;
 mod themes;
 mod transcript_view;
@@ -484,6 +485,12 @@ fn copy_image_path(message: &crate::model::Message) -> Option<&std::path::Path> 
 
 pub struct Init {
     pub dirs: AppDirs,
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_BACKEND: std::cell::RefCell<Option<Backend>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// How long the resume spinner may show if the link never reports back.
@@ -1223,13 +1230,30 @@ impl SimpleComponent for NativeApplication {
         } else {
             (None, None)
         };
-        #[cfg(feature = "demo")]
+        #[cfg(all(not(test), feature = "demo"))]
         let spawned = match demo_backend {
             Some(backend) => Ok(backend),
             None => Backend::try_spawn(active_dirs.clone(), notifier.clone()),
         };
-        #[cfg(not(feature = "demo"))]
+        #[cfg(all(not(test), not(feature = "demo")))]
         let spawned = Backend::try_spawn(active_dirs.clone(), notifier.clone());
+        #[cfg(test)]
+        let spawned = match TEST_BACKEND.with_borrow_mut(|slot| slot.take()) {
+            Some(backend) => Ok(backend),
+            None => {
+                #[cfg(feature = "demo")]
+                {
+                    match demo_backend {
+                        Some(backend) => Ok(backend),
+                        None => Backend::try_spawn(active_dirs.clone(), notifier.clone()),
+                    }
+                }
+                #[cfg(not(feature = "demo"))]
+                {
+                    Backend::try_spawn(active_dirs.clone(), notifier.clone())
+                }
+            }
+        };
         let (backend, page_title, status): (Option<Backend>, String, String) = match spawned {
             Ok(backend) => (
                 Some(backend),
@@ -2445,3 +2469,7 @@ mod sidebar_sections_tests;
 #[cfg(test)]
 #[path = "application/media_viewer_tests.rs"]
 mod media_viewer_tests;
+
+#[cfg(test)]
+#[path = "application/sidebar_runtime_tests.rs"]
+mod sidebar_runtime_tests;
