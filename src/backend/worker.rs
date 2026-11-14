@@ -50,6 +50,7 @@ mod history;
 mod identity;
 mod ingest;
 mod maintenance;
+mod newsletters;
 mod older;
 mod outbound;
 mod poll_history;
@@ -984,6 +985,14 @@ struct Worker {
     syncing: bool,
     sync_deadline: Option<Instant>,
     group_info: GroupInfoQueue,
+    newsletter_names: HashMap<String, String>,
+    newsletter_requested: HashSet<String>,
+    newsletter_queue: std::collections::VecDeque<String>,
+    newsletter_running: bool,
+    newsletter_list_running: bool,
+    newsletter_list_pending: bool,
+    newsletter_retry: Vec<(Instant, String)>,
+    newsletter_tries: HashMap<String, u32>,
     presence_subscribed: HashSet<String>,
     older: OlderRequests,
     /// Deferred profile-picture requests and retry counts.
@@ -1121,6 +1130,14 @@ impl Worker {
                 group_info_tries: HashMap::new(),
                 group_info_retry: Vec::new(),
             },
+            newsletter_names: HashMap::new(),
+            newsletter_requested: HashSet::new(),
+            newsletter_queue: std::collections::VecDeque::new(),
+            newsletter_running: false,
+            newsletter_list_running: false,
+            newsletter_list_pending: false,
+            newsletter_retry: Vec::new(),
+            newsletter_tries: HashMap::new(),
             identity: Identity {
                 me_pn: None,
                 me_lid: None,
@@ -1231,6 +1248,7 @@ impl Worker {
                 self.expire_older_requests();
                 self.retry_avatars();
                 self.pump_group_info();
+                self.pump_newsletter_info();
                 self.pump_read_sync();
                 self.pump_poll_votes();
                 self.pump_poll_history();
