@@ -19,6 +19,22 @@ type CodeHandler = Box<dyn Fn(&str)>;
 // GtkTextView reserves one pixel for the cursor, even when hidden.
 const CURSOR_SPACE: i32 = 1;
 
+fn link_colors(
+    background: crate::color::Color,
+) -> (crate::color::Color, Option<crate::color::Color>) {
+    use crate::color::Color;
+
+    let dark_blue = Color::from_rgb(0x00, 0x54, 0xb8);
+    let light_blue = Color::from_rgb(0x83, 0xc4, 0xff);
+    if crate::native_theme::contrast_ratio(background, dark_blue) >= 4.5 {
+        (dark_blue, None)
+    } else if crate::native_theme::contrast_ratio(background, light_blue) >= 4.5 {
+        (light_blue, None)
+    } else {
+        (dark_blue, Some(Color::WHITE))
+    }
+}
+
 thread_local! {
     static BUBBLE_STYLE: gtk::CssProvider = {
         let provider = gtk::CssProvider::new();
@@ -177,6 +193,9 @@ mod imp {
         pub(super) view: OnceCell<gtk::TextView>,
         pub(super) mention_color: OnceCell<gtk::Label>,
         pub(super) mention_tag: RefCell<Option<gtk::TextTag>>,
+        pub(super) link_background: OnceCell<gtk::Label>,
+        pub(super) link_tag: RefCell<Option<gtk::TextTag>>,
+        pub(super) link_background_color: Cell<Option<gtk::gdk::RGBA>>,
         pub(super) width_attributes: RefCell<Option<gtk::pango::AttrList>>,
         pub(super) measured: Cell<Option<(i32, i32)>>,
         pub(super) resize_pending: Cell<bool>,
@@ -217,6 +236,12 @@ mod imp {
             mention_color.set_parent(&*self.obj());
             self.mention_color
                 .set(mention_color)
+                .expect("color initialized once");
+            let link_background = gtk::Label::new(None);
+            link_background.add_css_class("zaptide-link-background");
+            link_background.set_parent(&*self.obj());
+            self.link_background
+                .set(link_background)
                 .expect("color initialized once");
             let click = gtk::GestureClick::new();
             click.set_button(gtk::gdk::BUTTON_PRIMARY);
@@ -305,6 +330,9 @@ mod imp {
             if let Some(color) = self.mention_color.get() {
                 color.unparent();
             }
+            if let Some(color) = self.link_background.get() {
+                color.unparent();
+            }
         }
     }
 
@@ -368,6 +396,7 @@ mod imp {
 
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
             self.obj().refresh_mention_color();
+            self.obj().refresh_link_color();
             if let Some(view) = self.view.get() {
                 self.obj().snapshot_child(view, snapshot);
             }
@@ -382,6 +411,39 @@ glib::wrapper! {
 }
 
 impl TextBubble {
+    fn refresh_link_color(&self) {
+        if let Some(tag) = self.imp().link_tag.borrow().as_ref()
+            && let Some(source) = self.imp().link_background.get()
+        {
+            let background = source.color();
+            if self.imp().link_background_color.replace(Some(background)) == Some(background) {
+                return;
+            }
+            let channel = |value: f32| (value * 255.0).round() as u8;
+            let (color, backplate) = link_colors(crate::color::Color::from_rgb(
+                channel(background.red()),
+                channel(background.green()),
+                channel(background.blue()),
+            ));
+            let rgba = |color: crate::color::Color| {
+                gtk::gdk::RGBA::new(
+                    color.r as f32 / 255.0,
+                    color.g as f32 / 255.0,
+                    color.b as f32 / 255.0,
+                    1.0,
+                )
+            };
+            let color = rgba(color);
+            if tag.foreground_rgba() != Some(color) {
+                tag.set_foreground_rgba(Some(&color));
+            }
+            let backplate = backplate.map(rgba);
+            if tag.background_rgba() != backplate {
+                tag.set_background_rgba(backplate.as_ref());
+            }
+        }
+    }
+
     fn refresh_mention_color(&self) {
         if let Some(tag) = self.imp().mention_tag.borrow().as_ref()
             && let Some(source) = self.imp().mention_color.get()
@@ -667,6 +729,17 @@ impl TextBubble {
             );
         }
         *self.imp().mention_tag.borrow_mut() = Some(mention_tag);
+        let link_tag = buffer.create_tag(None, &[]).expect("new link tag");
+        for link in links.iter().filter(|link| !link.mention) {
+            buffer.apply_tag(
+                &link_tag,
+                &buffer.iter_at_offset(link.start),
+                &buffer.iter_at_offset(link.end),
+            );
+        }
+        *self.imp().link_tag.borrow_mut() = Some(link_tag);
+        self.imp().link_background_color.set(None);
+        self.refresh_link_color();
         self.refresh_mention_color();
         table.foreach(|tag| self.imp().markup_tags.borrow_mut().push(tag.clone()));
         let displayed = buffer.text(&buffer.start_iter(), &buffer.end_iter(), true);
@@ -743,6 +816,190 @@ impl TextBubble {
 mod tests {
     use super::*;
     use std::{cell::RefCell, rc::Rc, time::Duration};
+
+    #[test]
+    fn blue_links_contrast_with_light_dark_and_custom_bubbles() {
+        for background in [
+            crate::color::Color::from_rgb(255, 255, 255),
+            crate::color::Color::from_rgb(30, 30, 30),
+            crate::color::Color::from_rgb(120, 120, 120),
+            crate::color::Color::from_rgb(117, 117, 117),
+            crate::color::Color::from_rgb(118, 118, 118),
+            crate::color::Color::from_rgb(50, 110, 150),
+        ] {
+            let (foreground, backplate) = link_colors(background);
+            assert!(u16::from(foreground.b) - u16::from(foreground.r) >= 100);
+            assert!(
+                crate::native_theme::contrast_ratio(backplate.unwrap_or(background), foreground)
+                    >= 4.5
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "needs a display"]
+    fn web_links_follow_bubble_colors_without_changing_selection_or_keyboard_activation() {
+        gtk::init().unwrap();
+        libadwaita::init().unwrap();
+        let bubble = TextBubble::new();
+        bubble.set_formatted("See https://example.com now", &[]);
+        let other = TextBubble::new();
+        other.set_formatted("See https://example.com now", &[]);
+        let layout = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        for (child, class) in [(&bubble, "incoming"), (&other, "outgoing")] {
+            let container = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            container.add_css_class("zaptide-bubble");
+            container.add_css_class(class);
+            container.append(child);
+            layout.append(&container);
+        }
+        let window = gtk::Window::builder()
+            .default_width(400)
+            .child(&layout)
+            .build();
+        let provider = gtk::CssProvider::new();
+        provider.load_from_string(include_str!("../../data/style.css"));
+        let palette_provider = gtk::CssProvider::new();
+        let display = gtk::gdk::Display::default().unwrap();
+        gtk::style_context_add_provider_for_display(
+            &display,
+            &provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+        gtk::style_context_add_provider_for_display(
+            &display,
+            &palette_provider,
+            gtk::STYLE_PROVIDER_PRIORITY_USER,
+        );
+        window.present();
+        let context = glib::MainContext::default();
+        let settle = || {
+            let until = std::time::Instant::now() + Duration::from_millis(200);
+            while std::time::Instant::now() < until {
+                while context.pending() {
+                    context.iteration(false);
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        };
+        palette_provider.load_from_string(include_str!("../../data/theme-defaults.css"));
+        let manager = libadwaita::StyleManager::default();
+        for scheme in [
+            libadwaita::ColorScheme::ForceLight,
+            libadwaita::ColorScheme::ForceDark,
+        ] {
+            manager.set_color_scheme(scheme);
+            settle();
+            for child in [&bubble, &other] {
+                let background = child.imp().link_background.get().unwrap().color();
+                let channel = |value: f32| (value * 255.0).round() as u8;
+                let background = crate::color::Color::from_rgb(
+                    channel(background.red()),
+                    channel(background.green()),
+                    channel(background.blue()),
+                );
+                let (foreground, backplate) = link_colors(background);
+                let tag = child.imp().link_tag.borrow().clone().unwrap();
+                let actual = tag.foreground_rgba().unwrap();
+                assert_eq!(
+                    (
+                        channel(actual.red()),
+                        channel(actual.green()),
+                        channel(actual.blue())
+                    ),
+                    (foreground.r, foreground.g, foreground.b)
+                );
+                assert!(
+                    crate::native_theme::contrast_ratio(
+                        backplate.unwrap_or(background),
+                        foreground
+                    ) >= 4.5
+                );
+            }
+        }
+        manager.set_color_scheme(libadwaita::ColorScheme::Default);
+        for (incoming, outgoing) in [
+            (
+                crate::color::Color::from_rgb(255, 255, 255),
+                crate::color::Color::from_rgb(230, 245, 235),
+            ),
+            (
+                crate::color::Color::from_rgb(34, 34, 34),
+                crate::color::Color::from_rgb(25, 60, 45),
+            ),
+            (
+                crate::color::Color::from_rgb(117, 117, 117),
+                crate::color::Color::from_rgb(118, 118, 118),
+            ),
+            (
+                crate::color::Color::from_rgb(255, 255, 255),
+                crate::color::Color::from_rgb(34, 34, 34),
+            ),
+        ] {
+            let mut palette = crate::theme::Palette::light();
+            palette.bubble_in = incoming;
+            palette.bubble_out = outgoing;
+            palette_provider.load_from_string(&crate::native_theme::css_for_palette(&palette));
+            settle();
+            for (child, background) in [(&bubble, incoming), (&other, outgoing)] {
+                let buffer = child.view().buffer();
+                let tag = child.imp().link_tag.borrow().clone().unwrap();
+                assert!(buffer.iter_at_offset(5).tags().contains(&tag));
+                assert!(!buffer.iter_at_offset(0).tags().contains(&tag));
+                let (foreground, backplate) = link_colors(background);
+                let rgba = |c: crate::color::Color| {
+                    gtk::gdk::RGBA::new(
+                        c.r as f32 / 255.0,
+                        c.g as f32 / 255.0,
+                        c.b as f32 / 255.0,
+                        1.0,
+                    )
+                };
+                assert_eq!(tag.foreground_rgba(), Some(rgba(foreground)));
+                assert_eq!(tag.background_rgba(), backplate.map(rgba));
+            }
+            let snapshot = gtk::Snapshot::new();
+            gtk::WidgetPaintable::new(Some(&window)).snapshot(
+                &snapshot,
+                f64::from(window.width()),
+                f64::from(window.height()),
+            );
+            let texture = window
+                .renderer()
+                .unwrap()
+                .render_texture(snapshot.to_node().unwrap(), None);
+            let (width, height) = (texture.width() as usize, texture.height() as usize);
+            let mut pixels = vec![0; width * height * 4];
+            texture.download(&mut pixels, width * 4);
+            assert!(
+                pixels
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .any(|pixel| pixel[0] > pixel[2].saturating_add(40) && pixel[3] == 255),
+                "no blue pixels rendered"
+            );
+        }
+        let activated = Rc::new(RefCell::new(false));
+        let result = activated.clone();
+        bubble.connect_link_activation(move |_| *result.borrow_mut() = true);
+        assert_eq!(
+            bubble.handle_key(gtk::gdk::Key::Tab, gtk::gdk::ModifierType::empty()),
+            glib::Propagation::Stop
+        );
+        assert_eq!(
+            bubble.selected_text().as_deref(),
+            Some("https://example.com")
+        );
+        assert_eq!(
+            bubble.handle_key(gtk::gdk::Key::Return, gtk::gdk::ModifierType::empty()),
+            glib::Propagation::Stop
+        );
+        assert!(*activated.borrow());
+        gtk::style_context_remove_provider_for_display(&display, &provider);
+        gtk::style_context_remove_provider_for_display(&display, &palette_provider);
+        window.close();
+    }
 
     #[test]
     fn mention_links_are_bold_without_changing_web_links_or_offsets() {
