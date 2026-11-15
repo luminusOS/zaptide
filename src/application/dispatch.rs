@@ -840,8 +840,11 @@ impl NativeApplication {
                     self.chat_projection.select(chat.clone());
                 }
             }
-            Input::LoadOlder => self.load_older(),
-            Input::OlderAvailabilityChanged(_) => {}
+            Input::LoadOlder(epoch) => {
+                if epoch == self.transcript_requests.next {
+                    self.load_older();
+                }
+            }
             Input::OpenAccountChat(account, chat) => {
                 if account != self.active_account {
                     self.switch_account_with_restore(account, &sender, false);

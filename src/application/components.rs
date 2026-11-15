@@ -168,6 +168,7 @@ impl NativeApplication {
 
     fn sync_transcript_view(&self) {
         let state = TranscriptState {
+            request_epoch: self.transcript_requests.next,
             active: self.open_chat.active_chat.is_some(),
             has_messages: !self.open_chat.message_ids.is_empty(),
             history_complete: self.history_complete,

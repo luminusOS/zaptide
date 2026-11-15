@@ -31,12 +31,82 @@ pub(super) fn install_scroll_cancellation(scroller: &gtk::ScrolledWindow, view: 
     view.connect_unmap(|_| cancel_auto_scroll());
 }
 
-fn cancel_auto_scroll() {
+pub(super) fn cancel_auto_scroll() {
     SCROLL_GENERATION.set(SCROLL_GENERATION.get().wrapping_add(1));
     let previous = END_GLIDE.with_borrow_mut(|running| running.take());
     if let Some(previous) = previous {
         previous.pause();
     }
+}
+
+pub(super) fn reading_anchor(view: &gtk::ListView, ids: &[String]) -> Option<(String, f64)> {
+    let scroller = view.ancestor(gtk::ScrolledWindow::static_type())?;
+    let mut child = view.first_child();
+    while let Some(item) = child {
+        if let Some(root) = item.first_child()
+            && root.is_mapped()
+            && root.height() > 0
+            && let Some(bounds) = root.compute_bounds(&scroller)
+            && bounds.y() + bounds.height() > 0.0
+            && bounds.y() < scroller.height() as f32
+            && ids.iter().any(|id| id == root.widget_name().as_str())
+        {
+            return Some((root.widget_name().to_string(), f64::from(bounds.y())));
+        }
+        child = item.next_sibling();
+    }
+    None
+}
+
+pub(super) fn restore_reading_anchor(view: &gtk::ListView, position: u32, id: String, offset: f64) {
+    cancel_auto_scroll();
+    let generation = SCROLL_GENERATION.get();
+    let Some(model) = view.model() else {
+        return;
+    };
+    let Some(expected) = model.item(position) else {
+        return;
+    };
+    let frames = std::cell::Cell::new(0);
+    let stable = std::cell::Cell::new(0);
+    view.add_tick_callback(move |view, _| {
+        if SCROLL_GENERATION.get() != generation
+            || model.item(position).as_ref() != Some(&expected)
+            || frames.get() >= 16
+        {
+            return gtk::glib::ControlFlow::Break;
+        }
+        frames.set(frames.get() + 1);
+        let Some(scroller) = view.ancestor(gtk::ScrolledWindow::static_type()) else {
+            return gtk::glib::ControlFlow::Break;
+        };
+        let mut child = view.first_child();
+        while let Some(item) = child {
+            if let Some(root) = item.first_child()
+                && root.is_mapped()
+                && root.height() > 0
+                && root.widget_name() == id
+                && let Some(bounds) = root.compute_bounds(&scroller)
+                && let Some(adjustment) = view.vadjustment()
+            {
+                let delta = f64::from(bounds.y()) - offset;
+                if delta.abs() <= 1.0 {
+                    stable.set(stable.get() + 1);
+                } else {
+                    stable.set(0);
+                    adjustment.set_value(adjustment.value() + delta);
+                }
+                return if stable.get() >= 3 {
+                    gtk::glib::ControlFlow::Break
+                } else {
+                    gtk::glib::ControlFlow::Continue
+                };
+            }
+            child = item.next_sibling();
+        }
+        view.scroll_to(position, gtk::ListScrollFlags::NONE, None);
+        gtk::glib::ControlFlow::Continue
+    });
 }
 
 /// Moves a list to its end once rows are laid out. `ListView::scroll_to`

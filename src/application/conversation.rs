@@ -347,7 +347,7 @@ impl NativeApplication {
         // rows, as when every update was drawn on arrival.
         self.flush_transcript();
         let anchor = older
-            .then(|| self.open_chat.message_ids.first().cloned())
+            .then(|| motion::reading_anchor(&self.messages.view, &self.open_chat.message_ids))
             .flatten();
         let mut page_ids = std::collections::HashSet::new();
         let messages = messages
@@ -397,17 +397,14 @@ impl NativeApplication {
         self.rebuild_message_rows(live_messages_appended);
         self.sync_transcript();
         if older
-            && let Some(anchor) = anchor
+            && let Some((anchor, offset)) = anchor
             && let Some(position) = self
                 .open_chat
                 .message_ids
                 .iter()
                 .position(|id| id == &anchor)
         {
-            let view = self.messages.view.clone();
-            gtk::glib::idle_add_local_once(move || {
-                view.scroll_to(position as u32, gtk::ListScrollFlags::NONE, None);
-            });
+            motion::restore_reading_anchor(&self.messages.view, position as u32, anchor, offset);
         }
         self.status = gettext("Conversation loaded");
     }
