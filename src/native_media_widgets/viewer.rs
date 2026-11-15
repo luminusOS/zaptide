@@ -231,6 +231,7 @@ struct ViewerParts {
 impl ViewerParts {
     fn show(&self, details: &ViewerDetails, position: Option<(usize, usize)>) {
         self.avatar.set_text(Some(&details.title));
+        self.avatar.set_custom_image(details.avatar.as_ref());
         self.name.set_label(&details.title);
         self.time.set_label(&details.subtitle);
         let counter = position.and_then(|(index, total)| counter_text(index, total));

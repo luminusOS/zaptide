@@ -2443,3 +2443,7 @@ mod sidebar_runtime_tests;
 #[cfg(test)]
 #[path = "application/history_runtime_tests.rs"]
 mod history_runtime_tests;
+
+#[cfg(test)]
+#[path = "application/viewer_runtime_tests.rs"]
+mod viewer_runtime_tests;
