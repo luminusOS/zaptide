@@ -267,7 +267,9 @@ impl NativeApplication {
                 .map(|(_, message)| message.clone());
             self.pending_composer_request = self.composer.submit(&chat);
             let attachments = self.pending_attachments.remove(&chat).unwrap_or_default();
-            let has_clipboard_image = self.pending_clipboard_images.contains_key(&chat);
+            let has_clipboard_image =
+                attachments.is_empty() && self.pending_clipboard_images.contains_key(&chat);
+            let remaining = attachments.len().max(1);
             self.pending_send = Some(PendingSend {
                 chat: chat.clone(),
                 text: self.draft.clone(),
@@ -275,7 +277,7 @@ impl NativeApplication {
                 attachments,
                 failed_attachments: Vec::new(),
                 clipboard_image: has_clipboard_image,
-                remaining: attachment_count.max(1),
+                remaining,
                 failed: false,
             });
             if let Some(pending) = &self.pending_send

@@ -12,6 +12,7 @@ use crate::model::{Chat, ChatKind, Content, Delivery, Message};
 mod calls;
 mod contacts;
 mod encryption;
+mod identity;
 mod secrets;
 pub(crate) use encryption::{
     Database as EncryptedDatabase, device_store_key, key_literal as sqlcipher_key_literal,
@@ -342,7 +343,11 @@ impl Archive {
         transaction.execute_batch(media::SCHEMA)?;
         transaction.commit()?;
         connection.set_prepared_statement_cache_capacity(CACHED_STATEMENTS);
-        Ok(Self { connection })
+        let archive = Self { connection };
+        for (lid, pn) in archive.lids()? {
+            archive.put_lid(&lid, &pn)?;
+        }
+        Ok(archive)
     }
 
     /// Starts a batch of writes that commit together. A savepoint, so a batch
@@ -597,6 +602,7 @@ impl Archive {
     }
 
     pub fn finish_read_sync(&self, id: &str, through: i64) -> Result<()> {
+        let id = &*self.resolve_chat(id)?;
         self.connection.execute(
             "UPDATE chats SET pending_read = NULL WHERE id = ?1 AND pending_read <= ?2",
             params![id, through],
@@ -1099,6 +1105,7 @@ impl Archive {
     }
 
     pub fn delete_message(&self, chat: &str, id: &str) -> Result<bool> {
+        let chat = &*self.resolve_chat(chat)?;
         let deleted = self.connection.execute(
             "DELETE FROM messages WHERE chat = ?1 AND id = ?2",
             params![chat, id],
@@ -1107,6 +1114,7 @@ impl Archive {
     }
 
     pub fn message(&self, chat: &str, id: &str) -> Result<Option<Message>> {
+        let chat = &*self.resolve_chat(chat)?;
         self.connection
             .prepare_cached(&format!(
                 "SELECT {MESSAGE_COLUMNS} FROM messages WHERE chat = ?1 AND id = ?2"
@@ -1133,6 +1141,10 @@ impl Archive {
 
     /// Returns a message's raw protobuf for attachment downloads.
     pub fn raw(&self, chat: &str, id: &str) -> Result<Option<Vec<u8>>> {
+        self.raw_exact(&self.resolve_chat(chat)?, id)
+    }
+
+    fn raw_exact(&self, chat: &str, id: &str) -> Result<Option<Vec<u8>>> {
         self.connection
             .query_row(
                 "SELECT raw FROM messages WHERE chat = ?1 AND id = ?2",
@@ -1146,6 +1158,7 @@ impl Archive {
     /// Advances delivery state, except that `Failed` may replace it. Stores the
     /// first timestamp for each delivery stage.
     pub fn set_status(&self, chat: &str, id: &str, status: Delivery, at: i64) -> Result<bool> {
+        let chat = &*self.resolve_chat(chat)?;
         let rank = status_rank(status);
         let changed = if status == Delivery::Failed {
             self.connection
@@ -1207,6 +1220,7 @@ impl Archive {
         content: &Content,
         edited: bool,
     ) -> Result<bool> {
+        let chat = &*self.resolve_chat(chat)?;
         let changed = self.connection.execute(
             "UPDATE messages SET content = ?3, edited = ?4 WHERE chat = ?1 AND id = ?2",
             params![
@@ -1227,6 +1241,7 @@ impl Archive {
         content: &Content,
         mentions: &[crate::model::MentionRef],
     ) -> Result<bool> {
+        let chat = &*self.resolve_chat(chat)?;
         let changed = self.connection.execute(
             "UPDATE messages SET content = ?3, mentions = ?4, edited = 1 WHERE chat = ?1 AND id = ?2",
             params![

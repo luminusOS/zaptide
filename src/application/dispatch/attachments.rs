@@ -104,6 +104,7 @@ pub(super) fn attachments_picked(
     paths: Vec<std::path::PathBuf>,
     documents: bool,
 ) {
+    let chat = application.composer.resolve_chat(&chat).to_owned();
     if paths.is_empty() {
         return;
     }

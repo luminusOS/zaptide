@@ -1767,6 +1767,7 @@ impl Worker {
         row: Message,
         raw: Vec<u8>,
     ) {
+        let chat = self.canonical_str(&chat);
         if self.archive_cleanup_failed {
             return;
         }
@@ -1818,6 +1819,7 @@ impl Worker {
         raw: Vec<u8>,
         sent: tokio::sync::mpsc::UnboundedSender<bool>,
     ) {
+        let chat = self.canonical_str(&chat);
         if self.archive_cleanup_failed {
             let _ = sent.send(false);
             return;

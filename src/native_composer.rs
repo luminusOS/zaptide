@@ -10,6 +10,7 @@ pub(crate) mod formatting;
 #[derive(Default)]
 pub struct NativeComposerState {
     chats: HashMap<String, ChatComposerState>,
+    aliases: HashMap<String, String>,
     next_operation: u64,
 }
 
@@ -163,12 +164,56 @@ impl fmt::Debug for ComposerRequest {
 }
 
 impl ComposerRequest {
+    pub(crate) fn remap_chat(&mut self, alias: &str, canonical: &str) {
+        if self.chat_id == alias {
+            self.chat_id = canonical.to_owned();
+        }
+    }
+
     pub fn text(&self) -> &str {
         &self.text
     }
 }
 
 impl NativeComposerState {
+    pub(crate) fn resolve_chat<'a>(&'a self, chat: &'a str) -> &'a str {
+        self.aliases.get(chat).map_or(chat, String::as_str)
+    }
+
+    pub(crate) fn merge_chat(&mut self, alias: &str, canonical: &str, prefer_alias: bool) {
+        self.aliases.insert(alias.to_owned(), canonical.to_owned());
+        let Some(alias_state) = self.chats.remove(alias) else {
+            return;
+        };
+        let canonical_state = self.chats.remove(canonical).unwrap_or_default();
+        let use_alias =
+            alias_state.pending.is_some() || canonical_state.pending.is_none() && prefer_alias;
+        let (mut primary, secondary) = if use_alias {
+            (alias_state, canonical_state)
+        } else {
+            (canonical_state, alias_state)
+        };
+        if !secondary.draft.is_empty() && primary.draft != secondary.draft {
+            if !primary.draft.is_empty() {
+                primary.draft.push('\n');
+            }
+            primary.draft.push_str(&secondary.draft);
+            primary.revision = primary.revision.wrapping_add(1);
+        }
+        if !secondary.attachment_caption.is_empty()
+            && primary.attachment_caption != secondary.attachment_caption
+        {
+            if !primary.attachment_caption.is_empty() {
+                primary.attachment_caption.push('\n');
+            }
+            primary
+                .attachment_caption
+                .push_str(&secondary.attachment_caption);
+            primary.caption_revision = primary.caption_revision.wrapping_add(1);
+        }
+        self.chats.insert(canonical.to_owned(), primary);
+    }
+
     /// Read draft for one chat; drafts remain independent across chat switches.
     pub fn draft(&self, chat_id: &str) -> &str {
         self.chats
@@ -359,6 +404,20 @@ mod tests {
         assert_eq!(active_mention_query("Hi @Lucas"), Some("Lucas"));
         assert_eq!(active_mention_query("mail@Lucas"), None);
         assert_eq!(active_mention_query("Hi @Lucas Ribeiro"), None);
+    }
+
+    #[test]
+    fn identity_merge_preserves_drafts_and_pending_completion_ownership() {
+        let mut state = NativeComposerState::default();
+        state.set_draft("alias", "sent draft");
+        let mut request = state.submit("alias").unwrap();
+        state.set_draft("canonical", "other draft");
+        state.merge_chat("alias", "canonical", true);
+        request.remap_chat("alias", "canonical");
+        assert_eq!(state.draft("canonical"), "sent draft\nother draft");
+        state.complete_send(&request);
+        assert_eq!(state.draft("canonical"), "sent draft\nother draft");
+        assert!(state.submit("canonical").is_some());
     }
 
     #[test]

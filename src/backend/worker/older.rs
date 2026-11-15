@@ -12,28 +12,38 @@ impl Worker {
             return;
         };
         for (chat, count, more_on_phone) in filed {
-            let Some(request) = self.older.pending_older.get_mut(&chat) else {
-                continue;
-            };
-            if request.protocol_id.as_deref() == Some(protocol_id.as_str()) {
-                self.record_older_response(chat, count, more_on_phone);
-            } else if request.protocol_id.is_none() {
-                if let Some(early) = request.early_responses.get_mut(&protocol_id) {
-                    early.received_count = early.received_count.saturating_add(count);
-                    if let Some(more_on_phone) = more_on_phone {
-                        early.more_on_phone = Some(more_on_phone);
+            let canonical = self.canonical_str(&chat);
+            let matching: Vec<_> = self
+                .older
+                .pending_older
+                .keys()
+                .filter(|known| self.canonical_str(known) == canonical)
+                .cloned()
+                .collect();
+            for chat in matching {
+                let Some(request) = self.older.pending_older.get_mut(&chat) else {
+                    continue;
+                };
+                if request.protocol_id.as_deref() == Some(protocol_id.as_str()) {
+                    self.record_older_response(chat, count, more_on_phone);
+                } else if request.protocol_id.is_none() {
+                    if let Some(early) = request.early_responses.get_mut(&protocol_id) {
+                        early.received_count = early.received_count.saturating_add(count);
+                        if let Some(more_on_phone) = more_on_phone {
+                            early.more_on_phone = Some(more_on_phone);
+                        }
+                    } else if request.early_responses.len() < MAX_EARLY_HISTORY_IDS {
+                        let mut early = EarlyOlderResponse {
+                            received_count: count,
+                            ..Default::default()
+                        };
+                        early.more_on_phone = more_on_phone;
+                        request.early_responses.insert(protocol_id.clone(), early);
+                    } else {
+                        log::warn!(
+                            "too many unrelated history IDs arrived before request registration"
+                        );
                     }
-                } else if request.early_responses.len() < MAX_EARLY_HISTORY_IDS {
-                    let mut early = EarlyOlderResponse {
-                        received_count: count,
-                        ..Default::default()
-                    };
-                    early.more_on_phone = more_on_phone;
-                    request.early_responses.insert(protocol_id.clone(), early);
-                } else {
-                    log::warn!(
-                        "too many unrelated history IDs arrived before request registration"
-                    );
                 }
             }
         }
@@ -86,10 +96,11 @@ impl Worker {
         (before_time, before_id): super::PageKey,
         request: u64,
     ) {
+        let archived_chat = self.canonical_str(&chat);
         let mut more = count > 0 && more_on_phone != Some(false);
         match self
             .archive
-            .messages(&chat, Some((before_time, &before_id)), 501)
+            .messages(&archived_chat, Some((before_time, &before_id)), 501)
         {
             Ok(mut messages) => {
                 if messages.len() > 500 {

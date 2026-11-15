@@ -105,6 +105,7 @@ async fn stale_contact_lookup_cannot_write_into_a_new_session() {
                 first_name: Some("Old".into()),
                 to_phone: true,
                 registered: true,
+                lid: Some("900001".into()),
             },
         }))
         .await;

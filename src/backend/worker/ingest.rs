@@ -245,10 +245,11 @@ impl Worker {
     /// Archives a message and emits chat and row updates.
     pub(super) fn store_message(
         &mut self,
-        message: Message,
+        mut message: Message,
         raw: Option<Vec<u8>>,
         push_name: Option<&str>,
     ) {
+        message.chat = self.canonical_str(&message.chat);
         match self.archive.sender_collision(&message) {
             Ok(true) => return,
             Ok(false) => {}

@@ -143,12 +143,13 @@ impl Archive {
 
     /// A late decryption must not resurrect a deleted poll or replace a newer vote.
     pub fn finish_poll_vote(&self, vote: &PollVote, choices: &[usize]) -> Result<bool> {
+        let chat = self.resolve_chat(&vote.chat)?;
         self.connection
             .execute(
                 "UPDATE poll_votes SET choices = ?6 WHERE chat = ?1 AND poll = ?2 AND voter = ?3
              AND at = ?4 AND update_id = ?5 AND choices IS NULL",
                 params![
-                    vote.chat,
+                    chat.as_ref(),
                     vote.poll,
                     vote.voter,
                     vote.at,

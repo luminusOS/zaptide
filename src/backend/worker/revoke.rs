@@ -1,10 +1,22 @@
 use super::*;
 
 impl Worker {
+    pub(super) fn forget_pending_revoke(&mut self, chat: &str, id: &str) {
+        let canonical = self.canonical_str(chat);
+        let keys: Vec<_> = self
+            .pending_revokes
+            .keys()
+            .filter(|(known, message)| message == id && self.canonical_str(known) == canonical)
+            .cloned()
+            .collect();
+        for key in keys {
+            self.pending_revokes.remove(&key);
+        }
+    }
+
     pub(super) fn confirm_revoke(&mut self, chat: &str, id: &str) {
         // An authoritative phone update invalidates any later rollback.
-        self.pending_revokes
-            .remove(&(chat.to_owned(), id.to_owned()));
+        self.forget_pending_revoke(chat, id);
         if let Ok(true) = self.archive.set_content(chat, id, &Content::Revoked, false) {
             self.emit_message(chat, id);
             self.emit_chat(chat);

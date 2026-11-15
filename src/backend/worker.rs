@@ -871,6 +871,7 @@ impl Drop for DeferredDownload {
     }
 }
 
+#[derive(Clone)]
 struct PendingRevoke {
     attempt_id: u64,
     content: Content,
@@ -1029,6 +1030,7 @@ struct Batch<'a> {
 struct BatchState {
     lid_to_pn: HashMap<String, String>,
     contacts: Option<HashMap<String, Contact>>,
+    pending_revokes: HashMap<(ChatId, String), PendingRevoke>,
 }
 
 impl std::ops::Deref for Batch<'_> {
@@ -1061,12 +1063,14 @@ impl Batch<'_> {
         self.state = Some(BatchState {
             lid_to_pn: self.worker.identity.lid_to_pn.clone(),
             contacts: contacts.then(|| self.worker.identity.contacts.clone()),
+            pending_revokes: self.worker.pending_revokes.clone(),
         });
     }
 
     fn restore_state(&mut self) {
         if let Some(state) = self.state.take() {
             self.worker.identity.lid_to_pn = state.lid_to_pn;
+            self.worker.pending_revokes = state.pending_revokes;
             if let Some(contacts) = state.contacts {
                 self.worker.identity.contacts = contacts;
             }
@@ -1314,6 +1318,17 @@ impl Worker {
     }
 
     fn emit(&self, mut event: Event) {
+        match &mut event {
+            Event::Sent { chat, .. }
+            | Event::Edited { chat, .. }
+            | Event::Media { chat, .. }
+            | Event::AttachmentCompleted { chat, .. }
+            | Event::MessageDeleted { chat, .. }
+            | Event::OlderFetched { chat, .. }
+            | Event::PollCreated { chat, .. }
+            | Event::PollVoted { chat, .. } => *chat = self.canonical_str(chat),
+            _ => {}
+        }
         if let Event::Syncing(syncing) = &mut event {
             *syncing |= !self.privacy.privacy_ready;
         }
@@ -1416,6 +1431,7 @@ impl Worker {
     }
 
     fn emit_chat(&self, id: &str) {
+        let id = &*self.canonical_str(id);
         if let Ok(Some(mut chat)) = self.archive.chat(id) {
             self.polish_chat(&mut chat);
             self.emit(Event::ChatUpdated(Box::new(chat)));
@@ -1446,6 +1462,7 @@ impl Worker {
     }
 
     fn updated_message(&self, chat: &str, id: &str) -> Option<Message> {
+        let chat = &*self.canonical_str(chat);
         let mut message = self.archive.message(chat, id).ok().flatten()?;
         self.polish(&mut message);
         Some(message)

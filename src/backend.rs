@@ -323,6 +323,7 @@ pub enum Done {
         first_name: Option<String>,
         to_phone: bool,
         registered: bool,
+        lid: Option<String>,
     },
     /// Internal number-lookup failure; never treat an API error as registration.
     ContactCheckFailed {},
@@ -709,6 +710,10 @@ pub enum Event {
     Link(LinkStatus),
     /// Full chat list, newest first.
     Chats(Vec<Chat>),
+    ChatIdentity {
+        alias: ChatId,
+        canonical: ChatId,
+    },
     ChatUpdated(Box<Chat>),
     /// Reload the open transcript after archive changes or a failed batch.
     RefreshTranscript,
