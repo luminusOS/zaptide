@@ -153,7 +153,9 @@ def run_scenario(display, binary, demo_dir, scenario):
             display.move(500, 330)
             wait_for(visible, 'reaction bar did not appear')
             display.move(500, 296)
-            time.sleep(.08)
+            time.sleep(.7)
+            if not visible():
+                raise AssertionError('reaction bar disappeared while parked in the gap')
             display.move(500, 280)
             end = time.monotonic() + .7
             while time.monotonic() < end:

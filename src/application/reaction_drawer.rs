@@ -21,7 +21,7 @@ const HIDE_DELAY: Duration = Duration::from_millis(250);
 
 /// Space between the pill and the bubble's top edge, so the pill never covers
 /// the sender's name or the first line.
-const GAP: f32 = 8.0;
+const GAP: i32 = 8;
 
 /// Keeps the pill inside the list when the bubble's top has scrolled away.
 const MIN_TOP: i32 = 44;
@@ -279,17 +279,22 @@ impl Drawer {
 
     fn build(self: &Rc<Self>, list: &gtk::Widget, overlay: &gtk::Overlay) -> gtk::Box {
         let pill = gtk::Box::builder()
-            .spacing(2)
+            .orientation(gtk::Orientation::Vertical)
             .halign(gtk::Align::Start)
             .valign(gtk::Align::Start)
             .can_focus(false)
             .visible(false)
+            .build();
+        let buttons = gtk::Box::builder()
+            .spacing(2)
+            .margin_bottom(GAP)
             .css_classes(["card", "zaptide-quick-reactions"])
             .build();
+        pill.append(&buttons);
         for index in 0..QUICK_SLOTS {
             let button = pill_button();
             button.connect_clicked(move |_| drawer().choose(index));
-            pill.append(&button);
+            buttons.append(&button);
         }
         let more = pill_button();
         more.set_icon_name("list-add-symbolic");
@@ -297,7 +302,7 @@ impl Drawer {
         more.set_tooltip_text(Some(&label));
         more.update_property(&[gtk::accessible::Property::Label(&label)]);
         more.connect_clicked(|button| drawer().choose_another(button));
-        pill.append(&more);
+        buttons.append(&more);
 
         overlay.add_overlay(&pill);
         overlay.set_measure_overlay(&pill, false);
@@ -418,7 +423,7 @@ impl Drawer {
 
 /// Where the pill points, given the bubble's top in list coordinates.
 fn pill_anchor_top(bubble_top: f32) -> i32 {
-    ((bubble_top - GAP) as i32).max(MIN_TOP)
+    (bubble_top as i32).max(MIN_TOP)
 }
 
 fn pill_bounds(
@@ -451,7 +456,7 @@ fn pill_button() -> gtk::Button {
 }
 
 fn refresh_buttons(pill: &gtk::Box, quick: &[String], mine: Option<&str>) {
-    let mut child = pill.first_child();
+    let mut child = pill.first_child().and_then(|buttons| buttons.first_child());
     for emoji in quick {
         let Some(button) = child.take().and_downcast::<gtk::Button>() else {
             return;
@@ -606,7 +611,7 @@ mod tests {
         let quick = quick_reactions(&strings(&["🎉", "😂"]));
         refresh_buttons(&pill, &quick, Some("🎉"));
         let mut buttons = Vec::new();
-        let mut child = pill.first_child();
+        let mut child = pill.first_child().unwrap().first_child();
         while let Some(widget) = child {
             child = widget.next_sibling();
             buttons.push(widget.downcast::<gtk::Button>().expect("button"));
@@ -660,6 +665,52 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs a display"]
+    fn quick_reaction_surface_is_opaque_in_light_and_dark_mode() {
+        adw::init().expect("display");
+        let css = gtk::CssProvider::new();
+        css.load_from_string(include_str!("../../data/style.css"));
+        gtk::style_context_add_provider_for_display(
+            &gtk::gdk::Display::default().unwrap(),
+            &css,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+        let surface = gtk::Box::builder()
+            .css_classes(["card", "zaptide-quick-reactions"])
+            .width_request(260)
+            .height_request(40)
+            .build();
+        let window = gtk::Window::builder().child(&surface).build();
+        window.present();
+        for scheme in [adw::ColorScheme::ForceDark, adw::ColorScheme::ForceLight] {
+            adw::StyleManager::default().set_color_scheme(scheme);
+            let context = glib::MainContext::default();
+            let deadline = std::time::Instant::now() + Duration::from_millis(300);
+            while std::time::Instant::now() < deadline {
+                context.iteration(false);
+            }
+            let snapshot = gtk::Snapshot::new();
+            gtk::WidgetPaintable::new(Some(&surface)).snapshot(
+                &snapshot,
+                f64::from(surface.width()),
+                f64::from(surface.height()),
+            );
+            let rect =
+                gtk::graphene::Rect::new(0.0, 0.0, surface.width() as f32, surface.height() as f32);
+            let texture = window
+                .renderer()
+                .unwrap()
+                .render_texture(snapshot.to_node().expect("reaction surface"), Some(&rect));
+            let mut downloader = gtk::gdk::TextureDownloader::new(&texture);
+            downloader.set_format(gtk::gdk::MemoryFormat::R8g8b8a8);
+            let (bytes, stride) = downloader.download_bytes();
+            let center = texture.height() as usize / 2 * stride + texture.width() as usize / 2 * 4;
+            assert_eq!(bytes[center + 3], 255, "{scheme:?} surface must be opaque");
+        }
+        window.destroy();
+    }
+
+    #[test]
     fn pill_alignment_follows_the_bubble_without_covering_it() {
         let anchor = gtk::graphene::Point::new(50.0, 100.0);
         assert_eq!(
@@ -698,8 +749,16 @@ mod tests {
 
     #[test]
     fn the_pill_points_above_the_bubble_and_stays_inside_the_list() {
-        assert_eq!(pill_anchor_top(200.0), 192);
-        assert!(pill_anchor_top(200.0) < 200);
+        assert_eq!(pill_anchor_top(200.0), 200);
+        let bounds = pill_bounds(
+            gtk::graphene::Point::new(50.0, pill_anchor_top(200.0) as f32),
+            180.0,
+            (400, 300),
+            (260, 38 + GAP),
+            false,
+        );
+        assert_eq!(bounds.y() + bounds.height(), 200);
+        assert_eq!(bounds.y() + bounds.height() - GAP, 192);
         assert_eq!(pill_anchor_top(10.0), MIN_TOP);
     }
 
