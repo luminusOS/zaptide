@@ -1084,6 +1084,7 @@ pub(super) fn sticker_picker_content(
             return empty.upcast::<gtk::Widget>();
         }
         let grid = gtk::FlowBox::builder()
+            .css_classes(["zaptide-sticker-grid"])
             .selection_mode(gtk::SelectionMode::None)
             .homogeneous(true)
             .min_children_per_line(4)
@@ -1125,7 +1126,11 @@ pub(super) fn sticker_picker_content(
             let path = path.clone();
             let on_action = on_action.clone();
             button.connect_clicked(move |_| on_action(DialogAction::SendSticker(path.clone())));
-            grid.append(&button);
+            let tile = gtk::FlowBoxChild::builder()
+                .focusable(false)
+                .child(&button)
+                .build();
+            grid.append(&tile);
         }
         gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
@@ -1523,6 +1528,71 @@ fn glib_escape(text: &str) -> String {
 #[cfg(test)]
 mod sticker_menu_tests {
     use super::*;
+
+    #[test]
+    #[ignore = "needs a display"]
+    fn sticker_picker_has_one_interactive_target_per_tile() {
+        adw::init().unwrap();
+        let provider = gtk::CssProvider::new();
+        provider.load_from_string(include_str!("../../data/style.css"));
+        gtk::style_context_add_provider_for_display(
+            &gtk::gdk::Display::default().unwrap(),
+            &provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("synthetic.webp");
+        let actions = std::rc::Rc::new(std::cell::Cell::new(0));
+        let observed = actions.clone();
+        let callback: DialogActionCallback = std::rc::Rc::new(move |action| {
+            if matches!(action, DialogAction::SendSticker(_)) {
+                observed.set(observed.get() + 1);
+            }
+        });
+        let (content, stack) = sticker_picker_content(&[path], &[], dir.path(), "all", &callback);
+        let window = gtk::Window::builder().child(&content).build();
+        window.present();
+        let scroller = stack
+            .child_by_name("all")
+            .unwrap()
+            .downcast::<gtk::ScrolledWindow>()
+            .unwrap();
+        let viewport = scroller
+            .child()
+            .unwrap()
+            .downcast::<gtk::Viewport>()
+            .unwrap();
+        let grid = viewport
+            .child()
+            .unwrap()
+            .downcast::<gtk::FlowBox>()
+            .unwrap();
+        let tile = grid.child_at_index(0).unwrap();
+        let button = tile.child().unwrap().downcast::<gtk::Button>().unwrap();
+        assert!(
+            !tile.is_focusable(),
+            "only the sticker button should take focus"
+        );
+        assert!(button.is_focusable());
+        let context = gtk::glib::MainContext::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while tile.width() == 0 && std::time::Instant::now() < deadline {
+            context.iteration(false);
+        }
+        assert!(tile.width() > 0);
+        let bounds = button.compute_bounds(&tile).unwrap();
+        assert_eq!(
+            tile.width() as f32,
+            bounds.width(),
+            "no second hover area outside the button"
+        );
+        assert_eq!(tile.height() as f32, bounds.height());
+        assert_eq!(bounds.x(), 0.0);
+        assert_eq!(bounds.y(), 0.0);
+        button.emit_clicked();
+        assert_eq!(actions.get(), 1);
+        window.destroy();
+    }
 
     #[test]
     #[ignore = "needs a display"]

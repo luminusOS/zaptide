@@ -84,6 +84,7 @@ button.zaptide-jump-button { min-width: 42px; min-height: 42px; padding: 0; }
 .zaptide-sticker-tab { border-radius: 8px; min-width: 36px; min-height: 36px; padding: 2px; }
 .zaptide-sticker-tab:checked { background-color: color-mix(in srgb, currentColor 12%, transparent); }
 .zaptide-sticker-picker > contents { padding: 0; }
+.zaptide-sticker-grid > flowboxchild { padding: 0; background: none; box-shadow: none; }
 .zaptide-unread-pill.compact { font-size: 0.75em; min-width: 1.2em; padding: 0 5px; }
 .zaptide-unread-pill.muted { color: var(--window-fg-color); background-color: color-mix(in srgb, currentColor 18%, transparent); }
 .zaptide-composer { border-radius: 18px; background-color: color-mix(in srgb, currentColor 8%, transparent); }
