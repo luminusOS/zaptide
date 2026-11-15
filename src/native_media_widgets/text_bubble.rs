@@ -19,22 +19,6 @@ type CodeHandler = Box<dyn Fn(&str)>;
 // GtkTextView reserves one pixel for the cursor, even when hidden.
 const CURSOR_SPACE: i32 = 1;
 
-fn link_colors(
-    background: crate::color::Color,
-) -> (crate::color::Color, Option<crate::color::Color>) {
-    use crate::color::Color;
-
-    let dark_blue = Color::from_rgb(0x00, 0x54, 0xb8);
-    let light_blue = Color::from_rgb(0x83, 0xc4, 0xff);
-    if crate::native_theme::contrast_ratio(background, dark_blue) >= 4.5 {
-        (dark_blue, None)
-    } else if crate::native_theme::contrast_ratio(background, light_blue) >= 4.5 {
-        (light_blue, None)
-    } else {
-        (dark_blue, Some(Color::WHITE))
-    }
-}
-
 thread_local! {
     static BUBBLE_STYLE: gtk::CssProvider = {
         let provider = gtk::CssProvider::new();
@@ -191,11 +175,9 @@ mod imp {
     #[derive(Default)]
     pub struct TextBubble {
         pub(super) view: OnceCell<gtk::TextView>,
-        pub(super) mention_color: OnceCell<gtk::Label>,
+        pub(super) accent_color: OnceCell<gtk::Label>,
         pub(super) mention_tag: RefCell<Option<gtk::TextTag>>,
-        pub(super) link_background: OnceCell<gtk::Label>,
         pub(super) link_tag: RefCell<Option<gtk::TextTag>>,
-        pub(super) link_background_color: Cell<Option<gtk::gdk::RGBA>>,
         pub(super) width_attributes: RefCell<Option<gtk::pango::AttrList>>,
         pub(super) measured: Cell<Option<(i32, i32)>>,
         pub(super) resize_pending: Cell<bool>,
@@ -231,17 +213,11 @@ mod imp {
             view.add_css_class("zaptide-message-text");
             BUBBLE_STYLE.with(|_| {});
             view.set_parent(&*self.obj());
-            let mention_color = gtk::Label::new(None);
-            mention_color.add_css_class("accent");
-            mention_color.set_parent(&*self.obj());
-            self.mention_color
-                .set(mention_color)
-                .expect("color initialized once");
-            let link_background = gtk::Label::new(None);
-            link_background.add_css_class("zaptide-link-background");
-            link_background.set_parent(&*self.obj());
-            self.link_background
-                .set(link_background)
+            let accent_color = gtk::Label::new(None);
+            accent_color.add_css_class("accent");
+            accent_color.set_parent(&*self.obj());
+            self.accent_color
+                .set(accent_color)
                 .expect("color initialized once");
             let click = gtk::GestureClick::new();
             click.set_button(gtk::gdk::BUTTON_PRIMARY);
@@ -275,6 +251,27 @@ mod imp {
                 }
             });
             view.add_controller(click);
+            let motion = gtk::EventControllerMotion::new();
+            motion.set_name(Some("zaptide-link-hover"));
+            let owner = self.obj().downgrade();
+            motion.connect_enter(move |_, x, y| {
+                if let Some(owner) = owner.upgrade() {
+                    owner.update_link_cursor(x, y);
+                }
+            });
+            let owner = self.obj().downgrade();
+            motion.connect_motion(move |_, x, y| {
+                if let Some(owner) = owner.upgrade() {
+                    owner.update_link_cursor(x, y);
+                }
+            });
+            let owner = self.obj().downgrade();
+            motion.connect_leave(move |_| {
+                if let Some(owner) = owner.upgrade() {
+                    owner.view().set_cursor(None);
+                }
+            });
+            view.add_controller(motion);
             let keys = gtk::EventControllerKey::new();
             keys.set_propagation_phase(gtk::PropagationPhase::Capture);
             let owner = self.obj().downgrade();
@@ -327,10 +324,7 @@ mod imp {
             if let Some(view) = self.view.get() {
                 view.unparent();
             }
-            if let Some(color) = self.mention_color.get() {
-                color.unparent();
-            }
-            if let Some(color) = self.link_background.get() {
+            if let Some(color) = self.accent_color.get() {
                 color.unparent();
             }
         }
@@ -395,8 +389,7 @@ mod imp {
         }
 
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
-            self.obj().refresh_mention_color();
-            self.obj().refresh_link_color();
+            self.obj().refresh_accent_color();
             if let Some(view) = self.view.get() {
                 self.obj().snapshot_child(view, snapshot);
             }
@@ -411,46 +404,19 @@ glib::wrapper! {
 }
 
 impl TextBubble {
-    fn refresh_link_color(&self) {
-        if let Some(tag) = self.imp().link_tag.borrow().as_ref()
-            && let Some(source) = self.imp().link_background.get()
-        {
-            let background = source.color();
-            if self.imp().link_background_color.replace(Some(background)) == Some(background) {
-                return;
-            }
-            let channel = |value: f32| (value * 255.0).round() as u8;
-            let (color, backplate) = link_colors(crate::color::Color::from_rgb(
-                channel(background.red()),
-                channel(background.green()),
-                channel(background.blue()),
-            ));
-            let rgba = |color: crate::color::Color| {
-                gtk::gdk::RGBA::new(
-                    color.r as f32 / 255.0,
-                    color.g as f32 / 255.0,
-                    color.b as f32 / 255.0,
-                    1.0,
-                )
-            };
-            let color = rgba(color);
-            if tag.foreground_rgba() != Some(color) {
-                tag.set_foreground_rgba(Some(&color));
-            }
-            let backplate = backplate.map(rgba);
-            if tag.background_rgba() != backplate {
-                tag.set_background_rgba(backplate.as_ref());
-            }
-        }
-    }
-
-    fn refresh_mention_color(&self) {
-        if let Some(tag) = self.imp().mention_tag.borrow().as_ref()
-            && let Some(source) = self.imp().mention_color.get()
-        {
-            let color = source.color();
-            if tag.foreground_rgba() != Some(color) {
-                tag.set_foreground_rgba(Some(&color));
+    fn refresh_accent_color(&self) {
+        if let Some(source) = self.imp().accent_color.get() {
+            for tag in [
+                self.imp().mention_tag.borrow().as_ref(),
+                self.imp().link_tag.borrow().as_ref(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                let color = source.color();
+                if tag.foreground_rgba() != Some(color) {
+                    tag.set_foreground_rgba(Some(&color));
+                }
             }
         }
     }
@@ -622,6 +588,18 @@ impl TextBubble {
         true
     }
 
+    fn update_link_cursor(&self, x: f64, y: f64) {
+        let on_link = self.offset_at(x, y).is_some_and(|offset| {
+            self.imp()
+                .links
+                .borrow()
+                .iter()
+                .any(|link| (link.start..link.end).contains(&offset))
+        });
+        self.view()
+            .set_cursor_from_name(Some(if on_link { "pointer" } else { "text" }));
+    }
+
     fn same_link(&self, start: i32, end: i32) -> bool {
         self.imp().links.borrow().iter().any(|link| {
             (link.start..link.end).contains(&start) && (link.start..link.end).contains(&end)
@@ -703,6 +681,7 @@ impl TextBubble {
     }
 
     pub(crate) fn set_formatted(&self, text: &str, mentions: &[crate::safety::MentionLabel]) {
+        self.view().set_cursor(None);
         self.imp().keyboard_link.set(None);
         self.imp().click_start.set(None);
         let markup = crate::safety::linkify_markup_with_mentions(text, mentions);
@@ -738,9 +717,7 @@ impl TextBubble {
             );
         }
         *self.imp().link_tag.borrow_mut() = Some(link_tag);
-        self.imp().link_background_color.set(None);
-        self.refresh_link_color();
-        self.refresh_mention_color();
+        self.refresh_accent_color();
         table.foreach(|tag| self.imp().markup_tags.borrow_mut().push(tag.clone()));
         let displayed = buffer.text(&buffer.start_iter(), &buffer.end_iter(), true);
         *self.imp().blocks.borrow_mut() = rendered_blocks(text, &displayed);
@@ -818,27 +795,8 @@ mod tests {
     use std::{cell::RefCell, rc::Rc, time::Duration};
 
     #[test]
-    fn blue_links_contrast_with_light_dark_and_custom_bubbles() {
-        for background in [
-            crate::color::Color::from_rgb(255, 255, 255),
-            crate::color::Color::from_rgb(30, 30, 30),
-            crate::color::Color::from_rgb(120, 120, 120),
-            crate::color::Color::from_rgb(117, 117, 117),
-            crate::color::Color::from_rgb(118, 118, 118),
-            crate::color::Color::from_rgb(50, 110, 150),
-        ] {
-            let (foreground, backplate) = link_colors(background);
-            assert!(u16::from(foreground.b) - u16::from(foreground.r) >= 100);
-            assert!(
-                crate::native_theme::contrast_ratio(backplate.unwrap_or(background), foreground)
-                    >= 4.5
-            );
-        }
-    }
-
-    #[test]
     #[ignore = "needs a display"]
-    fn web_links_follow_bubble_colors_without_changing_selection_or_keyboard_activation() {
+    fn web_links_follow_accent_changes_without_changing_selection_or_keyboard_activation() {
         gtk::init().unwrap();
         libadwaita::init().unwrap();
         let bubble = TextBubble::new();
@@ -891,34 +849,14 @@ mod tests {
             manager.set_color_scheme(scheme);
             settle();
             for child in [&bubble, &other] {
-                let background = child.imp().link_background.get().unwrap().color();
-                let channel = |value: f32| (value * 255.0).round() as u8;
-                let background = crate::color::Color::from_rgb(
-                    channel(background.red()),
-                    channel(background.green()),
-                    channel(background.blue()),
-                );
-                let (foreground, backplate) = link_colors(background);
+                let accent = child.imp().accent_color.get().unwrap().color();
                 let tag = child.imp().link_tag.borrow().clone().unwrap();
-                let actual = tag.foreground_rgba().unwrap();
-                assert_eq!(
-                    (
-                        channel(actual.red()),
-                        channel(actual.green()),
-                        channel(actual.blue())
-                    ),
-                    (foreground.r, foreground.g, foreground.b)
-                );
-                assert!(
-                    crate::native_theme::contrast_ratio(
-                        backplate.unwrap_or(background),
-                        foreground
-                    ) >= 4.5
-                );
+                assert_eq!(tag.foreground_rgba(), Some(accent));
+                assert_eq!(tag.background_rgba(), None);
             }
         }
         manager.set_color_scheme(libadwaita::ColorScheme::Default);
-        for (incoming, outgoing) in [
+        for (index, (incoming, outgoing)) in [
             (
                 crate::color::Color::from_rgb(255, 255, 255),
                 crate::color::Color::from_rgb(230, 245, 235),
@@ -932,21 +870,33 @@ mod tests {
                 crate::color::Color::from_rgb(118, 118, 118),
             ),
             (
+                crate::color::Color::from_rgb(41, 42, 45),
+                crate::color::Color::from_rgb(45, 116, 88),
+            ),
+            (
                 crate::color::Color::from_rgb(255, 255, 255),
                 crate::color::Color::from_rgb(34, 34, 34),
             ),
-        ] {
+        ]
+        .into_iter()
+        .enumerate()
+        {
             let mut palette = crate::theme::Palette::light();
             palette.bubble_in = incoming;
             palette.bubble_out = outgoing;
+            palette.accent = [
+                crate::color::Color::from_rgb(98, 160, 234),
+                crate::color::Color::from_rgb(245, 194, 17),
+                crate::color::Color::from_rgb(192, 97, 203),
+            ][index % 3];
             palette_provider.load_from_string(&crate::native_theme::css_for_palette(&palette));
             settle();
-            for (child, background) in [(&bubble, incoming), (&other, outgoing)] {
+            for child in [&bubble, &other] {
                 let buffer = child.view().buffer();
                 let tag = child.imp().link_tag.borrow().clone().unwrap();
                 assert!(buffer.iter_at_offset(5).tags().contains(&tag));
                 assert!(!buffer.iter_at_offset(0).tags().contains(&tag));
-                let (foreground, backplate) = link_colors(background);
+                let foreground = palette.accent;
                 let rgba = |c: crate::color::Color| {
                     gtk::gdk::RGBA::new(
                         c.r as f32 / 255.0,
@@ -956,7 +906,7 @@ mod tests {
                     )
                 };
                 assert_eq!(tag.foreground_rgba(), Some(rgba(foreground)));
-                assert_eq!(tag.background_rgba(), backplate.map(rgba));
+                assert_eq!(tag.background_rgba(), None);
             }
             let snapshot = gtk::Snapshot::new();
             gtk::WidgetPaintable::new(Some(&window)).snapshot(
@@ -971,13 +921,17 @@ mod tests {
             let (width, height) = (texture.width() as usize, texture.height() as usize);
             let mut pixels = vec![0; width * height * 4];
             texture.download(&mut pixels, width * 4);
+            let foregrounds = [palette.accent];
             assert!(
-                pixels
-                    .as_chunks::<4>()
-                    .0
-                    .iter()
-                    .any(|pixel| pixel[0] > pixel[2].saturating_add(40) && pixel[3] == 255),
-                "no blue pixels rendered"
+                pixels.as_chunks::<4>().0.iter().any(|pixel| {
+                    foregrounds.iter().any(|foreground| {
+                        pixel[0].abs_diff(foreground.b) <= 3
+                            && pixel[1].abs_diff(foreground.g) <= 3
+                            && pixel[2].abs_diff(foreground.r) <= 3
+                            && pixel[3] == 255
+                    })
+                }),
+                "no accent-colored pixels rendered"
             );
         }
         let activated = Rc::new(RefCell::new(false));
@@ -1074,7 +1028,7 @@ mod tests {
                 tags.iter()
                     .any(|tag| tag.foreground_rgba() == Some(color.parse().unwrap())),
                 "expected {color}, source {:?}, tags {:?}",
-                bubble.imp().mention_color.get().unwrap().color(),
+                bubble.imp().accent_color.get().unwrap().color(),
                 tags.iter()
                     .map(|tag| tag.foreground_rgba())
                     .collect::<Vec<_>>()
@@ -1300,6 +1254,90 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs private Xvfb, Python, X11 and XTest"]
+    fn pointer_tracks_links_with_native_x11_motion() {
+        gtk::init().unwrap();
+        let bubble = TextBubble::new();
+        bubble.set_formatted("Plain https://example.com tail", &[]);
+        let window = gtk::Window::builder()
+            .title("ZapTide link pointer fixture")
+            .default_width(500)
+            .default_height(120)
+            .child(&bubble)
+            .build();
+        window.present();
+        let context = glib::MainContext::default();
+        let settle = || {
+            let until = std::time::Instant::now() + Duration::from_millis(150);
+            while std::time::Instant::now() < until {
+                while context.pending() {
+                    context.iteration(false);
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        };
+        settle();
+        let view = bubble.view();
+        for (offset, expected) in [(0, "text"), (8, "pointer"), (27, "text"), (12, "pointer")] {
+            let rect = view.iter_location(&view.buffer().iter_at_offset(offset));
+            let (x, y) = view.buffer_to_window_coords(
+                gtk::TextWindowType::Widget,
+                rect.x() + 1,
+                rect.y() + rect.height() / 2,
+            );
+            let status = std::process::Command::new("python3")
+                .args(["-c", r#"
+import ctypes as c
+import sys
+x = c.CDLL('libX11.so.6')
+xt = c.CDLL('libXtst.so.6')
+D, W = c.c_void_p, c.c_ulong
+x.XOpenDisplay.argtypes = [c.c_char_p]
+x.XOpenDisplay.restype = D
+x.XDefaultRootWindow.argtypes = [D]
+x.XDefaultRootWindow.restype = W
+x.XQueryTree.argtypes = [D, W, c.POINTER(W), c.POINTER(W), c.POINTER(c.POINTER(W)), c.POINTER(c.c_uint)]
+x.XFetchName.argtypes = [D, W, c.POINTER(c.c_char_p)]
+x.XFree.argtypes = [c.c_void_p]
+x.XTranslateCoordinates.argtypes = [D, W, W, c.c_int, c.c_int, c.POINTER(c.c_int), c.POINTER(c.c_int), c.POINTER(W)]
+xt.XTestFakeMotionEvent.argtypes = [D, c.c_int, c.c_int, c.c_int, W]
+x.XSync.argtypes = [D, c.c_int]
+x.XCloseDisplay.argtypes = [D]
+d = x.XOpenDisplay(None)
+assert d
+root = x.XDefaultRootWindow(d)
+r, parent, children, count = W(), W(), c.POINTER(W)(), c.c_uint()
+assert x.XQueryTree(d, root, c.byref(r), c.byref(parent), c.byref(children), c.byref(count))
+found = None
+for child in children[:count.value]:
+    name = c.c_char_p()
+    if x.XFetchName(d, child, c.byref(name)):
+        if name.value == b'ZapTide link pointer fixture':
+            found = child
+        x.XFree(name)
+x.XFree(children)
+assert found is not None
+rx, ry, under = c.c_int(), c.c_int(), W()
+assert x.XTranslateCoordinates(d, found, root, int(sys.argv[1]), int(sys.argv[2]), c.byref(rx), c.byref(ry), c.byref(under))
+assert xt.XTestFakeMotionEvent(d, -1, rx.value, ry.value, 0)
+x.XSync(d, 0)
+x.XCloseDisplay(d)
+"#])
+                .args([x.to_string(), y.to_string()])
+                .status().unwrap();
+            assert!(status.success());
+            settle();
+            assert_eq!(
+                view.cursor().and_then(|cursor| cursor.name()).as_deref(),
+                Some(expected)
+            );
+        }
+        bubble.set_formatted("Rebound text without any link", &[]);
+        assert!(view.cursor().is_none());
+        window.close();
+    }
+
+    #[test]
     #[ignore = "needs a display"]
     fn interaction_activates_safe_links_and_copies_unicode_code() {
         gtk::init().unwrap();
@@ -1339,6 +1377,19 @@ mod tests {
         bubble.connect_code_copied(move |code| found.borrow_mut().push(code.to_owned()));
         let view = bubble.view();
         let controllers = view.observe_controllers();
+        let motion = (0..controllers.n_items())
+            .filter_map(|index| controllers.item(index))
+            .find(|controller| {
+                controller
+                    .clone()
+                    .downcast::<gtk::EventController>()
+                    .is_ok_and(|controller| {
+                        controller.name().as_deref() == Some("zaptide-link-hover")
+                    })
+            })
+            .unwrap()
+            .downcast::<gtk::EventControllerMotion>()
+            .unwrap();
         let mut click = None;
         let mut keys = None;
         for index in 0..controllers.n_items() {
@@ -1367,6 +1418,29 @@ mod tests {
             click.emit_by_name::<()>("released", &[&presses, &x, &y]);
         };
         let mention_offset = bubble.imp().links.borrow()[0].start;
+        let web_offset = bubble.imp().links.borrow()[1].start;
+        for offset in [mention_offset, web_offset] {
+            let (x, y) = coords(offset);
+            motion.emit_by_name::<()>("motion", &[&x, &y]);
+            assert_eq!(
+                view.cursor().and_then(|cursor| cursor.name()).as_deref(),
+                Some("pointer")
+            );
+        }
+        let (x, y) = coords(0);
+        motion.emit_by_name::<()>("motion", &[&x, &y]);
+        assert_eq!(
+            view.cursor().and_then(|cursor| cursor.name()).as_deref(),
+            Some("text")
+        );
+        let (x, y) = coords(web_offset);
+        motion.emit_by_name::<()>("enter", &[&x, &y]);
+        assert_eq!(
+            view.cursor().and_then(|cursor| cursor.name()).as_deref(),
+            Some("pointer")
+        );
+        motion.emit_by_name::<()>("leave", &[]);
+        assert!(view.cursor().is_none());
         send_click(1, mention_offset - 1);
         assert!(activated.borrow().is_empty());
         send_click(1, mention_offset);
