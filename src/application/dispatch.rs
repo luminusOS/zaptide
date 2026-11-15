@@ -700,6 +700,41 @@ impl NativeApplication {
             crate::native_media::NativeMediaAction::Download { message, .. } => {
                 self.activate_attachment(&message)
             }
+            crate::native_media::NativeMediaAction::VotePoll {
+                chat,
+                message,
+                mut choices,
+            } => {
+                if self.open_chat.active_chat.as_deref() != Some(chat.as_str()) {
+                    return;
+                }
+                let Some(current) = self.open_chat.message_snapshots.get(&message) else {
+                    return;
+                };
+                let crate::model::Content::Poll { options, state, .. } = &current.content else {
+                    return;
+                };
+                choices.sort_unstable();
+                choices.dedup();
+                if current.chat != chat
+                    || state.quiz
+                    || !state.can_vote
+                    || state.selectable == 0
+                    || choices.len() > state.selectable
+                    || choices.iter().any(|&choice| choice >= options.len())
+                {
+                    return;
+                }
+                if let Some(backend) = &self.backend {
+                    backend.send(crate::backend::Command::VotePoll {
+                        chat,
+                        message,
+                        choices,
+                    });
+                } else {
+                    self.toast(&gettext("Backend unavailable"));
+                }
+            }
             crate::native_media::NativeMediaAction::VoteQuiz {
                 chat,
                 message,
@@ -1217,6 +1252,11 @@ impl NativeApplication {
                 self.waveform_ready(chat, id, bars, &sender);
             }
             Input::MediaAction(action) => self.handle_media_action(action, sender),
+            Input::AccountMediaAction(account, action) => {
+                if account == self.active_account {
+                    self.handle_media_action(action, sender);
+                }
+            }
             Input::ActivateSelectedAttachment => {
                 if let Some(id) = self.selected_message_id() {
                     self.activate_attachment(&id);

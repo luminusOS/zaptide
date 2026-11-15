@@ -136,6 +136,13 @@ seconds to 15 minutes without a UI timer. Request timestamps are Unix seconds
 despite the library and wire field names ending in `Ms`; never multiply by
 1,000. A repeated question without a usable vote snapshot cannot end recovery.
 
+Inline voting requires explicit submission and carries account, chat and
+message identity. Keep unsent choices through result updates, including a newer
+draft made while an earlier vote is pending. Clear a matching confirmed draft
+or a recycled poll's draft; stale controls must not submit or change its
+replacement. Counts change only through backend events. Quizzes hide results
+until answered and cannot be answered again.
+
 ## Downloads and message presentation
 
 Downloads stream to same-directory staging files without clobbering existing

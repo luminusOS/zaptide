@@ -279,6 +279,7 @@ fn append_photo_sized(
         }
         Some(
             NativeMediaAction::VoteQuiz { .. }
+            | NativeMediaAction::VotePoll { .. }
             | NativeMediaAction::AnswerButton { .. }
             | NativeMediaAction::AnswerListRow { .. }
             | NativeMediaAction::CopyContactPhone(_)
@@ -406,6 +407,7 @@ pub(super) fn append_video(
         }
         Some(
             NativeMediaAction::VoteQuiz { .. }
+            | NativeMediaAction::VotePoll { .. }
             | NativeMediaAction::AnswerButton { .. }
             | NativeMediaAction::AnswerListRow { .. }
             | NativeMediaAction::CopyContactPhone(_)
@@ -531,6 +533,7 @@ pub(super) fn document_card(
         }
         Some(
             NativeMediaAction::VoteQuiz { .. }
+            | NativeMediaAction::VotePoll { .. }
             | NativeMediaAction::AnswerButton { .. }
             | NativeMediaAction::AnswerListRow { .. }
             | NativeMediaAction::CopyContactPhone(_)

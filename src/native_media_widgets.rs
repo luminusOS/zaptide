@@ -79,6 +79,7 @@ mod cards;
 mod clipboard_image;
 mod contacts;
 mod photo;
+mod poll;
 mod sticker;
 mod video_stream;
 pub(crate) mod viewer;
@@ -97,16 +98,20 @@ pub(crate) fn copy_image(path: std::path::PathBuf, clipboard: &gdk::Clipboard) {
 
 #[cfg(test)]
 mod call_tests;
+
 #[cfg(test)]
 mod playback_tests;
+#[cfg(test)]
+mod poll_tests;
 
 pub use audio::{AudioControls, RecordingMeter};
 pub(crate) use contacts::contact_preview;
 pub use photo::{build_album_widget, show_in_folder};
+pub(crate) use poll::PollChoices;
 pub(crate) use sticker::{StickerAnimation, decode_lottie_preview, decode_sticker_file};
 #[cfg(test)]
 pub use widget::build_media_widget_with_action;
-pub(crate) use widget::build_media_widget_with_quiz_choice;
+pub(crate) use widget::build_media_widget_with_poll_choices;
 
 use cards::{
     ListChoiceSection, add_formatted_label, add_label, decode_preview_async, link_button,

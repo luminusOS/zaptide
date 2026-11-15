@@ -656,7 +656,7 @@ impl NativeApplication {
             .filter_map(|id| self.open_chat.message_snapshots.get(id).cloned())
             .collect::<Vec<_>>();
         let voice = |message: &crate::model::Message| self.project_voice(message);
-        let (rows, unread_row) = message_rows(
+        let (mut rows, unread_row) = message_rows(
             messages,
             unread,
             RowInputs {
@@ -670,6 +670,9 @@ impl NativeApplication {
                 voice: &voice,
             },
         );
+        for row in &mut rows {
+            row.account = self.active_account;
+        }
         // A glide still under way counts as the end: a covered window gets no
         // frames, so the glide waits there and finishes once it is shown.
         let at_bottom = gliding()

@@ -926,6 +926,13 @@ impl Backend {
     }
 
     #[cfg(test)]
+    pub(crate) fn capture_commands(&mut self) -> mpsc::UnboundedReceiver<Command> {
+        let (commands, receiver) = mpsc::unbounded_channel();
+        self.commands = commands;
+        receiver
+    }
+
+    #[cfg(test)]
     pub fn poll(&self) -> Vec<Event> {
         self.events.try_iter().collect()
     }

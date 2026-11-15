@@ -958,6 +958,7 @@ fn star_of(row: &gtk::Box) -> gtk::Image {
 fn plain_row(message: crate::model::Message, starred: bool) -> MessageRow<()> {
     MessageRow {
         id: message.id.clone(),
+        account: crate::account::AccountId::FIRST,
         separator: String::new(),
         unread_divider: false,
         sender: "ana".into(),

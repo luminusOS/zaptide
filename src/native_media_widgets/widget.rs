@@ -7,19 +7,26 @@ pub fn build_media_widget_with_action(
     message: &Message,
     on_action: impl Fn(NativeMediaAction) + 'static,
 ) -> NativeMediaWidget {
-    build_media_widget_with_quiz_choice(message, on_action, std::rc::Rc::default())
+    build_media_widget_with_poll_choices(message, on_action, std::rc::Rc::default())
 }
 
-pub(crate) fn build_media_widget_with_quiz_choice(
+pub(crate) fn build_media_widget_with_poll_choices(
     message: &Message,
     on_action: impl Fn(NativeMediaAction) + 'static,
-    quiz_choice: std::rc::Rc<std::cell::Cell<Option<usize>>>,
+    poll_choices: super::PollChoices,
 ) -> NativeMediaWidget {
     let projected = project_content(message);
     let decode_token = DecodeToken::default();
     // The message row draws sender, quote, body, reactions, and forwarding;
     // this widget only adds what the content itself needs.
     let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    if matches!(&message.content, Content::Poll { .. }) {
+        super::poll::append(&root, message, poll_choices, std::rc::Rc::new(on_action));
+        return NativeMediaWidget {
+            widget: root,
+            decode_token,
+        };
+    }
     if let Content::Contact {
         display_name,
         vcard,
@@ -147,94 +154,7 @@ pub(crate) fn build_media_widget_with_quiz_choice(
         }
         NativeMediaContent::Contact { display_name } => ("Contact", display_name.as_str()),
         NativeMediaContent::Location { label } => ("Location", label.as_str()),
-        NativeMediaContent::Poll {
-            question,
-            options,
-            quiz,
-        } => {
-            add_label(&root, question);
-            if *quiz
-                && let Content::Poll { state, .. } = &message.content
-                && state.selected.is_empty()
-            {
-                add_label(&root, &gettext("Choose one answer"));
-                let choice = quiz_choice;
-                let vote = gtk::Button::with_label(&gettext("Vote"));
-                vote.set_sensitive(false);
-                let mut first: Option<gtk::CheckButton> = None;
-                for (index, option) in options.iter().enumerate() {
-                    let button = gtk::CheckButton::with_label(&option.text);
-                    button.set_sensitive(state.can_vote);
-                    if let Some(first) = &first {
-                        button.set_group(Some(first));
-                    } else {
-                        first = Some(button.clone());
-                    }
-                    let selected = choice.get() == Some(index);
-                    let can_vote = state.can_vote;
-                    let (choice, vote) = (choice.clone(), vote.downgrade());
-                    button.connect_toggled(move |button| {
-                        if button.is_active() {
-                            choice.set(Some(index));
-                            if let Some(vote) = vote.upgrade() {
-                                vote.set_sensitive(can_vote);
-                            }
-                        }
-                    });
-                    if selected {
-                        button.set_active(true);
-                    }
-                    root.append(&button);
-                }
-                let (chat, message_id, on_action) =
-                    (message.chat.clone(), message.id.clone(), on_action.clone());
-                vote.connect_clicked(move |_| {
-                    if let Some(choice) = choice.get() {
-                        on_action(NativeMediaAction::VoteQuiz {
-                            chat: chat.clone(),
-                            message: message_id.clone(),
-                            choice,
-                        });
-                    }
-                });
-                root.append(&vote);
-                return NativeMediaWidget {
-                    widget: root,
-                    decode_token,
-                };
-            }
-            if *quiz
-                && let Content::Poll { state, .. } = &message.content
-                && let Some(correct) = state.correct
-            {
-                let status = if state.selected.contains(&correct) {
-                    gettext("Correct answer")
-                } else {
-                    gettext("Incorrect answer")
-                };
-                add_label(&root, &status);
-            }
-            for option in options {
-                let selected = if option.selected {
-                    gettext(" · selected")
-                } else {
-                    String::new()
-                };
-                let correct = if option.correct {
-                    gettext(" · correct answer")
-                } else {
-                    String::new()
-                };
-                add_label(
-                    &root,
-                    &format!(
-                        "{} · {} votes{selected}{correct}",
-                        option.text, option.votes
-                    ),
-                );
-            }
-            (if *quiz { "Quiz" } else { "Poll" }, "")
-        }
+        NativeMediaContent::Poll { .. } => unreachable!("polls are rendered before projection"),
         NativeMediaContent::Buttons {
             text,
             footer,

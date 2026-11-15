@@ -167,7 +167,7 @@ pub(super) struct MessageRowWidgets {
     audio_controls: Option<crate::native_media_widgets::AudioControls>,
     rendered_message: Option<crate::model::Message>,
     rendered_album: Vec<crate::model::Message>,
-    quiz_choice: std::rc::Rc<std::cell::Cell<Option<usize>>>,
+    poll_choices: crate::native_media_widgets::PollChoices,
     action_generation: std::rc::Rc<std::cell::Cell<u64>>,
     decode_token: Option<crate::native_media::DecodeToken>,
     menu_target: MenuTarget,
@@ -191,14 +191,21 @@ impl Drop for FocusOnClickGuard {
 }
 
 impl MessageRowWidgets {
-    fn clear_quiz_choice(&mut self) {
-        self.quiz_choice.set(None);
-        if self.rendered_message.as_ref().is_some_and(|message| {
-            matches!(&message.content, crate::model::Content::Poll { state, .. } if state.quiz)
-        }) {
-            self.action_generation.set(self.action_generation.get().wrapping_add(1));
-            if let Some(token) = self.decode_token.take() { token.cancel(); }
-            while let Some(child) = self.media.first_child() { self.media.remove(&child); }
+    fn clear_poll_choices(&mut self) {
+        self.poll_choices = Default::default();
+        if self
+            .rendered_message
+            .as_ref()
+            .is_some_and(|message| matches!(&message.content, crate::model::Content::Poll { .. }))
+        {
+            self.action_generation
+                .set(self.action_generation.get().wrapping_add(1));
+            if let Some(token) = self.decode_token.take() {
+                token.cancel();
+            }
+            while let Some(child) = self.media.first_child() {
+                self.media.remove(&child);
+            }
             self.rendered_message = None;
         }
     }
@@ -228,11 +235,16 @@ impl MessageRowWidgets {
                 && matches!((&previous.content, &message.content),
                     (crate::model::Content::Poll { question: old_question, options: old_options, state: old_state },
                      crate::model::Content::Poll { question, options, state })
-                    if old_state.quiz && state.quiz && old_state.selected.is_empty() && state.selected.is_empty()
+                    if old_state.quiz == state.quiz
+                        && (!state.quiz || (old_state.selected.is_empty() && state.selected.is_empty()))
+                        && old_state.selectable == state.selectable
                         && old_question == question && old_options == options)
         });
-        if !preserve_choice {
-            self.quiz_choice.set(None);
+        let confirmed_choice = matches!(&message.content,
+            crate::model::Content::Poll { state, .. }
+            if self.poll_choices.borrow().as_ref() == Some(&state.selected));
+        if !preserve_choice || confirmed_choice {
+            self.poll_choices = Default::default();
         }
         if let Some(token) = self.decode_token.take() {
             token.cancel();
@@ -254,10 +266,10 @@ impl MessageRowWidgets {
             }
         };
         let rendered = if album.is_empty() {
-            crate::native_media_widgets::build_media_widget_with_quiz_choice(
+            crate::native_media_widgets::build_media_widget_with_poll_choices(
                 message,
                 forward,
-                self.quiz_choice.clone(),
+                self.poll_choices.clone(),
             )
         } else {
             crate::native_media_widgets::build_album_widget(album, forward)
@@ -604,7 +616,7 @@ impl RelmListItem for MessageRow {
                 audio_controls: None,
                 rendered_message: None,
                 rendered_album: Vec::new(),
-                quiz_choice: Default::default(),
+                poll_choices: Default::default(),
                 action_generation,
                 decode_token: None,
                 menu_target,
@@ -742,10 +754,22 @@ impl RelmListItem for MessageRow {
             self.audio_registry.borrow_mut().remove(&previous.id);
         }
         let sender = self.pointer_sender.clone();
+        let account = self.account;
         widgets.bind_media(
             &self.message,
             &self.album,
-            std::rc::Rc::new(move |input| sender.input(input)),
+            std::rc::Rc::new(move |input| {
+                let input = match input {
+                    Input::MediaAction(
+                        action @ crate::native_media::NativeMediaAction::VotePoll { .. },
+                    )
+                    | Input::MediaAction(
+                        action @ crate::native_media::NativeMediaAction::VoteQuiz { .. },
+                    ) => Input::AccountMediaAction(account, action),
+                    other => other,
+                };
+                sender.input(input);
+            }),
         );
         if let Some(voice) = &self.audio {
             if widgets.audio_controls.is_none() {
@@ -786,7 +810,7 @@ impl RelmListItem for MessageRow {
 
     fn unbind(&mut self, widgets: &mut Self::Widgets, _root: &mut Self::Root) {
         widgets.unbind_body();
-        widgets.clear_quiz_choice();
+        widgets.clear_poll_choices();
     }
 }
 
@@ -882,14 +906,14 @@ mod tests {
             state.selected = vec![0];
         }
         widgets.bind_media(&message, &[], send.clone());
-        assert_eq!(widgets.quiz_choice.get(), None);
+        assert_eq!(*widgets.poll_choices.borrow(), None);
         if let crate::model::Content::Poll { state, .. } = &mut message.content {
             state.selected.clear();
         }
         widgets.bind_media(&message, &[], send);
         controls(&widgets).0[0].set_active(true);
-        widgets.clear_quiz_choice();
-        assert_eq!(widgets.quiz_choice.get(), None);
+        widgets.clear_poll_choices();
+        assert_eq!(*widgets.poll_choices.borrow(), None);
         assert!(widgets.media.first_child().is_none());
     }
 

@@ -342,6 +342,7 @@ impl PendingSend {
 /// component.
 struct MessageRow<S = ComponentSender<NativeApplication>> {
     id: String,
+    account: crate::account::AccountId,
     /// Day and unread separators shown above the row.
     separator: String,
     /// Whether the unread marker is drawn above the row.
@@ -378,6 +379,7 @@ impl<S> MessageRow<S> {
     /// Whether rebinding `other` would draw exactly this row.
     fn renders_like(&self, other: &Self) -> bool {
         self.message == other.message
+            && self.account == other.account
             && self.starred == other.starred
             && self.album == other.album
             && self.collapsed == other.collapsed
@@ -801,6 +803,10 @@ pub enum Input {
     Quit,
     ShutdownComplete,
     MediaAction(crate::native_media::NativeMediaAction),
+    AccountMediaAction(
+        crate::account::AccountId,
+        crate::native_media::NativeMediaAction,
+    ),
     ShowPreferences,
     OpenThemesFolder,
     ThemesFolderPrepared(bool),
@@ -2447,3 +2453,7 @@ mod history_runtime_tests;
 #[cfg(test)]
 #[path = "application/viewer_runtime_tests.rs"]
 mod viewer_runtime_tests;
+
+#[cfg(test)]
+#[path = "application/poll_runtime_tests.rs"]
+mod poll_runtime_tests;
