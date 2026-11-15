@@ -233,6 +233,7 @@ pub(super) fn message_row<S>(
     );
     MessageRow {
         id: message.id.clone(),
+        account: crate::account::AccountId::FIRST,
         separator,
         unread_divider,
         sender: sender.into_owned(),

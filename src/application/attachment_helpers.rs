@@ -164,6 +164,7 @@ impl NativeApplication {
     }
 
     pub(super) fn stage_clipboard_image(&mut self, chat: String, pixels: ClipboardPixels) {
+        let chat = self.composer.resolve_chat(&chat).to_owned();
         if self.open_chat.active_chat.as_deref() != Some(&chat) || !self.can_attach() {
             self.status = gettext("Choose an available conversation before pasting an image");
             return;

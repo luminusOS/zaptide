@@ -1,10 +1,11 @@
-use super::{Content, Message, gettext};
+use super::{Content, Message, gdk, gettext};
 
 /// Who sent a photo or video, when, its caption, and a one-line summary of
 /// the file, for the viewer.
 #[derive(Clone)]
 pub(crate) struct ViewerDetails {
     pub(super) title: String,
+    pub(crate) avatar: Option<gdk::Texture>,
     pub(super) subtitle: String,
     pub(super) caption: Option<String>,
     pub(super) thumbnail: Option<Vec<u8>>,
@@ -47,6 +48,7 @@ impl ViewerDetails {
         };
         Self {
             title,
+            avatar: None,
             subtitle: crate::util::clock(message.timestamp),
             caption: caption.filter(|caption| !caption.is_empty()),
             thumbnail: message.thumbnail.clone(),

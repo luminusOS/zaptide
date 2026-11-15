@@ -71,6 +71,17 @@ only request phone history after it is exhausted. `Command::FetchOlder` uses
 `sync_type == ON_DEMAND`. A named chat with no messages requests history on
 load or open, anchored at the present with an empty message ID.
 
+Verified privacy-ID mappings join both archived histories in a savepoint and
+repair older splits when opening the archive. Never infer a mapping from a
+name or avatar. Keep unique message rowids, attachment keys and poll senders.
+Resolve old completion addresses without changing their request, attempt or
+payload guards. Publish identity redirects only after the owning batch commits;
+redirect the open composer before replacing the chat list and reject old pages.
+Authorize queued sends against the canonical destination. Keep ordinary drafts
+separate from edit buffers and resolve delayed picker results through verified
+aliases. A revocation already confirmed in either history invalidates pending
+rollback ownership; restore that ownership if the enclosing batch rolls back.
+
 Group names and members use `groups().get_metadata` through `pump_group_info`,
 one request at a time, two per five-second tick. Retry failures from 30 seconds
 with doubling backoff, at most seven tries. Item-not-found, forbidden and
@@ -124,6 +135,13 @@ the vote snapshot. `poll_history.rs` serializes requests, retrying from 30
 seconds to 15 minutes without a UI timer. Request timestamps are Unix seconds
 despite the library and wire field names ending in `Ms`; never multiply by
 1,000. A repeated question without a usable vote snapshot cannot end recovery.
+
+Inline voting requires explicit submission and carries account, chat and
+message identity. Keep unsent choices through result updates, including a newer
+draft made while an earlier vote is pending. Clear a matching confirmed draft
+or a recycled poll's draft; stale controls must not submit or change its
+replacement. Counts change only through backend events. Quizzes hide results
+until answered and cannot be answered again.
 
 ## Downloads and message presentation
 

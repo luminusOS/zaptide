@@ -32,8 +32,6 @@
 .zaptide-bubble { padding: 8px 11px; border-radius: 13px; }
 .zaptide-bubble.incoming { background-color: var(--zaptide-bubble-in); color: var(--zaptide-bubble-in-text); }
 .zaptide-bubble.outgoing { background-color: var(--zaptide-bubble-out); color: var(--zaptide-bubble-out-text); }
-.zaptide-bubble.incoming .zaptide-link-background { color: var(--zaptide-bubble-in); }
-.zaptide-bubble.outgoing .zaptide-link-background { color: var(--zaptide-bubble-out); }
 .zaptide-message-selected { border-radius: 12px; background-color: color-mix(in srgb, var(--accent-bg-color) 15%, transparent); }
 .zaptide-typing-bubble { padding: 13px 14px; border-bottom-left-radius: 4px; }
 .zaptide-typing-dot { min-width: 7px; min-height: 7px; border-radius: 9999px; background-color: currentColor; opacity: 0.35; animation: zaptide-typing 1.2s ease-in-out infinite; }
@@ -47,6 +45,11 @@
 .zaptide-message-item:focus-visible .zaptide-bubble { outline: 2px solid var(--accent-color); outline-offset: 2px; }
 .zaptide-media-card { padding: 8px 12px; margin-top: 4px; background-color: color-mix(in srgb, currentColor 8%, transparent); }
 .zaptide-link-card:hover { background-color: color-mix(in srgb, currentColor 12%, transparent); }
+.zaptide-poll { padding: 4px; }
+.zaptide-poll-option { padding: 10px; border-radius: 9px; background-color: color-mix(in srgb, currentColor 7%, transparent); }
+.zaptide-poll-option:hover { background-color: color-mix(in srgb, currentColor 11%, transparent); }
+.zaptide-poll-option:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 2px; }
+.zaptide-poll-option.selected { font-weight: bold; }
 .zaptide-link-thumbnail { border-radius: 8px; }
 .zaptide-sender-blue { color: var(--blue-3); }
 .zaptide-sender-green { color: var(--green-4); }
@@ -76,7 +79,7 @@ button.zaptide-jump-button { min-width: 42px; min-height: 42px; padding: 0; }
 .zaptide-reaction.chosen { background-color: color-mix(in srgb, var(--accent-bg-color) 25%, transparent); }
 .zaptide-reaction > label { transition: transform 120ms ease-out; }
 .zaptide-reaction:hover > label { transform: scale(1.25); }
-.zaptide-quick-reactions { padding: 2px 4px; border-radius: 19px; }
+.zaptide-quick-reactions { padding: 2px 4px; border-radius: 19px; background-color: var(--popover-bg-color); color: var(--popover-fg-color); }
 .zaptide-quick-reactions .zaptide-reaction { font-size: 1.2em; min-width: 34px; min-height: 34px; }
 .zaptide-reaction-chip { min-height: 0; min-width: 0; padding: 1px 8px; border-radius: 9999px; font-size: 0.9em; background-color: var(--window-bg-color); box-shadow: 0 0 0 1px color-mix(in srgb, currentColor 12%, transparent); }
 .zaptide-reaction-chip:hover { background-color: color-mix(in srgb, currentColor 8%, var(--window-bg-color)); }
@@ -84,6 +87,7 @@ button.zaptide-jump-button { min-width: 42px; min-height: 42px; padding: 0; }
 .zaptide-sticker-tab { border-radius: 8px; min-width: 36px; min-height: 36px; padding: 2px; }
 .zaptide-sticker-tab:checked { background-color: color-mix(in srgb, currentColor 12%, transparent); }
 .zaptide-sticker-picker > contents { padding: 0; }
+.zaptide-sticker-grid > flowboxchild { padding: 0; background: none; box-shadow: none; }
 .zaptide-unread-pill.compact { font-size: 0.75em; min-width: 1.2em; padding: 0 5px; }
 .zaptide-unread-pill.muted { color: var(--window-fg-color); background-color: color-mix(in srgb, currentColor 18%, transparent); }
 .zaptide-composer { border-radius: 18px; background-color: color-mix(in srgb, currentColor 8%, transparent); }

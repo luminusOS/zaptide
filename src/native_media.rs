@@ -532,6 +532,12 @@ pub enum NativeMediaAction {
         message: String,
         choice: usize,
     },
+    /// Submit or withdraw an ordinary poll vote using explicit option indices.
+    VotePoll {
+        chat: String,
+        message: String,
+        choices: Vec<usize>,
+    },
     /// Reply to an interactive message with one of its quick-reply buttons.
     AnswerButton {
         chat: String,
@@ -557,6 +563,7 @@ impl fmt::Debug for NativeMediaAction {
             Self::ViewVideo(_) => formatter.write_str("ViewVideo(..)"),
             Self::Download { .. } => formatter.write_str("Download { .. }"),
             Self::VoteQuiz { .. } => formatter.write_str("VoteQuiz { .. }"),
+            Self::VotePoll { .. } => formatter.write_str("VotePoll { .. }"),
             Self::AnswerButton { .. } => formatter.write_str("AnswerButton { .. }"),
             Self::AnswerListRow { .. } => formatter.write_str("AnswerListRow { .. }"),
         }

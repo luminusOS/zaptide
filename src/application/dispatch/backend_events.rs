@@ -100,6 +100,73 @@ pub(super) fn handle_backend_ready(
             Event::Chats(chats) => {
                 app.apply_chat_changes(vec![ChatChange::Snapshot(chats)]);
             }
+            Event::ChatIdentity { alias, canonical } => {
+                app.contacts.remove(&alias);
+                let active_alias = app.open_chat.active_chat.as_deref() == Some(&alias);
+                app.composer.merge_chat(&alias, &canonical, active_alias);
+                if let Some(request) = app.pending_composer_request.as_mut() {
+                    request.remap_chat(&alias, &canonical);
+                }
+                if let Some(pending) = app.pending_send.as_mut()
+                    && pending.chat == alias
+                {
+                    pending.chat = canonical.clone();
+                }
+                for context in [&mut app.open_chat.editing, &mut app.open_chat.reply_to]
+                    .into_iter()
+                    .flatten()
+                {
+                    if context.0 == alias {
+                        context.0 = canonical.clone();
+                    }
+                }
+                if let Some((chat, _, _)) = app.open_chat.pending_edit.as_mut()
+                    && *chat == alias
+                {
+                    *chat = canonical.clone();
+                }
+                if let Some(paths) = app.pending_attachments.remove(&alias) {
+                    app.pending_attachments
+                        .entry(canonical.clone())
+                        .or_default()
+                        .extend(paths);
+                }
+                if let Some(image) = app.pending_clipboard_images.remove(&alias) {
+                    app.pending_clipboard_images
+                        .insert(canonical.clone(), image);
+                }
+                let documents: Vec<_> = app
+                    .document_attachments
+                    .iter()
+                    .filter(|(chat, _)| chat == &alias)
+                    .cloned()
+                    .collect();
+                for document in documents {
+                    app.document_attachments.remove(&document);
+                    app.document_attachments
+                        .insert((canonical.clone(), document.1));
+                }
+                if let Some(draft) = app.drafts.remove(&alias) {
+                    let stored = app.drafts.entry(canonical.clone()).or_default();
+                    if stored.is_empty() {
+                        *stored = draft;
+                    } else if *stored != draft && !draft.is_empty() {
+                        stored.push('\n');
+                        stored.push_str(&draft);
+                    }
+                }
+                if active_alias || app.open_chat.active_chat.as_deref() == Some(&canonical) {
+                    app.draft = app.composer.draft(&canonical).to_owned();
+                    if app.open_chat.editing.is_none() {
+                        app.drafts.insert(canonical.clone(), app.draft.clone());
+                    }
+                    app.composer_buffer.set_text(&app.draft);
+                }
+                if active_alias {
+                    app.open_chat.active_chat = Some(canonical);
+                    app.transcript_requests.reload();
+                }
+            }
             Event::ChatUpdated(chat) => {
                 app.apply_chat_changes(vec![ChatChange::Update(*chat)]);
                 app.read_open_chat();

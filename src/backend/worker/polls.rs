@@ -436,6 +436,7 @@ impl Worker {
         draft: PollDraft,
         result: Result<super::super::CreatedPoll, String>,
     ) {
+        let chat = self.canonical_str(&chat);
         let created = match result {
             Ok(created) => created,
             Err(error) => {
@@ -574,6 +575,7 @@ impl Worker {
         at: i64,
         result: Result<String, String>,
     ) {
+        let chat = self.canonical_str(&chat);
         if !self.poll_sending.remove(&(chat.clone(), id.clone())) {
             return;
         }

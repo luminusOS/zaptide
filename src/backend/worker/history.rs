@@ -478,7 +478,7 @@ impl Worker {
                 self.poll_history.finish(&chat, &id);
             }
             for (chat, id) in effects.revoked {
-                self.pending_revokes.remove(&(chat, id));
+                self.forget_pending_revoke(&chat, &id);
             }
             for id in effects.groups {
                 self.request_group_info(&id, false);

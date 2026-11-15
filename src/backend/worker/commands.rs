@@ -14,7 +14,7 @@ impl Worker {
             // A finished sweep releases the running slot even after an account change.
             self.retention.running = false;
         }
-        let command = match command {
+        let mut command = match command {
             Command::Completed(completion) if completion.generation != self.session_generation => {
                 completion.done.discard();
                 return;
@@ -28,7 +28,7 @@ impl Worker {
                 done: Done::ContactSent { .. }
             })
         );
-        let destination = match &command {
+        let destination = match &mut command {
             Command::SendText { chat, .. }
             | Command::SendContact { chat, .. }
             | Command::SendVoice { chat, .. }
@@ -42,10 +42,12 @@ impl Worker {
             _ => None,
         };
         if let Some(chat) = destination {
+            *chat = self.canonical_str(chat);
+            let chat = chat.clone();
             let writable = self.privacy.privacy_ready
-                && match self.archive.chat(chat) {
+                && match self.archive.chat(&chat) {
                     Ok(Some(chat)) => chat.can_send(),
-                    Ok(None) => ChatKind::from_id(chat) != ChatKind::Broadcast,
+                    Ok(None) => ChatKind::from_id(&chat) != ChatKind::Broadcast,
                     Err(_) => false,
                 };
             if !writable {
@@ -368,6 +370,16 @@ impl Worker {
                     match client.contacts().is_on_whatsapp(&[jid]).await {
                         Ok(results) => {
                             let registered = results.iter().any(|result| result.is_registered);
+                            let lid = results
+                                .iter()
+                                .find(|result| {
+                                    result.is_registered
+                                        && result.jid.user_base() == phone
+                                        && result.jid.is_pn()
+                                })
+                                .and_then(|result| result.lid.as_ref())
+                                .filter(|lid| lid.is_lid())
+                                .map(|lid| lid.user_base().to_owned());
                             let _ = Completion {
                                 generation: session_generation,
                                 done: Done::ContactChecked {
@@ -376,6 +388,7 @@ impl Worker {
                                     first_name,
                                     to_phone,
                                     registered,
+                                    lid,
                                 },
                             }
                             .send(&commands);
@@ -408,6 +421,7 @@ impl Worker {
                         first_name,
                         to_phone,
                         registered,
+                        lid,
                     },
             }) => {
                 if !self.privacy.privacy_ready || self.archive_cleanup_failed {
@@ -421,6 +435,9 @@ impl Worker {
                     return;
                 }
                 let id = format!("{phone}@s.whatsapp.net");
+                if let Some(lid) = lid {
+                    self.learn_lid(&lid, &phone);
+                }
                 if let Some(full_name) = full_name.clone() {
                     let _ = self.commands.send(Command::SaveContact {
                         session_generation: Some(session_generation),
@@ -823,6 +840,22 @@ impl Worker {
                     self.answer_sends.remove(&id);
                     return;
                 }
+                let error = error.filter(|_| {
+                    !self
+                        .archive
+                        .message(&chat, &id)
+                        .ok()
+                        .flatten()
+                        .is_some_and(|row| {
+                            matches!(
+                                row.status,
+                                Delivery::Sent
+                                    | Delivery::Delivered
+                                    | Delivery::Read
+                                    | Delivery::Played
+                            )
+                        })
+                });
                 let status = match &error {
                     Some(_) => Delivery::Failed,
                     None => Delivery::Sent,

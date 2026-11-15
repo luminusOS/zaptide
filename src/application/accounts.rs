@@ -862,6 +862,18 @@ pub(super) fn apply_hidden_event(
         Event::Chats(chats) => {
             session.chat_snapshots = chats.into_iter().map(std::rc::Rc::new).collect()
         }
+        Event::ChatIdentity { alias, canonical } => {
+            session.contacts.remove(&alias);
+            if let Some(draft) = session.drafts.remove(&alias) {
+                let stored = session.drafts.entry(canonical).or_default();
+                if stored.is_empty() {
+                    *stored = draft;
+                } else if *stored != draft && !draft.is_empty() {
+                    stored.push('\n');
+                    stored.push_str(&draft);
+                }
+            }
+        }
         Event::ChatUpdated(chat) => {
             session.chat_snapshots.retain(|known| known.id != chat.id);
             let index = session

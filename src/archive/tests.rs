@@ -27,6 +27,38 @@ pub(crate) fn message(chat: &str, id: &str, timestamp: i64, from_me: bool) -> Me
 }
 
 #[test]
+fn learning_a_privacy_id_joins_both_halves_of_a_direct_conversation() {
+    let archive = Archive::in_memory().unwrap();
+    let phone = "15550001001@s.whatsapp.net";
+    let privacy = "900001@lid";
+    archive.ensure_chat(phone, "15550001001").unwrap();
+    archive.ensure_chat(privacy, "~Synthetic contact").unwrap();
+    archive
+        .insert_message(&message(phone, "sent", 1, true), None)
+        .unwrap();
+    archive
+        .insert_message(&message(privacy, "reply", 2, false), None)
+        .unwrap();
+    archive.put_lid("900001", "15550001001").unwrap();
+    let chats = archive.chats().unwrap();
+    assert_eq!(
+        chats.len(),
+        1,
+        "a verified identity mapping must join both chats"
+    );
+    assert_eq!(chats[0].id, phone);
+    let messages = archive.messages(phone, None, 10).unwrap();
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| message.id.as_str())
+            .collect::<Vec<_>>(),
+        ["sent", "reply"]
+    );
+    assert_eq!(messages[1].sender, phone);
+}
+
+#[test]
 fn group_message_id_collision_keeps_first_sender_and_content() {
     let archive = Archive::in_memory().unwrap();
     let chat = "1-2@g.us";

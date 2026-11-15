@@ -6,7 +6,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: zaptide\n"
 "Report-Msgid-Bugs-To: https://github.com/luminusOS/zaptide/issues\n"
-"POT-Creation-Date: 2026-11-13 23:26-0300\n"
+"POT-Creation-Date: 2026-11-15 15:17-0300\n"
 "PO-Revision-Date: 2026-10-13 17:25-0300\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -17,9 +17,9 @@ msgstr ""
 "Plural-Forms: nplurals=2; plural=(n > 1);\n"
 
 #: src/application/accounts.rs:151 src/application/accounts.rs:152
-#: src/application/dispatch/backend_events.rs:380
+#: src/application/dispatch/backend_events.rs:447
 #: src/application/dispatch.rs:225 src/application/dispatch.rs:226
-#: src/application/dispatch.rs:359 src/application.rs:2349
+#: src/application/dispatch.rs:359 src/application.rs:2342
 msgid "Could not save preferences"
 msgstr "Não foi possível salvar as preferências"
 
@@ -58,31 +58,31 @@ msgstr "Lendo imagem da área de transferência"
 msgid "Could not read clipboard image"
 msgstr "Não foi possível ler a imagem da área de transferência"
 
-#: src/application/attachment_helpers.rs:168
+#: src/application/attachment_helpers.rs:169
 msgid "Choose an available conversation before pasting an image"
 msgstr "Escolha uma conversa disponível antes de colar uma imagem"
 
-#: src/application/attachment_helpers.rs:182
+#: src/application/attachment_helpers.rs:183
 msgid "Send or clear the staged attachment before pasting an image"
 msgstr "Envie ou remova o anexo pendente antes de colar uma imagem"
 
-#: src/application/attachment_helpers.rs:186
+#: src/application/attachment_helpers.rs:187
 msgid "Clipboard image ready"
 msgstr "Imagem da área de transferência pronta"
 
-#: src/application/attachment_helpers.rs:219
+#: src/application/attachment_helpers.rs:220
 msgid "Opening link"
 msgstr "Abrindo link"
 
-#: src/application/attachment_helpers.rs:221
+#: src/application/attachment_helpers.rs:222
 msgid "Link is not supported"
 msgstr "Link não suportado"
 
-#: src/application/attachment_helpers.rs:257
+#: src/application/attachment_helpers.rs:258
 msgid "Choose save location"
 msgstr "Escolher onde salvar"
 
-#: src/application/attachment_helpers.rs:259
+#: src/application/attachment_helpers.rs:260
 msgid "Could not open save dialog"
 msgstr "Não foi possível abrir a janela para salvar"
 
@@ -119,15 +119,15 @@ msgid "Audio playback could not continue."
 msgstr "A reprodução de áudio não pôde continuar."
 
 #: src/application/bubbles.rs:115 src/application/bubbles.rs:118
-#: src/application/bubbles.rs:231 src/application/dialogs.rs:1148
+#: src/application/bubbles.rs:231 src/application/dialogs.rs:1160
 msgid "Starred"
 msgstr "Favorita"
 
-#: src/application/bubbles.rs:345 src/application/reaction_drawer.rs:417
+#: src/application/bubbles.rs:346 src/application/reaction_drawer.rs:467
 msgid "Remove reaction"
 msgstr "Remover reação"
 
-#: src/application/bubbles.rs:364 src/application/reaction_drawer.rs:300
+#: src/application/bubbles.rs:365 src/application/reaction_drawer.rs:301
 msgid "More Reactions"
 msgstr "Mais reações"
 
@@ -273,19 +273,19 @@ msgid "Camera off"
 msgstr "Câmera desligada"
 
 #: src/application/calls/window.rs:498 src/application/stars.rs:84
-#: src/native_media_widgets/viewer/details.rs:18
+#: src/native_media_widgets/viewer/details.rs:19
 msgid "You"
 msgstr "Você"
 
-#: src/application/chats.rs:138
+#: src/application/chats.rs:202
 msgid "Loading messages"
 msgstr "Carregando mensagens"
 
-#: src/application/chats.rs:243
+#: src/application/chats.rs:307
 msgid "_Close Chat"
 msgstr "_Fechar conversa"
 
-#: src/application/chats.rs:247
+#: src/application/chats.rs:311
 msgid "Copy _Transcript"
 msgstr "Copiar _transcrição"
 
@@ -308,10 +308,10 @@ msgstr "Enviar mensagem de voz"
 
 #: src/application/composer.rs:235 src/application/contact_sharing.rs:442
 #: src/application/dialogs.rs:54 src/application/dialogs.rs:79
-#: src/application/dialogs.rs:279 src/application/dialogs.rs:456
+#: src/application/dialogs.rs:283 src/application/dialogs.rs:463
 #: src/application/dispatch.rs:591 src/application/document_safety.rs:196
-#: src/application/link_page.rs:85 src/application.rs:1017
-#: src/application.rs:2389
+#: src/application/link_page.rs:85 src/application.rs:1024
+#: src/application.rs:2382
 msgid "Cancel"
 msgstr "Cancelar"
 
@@ -393,9 +393,10 @@ msgid "Sending contact"
 msgstr "Enviando contato"
 
 #: src/application/contact_sharing.rs:78 src/application/dispatch.rs:258
-#: src/application/dispatch.rs:402 src/application/dispatch.rs:691
-#: src/application/dispatch.rs:706 src/application/dispatch.rs:713
-#: src/application/dispatch.rs:954 src/application/dispatch.rs:1017
+#: src/application/dispatch.rs:402 src/application/dispatch.rs:735
+#: src/application/dispatch.rs:750 src/application/dispatch.rs:765
+#: src/application/dispatch.rs:772 src/application/dispatch.rs:1016
+#: src/application/dispatch.rs:1079
 msgid "Backend unavailable"
 msgstr "Serviço indisponível"
 
@@ -428,7 +429,7 @@ msgstr "Importar arquivo vCard…"
 msgid "Search names or phone numbers"
 msgstr "Buscar nomes ou números de telefone"
 
-#: src/application/contact_sharing.rs:285 src/application/dialogs.rs:322
+#: src/application/contact_sharing.rs:285 src/application/dialogs.rs:329
 msgid "Search contacts"
 msgstr "Buscar contatos"
 
@@ -485,43 +486,43 @@ msgstr "Esta conversa é somente leitura."
 msgid "Finish editing before sending attachments."
 msgstr "Termine a edição antes de enviar anexos."
 
-#: src/application/conversation.rs:301
+#: src/application/conversation.rs:303
 msgid "Sending attachments"
 msgstr "Enviando anexos"
 
-#: src/application/conversation.rs:312
+#: src/application/conversation.rs:314
 msgid "Sending clipboard image"
 msgstr "Enviando imagem da área de transferência"
 
-#: src/application/conversation.rs:325
+#: src/application/conversation.rs:327
 msgid "Sending message"
 msgstr "Enviando mensagem"
 
-#: src/application/conversation.rs:331
+#: src/application/conversation.rs:333
 msgid "Backend unavailable. Draft kept."
 msgstr "Serviço indisponível. O rascunho foi mantido."
 
-#: src/application/conversation.rs:410
+#: src/application/conversation.rs:409
 msgid "Conversation loaded"
 msgstr "Conversa carregada"
 
-#: src/application/conversation.rs:459
+#: src/application/conversation.rs:458
 msgid "Message updated"
 msgstr "Mensagem atualizada"
 
-#: src/application/conversation.rs:467
+#: src/application/conversation.rs:466
 msgid "Edit could not be saved. Draft kept."
 msgstr "Não foi possível salvar a edição. O rascunho foi mantido."
 
-#: src/application/conversation.rs:547
+#: src/application/conversation.rs:546
 msgid "Message sent"
 msgstr "Mensagem enviada"
 
-#: src/application/conversation.rs:573
+#: src/application/conversation.rs:572
 msgid "Message could not be sent. Draft kept."
 msgstr "Não foi possível enviar a mensagem. O rascunho foi mantido."
 
-#: src/application/conversation.rs:798
+#: src/application/conversation.rs:800
 msgid "Transcript copied"
 msgstr "Transcrição copiada"
 
@@ -533,7 +534,7 @@ msgstr "Arquivar conversa?"
 msgid "Archive"
 msgstr "Arquivar"
 
-#: src/application/dialogs.rs:80 src/application/dialogs.rs:1104
+#: src/application/dialogs.rs:80 src/application/dialogs.rs:1112
 #: src/application/profile_dialog.rs:122
 msgid "Remove"
 msgstr "Remover"
@@ -554,7 +555,7 @@ msgstr "Adicionar opção"
 msgid "Allow Multiple Answers"
 msgstr "Permitir várias respostas"
 
-#: src/application/dialogs.rs:120
+#: src/application/dialogs.rs:120 src/native_media_widgets/poll.rs:43
 msgid "Quiz"
 msgstr "Quiz"
 
@@ -572,7 +573,7 @@ msgid "Correct answer for option {number}"
 msgstr "Resposta correta para a opção {number}"
 
 #: src/application/dialogs.rs:209 src/application/dialogs.rs:213
-#: src/native_media_widgets/widget.rs:197
+#: src/native_media_widgets/poll.rs:59
 msgid "Correct answer"
 msgstr "Resposta correta"
 
@@ -580,119 +581,119 @@ msgstr "Resposta correta"
 msgid "Remove option"
 msgstr "Remover opção"
 
-#: src/application/dialogs.rs:270
+#: src/application/dialogs.rs:274
 msgid "Options"
 msgstr "Opções"
 
-#: src/application/dialogs.rs:317
+#: src/application/dialogs.rs:324
 msgid "New Chat"
 msgstr "Nova conversa"
 
-#: src/application/dialogs.rs:341
+#: src/application/dialogs.rs:348
 msgid "New Contact"
 msgstr "Novo contato"
 
-#: src/application/dialogs.rs:342
+#: src/application/dialogs.rs:349
 msgid "Message a phone number"
 msgstr "Enviar mensagem a um número"
 
-#: src/application/dialogs.rs:429
+#: src/application/dialogs.rs:436
 msgid "New contact"
 msgstr "Novo contato"
 
-#: src/application/dialogs.rs:443
+#: src/application/dialogs.rs:450
 msgid "Phone number, including country code"
 msgstr "Número de telefone, com o código do país"
 
-#: src/application/dialogs.rs:448
+#: src/application/dialogs.rs:455
 msgid "Name (optional)"
 msgstr "Nome (opcional)"
 
-#: src/application/dialogs.rs:457
+#: src/application/dialogs.rs:464
 msgid "Add contact"
 msgstr "Adicionar contato"
 
-#: src/application/dialogs.rs:497
+#: src/application/dialogs.rs:504
 msgid "Mention"
 msgstr "Mencionar"
 
-#: src/application/dialogs.rs:502
+#: src/application/dialogs.rs:509
 msgid "Search participants"
 msgstr "Buscar participantes"
 
-#: src/application/dialogs.rs:518
+#: src/application/dialogs.rs:525
 msgid "No participants match this search."
 msgstr "Nenhum participante corresponde à busca."
 
-#: src/application/dialogs.rs:646
+#: src/application/dialogs.rs:653
 msgid "Forward To"
 msgstr "Encaminhar para"
 
-#: src/application/dialogs.rs:651 src/application/sidebar.rs:140
+#: src/application/dialogs.rs:658 src/application/sidebar.rs:140
 msgid "Search chats"
 msgstr "Buscar conversas"
 
-#: src/application/dialogs.rs:675
+#: src/application/dialogs.rs:682
 msgid "Forwarding"
 msgstr "Encaminhando"
 
-#: src/application/dialogs.rs:716 src/application.rs:1034
+#: src/application/dialogs.rs:723 src/application.rs:1041
 msgid "Forward"
 msgstr "Encaminhar"
 
-#: src/application/dialogs.rs:1112 src/application.rs:2012
+#: src/application/dialogs.rs:1120 src/application.rs:2005
 msgid "Unstar"
 msgstr "Desfavoritar"
 
-#: src/application/dialogs.rs:1132
+#: src/application/dialogs.rs:1144
 msgid "Your recently used stickers appear here."
 msgstr "As figurinhas usadas recentemente aparecem aqui."
 
-#: src/application/dialogs.rs:1133
+#: src/application/dialogs.rs:1145
 msgid "To add your own, copy .webp files into:"
 msgstr ""
 
-#: src/application/dialogs.rs:1137
+#: src/application/dialogs.rs:1149
 msgid "No Stickers Yet"
 msgstr "Nenhuma figurinha ainda"
 
-#: src/application/dialogs.rs:1139 src/application/sidebar.rs:177
+#: src/application/dialogs.rs:1151 src/application/sidebar.rs:177
 #: src/application/sidebar.rs:179
 msgid "All"
 msgstr "Todas"
 
-#: src/application/dialogs.rs:1144
+#: src/application/dialogs.rs:1156
 #, fuzzy
 msgid "No Starred Stickers"
 msgstr "Nenhuma mensagem favorita"
 
-#: src/application/dialogs.rs:1145
+#: src/application/dialogs.rs:1157
 #, fuzzy
 msgid "Star a sticker in a chat to keep it here."
 msgstr "Favorite uma mensagem pelo menu dela para encontrá-la aqui."
 
-#: src/application/dialogs.rs:1238
+#: src/application/dialogs.rs:1250
 msgid "Phone"
 msgstr "Telefone"
 
-#: src/application/dialogs.rs:1246 src/native_media_widgets/contacts.rs:65
+#: src/application/dialogs.rs:1258 src/native_media_widgets/contacts.rs:65
 msgid "Copy phone number"
 msgstr "Copiar número de telefone"
 
-#: src/application/dialogs.rs:1331 src/application/dialogs.rs:1435
-#: src/application/dialogs.rs:1500
+#: src/application/dialogs.rs:1343 src/application/dialogs.rs:1447
+#: src/application/dialogs.rs:1512
 msgid "Starred Messages"
 msgstr "Mensagens favoritas"
 
-#: src/application/dialogs.rs:1378
+#: src/application/dialogs.rs:1390
 msgid "Participants"
 msgstr "Participantes"
 
-#: src/application/dialogs.rs:1442
+#: src/application/dialogs.rs:1454
 msgid "No Starred Messages"
 msgstr "Nenhuma mensagem favorita"
 
-#: src/application/dialogs.rs:1443
+#: src/application/dialogs.rs:1455
 msgid "Star a message from its menu to find it here."
 msgstr "Favorite uma mensagem pelo menu dela para encontrá-la aqui."
 
@@ -702,7 +703,7 @@ msgstr "Escolha uma conversa que aceite mensagens antes de anexar arquivos"
 
 #: src/application/dispatch/attachments.rs:18
 #: src/application/dispatch/attachments.rs:59
-#: src/application/dispatch/attachments.rs:111
+#: src/application/dispatch/attachments.rs:112
 msgid "Clear the staged clipboard image before adding files"
 msgstr "Remova a imagem da área de transferência antes de adicionar arquivos"
 
@@ -716,7 +717,7 @@ msgstr ""
 "A enquete foi enviada, mas não foi possível salvar sua chave de votação."
 
 #: src/application/dispatch/backend_events.rs:13
-#: src/application/dispatch/backend_events.rs:458
+#: src/application/dispatch/backend_events.rs:525
 msgid "Poll creation could not be completed."
 msgstr "Não foi possível concluir a criação da enquete."
 
@@ -725,19 +726,20 @@ msgid "Your vote was sent, but could not be saved locally."
 msgstr "Seu voto foi enviado, mas não foi possível salvá-lo localmente."
 
 #: src/application/dispatch/backend_events.rs:20
-#: src/application/dispatch/backend_events.rs:462
+#: src/application/dispatch/backend_events.rs:529
+#: src/application/poll_runtime_tests.rs:119
 msgid "Could not send your vote."
 msgstr "Não foi possível enviar seu voto."
 
-#: src/application/dispatch/backend_events.rs:166
+#: src/application/dispatch/backend_events.rs:233
 msgid "No older messages available"
 msgstr "Não há mensagens mais antigas"
 
-#: src/application/dispatch/backend_events.rs:374
+#: src/application/dispatch/backend_events.rs:441
 msgid "Profile saved"
 msgstr "Perfil salvo"
 
-#: src/application/dispatch/backend_events.rs:405
+#: src/application/dispatch/backend_events.rs:472
 msgid "Contact is on WhatsApp"
 msgstr "O contato está no WhatsApp"
 
@@ -749,7 +751,7 @@ msgstr "Geral"
 msgid "Close window"
 msgstr "Fechar janela"
 
-#: src/application/dispatch.rs:166 src/application.rs:2390
+#: src/application/dispatch.rs:166 src/application.rs:2383
 msgid "Quit"
 msgstr "Sair"
 
@@ -826,7 +828,7 @@ msgid "Refreshing messages"
 msgstr "Atualizando mensagens"
 
 #: src/application/dispatch.rs:382 src/application/dispatch.rs:383
-#: src/application/dispatch.rs:1009 src/application/dispatch.rs:1010
+#: src/application/dispatch.rs:1071 src/application/dispatch.rs:1072
 msgid "Enter valid phone number with country code"
 msgstr "Informe um número de telefone válido, com o código do país"
 
@@ -842,55 +844,55 @@ msgstr "Apagar mensagem?"
 msgid "Delete"
 msgstr "Apagar"
 
-#: src/application/dispatch.rs:666
+#: src/application/dispatch.rs:690
 msgid "Phone number copied"
 msgstr "Número de telefone copiado"
 
-#: src/application/dispatch.rs:761
+#: src/application/dispatch.rs:820
 msgid "Not connected to WhatsApp"
 msgstr "Sem conexão com o WhatsApp"
 
-#: src/application/dispatch.rs:769 src/application/dispatch.rs:770
-#: src/application/dispatch.rs:780 src/application/themes.rs:105
+#: src/application/dispatch.rs:828 src/application/dispatch.rs:829
+#: src/application/dispatch.rs:839 src/application/themes.rs:105
 #: src/application/themes.rs:106 src/application/themes.rs:120
 #: src/application/themes.rs:121 src/application/themes.rs:145
 #: src/application/themes.rs:146
 msgid "Could not open themes folder"
 msgstr "Não foi possível abrir a pasta de temas"
 
-#: src/application/dispatch.rs:936
+#: src/application/dispatch.rs:998
 msgid "Reconnecting to WhatsApp"
 msgstr "Reconectando ao WhatsApp"
 
-#: src/application/dispatch.rs:952
+#: src/application/dispatch.rs:1014
 msgid "Unlinking this computer"
 msgstr "Desvinculando este computador"
 
-#: src/application/dispatch.rs:993 src/application/dispatch.rs:1001
+#: src/application/dispatch.rs:1055 src/application/dispatch.rs:1063
 msgid "Code copied"
 msgstr "Código copiado"
 
-#: src/application/dispatch.rs:1015
+#: src/application/dispatch.rs:1077
 msgid "Requesting a pairing code from WhatsApp"
 msgstr "Pedindo um código de pareamento ao WhatsApp"
 
-#: src/application/dispatch.rs:1084
+#: src/application/dispatch.rs:1146
 msgid "Contact opened"
 msgstr "Contato aberto"
 
-#: src/application/dispatch.rs:1145
+#: src/application/dispatch.rs:1207
 msgid "Could not save attachment"
 msgstr "Não foi possível salvar o anexo"
 
-#: src/application/dispatch.rs:1150
+#: src/application/dispatch.rs:1212
 msgid "Clipboard or portal action failed"
 msgstr "A área de transferência ou o portal falhou"
 
-#: src/application/dispatch.rs:1173
+#: src/application/dispatch.rs:1235
 msgid "Copied"
 msgstr "Copiado"
 
-#: src/application/dispatch.rs:1265
+#: src/application/dispatch.rs:1332
 msgid "Shutdown complete"
 msgstr "Encerramento concluído"
 
@@ -907,7 +909,7 @@ msgstr ""
 "“{name}” pode conter programas ou conteúdo ativo. Abra-o somente se confiar "
 "no remetente."
 
-#: src/application/document_safety.rs:197 src/native_media_widgets/photo.rs:515
+#: src/application/document_safety.rs:197 src/native_media_widgets/photo.rs:517
 #: src/native_notifications/adapters.rs:228
 msgid "Open"
 msgstr "Abrir"
@@ -1017,150 +1019,150 @@ msgstr "Imagens"
 msgid "Choose a Profile Photo"
 msgstr "Escolher uma foto de perfil"
 
-#: src/application/reaction_drawer.rs:419
+#: src/application/reaction_drawer.rs:469
 #, rust-format
 msgid "React with {emoji}"
 msgstr "Reagir com {emoji}"
 
-#: src/application/rows.rs:253
+#: src/application/rows.rs:334
 msgid "Unread messages"
 msgstr "Mensagens não lidas"
 
-#: src/application.rs:889
+#: src/application.rs:897
 msgid "Chat"
 msgstr "Conversa"
 
-#: src/application.rs:903
+#: src/application.rs:910
 msgid "Chat details"
 msgstr "Detalhes da conversa"
 
-#: src/application.rs:920
+#: src/application.rs:927
 msgid "Chat menu"
 msgstr "Menu da conversa"
 
-#: src/application.rs:927 src/application.rs:928
+#: src/application.rs:934 src/application.rs:935
 msgid "Start video call"
 msgstr "Iniciar chamada de vídeo"
 
-#: src/application.rs:937 src/application.rs:938
+#: src/application.rs:944 src/application.rs:945
 msgid "Start voice call"
 msgstr "Iniciar chamada de voz"
 
-#: src/application.rs:947
+#: src/application.rs:954
 msgid "Connection lost"
 msgstr "Conexão perdida"
 
-#: src/application.rs:1030
+#: src/application.rs:1037
 msgid "Forward selected messages"
 msgstr "Encaminhar mensagens selecionadas"
 
-#: src/application.rs:1060
+#: src/application.rs:1067
 msgid "Drop Files to Attach"
 msgstr "Solte arquivos para anexar"
 
-#: src/application.rs:1249 src/application.rs:1285
+#: src/application.rs:1273 src/application.rs:1309
 msgid "_Remove Account…"
 msgstr "_Remover conta…"
 
-#: src/application.rs:1250 src/application.rs:1288
+#: src/application.rs:1274 src/application.rs:1312
 msgid "_Preferences"
 msgstr "_Preferências"
 
-#: src/application.rs:1251 src/application.rs:1290
+#: src/application.rs:1275 src/application.rs:1314
 msgid "_About ZapTide"
 msgstr "_Sobre o ZapTide"
 
-#: src/application.rs:1252 src/application.rs:1291
+#: src/application.rs:1276 src/application.rs:1315
 msgid "_Quit"
 msgstr "_Sair"
 
-#: src/application.rs:1284
+#: src/application.rs:1308
 msgid "_New Chat"
 msgstr "_Nova conversa"
 
-#: src/application.rs:1289
+#: src/application.rs:1313
 msgid "_Keyboard Shortcuts"
 msgstr "Atalhos do _teclado"
 
-#: src/application.rs:1761 src/application/transcript_view.rs:539
-msgid "Loading older messages…"
-msgstr "Carregando mensagens mais antigas…"
-
-#: src/application.rs:1763
+#: src/application.rs:1731 src/application.rs:1756
 msgid "Load older messages"
 msgstr "Carregar mensagens mais antigas"
 
-#: src/application.rs:1976 src/native_media_widgets/photo.rs:449
+#: src/application.rs:1754 src/application/transcript_view.rs:795
+msgid "Loading older messages…"
+msgstr "Carregando mensagens mais antigas…"
+
+#: src/application.rs:1969 src/native_media_widgets/photo.rs:451
 #: src/native_media_widgets/viewer/photo.rs:404
 #: src/native_media_widgets/viewer/video.rs:334
 msgid "Show in Folder"
 msgstr "Mostrar na pasta"
 
-#: src/application.rs:1977
+#: src/application.rs:1970
 msgid "Save Attachment…"
 msgstr "Salvar anexo…"
 
-#: src/application.rs:1987
+#: src/application.rs:1980
 msgid "Open Link"
 msgstr "Abrir link"
 
-#: src/application.rs:1991
+#: src/application.rs:1984
 msgid "Go to Quoted Message"
 msgstr "Ir para a mensagem citada"
 
-#: src/application.rs:2001 src/native_media_widgets/viewer/photo.rs:402
+#: src/application.rs:1994 src/native_media_widgets/viewer/photo.rs:402
 msgid "Copy Image"
 msgstr "Copiar imagem"
 
-#: src/application.rs:2004
+#: src/application.rs:1997
 msgid "Copy Text"
 msgstr "Copiar texto"
 
-#: src/application.rs:2006
+#: src/application.rs:1999
 msgid "Reply"
 msgstr "Responder"
 
-#: src/application.rs:2008
+#: src/application.rs:2001
 msgid "Edit"
 msgstr "Editar"
 
-#: src/application.rs:2010
+#: src/application.rs:2003
 msgid "Forward…"
 msgstr "Encaminhar…"
 
-#: src/application.rs:2014
+#: src/application.rs:2007
 msgid "Star"
 msgstr "Favoritar"
 
-#: src/application.rs:2017
+#: src/application.rs:2010
 msgid "Select"
 msgstr "Selecionar"
 
-#: src/application.rs:2035
+#: src/application.rs:2028
 msgid "Delete for Me"
 msgstr "Apagar para mim"
 
-#: src/application.rs:2038
+#: src/application.rs:2031
 msgid "Delete for Everyone"
 msgstr "Apagar para todos"
 
-#: src/application.rs:2108
+#: src/application.rs:2101
 msgid "Enter a question and two different poll options"
 msgstr "Informe uma pergunta e duas opções diferentes"
 
-#: src/application.rs:2116
+#: src/application.rs:2109
 msgid "Creating poll"
 msgstr "Criando enquete"
 
-#: src/application.rs:2298
+#: src/application.rs:2291
 msgid "Message deleted"
 msgstr "Mensagem apagada"
 
-#: src/application.rs:2305
+#: src/application.rs:2298
 msgid "This chat is no longer available."
 msgstr "Esta conversa não está mais disponível."
 
-#: src/application.rs:2351
+#: src/application.rs:2344
 msgid "Shutdown requested"
 msgstr "Encerramento solicitado"
 
@@ -1233,11 +1235,11 @@ msgstr "Arquivadas"
 msgid "Calls"
 msgstr "Chamadas"
 
-#: src/application/sidebar.rs:383
+#: src/application/sidebar.rs:375
 msgid "No Calls Yet"
 msgstr "Nenhuma chamada ainda"
 
-#: src/application/sidebar.rs:384
+#: src/application/sidebar.rs:376
 msgid "Voice and video calls appear here"
 msgstr "As chamadas de voz e de vídeo aparecem aqui"
 
@@ -1257,20 +1259,20 @@ msgstr "Preparando a pasta de temas"
 msgid "Opening themes folder"
 msgstr "Abrindo a pasta de temas"
 
-#: src/application/transcript_view.rs:85
+#: src/application/transcript_view.rs:87
 msgid "No Conversation Selected"
 msgstr "Nenhuma conversa selecionada"
 
-#: src/application/transcript_view.rs:110
-#: src/application/transcript_view.rs:111
+#: src/application/transcript_view.rs:112
+#: src/application/transcript_view.rs:113
 msgid "Go to latest message"
 msgstr "Ir para a última mensagem"
 
-#: src/application/transcript_view.rs:125
+#: src/application/transcript_view.rs:127
 msgid "Go to new messages"
 msgstr "Ir para as novas mensagens"
 
-#: src/application/transcript_view.rs:138
+#: src/application/transcript_view.rs:140
 msgid "New messages"
 msgstr "Novas mensagens"
 
@@ -1550,13 +1552,69 @@ msgstr "Ver foto"
 msgid "Download photo"
 msgstr "Baixar foto"
 
-#: src/native_media_widgets/photo.rs:391
+#: src/native_media_widgets/photo.rs:392
 msgid "Play video"
 msgstr "Reproduzir vídeo"
 
-#: src/native_media_widgets/photo.rs:547
+#: src/native_media_widgets/photo.rs:550
 msgid "Downloading"
 msgstr "Baixando"
+
+#: src/native_media_widgets/poll.rs:10
+#, rust-format
+msgid "{count} vote"
+msgstr "{count} voto"
+
+#: src/native_media_widgets/poll.rs:12
+#, rust-format
+msgid "{count} votes"
+msgstr "{count} votos"
+
+#: src/native_media_widgets/poll.rs:19
+msgid "Vote"
+msgstr "Votar"
+
+#: src/native_media_widgets/poll.rs:21 src/native_media_widgets/poll.rs:171
+msgid "Remove vote"
+msgstr "Remover voto"
+
+#: src/native_media_widgets/poll.rs:23
+msgid "Update vote"
+msgstr "Atualizar voto"
+
+#: src/native_media_widgets/poll.rs:45
+msgid "Poll"
+msgstr "Enquete"
+
+#: src/native_media_widgets/poll.rs:60
+msgid "Incorrect answer"
+msgstr "Resposta incorreta"
+
+#: src/native_media_widgets/poll.rs:61
+msgid "Answer submitted"
+msgstr "Resposta enviada"
+
+#: src/native_media_widgets/poll.rs:64
+msgid "This poll is not ready for voting. Reconnect and try again."
+msgstr "Esta enquete ainda não está disponível para votação. Reconecte e tente novamente."
+
+#: src/native_media_widgets/poll.rs:66
+msgid "Choose one answer"
+msgstr "Escolha uma resposta"
+
+#: src/native_media_widgets/poll.rs:68
+#, rust-format
+msgid "Select up to {count} answers"
+msgstr "Selecione até {count} respostas"
+
+#: src/native_media_widgets/poll.rs:228
+#, rust-format
+msgid "Your answer: {answer}"
+msgstr "Sua resposta: {answer}"
+
+#: src/native_media_widgets/poll.rs:233
+msgid "Results may be incomplete"
+msgstr "Os resultados podem estar incompletos"
 
 #: src/native_media_widgets/viewer/caption.rs:54
 #, fuzzy
@@ -1607,7 +1665,7 @@ msgstr "Tamanho real"
 msgid "Fit to Window"
 msgstr "Ajustar à janela"
 
-#: src/native_media_widgets/viewer.rs:352
+#: src/native_media_widgets/viewer.rs:353
 msgid "Back"
 msgstr ""
 
@@ -1653,39 +1711,19 @@ msgstr "Abra com outro aplicativo"
 msgid "Open in Another App"
 msgstr "Abrir em outro aplicativo"
 
-#: src/native_media_widgets/widget.rs:151
-msgid "Choose one answer"
-msgstr "Escolha uma resposta"
-
-#: src/native_media_widgets/widget.rs:153
-msgid "Vote"
-msgstr "Votar"
-
-#: src/native_media_widgets/widget.rs:199
-msgid "Incorrect answer"
-msgstr "Resposta incorreta"
-
-#: src/native_media_widgets/widget.rs:205
-msgid " · selected"
-msgstr " · selecionada"
-
-#: src/native_media_widgets/widget.rs:210
-msgid " · correct answer"
-msgstr " · resposta correta"
-
-#: src/native_media_widgets/widget.rs:439
+#: src/native_media_widgets/widget.rs:373
 msgid "This message type cannot be displayed"
 msgstr "Este tipo de mensagem não pode ser exibido"
 
-#: src/native_media_widgets/widget.rs:462
+#: src/native_media_widgets/widget.rs:396
 msgid "Image preview"
 msgstr "Pré-visualização da imagem"
 
-#: src/native_media_widgets/widget.rs:474
+#: src/native_media_widgets/widget.rs:408
 msgid "Open or download attachment"
 msgstr "Abrir ou baixar o anexo"
 
-#: src/native_media_widgets/widget.rs:538
+#: src/native_media_widgets/widget.rs:472
 msgid "This link can't be opened"
 msgstr "Este link não pode ser aberto"
 
@@ -1785,6 +1823,12 @@ msgid "Playing faster needs the GStreamer scaletempo plugin (gst-plugins-good)"
 msgstr ""
 "Reproduzir mais rápido requer o plugin scaletempo do GStreamer (gst-plugins-"
 "good)"
+
+#~ msgid " · selected"
+#~ msgstr " · selecionada"
+
+#~ msgid " · correct answer"
+#~ msgstr " · resposta correta"
 
 #~ msgid "Locked chats code"
 #~ msgstr "Código das conversas bloqueadas"

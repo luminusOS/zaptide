@@ -600,6 +600,30 @@ impl NativeApplication {
         dialog.present(Some(&self.window));
     }
 
+    fn viewer_details(
+        &self,
+        message: &crate::model::Message,
+    ) -> crate::native_media_widgets::viewer::ViewerDetails {
+        let mut details = crate::native_media_widgets::viewer::ViewerDetails::of(message);
+        let own = if message.from_me {
+            self.registry
+                .entry(self.active_account)
+                .and_then(|entry| entry.phone.as_deref())
+                .map(super::accounts::own_jid)
+        } else {
+            None
+        };
+        let sender = if message.from_me {
+            own.as_deref()
+        } else {
+            Some(message.sender.as_str())
+        };
+        details.avatar = sender
+            .and_then(|id| self.avatars.get(id))
+            .and_then(|path| super::dialogs::cached_texture(path));
+        details
+    }
+
     fn handle_media_action(
         &mut self,
         action: crate::native_media::NativeMediaAction,
@@ -607,7 +631,7 @@ impl NativeApplication {
     ) {
         match action {
             crate::native_media::NativeMediaAction::ViewPhotos { paths, start } => {
-                use crate::native_media_widgets::viewer::{PhotoItem, ViewerDetails, build_photo};
+                use crate::native_media_widgets::viewer::{PhotoItem, build_photo};
                 let target = paths.get(start).cloned();
                 let items: Vec<_> = paths
                     .iter()
@@ -618,7 +642,7 @@ impl NativeApplication {
                             .find(|message| copy_image_path(message) == Some(path.as_path()))
                             .map(|message| PhotoItem {
                                 path: path.clone(),
-                                details: ViewerDetails::of(message),
+                                details: self.viewer_details(message),
                             })
                     })
                     .collect();
@@ -641,11 +665,11 @@ impl NativeApplication {
                 self.present_media_viewer(page);
             }
             crate::native_media::NativeMediaAction::ViewVideo(path) => {
-                use crate::native_media_widgets::viewer::{ViewerDetails, build_video};
+                use crate::native_media_widgets::viewer::build_video;
                 let Some(message) = self.open_chat.message_snapshots.values().find(|message| {
                     matches!(&message.content, crate::model::Content::Video { media, .. } if media.path.as_ref() == Some(&path))
                 }) else { return; };
-                let details = ViewerDetails::of(message);
+                let details = self.viewer_details(message);
                 self.close_media_viewer();
                 let output = sender.clone();
                 let back = sender.clone();
@@ -675,6 +699,41 @@ impl NativeApplication {
             }
             crate::native_media::NativeMediaAction::Download { message, .. } => {
                 self.activate_attachment(&message)
+            }
+            crate::native_media::NativeMediaAction::VotePoll {
+                chat,
+                message,
+                mut choices,
+            } => {
+                if self.open_chat.active_chat.as_deref() != Some(chat.as_str()) {
+                    return;
+                }
+                let Some(current) = self.open_chat.message_snapshots.get(&message) else {
+                    return;
+                };
+                let crate::model::Content::Poll { options, state, .. } = &current.content else {
+                    return;
+                };
+                choices.sort_unstable();
+                choices.dedup();
+                if current.chat != chat
+                    || state.quiz
+                    || !state.can_vote
+                    || state.selectable == 0
+                    || choices.len() > state.selectable
+                    || choices.iter().any(|&choice| choice >= options.len())
+                {
+                    return;
+                }
+                if let Some(backend) = &self.backend {
+                    backend.send(crate::backend::Command::VotePoll {
+                        chat,
+                        message,
+                        choices,
+                    });
+                } else {
+                    self.toast(&gettext("Backend unavailable"));
+                }
             }
             crate::native_media::NativeMediaAction::VoteQuiz {
                 chat,
@@ -840,8 +899,11 @@ impl NativeApplication {
                     self.chat_projection.select(chat.clone());
                 }
             }
-            Input::LoadOlder => self.load_older(),
-            Input::OlderAvailabilityChanged(_) => {}
+            Input::LoadOlder(epoch) => {
+                if epoch == self.transcript_requests.next {
+                    self.load_older();
+                }
+            }
             Input::OpenAccountChat(account, chat) => {
                 if account != self.active_account {
                     self.switch_account_with_restore(account, &sender, false);
@@ -1190,6 +1252,11 @@ impl NativeApplication {
                 self.waveform_ready(chat, id, bars, &sender);
             }
             Input::MediaAction(action) => self.handle_media_action(action, sender),
+            Input::AccountMediaAction(account, action) => {
+                if account == self.active_account {
+                    self.handle_media_action(action, sender);
+                }
+            }
             Input::ActivateSelectedAttachment => {
                 if let Some(id) = self.selected_message_id() {
                     self.activate_attachment(&id);

@@ -165,7 +165,7 @@ fn copy_control_rows(
         .set_selected(model.chats.selection_model.selected());
 }
 
-fn native_x11_input(window: &gtk::Window, scroller: &gtk::ScrolledWindow, action: &str) {
+pub(super) fn native_x11_input(window: &gtk::Window, scroller: &gtk::ScrolledWindow, action: &str) {
     assert_eq!(
         std::env::var("ZAPTIDE_TEST_PRIVATE_XVFB").as_deref(),
         Ok("1")
@@ -210,9 +210,9 @@ rx=c.c_int(); ry=c.c_int(); child=c.c_ulong()
 if not x.XTranslateCoordinates(d,w,root,int(sys.argv[1]),int(sys.argv[2]),c.byref(rx),c.byref(ry),c.byref(child)): raise RuntimeError('cannot translate coordinates')
 if not t.XTestFakeMotionEvent(d,-1,rx.value,ry.value,0): raise RuntimeError('cannot move pointer')
 action=sys.argv[3]
-if action == 'wheel-down':
+if action in ('wheel-down', 'wheel-up'):
     for pressed in (1,0):
-        if not t.XTestFakeButtonEvent(d,5,pressed,0): raise RuntimeError('cannot send wheel')
+        if not t.XTestFakeButtonEvent(d,5 if action == 'wheel-down' else 4,pressed,0): raise RuntimeError('cannot send wheel')
 else:
     x.XSetInputFocus(d,w,1,0)
     shifted=action.startswith('Shift+')
@@ -369,6 +369,320 @@ fn native_cancel_reference(
     let reference = result.borrow().clone().unwrap();
     control_window.set_visible(false);
     reference
+}
+
+#[test]
+#[ignore = "needs a display"]
+fn identity_merge_redirect_keeps_reply_drafts_and_staged_documents() {
+    identity_merge_redirect_fixture(false, false);
+}
+
+#[test]
+#[ignore = "needs a display"]
+fn identity_merge_redirect_keeps_edit_and_staged_clipboard_image() {
+    identity_merge_redirect_fixture(true, false);
+}
+
+#[test]
+#[ignore = "needs a display"]
+fn identity_merge_keeps_clipboard_after_sending_merged_documents() {
+    identity_merge_redirect_fixture(false, true);
+}
+
+fn identity_merge_redirect_fixture(edit: bool, mixed_attachments: bool) {
+    const ALIAS: &str = "900001@lid";
+    const PHONE: &str = "15550001001@s.whatsapp.net";
+    let data = tempfile::tempdir().unwrap();
+    let _relm: RelmApp<Input> = RelmApp::new("dev.luminusos.ZapTide.IdentityFixture");
+    relm4::main_application()
+        .register(None::<&gtk::gio::Cancellable>)
+        .unwrap();
+    let (backend, events) = Backend::detached();
+    TEST_BACKEND.with_borrow_mut(|slot| assert!(slot.replace(backend).is_none()));
+    let app = NativeApplication::builder().launch(Init {
+        dirs: AppDirs::under(data.path()),
+    });
+    let notifier = app.model().notifier.clone();
+    let window = app.widget().clone();
+    window.present();
+    let account = app.model().active_account;
+    let phone = crate::model::Chat::new(PHONE.into(), "Synthetic contact".into());
+    send_event(&events, &notifier, Event::Link(LinkStatus::Connected));
+    send_event(
+        &events,
+        &notifier,
+        Event::Chats(vec![
+            phone.clone(),
+            crate::model::Chat::new(ALIAS.into(), "Synthetic alias".into()),
+        ]),
+    );
+    wait_until("both identities", || app.model().chat_snapshots.len() == 2);
+    app.emit(Input::SelectChat(account, PHONE.into()));
+    app.emit(Input::DraftChanged("phone draft".into()));
+    wait_until("phone draft", || app.model().draft == "phone draft");
+    if mixed_attachments {
+        let rgba = vec![0, 0, 0, 255];
+        let bytes = gtk::glib::Bytes::from_owned(rgba.clone());
+        let preview =
+            gtk::gdk::MemoryTexture::new(1, 1, gtk::gdk::MemoryFormat::R8g8b8a8, &bytes, 4)
+                .upcast();
+        app.emit(Input::ClipboardImageReady {
+            chat: PHONE.into(),
+            pixels: ClipboardPixels {
+                width: 1,
+                height: 1,
+                rgba,
+                preview,
+            },
+        });
+        wait_until("phone clipboard staged", || {
+            app.model().pending_clipboard_images.contains_key(PHONE)
+        });
+    }
+    app.emit(Input::SelectChat(account, ALIAS.into()));
+    wait_until("alias open", || {
+        app.model().open_chat.active_chat.as_deref() == Some(ALIAS)
+    });
+    let old_request = app.model().transcript_requests.initial;
+    send_event(
+        &events,
+        &notifier,
+        Event::Messages {
+            chat: ALIAS.into(),
+            messages: vec![crate::archive::tests::message(ALIAS, "message", 10, true)],
+            older: false,
+            complete: true,
+            request: old_request,
+        },
+    );
+    wait_until("alias message", || {
+        app.model()
+            .open_chat
+            .message_ids
+            .iter()
+            .any(|id| id == "message")
+    });
+    let staged = data.path().join("document.txt");
+    if edit {
+        let rgba = vec![0, 0, 0, 255];
+        let bytes = gtk::glib::Bytes::from_owned(rgba.clone());
+        let preview =
+            gtk::gdk::MemoryTexture::new(1, 1, gtk::gdk::MemoryFormat::R8g8b8a8, &bytes, 4)
+                .upcast();
+        app.emit(Input::ClipboardImageReady {
+            chat: ALIAS.into(),
+            pixels: ClipboardPixels {
+                width: 1,
+                height: 1,
+                rgba,
+                preview,
+            },
+        });
+        wait_until("clipboard staged", || {
+            app.model().pending_clipboard_images.contains_key(ALIAS)
+        });
+    } else {
+        std::fs::write(&staged, b"synthetic document").unwrap();
+        app.emit(Input::AttachmentsPicked {
+            chat: ALIAS.into(),
+            paths: vec![staged.clone()],
+            documents: true,
+        });
+        wait_until("document staged", || {
+            app.model().pending_attachments.contains_key(ALIAS)
+        });
+    }
+    app.emit(Input::DraftChanged("ordinary draft".into()));
+    wait_until("ordinary draft saved", || {
+        app.model().draft == "ordinary draft"
+    });
+    app.emit(Input::ShowMessageMenu {
+        id: "message".into(),
+        x: 0.0,
+        y: 0.0,
+        selected_text: None,
+    });
+    app.emit(if edit {
+        Input::EditSelected
+    } else {
+        Input::ReplySelected
+    });
+    wait_until("composer context", || {
+        if edit {
+            app.model().open_chat.editing.is_some()
+        } else {
+            app.model().open_chat.reply_to.is_some()
+        }
+    });
+    wait_for_frames(&window, 2);
+    app.emit(Input::DraftChanged("alias draft".into()));
+    wait_until("alias draft", || app.model().draft == "alias draft");
+    send_event(
+        &events,
+        &notifier,
+        Event::ChatIdentity {
+            alias: ALIAS.into(),
+            canonical: PHONE.into(),
+        },
+    );
+    send_event(&events, &notifier, Event::Chats(vec![phone.clone()]));
+    send_event(&events, &notifier, Event::RefreshTranscript);
+    wait_until("identity redirected", || {
+        app.model().open_chat.active_chat.as_deref() == Some(PHONE)
+    });
+    wait_for_frames(&window, 2);
+    {
+        let model = app.model();
+        assert_eq!(model.draft, "alias draft\nphone draft");
+        assert_eq!(
+            model.composer_buffer.text(
+                &model.composer_buffer.start_iter(),
+                &model.composer_buffer.end_iter(),
+                true
+            ),
+            model.draft
+        );
+        let context = if edit {
+            &model.open_chat.editing
+        } else {
+            &model.open_chat.reply_to
+        };
+        assert_eq!(
+            context.as_ref().map(|context| context.0.as_str()),
+            Some(PHONE)
+        );
+        if edit {
+            assert!(model.pending_clipboard_images.contains_key(PHONE));
+            assert!(!model.pending_clipboard_images.contains_key(ALIAS));
+        } else {
+            assert_eq!(
+                model.pending_attachments.get(PHONE).unwrap(),
+                std::slice::from_ref(&staged)
+            );
+            assert!(
+                model
+                    .document_attachments
+                    .contains(&(PHONE.into(), staged.clone()))
+            );
+        }
+    }
+    send_event(
+        &events,
+        &notifier,
+        Event::Messages {
+            chat: PHONE.into(),
+            messages: vec![crate::archive::tests::message(PHONE, "stale", 1, false)],
+            older: false,
+            complete: true,
+            request: old_request,
+        },
+    );
+    app.emit(Input::DraftChanged("alias draft\nphone draft typed".into()));
+    wait_until("typing after redirect", || {
+        app.model().draft.ends_with(" typed")
+    });
+    assert_eq!(
+        app.model().composer.draft(PHONE),
+        "alias draft\nphone draft typed"
+    );
+    assert!(
+        !app.model()
+            .open_chat
+            .message_ids
+            .iter()
+            .any(|id| id == "stale")
+    );
+    if edit {
+        app.emit(Input::CancelEdit);
+        wait_until("edit cancelled after redirect", || {
+            app.model().open_chat.editing.is_none()
+        });
+        assert_eq!(app.model().draft, "phone draft\nordinary draft");
+        let rgba = vec![0, 0, 0, 255, 255, 255, 255, 255];
+        let bytes = gtk::glib::Bytes::from_owned(rgba.clone());
+        let preview =
+            gtk::gdk::MemoryTexture::new(2, 1, gtk::gdk::MemoryFormat::R8g8b8a8, &bytes, 8)
+                .upcast();
+        app.emit(Input::ClipboardImageReady {
+            chat: ALIAS.into(),
+            pixels: ClipboardPixels {
+                width: 2,
+                height: 1,
+                rgba,
+                preview,
+            },
+        });
+        wait_for_frames(&window, 2);
+        assert_eq!(
+            app.model()
+                .pending_clipboard_images
+                .get(PHONE)
+                .unwrap()
+                .width,
+            2
+        );
+        assert!(!app.model().pending_clipboard_images.contains_key(ALIAS));
+    } else if !mixed_attachments {
+        let late = data.path().join("late-document.txt");
+        app.emit(Input::AttachmentsPicked {
+            chat: ALIAS.into(),
+            paths: vec![late.clone()],
+            documents: true,
+        });
+        wait_for_frames(&window, 2);
+        assert!(
+            app.model()
+                .pending_attachments
+                .get(PHONE)
+                .unwrap()
+                .contains(&late)
+        );
+        assert!(!app.model().pending_attachments.contains_key(ALIAS));
+    }
+    if mixed_attachments {
+        app.emit(Input::SendText {
+            text: "alias draft\nphone draft typed".into(),
+            link_preview: None,
+        });
+        wait_until("merged document send started", || {
+            app.model().pending_send.is_some()
+        });
+        assert!(!app.model().pending_send.as_ref().unwrap().clipboard_image);
+        assert_eq!(app.model().pending_send.as_ref().unwrap().remaining, 1);
+        send_event(
+            &events,
+            &notifier,
+            Event::AttachmentCompleted {
+                chat: PHONE.into(),
+                batch: 1,
+                index: 0,
+                total: 1,
+                path: staged,
+                success: true,
+            },
+        );
+        wait_until("merged document send completed", || {
+            app.model().pending_send.is_none()
+        });
+        assert!(app.model().pending_clipboard_images.contains_key(PHONE));
+    }
+    let mut locked = phone;
+    locked.locked = true;
+    send_event(&events, &notifier, Event::Chats(vec![locked]));
+    wait_until("locked target hidden", || {
+        app.model().open_chat.active_chat.is_none()
+    });
+    assert_eq!(
+        app.model().composer.draft(PHONE),
+        if mixed_attachments {
+            ""
+        } else if edit {
+            "phone draft\nordinary draft"
+        } else {
+            "alias draft\nphone draft typed"
+        }
+    );
+    window.set_visible(false);
 }
 
 #[test]

@@ -67,6 +67,13 @@ impl Worker {
                     return;
                 }
                 self.remember_identity(pn, lid, name);
+                if let Ok(chats) = self.archive.chats() {
+                    for chat in chats {
+                        if let Some(jid) = Self::jid_of(&chat.id) {
+                            self.learn_cached_identity(&jid).await;
+                        }
+                    }
+                }
                 self.set_status(LinkStatus::Connected);
                 self.fetch_subscribed_newsletters();
                 self.refresh_legacy_preferences();
@@ -156,6 +163,7 @@ impl Worker {
             }
             E::Messages(batch) => {
                 for inbound in batch.messages.iter() {
+                    self.learn_cached_identity(&inbound.info.source.chat).await;
                     self.ingest(&inbound.message, &inbound.info);
                 }
             }

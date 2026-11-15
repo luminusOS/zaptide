@@ -13,13 +13,65 @@ impl Worker {
         {
             return;
         }
-        self.identity
-            .lid_to_pn
-            .insert(lid.to_owned(), pn.to_owned());
+        let alias = format!("{lid}@lid");
+        let canonical = format!("{pn}@s.whatsapp.net");
+        let mut confirmed_revokes = Vec::new();
+        for (chat, id) in self.pending_revokes.keys() {
+            let other = if chat == &alias {
+                &canonical
+            } else if chat == &canonical {
+                &alias
+            } else {
+                continue;
+            };
+            if !self
+                .pending_revokes
+                .contains_key(&(other.clone(), id.clone()))
+                && self
+                    .archive
+                    .message(other, id)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|message| matches!(message.content, Content::Revoked))
+            {
+                confirmed_revokes.push((chat.clone(), id.clone()));
+            }
+        }
         match self.archive.put_lid(lid, pn) {
-            Ok(true) => self.emit_chats(),
-            Ok(false) => {}
+            Ok(changed) => {
+                for key in confirmed_revokes {
+                    self.pending_revokes.remove(&key);
+                }
+                self.identity
+                    .lid_to_pn
+                    .insert(lid.to_owned(), pn.to_owned());
+                self.emit(Event::ChatIdentity {
+                    alias: format!("{lid}@lid"),
+                    canonical: format!("{pn}@s.whatsapp.net"),
+                });
+                if let Ok(Some(contact)) = self.archive.contact(&format!("{pn}@s.whatsapp.net")) {
+                    self.emit(Event::Contacts(vec![contact]));
+                }
+                if changed {
+                    self.emit_chats();
+                    self.emit(Event::RefreshTranscript);
+                }
+            }
             Err(error) => log::warn!("could not remember an id mapping: {error}"),
+        }
+    }
+
+    pub(super) async fn learn_cached_identity(&mut self, jid: &Jid) {
+        if !jid.is_lid() && !jid.is_pn() {
+            return;
+        }
+        let Some(client) = self.client.clone() else {
+            return;
+        };
+        match client.get_lid_pn_entry(jid).await {
+            Ok(Some(entry)) => self.learn_lid(&entry.lid, &entry.phone_number),
+            Ok(None) => {}
+            Err(_) => log::warn!("could not read a cached identity mapping"),
         }
     }
 
@@ -80,11 +132,28 @@ impl Worker {
             .contacts
             .get(id)
             .and_then(|contact| contact.full_name.clone())
+            .or_else(|| {
+                self.archive
+                    .contact(id)
+                    .ok()
+                    .flatten()
+                    .and_then(|contact| contact.full_name)
+            })
             .filter(|name| !name.trim().is_empty())
     }
 
     pub(super) fn contact_name(&self, id: &str) -> Option<String> {
-        self.identity.contacts.get(id).and_then(Contact::label)
+        self.identity
+            .contacts
+            .get(id)
+            .and_then(Contact::label)
+            .or_else(|| {
+                self.archive
+                    .contact(id)
+                    .ok()
+                    .flatten()
+                    .and_then(|contact| contact.label())
+            })
     }
 
     /// Resolves a name for a quote or mention.
@@ -135,14 +204,17 @@ impl Worker {
         if push_name.is_empty() || id == self.me() {
             return None;
         }
+        let archived = self.archive.contact(id).ok().flatten();
         let contact = self
             .identity
             .contacts
             .entry(id.to_owned())
-            .or_insert_with(|| Contact {
-                id: id.to_owned(),
-                full_name: None,
-                push_name: None,
+            .or_insert_with(|| {
+                archived.unwrap_or_else(|| Contact {
+                    id: id.to_owned(),
+                    full_name: None,
+                    push_name: None,
+                })
             });
         if contact.push_name.as_deref() == Some(push_name) {
             return None;

@@ -3195,6 +3195,40 @@ async fn older_failure_from_expired_attempt_does_not_finish_newer_request() {
 }
 
 #[test]
+fn identity_merge_matches_history_responses_without_rekeying_request_ownership() {
+    let (mut worker, events, _, _) = worker();
+    let alias = "900001@lid";
+    let phone = "15550001001@s.whatsapp.net";
+    worker.older.pending_older.insert(
+        alias.into(),
+        PendingOlder {
+            request: 1,
+            queued: None,
+            request_id: 41,
+            asked: Instant::now(),
+            before: (200, "boundary".into()),
+            protocol_id: Some("old-protocol".into()),
+            received_count: 0,
+            more_on_phone: None,
+            early_responses: HashMap::new(),
+        },
+    );
+    worker.learn_lid("900001", "15550001001");
+    while events.try_recv().is_ok() {}
+    worker.answer_older(
+        vec![(phone.into(), 1, Some(false))],
+        Some("unrelated-protocol".into()),
+    );
+    assert!(worker.older.pending_older.contains_key(alias));
+    assert!(events.try_recv().is_err());
+    worker.answer_older(
+        vec![(phone.into(), 1, Some(false))],
+        Some("old-protocol".into()),
+    );
+    assert!(worker.older.pending_older.is_empty());
+}
+
+#[test]
 fn late_history_response_id_does_not_finish_newer_same_chat_request() {
     let (mut worker, events, _inbox, _wa) = worker();
     let chat = "1@s.whatsapp.net".to_owned();
@@ -3555,7 +3589,17 @@ fn receipt_identity_guard_restores_on_unwind() {
 fn receipt_commit_failure_does_not_publish_learned_identity() {
     const LID: &str = "123456@lid";
     const PN: &str = "15550002222@s.whatsapp.net";
-    let (mut worker, _, _, _) = worker();
+    let (mut worker, events, _, _) = worker();
+    worker.archive.ensure_chat(LID, "Synthetic alias").unwrap();
+    worker.archive.ensure_chat(PN, "Synthetic phone").unwrap();
+    worker
+        .archive
+        .insert_message(
+            &crate::archive::tests::message(LID, "reply", 10, false),
+            Some(b"reply raw"),
+        )
+        .unwrap();
+    worker.archive.set_starred(LID, "reply", true, 11).unwrap();
     worker.archive.execute_batch_for_test(
         "PRAGMA foreign_keys = ON;
          CREATE TABLE synthetic_parent (id INTEGER PRIMARY KEY);
@@ -3578,6 +3622,14 @@ fn receipt_commit_failure_does_not_publish_learned_identity() {
     worker.on_receipt(&receipt);
     assert!(worker.archive.lids().unwrap().is_empty());
     assert_eq!(worker.canonical_str(LID), LID);
+    assert_eq!(worker.archive.chats().unwrap().len(), 2);
+    assert!(worker.archive.message(LID, "reply").unwrap().is_some());
+    assert!(worker.archive.message(PN, "reply").unwrap().is_none());
+    assert!(
+        !events
+            .try_iter()
+            .any(|event| matches!(event, Event::ChatIdentity { .. }))
+    );
     worker
         .archive
         .execute_batch_for_test("DROP TRIGGER synthetic_commit_failure;")
@@ -3585,6 +3637,140 @@ fn receipt_commit_failure_does_not_publish_learned_identity() {
     worker.on_receipt(&receipt);
     assert_eq!(worker.archive.lids().unwrap().len(), 1);
     assert_eq!(worker.canonical_str(LID), PN);
+}
+
+#[test]
+fn failed_identity_write_does_not_change_canonicalization() {
+    let (mut worker, events, _, _) = worker();
+    worker
+        .archive
+        .execute_batch_for_test(
+            "CREATE TRIGGER reject_identity BEFORE INSERT ON lids
+         BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END;",
+        )
+        .unwrap();
+    worker.learn_lid("900001", "15550001001");
+    assert_eq!(worker.canonical_str("900001@lid"), "900001@lid");
+    assert!(worker.archive.lids().unwrap().is_empty());
+    assert!(events.try_recv().is_err());
+}
+
+#[test]
+fn identity_merge_keeps_saved_name_when_learning_a_new_push_name() {
+    let (mut worker, _, _, _) = worker();
+    worker
+        .archive
+        .upsert_contact(&Contact {
+            id: "900001@lid".into(),
+            full_name: Some("Synthetic saved name".into()),
+            push_name: None,
+        })
+        .unwrap();
+    worker.learn_lid("900001", "15550001001");
+    let contact = worker
+        .learn_push_name("15550001001@s.whatsapp.net", "New push name")
+        .unwrap();
+    assert_eq!(contact.full_name.as_deref(), Some("Synthetic saved name"));
+}
+
+#[tokio::test]
+async fn identity_merge_rejects_queued_alias_send_to_locked_canonical_chat() {
+    let (mut worker, events, _, _) = worker();
+    let alias = "900001@lid";
+    let phone = "15550001001@s.whatsapp.net";
+    worker.archive.ensure_chat(alias, "Alias").unwrap();
+    worker.archive.ensure_chat(phone, "Phone").unwrap();
+    worker
+        .archive
+        .execute_batch_for_test(
+            "UPDATE chats SET locked = 1 WHERE id = '15550001001@s.whatsapp.net'",
+        )
+        .unwrap();
+    worker.learn_lid("900001", "15550001001");
+    while events.try_recv().is_ok() {}
+    worker
+        .handle_command(Command::SendText {
+            chat: alias.into(),
+            text: "Synthetic queued text".into(),
+            quoting: None,
+            mentions: Vec::new(),
+            link_preview: None,
+        })
+        .await;
+    assert!(events.try_iter().any(|event| matches!(event, Event::Error(error) if error == "This conversation is read-only in ZapTide")));
+}
+
+#[tokio::test]
+async fn identity_merge_preserves_authoritative_revoke_during_pending_collision() {
+    for authoritative in [false, true] {
+        let (mut worker, _, _, _) = worker();
+        let alias = "900001@lid";
+        let phone = "15550001001@s.whatsapp.net";
+        worker.archive.ensure_chat(alias, "Alias").unwrap();
+        worker.archive.ensure_chat(phone, "Phone").unwrap();
+        let row = crate::archive::tests::message(alias, "revoked", 10, true);
+        worker.archive.insert_message(&row, None).unwrap();
+        let mut duplicate = row.clone();
+        duplicate.chat = phone.into();
+        if authoritative {
+            duplicate.content = Content::Revoked;
+        }
+        worker.archive.insert_message(&duplicate, None).unwrap();
+        let attempt_id = worker.begin_revoke(alias, "revoked").unwrap().unwrap();
+        worker.learn_lid("900001", "15550001001");
+        worker
+            .handle_command(Command::Completed(Completion {
+                generation: worker.session_generation,
+                done: Done::RevokeFinished {
+                    attempt_id,
+                    chat: alias.into(),
+                    message: "revoked".into(),
+                    success: false,
+                },
+            }))
+            .await;
+        assert_eq!(
+            stored(&worker, phone, "revoked").content,
+            if authoritative {
+                Content::Revoked
+            } else {
+                row.content
+            }
+        );
+    }
+}
+
+#[test]
+fn identity_merge_rollback_restores_pending_revoke_ownership() {
+    let (mut worker, events, _, _) = worker();
+    let alias = "900001@lid";
+    let phone = "15550001001@s.whatsapp.net";
+    worker.archive.ensure_chat(alias, "Alias").unwrap();
+    worker.archive.ensure_chat(phone, "Phone").unwrap();
+    let row = crate::archive::tests::message(alias, "revoked", 10, true);
+    worker.archive.insert_message(&row, None).unwrap();
+    let mut duplicate = row;
+    duplicate.chat = phone.into();
+    duplicate.content = Content::Revoked;
+    worker.archive.insert_message(&duplicate, None).unwrap();
+    let attempt = worker.begin_revoke(alias, "revoked").unwrap().unwrap();
+    while events.try_recv().is_ok() {}
+    {
+        let mut batch = worker.begin_batch();
+        batch.protect_state(false);
+        batch.learn_lid("900001", "15550001001");
+        assert!(batch.pending_revokes.is_empty());
+    }
+    assert_eq!(worker.canonical_str(alias), alias);
+    assert_eq!(
+        worker
+            .pending_revokes
+            .get(&(alias.into(), "revoked".into()))
+            .unwrap()
+            .attempt_id,
+        attempt
+    );
+    assert!(events.try_recv().is_err());
 }
 
 #[test]
@@ -3838,6 +4024,241 @@ async fn downloaded_document_with_long_name_can_be_staged_and_saved() {
 
     assert_eq!(std::fs::read(&destination).unwrap(), bytes);
     assert!(!staged.exists());
+}
+
+#[tokio::test]
+async fn verified_contact_lookup_joins_an_existing_privacy_id_chat() {
+    let (mut worker, events, _, _) = worker();
+    let alias = "900001@lid";
+    let phone = "15550001001@s.whatsapp.net";
+    worker
+        .archive
+        .ensure_chat(alias, "Synthetic contact")
+        .unwrap();
+    worker
+        .archive
+        .insert_message(
+            &crate::archive::tests::message(alias, "reply", 10, false),
+            None,
+        )
+        .unwrap();
+    let contact = Contact {
+        id: alias.into(),
+        full_name: Some("Synthetic saved name".into()),
+        push_name: None,
+    };
+    worker.archive.upsert_contact(&contact).unwrap();
+    worker.identity.contacts.insert(alias.into(), contact);
+    worker
+        .handle_command(Command::Completed(Completion {
+            generation: worker.session_generation,
+            done: Done::ContactChecked {
+                phone: "15550001001".into(),
+                full_name: None,
+                first_name: None,
+                to_phone: false,
+                registered: true,
+                lid: Some("900001".into()),
+            },
+        }))
+        .await;
+    assert_eq!(worker.archive.chats().unwrap().len(), 1);
+    assert_eq!(stored(&worker, phone, "reply").chat, phone);
+    assert_eq!(
+        worker.contact_name(phone).as_deref(),
+        Some("Synthetic saved name")
+    );
+    assert!(
+        events
+            .try_iter()
+            .any(|event| matches!(event, Event::ContactReady { id, .. } if id == phone))
+    );
+}
+
+#[tokio::test]
+async fn identity_merge_keeps_server_confirmation_after_a_late_send_failure() {
+    let (mut worker, events, _, _) = worker();
+    let alias = "900001@lid";
+    let phone = "15550001001@s.whatsapp.net";
+    worker.archive.ensure_chat(alias, "Contact").unwrap();
+    worker.archive.ensure_chat(phone, "Contact").unwrap();
+    let pending = crate::archive::tests::message(alias, "sent", 10, true);
+    let mut confirmed = pending.clone();
+    confirmed.chat = phone.into();
+    confirmed.status = Delivery::Read;
+    worker.archive.insert_message(&pending, None).unwrap();
+    worker.archive.insert_message(&confirmed, None).unwrap();
+    worker.learn_lid("900001", "15550001001");
+    while events.try_recv().is_ok() {}
+    worker
+        .handle_command(Command::Completed(Completion {
+            generation: worker.session_generation,
+            done: Done::Sent {
+                chat: alias.into(),
+                id: "sent".into(),
+                error: Some("synthetic late failure".into()),
+            },
+        }))
+        .await;
+    assert_eq!(stored(&worker, phone, "sent").status, Delivery::Read);
+    assert!(
+        events
+            .try_iter()
+            .any(|event| matches!(event, Event::Sent { chat, success: true } if chat == phone))
+    );
+}
+
+#[tokio::test]
+async fn identity_merge_routes_pending_send_edit_and_read_completions() {
+    const ALIAS: &str = "900001@lid";
+    const PHONE: &str = "15550001001@s.whatsapp.net";
+    let (mut worker, events, _, _) = worker();
+    worker.archive.ensure_chat(ALIAS, "Contact").unwrap();
+    worker
+        .archive
+        .insert_message(
+            &crate::archive::tests::message(ALIAS, "sent", 10, true),
+            None,
+        )
+        .unwrap();
+    worker.archive.mark_read(ALIAS).unwrap();
+    worker.archive.queue_read_sync(ALIAS).unwrap();
+    let attempt_id = worker.read_sync.start(ALIAS, 10, Instant::now()).unwrap();
+    worker.learn_lid("900001", "15550001001");
+    while events.try_recv().is_ok() {}
+    worker
+        .handle_command(Command::Completed(Completion {
+            generation: worker.session_generation,
+            done: Done::Sent {
+                chat: ALIAS.into(),
+                id: "sent".into(),
+                error: None,
+            },
+        }))
+        .await;
+    assert_eq!(stored(&worker, PHONE, "sent").status, Delivery::Sent);
+    worker
+        .handle_command(Command::Completed(Completion {
+            generation: worker.session_generation,
+            done: Done::Edited {
+                chat: ALIAS.into(),
+                id: "sent".into(),
+                success: true,
+                content: Content::text("edited"),
+                mentions: Vec::new(),
+            },
+        }))
+        .await;
+    assert_eq!(
+        stored(&worker, PHONE, "sent").content,
+        Content::text("edited")
+    );
+    worker
+        .handle_command(Command::Completed(Completion {
+            generation: worker.session_generation,
+            done: Done::ReadSyncFinished {
+                attempt_id,
+                chat: ALIAS.into(),
+                through: 10,
+                success: true,
+            },
+        }))
+        .await;
+    assert!(worker.archive.pending_reads().unwrap().is_empty());
+    assert!(events.try_iter().all(|event| match event {
+        Event::Sent { chat, .. } | Event::Edited { chat, .. } => chat == PHONE,
+        Event::MessageUpdated(message) => message.chat == PHONE,
+        _ => true,
+    }));
+}
+
+#[tokio::test]
+async fn identity_merge_preserves_download_fingerprint_and_picker_ownership() {
+    const ALIAS: &str = "900001@lid";
+    const PHONE: &str = "15550001001@s.whatsapp.net";
+    let (mut worker, events, _, _) = worker();
+    let directory = tempfile::tempdir().unwrap();
+    let raw = b"synthetic attachment raw";
+    let fingerprint = message_raw_fingerprint(raw);
+    let mut row = crate::archive::tests::message(ALIAS, "media", 10, false);
+    row.content = Content::Image {
+        caption: None,
+        media: crate::model::Media {
+            mime: "image/jpeg".into(),
+            size: 10,
+            width: Some(2),
+            height: Some(2),
+            path: None,
+            state: Default::default(),
+        },
+    };
+    worker.archive.ensure_chat(ALIAS, "Contact").unwrap();
+    worker.archive.insert_message(&row, Some(raw)).unwrap();
+    worker
+        .sticker_downloads
+        .insert((ALIAS.into(), "media".into(), fingerprint));
+    let staged = download_staging_path(directory.path()).unwrap();
+    let destination = directory.path().join("saved.jpg");
+    std::fs::write(&staged, b"synthetic bytes").unwrap();
+    worker.learn_lid("900001", "15550001001");
+    while events.try_recv().is_ok() {}
+    worker
+        .handle_command(Command::Completed(Completion {
+            generation: worker.session_generation,
+            done: Done::Downloaded {
+                chat: ALIAS.into(),
+                id: "media".into(),
+                raw_fingerprint: fingerprint,
+                destination: destination.clone(),
+                result: Ok(staged.clone()),
+            },
+        }))
+        .await;
+    assert!(!staged.exists());
+    assert_eq!(std::fs::read(&destination).unwrap(), b"synthetic bytes");
+    assert_eq!(
+        stored(&worker, PHONE, "media")
+            .content
+            .media()
+            .unwrap()
+            .path,
+        Some(destination.clone())
+    );
+    assert!(worker.sticker_downloads.is_empty());
+    assert!(
+        matches!(events.try_recv(), Ok(Event::Media { chat, result: Ok(path), .. }) if chat == PHONE && path == destination)
+    );
+}
+
+#[tokio::test]
+async fn identity_merge_cannot_let_a_late_revoke_failure_undo_confirmation() {
+    const ALIAS: &str = "900001@lid";
+    const PHONE: &str = "15550001001@s.whatsapp.net";
+    let (mut worker, _, _, _) = worker();
+    worker.archive.ensure_chat(ALIAS, "Contact").unwrap();
+    worker
+        .archive
+        .insert_message(
+            &crate::archive::tests::message(ALIAS, "revoked", 10, true),
+            None,
+        )
+        .unwrap();
+    let attempt_id = worker.begin_revoke(ALIAS, "revoked").unwrap().unwrap();
+    worker.learn_lid("900001", "15550001001");
+    worker.confirm_revoke(PHONE, "revoked");
+    worker
+        .handle_command(Command::Completed(Completion {
+            generation: worker.session_generation,
+            done: Done::RevokeFinished {
+                attempt_id,
+                chat: ALIAS.into(),
+                message: "revoked".into(),
+                success: false,
+            },
+        }))
+        .await;
+    assert_eq!(stored(&worker, PHONE, "revoked").content, Content::Revoked);
+    assert!(worker.pending_revokes.is_empty());
 }
 
 #[tokio::test]
@@ -5508,6 +5929,7 @@ pub(super) mod receipt_tests {
                     first_name: None,
                     to_phone: false,
                     registered: true,
+                    lid: Some("900001".into()),
                 },
             }))
             .await;

@@ -267,7 +267,9 @@ impl NativeApplication {
                 .map(|(_, message)| message.clone());
             self.pending_composer_request = self.composer.submit(&chat);
             let attachments = self.pending_attachments.remove(&chat).unwrap_or_default();
-            let has_clipboard_image = self.pending_clipboard_images.contains_key(&chat);
+            let has_clipboard_image =
+                attachments.is_empty() && self.pending_clipboard_images.contains_key(&chat);
+            let remaining = attachments.len().max(1);
             self.pending_send = Some(PendingSend {
                 chat: chat.clone(),
                 text: self.draft.clone(),
@@ -275,7 +277,7 @@ impl NativeApplication {
                 attachments,
                 failed_attachments: Vec::new(),
                 clipboard_image: has_clipboard_image,
-                remaining: attachment_count.max(1),
+                remaining,
                 failed: false,
             });
             if let Some(pending) = &self.pending_send
@@ -345,7 +347,7 @@ impl NativeApplication {
         // rows, as when every update was drawn on arrival.
         self.flush_transcript();
         let anchor = older
-            .then(|| self.open_chat.message_ids.first().cloned())
+            .then(|| motion::reading_anchor(&self.messages.view, &self.open_chat.message_ids))
             .flatten();
         let mut page_ids = std::collections::HashSet::new();
         let messages = messages
@@ -395,17 +397,14 @@ impl NativeApplication {
         self.rebuild_message_rows(live_messages_appended);
         self.sync_transcript();
         if older
-            && let Some(anchor) = anchor
+            && let Some((anchor, offset)) = anchor
             && let Some(position) = self
                 .open_chat
                 .message_ids
                 .iter()
                 .position(|id| id == &anchor)
         {
-            let view = self.messages.view.clone();
-            gtk::glib::idle_add_local_once(move || {
-                view.scroll_to(position as u32, gtk::ListScrollFlags::NONE, None);
-            });
+            motion::restore_reading_anchor(&self.messages.view, position as u32, anchor, offset);
         }
         self.status = gettext("Conversation loaded");
     }
@@ -657,7 +656,7 @@ impl NativeApplication {
             .filter_map(|id| self.open_chat.message_snapshots.get(id).cloned())
             .collect::<Vec<_>>();
         let voice = |message: &crate::model::Message| self.project_voice(message);
-        let (rows, unread_row) = message_rows(
+        let (mut rows, unread_row) = message_rows(
             messages,
             unread,
             RowInputs {
@@ -671,6 +670,9 @@ impl NativeApplication {
                 voice: &voice,
             },
         );
+        for row in &mut rows {
+            row.account = self.active_account;
+        }
         // A glide still under way counts as the end: a covered window gets no
         // frames, so the glide waits there and finishes once it is shown.
         let at_bottom = gliding()

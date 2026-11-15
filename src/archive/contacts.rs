@@ -10,9 +10,13 @@ fn contact_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Contact> {
 }
 
 impl Archive {
-    /// Stores a privacy id mapping and carries early mute/pin/lock sync to the
-    /// canonical chat. Returns whether that chat's preferences were touched.
+    /// Stores a verified identity mapping and joins its archived conversation.
+    /// Returns whether the canonical chat or its preferences changed.
     pub fn put_lid(&self, lid: &str, pn: &str) -> Result<bool> {
+        self.atomic(|| self.store_lid(lid, pn))
+    }
+
+    fn store_lid(&self, lid: &str, pn: &str) -> Result<bool> {
         self.connection.execute(
             "INSERT INTO lids (lid, pn) VALUES (?1, ?2) ON CONFLICT(lid) DO UPDATE SET pn = excluded.pn",
             params![lid, pn],
@@ -41,7 +45,8 @@ impl Archive {
                 lock_updated_at = NULLIF(MAX(COALESCE(lock_updated_at, -1), COALESCE(excluded.lock_updated_at, -1)), -1)",
             params![format!("{lid}@lid"), format!("{pn}@s.whatsapp.net"), pn],
         )?;
-        Ok(changed > 0)
+        let merged = self.merge_lid_chat(&format!("{lid}@lid"), &format!("{pn}@s.whatsapp.net"))?;
+        Ok(changed > 0 || merged)
     }
 
     pub fn lids(&self) -> Result<Vec<(String, String)>> {
