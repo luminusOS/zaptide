@@ -165,7 +165,7 @@ fn copy_control_rows(
         .set_selected(model.chats.selection_model.selected());
 }
 
-fn native_x11_input(window: &gtk::Window, scroller: &gtk::ScrolledWindow, action: &str) {
+pub(super) fn native_x11_input(window: &gtk::Window, scroller: &gtk::ScrolledWindow, action: &str) {
     assert_eq!(
         std::env::var("ZAPTIDE_TEST_PRIVATE_XVFB").as_deref(),
         Ok("1")
@@ -210,9 +210,9 @@ rx=c.c_int(); ry=c.c_int(); child=c.c_ulong()
 if not x.XTranslateCoordinates(d,w,root,int(sys.argv[1]),int(sys.argv[2]),c.byref(rx),c.byref(ry),c.byref(child)): raise RuntimeError('cannot translate coordinates')
 if not t.XTestFakeMotionEvent(d,-1,rx.value,ry.value,0): raise RuntimeError('cannot move pointer')
 action=sys.argv[3]
-if action == 'wheel-down':
+if action in ('wheel-down', 'wheel-up'):
     for pressed in (1,0):
-        if not t.XTestFakeButtonEvent(d,5,pressed,0): raise RuntimeError('cannot send wheel')
+        if not t.XTestFakeButtonEvent(d,5 if action == 'wheel-down' else 4,pressed,0): raise RuntimeError('cannot send wheel')
 else:
     x.XSetInputFocus(d,w,1,0)
     shifted=action.startswith('Shift+')

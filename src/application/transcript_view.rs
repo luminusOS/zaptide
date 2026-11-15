@@ -159,6 +159,7 @@ impl SimpleComponent for TranscriptView {
         };
         let message_view = &init.message_view;
         let widgets = view_output!();
+        super::motion::install_scroll_cancellation(&widgets.message_scroller, message_view);
         let adjustment = widgets.message_scroller.vadjustment();
         let output = sender.clone();
         let away = std::rc::Rc::new(std::cell::Cell::new(false));
