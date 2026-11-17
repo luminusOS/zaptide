@@ -36,6 +36,20 @@
     <control>keyboard</control>
   </supports>
   <releases>
+    <release version="0.9.0" date="2026-11-17">
+      <description>
+        <p>Polls can be quizzes that reveal the answer after voting. The
+        sticker picker keeps saved stickers, skips duplicates and previews
+        animated stickers. Reads from the phone apply even when they arrive
+        before their message, group statuses no longer appear in group
+        chats, and the chat list and transcript keep their scroll position
+        as chats update. Linking falls back across addresses, channel names
+        are kept, and selected message text can be copied. The Flatpak
+        copies archive keys where the upcoming org.luminusos.ZapTide app ID
+        can take them over, so start this version once before that
+        update.</p>
+      </description>
+    </release>
     <release version="0.8.0" date="2026-11-04">
       <description>
         <p>One-to-one voice and video calls, with a Calls tab, redesigned call
