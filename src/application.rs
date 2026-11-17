@@ -55,7 +55,7 @@ use link_page::{LinkPage, LinkPageInit, LinkPageInput, LinkPageOutput, LinkPageS
 use linking::{link_page, qr_texture};
 use motion::*;
 use presentation::*;
-use rows::MessageRowWidgets;
+use rows::{ChatRowWidgets, MessageRowWidgets};
 use sidebar::{Sidebar, SidebarInit, SidebarInput, SidebarOutput, SidebarState};
 use transcript_view::{
     TranscriptState, TranscriptView, TranscriptViewInit, TranscriptViewInput, TranscriptViewOutput,

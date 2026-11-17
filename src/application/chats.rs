@@ -70,6 +70,25 @@ fn update_chat_rows(
             .get(position as u32)
             .is_some_and(|item| *item.borrow() == *row)
     });
+    // A chat whose preview, badge or avatar changed in place keeps its list
+    // item. Replacing it moves GTK's scroll anchor and the focused row, which
+    // a click arriving before the next allocation turns into a jump.
+    if removed == inserted
+        && (prefix..prefix + inserted).all(|position| {
+            chats
+                .get(position as u32)
+                .is_some_and(|item| item.borrow().id == rows[position].id)
+        })
+    {
+        let selected_position = selected.and_then(|id| rows.iter().position(|row| row.id == id));
+        for (position, row) in rows.into_iter().enumerate().skip(prefix).take(inserted) {
+            rebind_chat_row(chats, position as u32, row);
+        }
+        chats
+            .selection_model
+            .set_selected(selected_position.map_or(gtk::INVALID_LIST_POSITION, |i| i as u32));
+        return;
+    }
     let coordinates = chats
         .view
         .parent()
@@ -113,16 +132,40 @@ fn update_chat_rows(
     }
 }
 
+fn rebind_chat_row(
+    chats: &TypedListView<ChatRow, gtk::SingleSelection>,
+    position: u32,
+    row: ChatRow,
+) {
+    let Some(item) = chats.get(position) else {
+        return;
+    };
+    if *item.borrow() == row {
+        return;
+    }
+    let id = row.id.clone();
+    *item.borrow_mut() = row;
+    let mut child = chats.view.first_child();
+    while let Some(current) = child {
+        if let Some(mut root) = current.first_child().and_downcast::<gtk::Box>()
+            && root.widget_name() == id.as_str()
+        {
+            // relm4's list factory keeps each row's widgets under this key.
+            if let Some(mut widgets) = unsafe { root.steal_data::<ChatRowWidgets>("widgets") } {
+                item.borrow_mut().bind(&mut widgets, &mut root);
+                unsafe { root.set_data("widgets", widgets) };
+            }
+            return;
+        }
+        child = current.next_sibling();
+    }
+}
+
 impl NativeApplication {
     pub(super) fn select_chat(&mut self, position: u32) {
-        if let Some(bridge) = self
-            .chats
-            .view
-            .parent()
-            .and_downcast::<super::sidebar_coordinates::SidebarCoordinates>()
-        {
-            bridge.cancel_restore();
-        }
+        // A pending sidebar restore keeps running: opening a chat does not
+        // scroll the list, and cancelling would leave the rows wherever the
+        // reorder's interim `scroll_to` put them.
         self.close_media_viewer();
         let Some(chat) = self.chat_ids.get(position as usize).cloned() else {
             return;

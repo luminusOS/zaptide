@@ -119,10 +119,16 @@ visible chat by identity and offset before its first snapshot. Pending input
 must be applied once, including input received before the model update.
 Exhausting materialization attempts is cancellation, not a successful restore.
 
-Cancel pending restoration coherently on navigation, unmap or adjustment
-replacement. Reentrant signals and old callbacks must not modify a newer
-transaction or publish to a replaced adjustment. Release Rust borrows before
-calling GTK setters that can emit signals. Selection and application state
+A chat whose rows keep their order and identity is rebound in place, keeping
+its list item, selection and GTK's scroll anchor; only insertions, removals
+and moves go through restoration. Opening a chat does not scroll the sidebar
+beyond GTK bringing a partly hidden clicked row into view, so a pending
+restoration continues across it.
+
+Cancel pending restoration coherently on account navigation, unmap or
+adjustment replacement. Reentrant signals and old callbacks must not modify a
+newer transaction or publish to a replaced adjustment. Release Rust borrows
+before calling GTK setters that can emit signals. Selection and application state
 remain owned by Relm4; the bridge owns only widget coordinates and geometry.
 
 ## Polls
