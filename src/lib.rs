@@ -16,6 +16,7 @@ pub(crate) mod event_drain;
 pub(crate) mod glib_notifier;
 pub mod i18n;
 pub(crate) mod link_preview;
+pub mod logging;
 pub(crate) mod media_retention;
 pub(crate) mod message_window;
 pub(crate) mod model;

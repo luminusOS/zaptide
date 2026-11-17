@@ -33,6 +33,12 @@ The window owns presence through `Command::SetOnline` and
 Keep `PresencePolicy::Manual`. Automatic announces availability on reconnect
 and prevents the phone from notifying while the linked device is online.
 
+`src/logging.rs` installs the only `log` backend. Records from other crates,
+mainly whatsapp-rust, are redacted before output: a rendered protocol node
+keeps only its tag and digit runs of seven or more are masked. ZapTide's own
+records are not redacted, so they must not contain personal data in the first
+place. GLib and GTK messages use GLib's writer and are not redacted.
+
 Quitting shuts the backend down on a thread before calling
 `relm4::main_application().quit()`. GApplication provides single-instance
 activation. Notification presentation belongs in `src/native_notifications.rs`.
