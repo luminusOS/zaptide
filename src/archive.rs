@@ -19,7 +19,8 @@ pub(crate) use encryption::{
     keyed as open_keyed, open as open_encrypted,
 };
 pub use encryption::{
-    archive_key_identity, copy_archive_key, forget_archive_key, hand_over_archive_keys,
+    archive_key_identity, copy_archive_key, forget_archive_key, forget_handed_over_key,
+    hand_over_archive_keys,
 };
 mod media;
 mod polls;

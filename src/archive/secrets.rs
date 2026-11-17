@@ -178,22 +178,52 @@ fn with_stores<T>(operation: impl FnOnce(&Keyring<'_>) -> Result<T>) -> Result<T
     })
 }
 
+/// Reads a key from this app's own store.
+pub(super) type ReadKey<'a> = &'a dyn Fn(&str) -> Result<Option<Secret>>;
+
+fn hands_keys_over_here() -> bool {
+    !cfg!(test)
+        && hands_keys_over(
+            ashpd::is_sandboxed(),
+            std::env::var_os("FLATPAK_ID").as_deref(),
+        )
+}
+
 /// Runs `operation` on a thread of its own when this build hands keys over
-/// to the renamed app; otherwise does nothing. It never prompts, so it cannot
-/// hold up the keyring thread, and its error is logged.
+/// to the renamed app; otherwise does nothing. It never unlocks host items,
+/// so a locked keyring waits for the next start, and its error is logged.
 pub(super) fn hand_keys_over_later(
-    operation: impl FnOnce(&dyn SecretStore, &dyn HostSecretStore) -> Result<()> + Send + 'static,
+    operation: impl FnOnce(ReadKey<'_>, &dyn HostSecretStore) -> Result<()> + Send + 'static,
 ) {
-    let flatpak_id = std::env::var_os("FLATPAK_ID");
-    if cfg!(test) || !hands_keys_over(ashpd::is_sandboxed(), flatpak_id.as_deref()) {
+    if !hands_keys_over_here() {
         return;
     }
+    on_handover_thread(move || {
+        let current = Oo7::open()?;
+        match &*current.backend {
+            Backend::File(_) => operation(&|identity| current.get(identity), &Handover),
+            // Without a Secret portal the keys already are in the host
+            // Secret Service; read them there without unlocking.
+            Backend::Host(_) => operation(&|identity| Handover.get(identity), &Handover),
+        }
+    });
+}
+
+/// Deletes the marked host copy of a removed folder's key, on a thread of
+/// its own, when this build hands keys over.
+pub(super) fn forget_handed_over_later(identity: String) {
+    if !hands_keys_over_here() {
+        return;
+    }
+    on_handover_thread(move || Handover.delete(&identity));
+}
+
+fn on_handover_thread(work: impl FnOnce() -> Result<()> + Send + 'static) {
     let spawned = std::thread::Builder::new()
         .name("key-handover".into())
         .spawn(move || {
             let _runtime = crate::portal::enter();
-            let result = Oo7::open().and_then(|current| operation(&current, &Handover));
-            if let Err(error) = result {
+            if let Err(error) = work() {
                 log::warn!("could not hand archive keys over to the renamed app: {error:#}");
             }
         });

@@ -323,6 +323,7 @@ fn delete_account_data_with(dirs: &AppDirs, id: AccountId, forget_key: ForgetKey
     let account = dirs.for_account(id);
     let archive = account.archive_db();
     if archive.exists() || account.session_db().exists() {
+        crate::archive::forget_handed_over_key(&archive);
         match crate::archive::archive_key_identity(&archive) {
             Ok(identity) => {
                 if let Err(error) = forget_key(&identity) {

@@ -12,7 +12,7 @@ use rusqlite::{Connection, OpenFlags};
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
-use super::secrets::{self, HostSecretStore, Keyring, Lookup, SecretStore};
+use super::secrets::{self, HostSecretStore, Keyring, Lookup};
 
 const HEADER: &[u8; 16] = b"SQLite format 3\0";
 const ARCHIVE_FILE: &str = "archive.db";
@@ -159,7 +159,7 @@ pub fn hand_over_archive_keys(archives: Vec<PathBuf>) {
 
 fn hand_over_in(
     archive: &Path,
-    current: &dyn SecretStore,
+    current: secrets::ReadKey<'_>,
     host: &dyn HostSecretStore,
 ) -> Result<()> {
     if !archive.exists() && !device_store_beside(archive).exists() {
@@ -179,11 +179,25 @@ fn hand_over_in(
     };
     // Only this app's own store: a key an older build left elsewhere is copied
     // in when the archive opens, and handed over on the next start.
-    let key = match current.get(&identity_of(&folder))? {
+    let key = match current(&identity_of(&folder))? {
         Some(secret) => key_from(&secret)?,
         None => anyhow::bail!("The archive key is not in this app's keyring yet"),
     };
     hand_over_key(&identity_of(&renamed), &key, host)
+}
+
+/// Forgets the copy handed over for `archive`'s folder, which is about to be
+/// deleted, so a removed account's key does not stay in the host Secret
+/// Service. Call it while the folder still exists.
+pub fn forget_handed_over_key(archive: &Path) {
+    if let Some(identity) = handed_over_identity(archive) {
+        secrets::forget_handed_over_later(identity);
+    }
+}
+
+fn handed_over_identity(archive: &Path) -> Option<String> {
+    let folder = archive.parent()?.canonicalize().ok()?;
+    Some(identity_of(&renamed_folder(&folder)?))
 }
 
 fn hand_over_key(identity: &str, key: &[u8; 32], host: &dyn HostSecretStore) -> Result<()> {
@@ -457,7 +471,7 @@ fn encrypt_in_place(path: &Path, staging: &Path, key: &[u8; 32], database: Datab
 
 #[cfg(test)]
 mod tests {
-    use super::super::secrets::{KEYRING_SERVICE, memory::Store};
+    use super::super::secrets::{KEYRING_SERVICE, SecretStore, memory::Store};
     use super::*;
 
     fn directory() -> tempfile::TempDir {
@@ -577,7 +591,12 @@ mod tests {
         let identity = archive_key_identity(&archive).unwrap();
         let (current, host) = (Store::with(&identity, &key), Store::default());
 
-        hand_over_in(&archive, &current, &host).unwrap();
+        hand_over_in(
+            &archive,
+            &|identity| SecretStore::get(&current, identity),
+            &host,
+        )
+        .unwrap();
         assert_eq!(host.len(), 1);
         assert_eq!(current.read(&identity), Some(key.to_vec()));
 
@@ -611,9 +630,36 @@ mod tests {
         let identity = archive_key_identity(&archive).unwrap();
         // The current store is the host Secret Service itself.
         let host = Store::with(&identity, &key);
-        hand_over_in(&archive, &host, &host).unwrap();
+        hand_over_in(
+            &archive,
+            &|identity| SecretStore::get(&host, identity),
+            &host,
+        )
+        .unwrap();
         assert_eq!(host.read(&identity), Some(key.to_vec()));
         assert_eq!(host.read(&future_identity(&archive)), Some(key.to_vec()));
+    }
+
+    #[test]
+    fn forgetting_a_folder_names_its_handed_over_copy() {
+        let directory = directory();
+        let key = [5u8; 32];
+        let archive = flatpak_archive(directory.path(), &key);
+        let identity = archive_key_identity(&archive).unwrap();
+        let (current, host) = (Store::with(&identity, &key), Store::default());
+        hand_over_in(
+            &archive,
+            &|identity| SecretStore::get(&current, identity),
+            &host,
+        )
+        .unwrap();
+        let handed = handed_over_identity(&archive).unwrap();
+        assert_eq!(handed, future_identity(&archive));
+        HostSecretStore::delete(&host, &handed).unwrap();
+        assert_eq!(host.len(), 0);
+        let native = directory.path().join("state/zaptide/accounts/1/archive.db");
+        fs::create_dir_all(native.parent().unwrap()).unwrap();
+        assert_eq!(handed_over_identity(&native), None);
     }
 
     #[test]
@@ -623,8 +669,18 @@ mod tests {
         let archive = flatpak_archive(directory.path(), &key);
         let identity = archive_key_identity(&archive).unwrap();
         let (current, host) = (Store::with(&identity, &key), Store::default());
-        hand_over_in(&archive, &current, &host).unwrap();
-        hand_over_in(&archive, &current, &host).unwrap();
+        hand_over_in(
+            &archive,
+            &|identity| SecretStore::get(&current, identity),
+            &host,
+        )
+        .unwrap();
+        hand_over_in(
+            &archive,
+            &|identity| SecretStore::get(&current, identity),
+            &host,
+        )
+        .unwrap();
         assert_eq!(host.len(), 1);
         assert_eq!(host.read(&future_identity(&archive)), Some(key.to_vec()));
     }
@@ -638,7 +694,12 @@ mod tests {
         let future = future_identity(&archive);
         let current = Store::with(&identity, &key);
         let host = Store::with(&future, &[6u8; 32]);
-        let error = hand_over_in(&archive, &current, &host).unwrap_err();
+        let error = hand_over_in(
+            &archive,
+            &|identity| SecretStore::get(&current, identity),
+            &host,
+        )
+        .unwrap_err();
         assert!(error.to_string().contains("different key"), "{error}");
         assert_eq!(host.read(&future), Some(vec![6u8; 32]));
         assert_eq!(current.read(&identity), Some(key.to_vec()));
@@ -652,7 +713,12 @@ mod tests {
         let identity = archive_key_identity(&archive).unwrap();
         let (current, host) = (Store::with(&identity, &key), Store::default());
         host.damage_writes();
-        let error = hand_over_in(&archive, &current, &host).unwrap_err();
+        let error = hand_over_in(
+            &archive,
+            &|identity| SecretStore::get(&current, identity),
+            &host,
+        )
+        .unwrap_err();
         assert!(error.to_string().contains("did not retain"), "{error}");
         assert_eq!(host.len(), 0);
         assert_eq!(current.read(&identity), Some(key.to_vec()));
@@ -663,7 +729,12 @@ mod tests {
         let directory = directory();
         let archive = flatpak_archive(directory.path(), &[5u8; 32]);
         let (current, host) = (Store::default(), Store::default());
-        let error = hand_over_in(&archive, &current, &host).unwrap_err();
+        let error = hand_over_in(
+            &archive,
+            &|identity| SecretStore::get(&current, identity),
+            &host,
+        )
+        .unwrap_err();
         assert!(
             error.to_string().contains("not in this app's keyring"),
             "{error}"
@@ -683,17 +754,32 @@ mod tests {
             .execute_batch("CREATE TABLE fixture(value TEXT)")
             .unwrap();
         let current = Store::with(&archive_key_identity(&native).unwrap(), &[5u8; 32]);
-        hand_over_in(&native, &current, &host).unwrap();
+        hand_over_in(
+            &native,
+            &|identity| SecretStore::get(&current, identity),
+            &host,
+        )
+        .unwrap();
 
         let plain = directory
             .path()
             .join(".var/app/dev.luminusos.ZapTide/.local/state/zaptide/accounts/2/archive.db");
         fs::create_dir_all(plain.parent().unwrap()).unwrap();
         fs::write(&plain, b"SQLite format 3\0rest").unwrap();
-        hand_over_in(&plain, &current, &host).unwrap();
+        hand_over_in(
+            &plain,
+            &|identity| SecretStore::get(&current, identity),
+            &host,
+        )
+        .unwrap();
 
         let missing = plain.with_file_name("absent.db");
-        hand_over_in(&missing, &current, &host).unwrap();
+        hand_over_in(
+            &missing,
+            &|identity| SecretStore::get(&current, identity),
+            &host,
+        )
+        .unwrap();
         assert_eq!(host.len(), 0);
     }
 
