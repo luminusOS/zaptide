@@ -411,6 +411,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn every_accounts_archive_is_handed_over_in_either_layout() {
+        let root = tempfile::tempdir().unwrap();
+        let dirs = AppDirs::under(root.path());
+        let mut registry = Registry::default();
+        let (first, second) = (registry.add(), registry.add());
+        let prepared = Prepared {
+            registry,
+            legacy: false,
+        };
+        assert_eq!(
+            prepared.archives(&dirs),
+            vec![
+                dirs.for_account(first).archive_db(),
+                dirs.for_account(second).archive_db()
+            ]
+        );
+        let legacy = Prepared {
+            registry: Registry::default(),
+            legacy: true,
+        };
+        assert_eq!(legacy.archives(&dirs), vec![dirs.archive_db()]);
+    }
+
+    #[test]
     fn ids_grow_and_are_never_reused() {
         let mut registry = Registry::default();
         let first = registry.add();

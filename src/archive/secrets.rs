@@ -52,11 +52,16 @@ pub(super) const PREVIOUS_FLATPAK_ID: &str = "dev.luminusos.ZapTide";
 /// The Flatpak ID that takes over its data, luminusOS/zaptide#234.
 pub(super) const NEXT_FLATPAK_ID: &str = "org.luminusos.ZapTide";
 
-/// The Secret portal ties the file keyring to the app ID, so the renamed app
-/// cannot open the previous one. Only the previous ID's sandbox hands keys
-/// over; native installs already keep them in the host Secret Service.
-fn bridges_keys(file_keyring: bool, flatpak_id: Option<&std::ffi::OsStr>) -> bool {
-    file_keyring && flatpak_id == Some(std::ffi::OsStr::new(PREVIOUS_FLATPAK_ID))
+/// Marks the host items made for the renamed app, so that its cleanup never
+/// touches a key that an older build created and may still need.
+pub(super) const HANDOVER_ATTRIBUTE: (&str, &str) = ("zaptide-handover", "1");
+
+/// The Secret portal ties the file keyring to the app ID, and a key's
+/// identity contains the app's data folder, so the renamed app finds no key.
+/// Only the previous ID's sandbox hands keys over, whether it keeps them in
+/// the file keyring or, without a Secret portal, in the host Secret Service.
+fn hands_keys_over(sandboxed: bool, flatpak_id: Option<&std::ffi::OsStr>) -> bool {
+    sandboxed && flatpak_id == Some(std::ffi::OsStr::new(PREVIOUS_FLATPAK_ID))
 }
 
 /// The result of looking a key up.
@@ -173,40 +178,28 @@ fn with_stores<T>(operation: impl FnOnce(&Keyring<'_>) -> Result<T>) -> Result<T
     })
 }
 
-/// Runs `operation` on the keyring thread, without waiting, when this build
-/// hands keys over to the renamed app; otherwise does nothing. Its error is
-/// logged.
-pub(super) fn with_key_bridge_later(
-    operation: impl FnOnce(&Keyring<'_>, &dyn HostSecretStore) -> Result<()> + Send + 'static,
-) -> Result<()> {
-    if cfg!(test) {
-        anyhow::bail!("tests must not use the OS keyring");
+/// Runs `operation` on a thread of its own when this build hands keys over
+/// to the renamed app; otherwise does nothing. It never prompts, so it cannot
+/// hold up the keyring thread, and its error is logged.
+pub(super) fn hand_keys_over_later(
+    operation: impl FnOnce(&dyn SecretStore, &dyn HostSecretStore) -> Result<()> + Send + 'static,
+) {
+    let flatpak_id = std::env::var_os("FLATPAK_ID");
+    if cfg!(test) || !hands_keys_over(ashpd::is_sandboxed(), flatpak_id.as_deref()) {
+        return;
     }
-    if std::env::var_os("FLATPAK_ID").as_deref() != Some(std::ffi::OsStr::new(PREVIOUS_FLATPAK_ID))
-    {
-        return Ok(());
-    }
-    queue(Box::new(move || {
-        let result = (|| {
-            let current = Oo7::open()?;
-            if !bridges_keys(
-                matches!(*current.backend, Backend::File(_)),
-                std::env::var_os("FLATPAK_ID").as_deref(),
-            ) {
-                return Ok(());
+    let spawned = std::thread::Builder::new()
+        .name("key-handover".into())
+        .spawn(move || {
+            let _runtime = crate::portal::enter();
+            let result = Oo7::open().and_then(|current| operation(&current, &Handover));
+            if let Err(error) = result {
+                log::warn!("could not hand archive keys over to the renamed app: {error:#}");
             }
-            operation(
-                &Keyring {
-                    current: &current,
-                    legacy: &SecretService,
-                },
-                &SecretService,
-            )
-        })();
-        if let Err(error) = result {
-            log::warn!("could not hand archive keys over to the renamed app: {error:#}");
-        }
-    }))
+        });
+    if let Err(error) = spawned {
+        log::warn!("could not start handing archive keys over: {error}");
+    }
 }
 
 /// Runs `operation` with the OS keyring stores and waits for its result.
@@ -461,20 +454,49 @@ impl LegacySecretStore for SecretService {
     }
 }
 
-impl HostSecretStore for SecretService {
+/// The host Secret Service as the key handover uses it: it never unlocks or
+/// prompts, and it only deletes the items it marked.
+struct Handover;
+
+fn handover_attributes(identity: &str) -> [(&'static str, String); 3] {
+    let [service, username] = attributes(identity);
+    [
+        service,
+        username,
+        (HANDOVER_ATTRIBUTE.0, HANDOVER_ATTRIBUTE.1.to_owned()),
+    ]
+}
+
+impl HostSecretStore for Handover {
     fn get(&self, identity: &str) -> Result<Option<Secret>> {
-        LegacySecretStore::get(self, identity)
+        let attributes = attributes(identity);
+        block_on(async move {
+            let service = oo7::dbus::Service::new().await?;
+            let mut items = Vec::new();
+            for collection in service.collections().await? {
+                items.extend(collection.search_items(&attributes).await?);
+            }
+            let Some(item) = unique(items)? else {
+                return Ok(None);
+            };
+            if item.is_locked().await? {
+                anyhow::bail!("The OS keyring is locked; trying again on the next start");
+            }
+            Ok(Some(Zeroizing::new(
+                item.secret().await?.as_bytes().to_vec(),
+            )))
+        })
     }
 
     fn create(&self, identity: &str, secret: &[u8]) -> Result<()> {
-        let attributes = attributes(identity);
+        let attributes = handover_attributes(identity);
         let label = label(identity);
         let secret = oo7::Secret::blob(secret);
         block_on(async move {
             let service = oo7::dbus::Service::new().await?;
             let collection = service.default_collection().await?;
             if collection.is_locked().await? {
-                collection.unlock(None).await?;
+                anyhow::bail!("The OS keyring is locked; trying again on the next start");
             }
             collection
                 .create_item(&label, &attributes, secret, false, None)
@@ -484,7 +506,7 @@ impl HostSecretStore for SecretService {
     }
 
     fn delete(&self, identity: &str) -> Result<()> {
-        let attributes = attributes(identity);
+        let attributes = handover_attributes(identity);
         block_on(async move {
             let service = oo7::dbus::Service::new().await?;
             for collection in service.collections().await? {
@@ -636,21 +658,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_the_previous_ids_file_keyring_hands_keys_over() {
+    fn only_the_previous_ids_sandbox_hands_keys_over() {
         use std::ffi::OsStr;
-        assert!(bridges_keys(
+        assert!(hands_keys_over(
             true,
             Some(OsStr::new("dev.luminusos.ZapTide"))
         ));
-        assert!(!bridges_keys(
+        assert!(!hands_keys_over(
             false,
             Some(OsStr::new("dev.luminusos.ZapTide"))
         ));
-        assert!(!bridges_keys(
+        assert!(!hands_keys_over(
             true,
             Some(OsStr::new("org.luminusos.ZapTide"))
         ));
-        assert!(!bridges_keys(true, None));
+        assert!(!hands_keys_over(false, None));
+    }
+
+    #[test]
+    fn handed_over_items_are_marked_beyond_the_earlier_attributes() {
+        let marked = handover_attributes("archive-1");
+        assert_eq!(marked[..2], attributes("archive-1"));
+        assert_eq!(marked[2], ("zaptide-handover", "1".to_owned()));
     }
 
     #[test]
