@@ -40,6 +40,30 @@ pub(super) trait LegacySecretStore {
     fn get(&self, identity: &str) -> Result<Option<Secret>>;
 }
 
+/// The host Secret Service, written only to hand keys to the renamed app.
+pub(super) trait HostSecretStore {
+    fn get(&self, identity: &str) -> Result<Option<Secret>>;
+    fn create(&self, identity: &str, secret: &[u8]) -> Result<()>;
+    fn delete(&self, identity: &str) -> Result<()>;
+}
+
+/// The Flatpak ID this build bridges keys away from.
+pub(super) const PREVIOUS_FLATPAK_ID: &str = "dev.luminusos.ZapTide";
+/// The Flatpak ID that takes over its data, luminusOS/zaptide#234.
+pub(super) const NEXT_FLATPAK_ID: &str = "org.luminusos.ZapTide";
+
+/// Marks the host items made for the renamed app, so that its cleanup never
+/// touches a key that an older build created and may still need.
+pub(super) const HANDOVER_ATTRIBUTE: (&str, &str) = ("zaptide-handover", "1");
+
+/// The Secret portal ties the file keyring to the app ID, and a key's
+/// identity contains the app's data folder, so the renamed app finds no key.
+/// Only the previous ID's sandbox hands keys over, whether it keeps them in
+/// the file keyring or, without a Secret portal, in the host Secret Service.
+fn hands_keys_over(sandboxed: bool, flatpak_id: Option<&std::ffi::OsStr>) -> bool {
+    sandboxed && flatpak_id == Some(std::ffi::OsStr::new(PREVIOUS_FLATPAK_ID))
+}
+
 /// The result of looking a key up.
 pub(super) enum Lookup {
     Found(Secret),
@@ -152,6 +176,60 @@ fn with_stores<T>(operation: impl FnOnce(&Keyring<'_>) -> Result<T>) -> Result<T
         current: &current,
         legacy,
     })
+}
+
+/// Reads a key from this app's own store.
+pub(super) type ReadKey<'a> = &'a dyn Fn(&str) -> Result<Option<Secret>>;
+
+fn hands_keys_over_here() -> bool {
+    !cfg!(test)
+        && hands_keys_over(
+            ashpd::is_sandboxed(),
+            std::env::var_os("FLATPAK_ID").as_deref(),
+        )
+}
+
+/// Runs `operation` on a thread of its own when this build hands keys over
+/// to the renamed app; otherwise does nothing. It never unlocks host items,
+/// so a locked keyring waits for the next start, and its error is logged.
+pub(super) fn hand_keys_over_later(
+    operation: impl FnOnce(ReadKey<'_>, &dyn HostSecretStore) -> Result<()> + Send + 'static,
+) {
+    if !hands_keys_over_here() {
+        return;
+    }
+    on_handover_thread(move || {
+        let current = Oo7::open()?;
+        match &*current.backend {
+            Backend::File(_) => operation(&|identity| current.get(identity), &Handover),
+            // Without a Secret portal the keys already are in the host
+            // Secret Service; read them there without unlocking.
+            Backend::Host(_) => operation(&|identity| Handover.get(identity), &Handover),
+        }
+    });
+}
+
+/// Deletes the marked host copy of a removed folder's key, on a thread of
+/// its own, when this build hands keys over.
+pub(super) fn forget_handed_over_later(identity: String) {
+    if !hands_keys_over_here() {
+        return;
+    }
+    on_handover_thread(move || Handover.delete(&identity));
+}
+
+fn on_handover_thread(work: impl FnOnce() -> Result<()> + Send + 'static) {
+    let spawned = std::thread::Builder::new()
+        .name("key-handover".into())
+        .spawn(move || {
+            let _runtime = crate::portal::enter();
+            if let Err(error) = work() {
+                log::warn!("could not hand archive keys over to the renamed app: {error:#}");
+            }
+        });
+    if let Err(error) = spawned {
+        log::warn!("could not start handing archive keys over: {error}");
+    }
 }
 
 /// Runs `operation` with the OS keyring stores and waits for its result.
@@ -406,6 +484,71 @@ impl LegacySecretStore for SecretService {
     }
 }
 
+/// The host Secret Service as the key handover uses it: it never unlocks or
+/// prompts, and it only deletes the items it marked.
+struct Handover;
+
+fn handover_attributes(identity: &str) -> [(&'static str, String); 3] {
+    let [service, username] = attributes(identity);
+    [
+        service,
+        username,
+        (HANDOVER_ATTRIBUTE.0, HANDOVER_ATTRIBUTE.1.to_owned()),
+    ]
+}
+
+impl HostSecretStore for Handover {
+    fn get(&self, identity: &str) -> Result<Option<Secret>> {
+        let attributes = attributes(identity);
+        block_on(async move {
+            let service = oo7::dbus::Service::new().await?;
+            let mut items = Vec::new();
+            for collection in service.collections().await? {
+                items.extend(collection.search_items(&attributes).await?);
+            }
+            let Some(item) = unique(items)? else {
+                return Ok(None);
+            };
+            if item.is_locked().await? {
+                anyhow::bail!("The OS keyring is locked; trying again on the next start");
+            }
+            Ok(Some(Zeroizing::new(
+                item.secret().await?.as_bytes().to_vec(),
+            )))
+        })
+    }
+
+    fn create(&self, identity: &str, secret: &[u8]) -> Result<()> {
+        let attributes = handover_attributes(identity);
+        let label = label(identity);
+        let secret = oo7::Secret::blob(secret);
+        block_on(async move {
+            let service = oo7::dbus::Service::new().await?;
+            let collection = service.default_collection().await?;
+            if collection.is_locked().await? {
+                anyhow::bail!("The OS keyring is locked; trying again on the next start");
+            }
+            collection
+                .create_item(&label, &attributes, secret, false, None)
+                .await?;
+            Ok(())
+        })
+    }
+
+    fn delete(&self, identity: &str) -> Result<()> {
+        let attributes = handover_attributes(identity);
+        block_on(async move {
+            let service = oo7::dbus::Service::new().await?;
+            for collection in service.collections().await? {
+                for item in collection.search_items(&attributes).await? {
+                    item.delete(None).await?;
+                }
+            }
+            Ok(())
+        })
+    }
+}
+
 /// The current store already is the old one, so there is nothing to migrate.
 struct NoLegacy;
 
@@ -443,6 +586,10 @@ pub(super) mod memory {
                 .lock()
                 .unwrap()
                 .insert(identity.to_owned(), secret.to_vec());
+        }
+
+        pub(in crate::archive) fn len(&self) -> usize {
+            self.items.lock().unwrap().len()
         }
 
         pub(in crate::archive) fn read(&self, identity: &str) -> Option<Vec<u8>> {
@@ -519,12 +666,51 @@ pub(super) mod memory {
             SecretStore::get(self, identity)
         }
     }
+
+    impl HostSecretStore for Store {
+        fn get(&self, identity: &str) -> Result<Option<Secret>> {
+            SecretStore::get(self, identity)
+        }
+
+        fn create(&self, identity: &str, secret: &[u8]) -> Result<()> {
+            SecretStore::set(self, identity, secret)
+        }
+
+        fn delete(&self, identity: &str) -> Result<()> {
+            SecretStore::delete(self, identity)
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::memory::Store;
     use super::*;
+
+    #[test]
+    fn only_the_previous_ids_sandbox_hands_keys_over() {
+        use std::ffi::OsStr;
+        assert!(hands_keys_over(
+            true,
+            Some(OsStr::new("dev.luminusos.ZapTide"))
+        ));
+        assert!(!hands_keys_over(
+            false,
+            Some(OsStr::new("dev.luminusos.ZapTide"))
+        ));
+        assert!(!hands_keys_over(
+            true,
+            Some(OsStr::new("org.luminusos.ZapTide"))
+        ));
+        assert!(!hands_keys_over(false, None));
+    }
+
+    #[test]
+    fn handed_over_items_are_marked_beyond_the_earlier_attributes() {
+        let marked = handover_attributes("archive-1");
+        assert_eq!(marked[..2], attributes("archive-1"));
+        assert_eq!(marked[2], ("zaptide-handover", "1".to_owned()));
+    }
 
     #[test]
     fn only_missing_portal_allows_host_fallback() {
