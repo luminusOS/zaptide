@@ -706,6 +706,53 @@ fn group_message_id_sender_alt_cannot_poison_colliding_envelope() {
 }
 
 #[test]
+fn group_statuses_stay_out_of_the_group_chat() {
+    let chat = "123-456@g.us";
+    // A <status> stanza from the group, and a hosted <message> that only
+    // carries <meta is_group_status="true">.
+    for status_stanza in [true, false] {
+        let (mut worker, events, _, _) = worker();
+        let mut status = group_message_id_info("222@lid");
+        status.id = "group-status".into();
+        status.is_status_stanza = status_stanza;
+        status.source.sender_alt = Some("111@s.whatsapp.net".parse().unwrap());
+        status.meta_info = Some(Box::new(whatsapp_rust::types::message::MsgMetaInfo {
+            is_group_status: true,
+            ..Default::default()
+        }));
+
+        worker.ingest(&Arc::new(wa_text("status")), &status);
+        worker.ingest_undecryptable(&status);
+
+        assert!(
+            worker
+                .archive
+                .message(chat, "group-status")
+                .unwrap()
+                .is_none()
+        );
+        assert!(!worker.identity.lid_to_pn.contains_key("222"));
+        assert!(events.try_iter().next().is_none());
+
+        let mut message = group_message_id_info("222@lid");
+        message.id = "group-message".into();
+        message.source.sender_alt = Some("111@s.whatsapp.net".parse().unwrap());
+        worker.ingest(&Arc::new(wa_text("message")), &message);
+        assert!(
+            worker
+                .archive
+                .message(chat, "group-message")
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(
+            worker.identity.lid_to_pn.get("222").map(String::as_str),
+            Some("111")
+        );
+    }
+}
+
+#[test]
 fn group_message_id_new_message_learns_sender_alt() {
     let (mut worker, _, _, _) = worker();
     let mut info = group_message_id_info("222@lid");
