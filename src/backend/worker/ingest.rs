@@ -19,7 +19,8 @@ impl Worker {
     }
 
     pub(super) fn ingest(&mut self, message: &Arc<wa::Message>, info: &MessageInfo) {
-        if info.source.chat.is_status_broadcast() {
+        // Contact and group statuses are not chat messages; see #27 and #233.
+        if info.has_status_receipt_class() {
             return;
         }
         let chat = self.canonical(&info.source.chat);
@@ -204,7 +205,7 @@ impl Worker {
     }
 
     pub(super) fn ingest_undecryptable(&mut self, info: &MessageInfo) {
-        if info.source.chat.is_status_broadcast() || info.source.is_from_me {
+        if info.has_status_receipt_class() || info.source.is_from_me {
             return;
         }
         let chat = self.canonical(&info.source.chat);
