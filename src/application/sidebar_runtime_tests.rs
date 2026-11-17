@@ -166,11 +166,23 @@ fn copy_control_rows(
 }
 
 pub(super) fn native_x11_input(window: &gtk::Window, scroller: &gtk::ScrolledWindow, action: &str) {
+    native_x11_input_on(window, scroller.upcast_ref(), action);
+}
+
+fn native_x11_input_on(window: &gtk::Window, target: &gtk::Widget, action: &str) {
     assert_eq!(
         std::env::var("ZAPTIDE_TEST_PRIVATE_XVFB").as_deref(),
         Ok("1")
     );
-    let bounds = scroller.compute_bounds(window).expect("scroller bounds");
+    let mut bounds = target.compute_bounds(window).expect("target bounds");
+    // Aim at the part of a partly scrolled-out row that is actually shown.
+    if let Some(viewport) = target
+        .ancestor(gtk::ScrolledWindow::static_type())
+        .filter(|scroller| scroller != target)
+        .and_then(|scroller| scroller.compute_bounds(window))
+    {
+        bounds = bounds.intersection(&viewport).expect("target is shown");
+    }
     let x = (bounds.x() + bounds.width() / 2.0) as i32;
     let y = (bounds.y() + bounds.height() / 2.0) as i32;
     let script = r#"
@@ -210,9 +222,10 @@ rx=c.c_int(); ry=c.c_int(); child=c.c_ulong()
 if not x.XTranslateCoordinates(d,w,root,int(sys.argv[1]),int(sys.argv[2]),c.byref(rx),c.byref(ry),c.byref(child)): raise RuntimeError('cannot translate coordinates')
 if not t.XTestFakeMotionEvent(d,-1,rx.value,ry.value,0): raise RuntimeError('cannot move pointer')
 action=sys.argv[3]
-if action in ('wheel-down', 'wheel-up'):
+if action in ('wheel-down', 'wheel-up', 'click'):
+    button={'wheel-down':5,'wheel-up':4,'click':1}[action]
     for pressed in (1,0):
-        if not t.XTestFakeButtonEvent(d,5 if action == 'wheel-down' else 4,pressed,0): raise RuntimeError('cannot send wheel')
+        if not t.XTestFakeButtonEvent(d,button,pressed,0): raise RuntimeError('cannot send button')
 else:
     x.XSetInputFocus(d,w,1,0)
     shifted=action.startswith('Shift+')
@@ -688,6 +701,16 @@ fn identity_merge_redirect_fixture(edit: bool, mixed_attachments: bool) {
 #[test]
 #[ignore = "requires private Xvfb, Python, X11 and XTest"]
 fn native_wheel_and_keyboard_survive_backend_reorder() {
+    wheel_and_keyboard_survive_backend_reorder(false);
+}
+
+#[test]
+#[ignore = "requires private Xvfb, Python, X11 and XTest"]
+fn animated_native_wheel_survives_backend_reorder() {
+    wheel_and_keyboard_survive_backend_reorder(true);
+}
+
+fn wheel_and_keyboard_survive_backend_reorder(animations: bool) {
     let data = tempfile::tempdir().expect("private fixture directory");
     let _relm: RelmApp<Input> = RelmApp::new("dev.luminusos.ZapTide.SidebarNativeInputTest");
     relm4::main_application()
@@ -695,7 +718,7 @@ fn native_wheel_and_keyboard_survive_backend_reorder() {
         .expect("register test application");
     gtk::Settings::default()
         .unwrap()
-        .set_gtk_enable_animations(false);
+        .set_gtk_enable_animations(animations);
     let (backend, events) = Backend::detached();
     TEST_BACKEND.with_borrow_mut(|slot| assert!(slot.replace(backend).is_none()));
     let app = NativeApplication::builder().launch(Init {
@@ -725,6 +748,22 @@ fn native_wheel_and_keyboard_survive_backend_reorder() {
         list.is_mapped() && scroller.vadjustment().upper() > scroller.vadjustment().page_size()
     });
     let adjustment = scroller.vadjustment();
+    if animations {
+        for action in ["wheel-down", "wheel-down", "wheel-up"] {
+            let before = adjustment.value();
+            native_x11_input(window.upcast_ref(), &scroller, action);
+            wait_for_frames(&window, 3);
+            let delta = adjustment.value() - before;
+            assert!(
+                delta.abs() > 0.0 && delta.abs() < adjustment.page_size(),
+                "startup {action} jumped {delta}: before={before}, after={}, lower={}, upper={}, page={}",
+                adjustment.value(),
+                adjustment.lower(),
+                adjustment.upper(),
+                adjustment.page_size()
+            );
+        }
+    }
     adjustment.set_value((adjustment.upper() - adjustment.page_size()) * 0.35);
     wait_for_frames(&window, 2);
     let scroll_events = Rc::new(RefCell::new(Vec::new()));
@@ -840,6 +879,11 @@ fn native_wheel_and_keyboard_survive_backend_reorder() {
     assert!((second_delta - second_real_delta).abs() <= 0.01);
     assert!((f64::from(second_y - second_after_y) - second_real_delta).abs() <= 2.0);
     assert!(adjustment.value() < adjustment.upper() - adjustment.page_size() - 100.0);
+    if animations {
+        control_window.destroy();
+        window.destroy();
+        return;
+    }
     let account = app.model().active_account;
     chats.reverse();
     for (index, chat) in chats.iter_mut().enumerate() {
@@ -855,10 +899,9 @@ fn native_wheel_and_keyboard_survive_backend_reorder() {
     wait_until("selected chat", || {
         app.model().open_chat.active_chat.as_deref() == Some(selected_id.as_str())
     });
-    assert!(
-        !bridge.restore_pending(),
-        "explicit chat navigation cancels the pending restore"
-    );
+    wait_until("restore finishing after chat navigation", || {
+        !bridge.restore_pending()
+    });
     let before = adjustment.value();
     let seen = scroll_events.borrow().len();
     native_x11_input(window.upcast_ref(), &scroller, "wheel-down");
@@ -868,7 +911,7 @@ fn native_wheel_and_keyboard_survive_backend_reorder() {
     wait_for_frames(&window, 3);
     assert!(
         adjustment.value() > before,
-        "wheel must work after cancellation"
+        "wheel must work after the restore"
     );
     assert!(list.grab_focus());
     native_x11_input(window.upcast_ref(), &scroller, "Down");
@@ -1386,6 +1429,121 @@ fn logout_and_account_switch_cancel_pending_restore() {
     wait_for_frames(&window, 2);
     assert_eq!(row_ids(&app.model()), incoming_ids);
     assert_eq!(app.model().active_account, new_account);
+    window.destroy();
+    drop(app);
+}
+
+#[test]
+#[ignore = "requires private Xvfb, Python, X11 and XTest"]
+fn opening_a_chat_keeps_the_sidebar_position() {
+    let data = tempfile::tempdir().expect("private fixture directory");
+    let _relm: RelmApp<Input> = RelmApp::new("dev.luminusos.ZapTide.SidebarOpenTest");
+    relm4::main_application()
+        .register(None::<&gtk::gio::Cancellable>)
+        .expect("register test application");
+    let (backend, events) = Backend::detached();
+    TEST_BACKEND.with_borrow_mut(|slot| assert!(slot.replace(backend).is_none()));
+    let app = NativeApplication::builder().launch(Init {
+        dirs: AppDirs::under(data.path()),
+    });
+    let notifier = app.model().notifier.clone();
+    let window = app.widget().clone();
+    window.set_title(Some("ZapTide sidebar open fixture"));
+    window.set_default_size(1100, 760);
+    window.present();
+    send_event(&events, &notifier, Event::Link(LinkStatus::Connected));
+    wait_until("connected link", || app.model().link.is_connected());
+    let mut chats = fixture_chats();
+    for chat in chats.iter_mut().skip(90).take(60) {
+        chat.unread = 3;
+    }
+    let ids: Vec<_> = chats.iter().map(|chat| chat.id.clone()).collect();
+    send_event(&events, &notifier, Event::Chats(chats.clone()));
+    wait_until("chat projection", || row_ids(&app.model()) == ids);
+    let list = app.model().chats.view.clone();
+    let bridge = list
+        .parent()
+        .and_downcast::<super::sidebar_coordinates::SidebarCoordinates>()
+        .expect("chat list coordinate bridge");
+    let scroller = list
+        .ancestor(gtk::ScrolledWindow::static_type())
+        .and_downcast::<gtk::ScrolledWindow>()
+        .expect("chat list scroll window");
+    wait_until("scrollable list", || {
+        list.is_mapped() && scroller.vadjustment().upper() > scroller.vadjustment().page_size()
+    });
+    let adjustment = scroller.vadjustment();
+    adjustment.set_value((adjustment.upper() - adjustment.page_size()) * 0.35);
+    wait_for_frames(&window, 3);
+    // (visible row to open, chat promoted to the top just before)
+    let rounds = [(0, None), (3, None), (usize::MAX, None), (2, Some(250))];
+    for (round, (index, promoted)) in rounds.into_iter().enumerate() {
+        let mut visible: Vec<(String, f32)> = ids
+            .iter()
+            .filter_map(|id| {
+                let y = wrapper_y(&list, &scroller, id)?;
+                (y > -40.0 && y < scroller.height() as f32 - 20.0).then(|| (id.clone(), y))
+            })
+            .collect();
+        visible.sort_by(|left, right| left.1.total_cmp(&right.1));
+        let target_index = index.min(visible.len() - 1);
+        let partly_hidden = target_index == 0 || target_index == visible.len() - 1;
+        let (target, _) = visible[target_index].clone();
+        let (reference, before_y) = visible[if target_index == 1 { 2 } else { 1 }].clone();
+        if let Some(promoted) = promoted {
+            // A reorder is still being restored when the chat opens.
+            chats[promoted].last_activity = 10_000;
+            send_event(
+                &events,
+                &notifier,
+                Event::ChatUpdated(Box::new(chats[promoted].clone())),
+            );
+            // Rows recreated by the reorder are laid out in the same frame
+            // that finishes the restore, so a click cannot reach them before.
+            wait_until("pending restore", || bridge.restore_pending());
+            app.emit(Input::SelectChat(
+                app.model().active_account,
+                target.clone(),
+            ));
+        } else {
+            native_x11_input_on(
+                window.upcast_ref(),
+                &row_wrapper(&list, &target).expect("target row"),
+                "click",
+            );
+        }
+        wait_until("opened chat", || {
+            app.model().open_chat.active_chat.as_deref() == Some(target.as_str())
+        });
+        wait_for_frames(&window, 3);
+        // GTK scrolls a partly hidden row fully into view when it is clicked.
+        let before_y = if partly_hidden {
+            let after_click =
+                wrapper_y(&list, &scroller, &reference).expect("reference after click");
+            assert!(
+                (after_click - before_y).abs() <= 64.0,
+                "round {round}: bringing {target} into view moved {reference} from {before_y} to {after_click}"
+            );
+            after_click
+        } else {
+            before_y
+        };
+        let position = ids.iter().position(|id| id == &target).unwrap();
+        chats[position].unread = 0;
+        send_event(
+            &events,
+            &notifier,
+            Event::ChatUpdated(Box::new(chats[position].clone())),
+        );
+        for _ in 0..12 {
+            wait_for_frames(&window, 1);
+            let after_y = wrapper_y(&list, &scroller, &reference);
+            assert!(
+                after_y.is_some_and(|y| (y - before_y).abs() <= 2.0),
+                "round {round}: opening {target} moved {reference} from {before_y} to {after_y:?}"
+            );
+        }
+    }
     window.destroy();
     drop(app);
 }

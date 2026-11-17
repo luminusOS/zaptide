@@ -105,6 +105,8 @@ jobs:
           for name in \
             backend_reorder_preserves_the_first_snapshot_and_open_chat \
             native_wheel_and_keyboard_survive_backend_reorder \
+            animated_native_wheel_survives_backend_reorder \
+            opening_a_chat_keeps_the_sidebar_position \
             logout_and_account_switch_cancel_pending_restore; do
             grep -Fx "application::sidebar_runtime_tests::${name}" "$RUNNER_TEMP/ignored-test-names.log" > /dev/null
           done
@@ -112,8 +114,9 @@ jobs:
             timeout 60s dbus-run-session -- xvfb-run -a -s '-screen 0 1600x1000x24' cargo test --locked --lib "$test" -- --ignored --exact --nocapture | tee "$RUNNER_TEMP/sidebar-test-output.log"
             grep -F 'test result: ok. 1 passed;' "$RUNNER_TEMP/sidebar-test-output.log"
           done < "$RUNNER_TEMP/sidebar-tests.log"
-      - name: Transcript scroll bounds
+      - name: Transcript scroll regressions
         env:
+          ZAPTIDE_TEST_PRIVATE_XVFB: '1'
           GDK_BACKEND: x11
           GSK_RENDERER: cairo
           GSETTINGS_BACKEND: memory
@@ -121,9 +124,18 @@ jobs:
           G_DEBUG: fatal-criticals
         shell: bash
         run: |
-          set -o pipefail
-          timeout 60s xvfb-run -a cargo test --locked --lib application::transcript_view::tests::jump_button_tracks_transcript_growth_without_scrolling -- --exact --ignored --test-threads=1 | tee "$RUNNER_TEMP/transcript-scroll-test.log"
-          grep -F 'test result: ok. 1 passed;' "$RUNNER_TEMP/transcript-scroll-test.log"
+          set -euo pipefail
+          for test in \
+            application::transcript_view::tests::jump_button_tracks_transcript_growth_without_scrolling \
+            application::motion::tests::wheel_input_cancels_delayed_scroll_to_end \
+            application::motion::tests::transcript_at_the_end_follows_late_growth \
+            application::motion::tests::placed_rows_settle_where_requested_among_unmeasured_heights \
+            application::motion::tests::wheel_input_stops_an_active_glide \
+            application::transcript_view::tests::older_button_follows_the_scroll_position \
+            application::history_runtime_tests::final_history_page_preserves_reading_position_and_rejects_stale_clicks; do
+            timeout 60s dbus-run-session -- xvfb-run -a -s '-screen 0 1600x1000x24' cargo test --locked --lib "$test" -- --exact --ignored --test-threads=1 | tee "$RUNNER_TEMP/transcript-scroll-test.log"
+            grep -F 'test result: ok. 1 passed;' "$RUNNER_TEMP/transcript-scroll-test.log"
+          done
       - name: Rustdoc
         env:
           RUSTDOCFLAGS: -D warnings

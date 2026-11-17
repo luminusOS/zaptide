@@ -119,11 +119,28 @@ visible chat by identity and offset before its first snapshot. Pending input
 must be applied once, including input received before the model update.
 Exhausting materialization attempts is cancellation, not a successful restore.
 
-Cancel pending restoration coherently on navigation, unmap or adjustment
-replacement. Reentrant signals and old callbacks must not modify a newer
-transaction or publish to a replaced adjustment. Release Rust borrows before
-calling GTK setters that can emit signals. Selection and application state
+A chat whose rows keep their order and identity is rebound in place, keeping
+its list item, selection and GTK's scroll anchor; only insertions, removals
+and moves go through restoration. Opening a chat does not scroll the sidebar
+beyond GTK bringing a partly hidden clicked row into view, so a pending
+restoration continues across it.
+
+Cancel pending restoration coherently on account navigation, unmap or
+adjustment replacement. Reentrant signals and old callbacks must not modify a
+newer transaction or publish to a replaced adjustment. Release Rust borrows
+before calling GTK setters that can emit signals. Selection and application state
 remain owned by Relm4; the bridge owns only widget coordinates and geometry.
+
+## Transcript scrolling
+
+A transcript resting at its end stays there when content grows after layout,
+such as decoded thumbnails, the typing indicator or a taller composer.
+Leaving the end through any input stops following until the view rests at the
+end again. Programmatic positioning (unread marker, message jumps, reading
+anchor restoration) stops following before its model change is laid out,
+corrects the row's place each frame until it holds, and yields to user input
+through the shared scroll generation. A placed row clamped at the end of the
+list rests there, so later growth below it is followed like any other.
 
 ## Polls
 
