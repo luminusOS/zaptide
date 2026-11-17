@@ -190,13 +190,13 @@ async fn prepare_voice(
         .map_err(|error| error.to_string())?;
     let message = audio_message(
         upload,
-        AudioOptions {
+        from_default!(AudioOptions {
             mimetype: Some(mime.clone()),
             duration_seconds: Some(seconds),
             ptt: Some(true),
             waveform: Some(waveform.clone()),
             context_info: context,
-        },
+        }),
     );
     Ok(Prepared {
         message,
@@ -246,12 +246,12 @@ async fn prepare_media(
             .map_err(|error| error.to_string())?;
         let mut message = image_message(
             upload,
-            ImageOptions {
+            from_default!(ImageOptions {
                 caption: None,
                 mimetype: Some("image/jpeg".to_owned()),
                 jpeg_thumbnail: thumbnail.clone(),
                 context_info: None,
-            },
+            }),
         );
         if let Some(image) = message.image_message.as_option_mut() {
             image.width = Some(width);
@@ -283,11 +283,10 @@ async fn prepare_media(
             .map_err(|error| error.to_string())?;
         let message = video_message(
             upload,
-            VideoOptions {
+            from_default!(VideoOptions {
                 mimetype: Some(mime_owned.clone()),
                 gif_playback: Some(gif),
-                ..Default::default()
-            },
+            }),
         );
         return Ok(Prepared {
             message,
@@ -310,11 +309,10 @@ async fn prepare_media(
             .map_err(|error| error.to_string())?;
         let message = audio_message(
             upload,
-            AudioOptions {
+            from_default!(AudioOptions {
                 mimetype: Some(mime_owned.clone()),
                 ptt: Some(false),
-                ..Default::default()
-            },
+            }),
         );
         return Ok(Prepared {
             message,
@@ -349,12 +347,11 @@ async fn prepare_document(
     let name = file_name.unwrap_or("file").to_owned();
     let message = document_message(
         upload,
-        DocumentOptions {
+        from_default!(DocumentOptions {
             mimetype: Some(mime_owned.clone()),
             file_name: Some(name.clone()),
             title: Some(name.clone()),
-            ..Default::default()
-        },
+        }),
     );
     Ok(Prepared {
         message,
@@ -399,11 +396,10 @@ async fn prepare_streamed_file(
         MediaType::Video => (
             video_message(
                 upload,
-                VideoOptions {
+                from_default!(VideoOptions {
                     mimetype: Some(mime.clone()),
                     gif_playback: Some(false),
-                    ..Default::default()
-                },
+                }),
             ),
             Content::Video {
                 caption: None,
@@ -416,11 +412,10 @@ async fn prepare_streamed_file(
         MediaType::Audio => (
             audio_message(
                 upload,
-                AudioOptions {
+                from_default!(AudioOptions {
                     mimetype: Some(mime.clone()),
                     ptt: Some(false),
-                    ..Default::default()
-                },
+                }),
             ),
             Content::Audio {
                 media: media(Some(&mime), Some(size), None, None),
@@ -435,12 +430,11 @@ async fn prepare_streamed_file(
             (
                 document_message(
                     upload,
-                    DocumentOptions {
+                    from_default!(DocumentOptions {
                         mimetype: Some(mime.clone()),
                         file_name: Some(name.clone()),
                         title: Some(name.clone()),
-                        ..Default::default()
-                    },
+                    }),
                 ),
                 Content::Document {
                     media: media(Some(&mime), Some(size), None, None),
@@ -520,12 +514,12 @@ async fn prepare_streamed_photo(
         .map_err(|error| error.to_string())?;
     let mut message = image_message(
         upload,
-        ImageOptions {
+        from_default!(ImageOptions {
             caption: None,
             mimetype: Some("image/jpeg".to_owned()),
             jpeg_thumbnail: photo.thumbnail.clone(),
             context_info: None,
-        },
+        }),
     );
     if let Some(image) = message.image_message.as_option_mut() {
         image.width = Some(photo.width);
@@ -567,8 +561,8 @@ async fn prepare_sticker(client: &Client, bytes: Vec<u8>) -> Result<Prepared, St
         .upload(bytes.clone(), MediaType::Sticker, UploadOptions::default())
         .await
         .map_err(|error| error.to_string())?;
-    let message = wa::Message {
-        sticker_message: MessageField::some(wa::message::StickerMessage {
+    let message = from_default!(wa::Message {
+        sticker_message: MessageField::some(from_default!(wa::message::StickerMessage {
             url: Some(upload.url),
             direct_path: Some(upload.direct_path),
             media_key: Some(upload.media_key.to_vec()),
@@ -580,10 +574,8 @@ async fn prepare_sticker(client: &Client, bytes: Vec<u8>) -> Result<Prepared, St
             is_animated: Some(animated),
             width: Some(width),
             height: Some(height),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
+        })),
+    });
     Ok(Prepared {
         message,
         content: Content::Sticker {
@@ -647,7 +639,7 @@ async fn file_outbound(
     if let Some(context) = context {
         prepared.message.set_context_info(context);
     }
-    let id = id.unwrap_or_else(|| client.generate_message_id());
+    let id = id.unwrap_or_else(|| client.generate_message_id().into_string());
     let path = media_path(
         dir,
         chat,
@@ -1372,7 +1364,7 @@ impl Worker {
         let me = self.me();
         // Show the sticker at once, as text sends do; the upload fills in
         // the same row, or marks it failed.
-        let id = client.generate_message_id();
+        let id = client.generate_message_id().into_string();
         let mut preview = media(Some(&"image/webp".to_owned()), None, None, None);
         preview.path = Some(path.clone());
         self.store_message(
@@ -1518,7 +1510,7 @@ impl Worker {
             );
         }
         let mentions = self.mentions_of(&mentions);
-        let id = client.generate_message_id();
+        let id = client.generate_message_id().into_string();
         let session_generation = self.session_generation;
         let session_generation_shared = self.session_generation_shared.clone();
         let row = Message {
@@ -1661,7 +1653,7 @@ impl Worker {
         // strip quote chains and secrets, and retain reusable media metadata.
         let (message, expiration) =
             outgoing_forward(&original, self.ephemeral_expiration(&to_chat));
-        let id = client.generate_message_id();
+        let id = client.generate_message_id().into_string();
         let session_generation = self.session_generation;
         let session_generation_shared = self.session_generation_shared.clone();
         let mentions = self.mentions_of(&mentioned_of(&message));
@@ -1734,8 +1726,10 @@ impl Worker {
         let session_generation = self.session_generation;
         let session_generation_shared = self.session_generation_shared.clone();
         tokio::spawn(async move {
-            let result = client.edit_message(jid, id.clone(), message).await;
-            let success = result.is_ok();
+            let success = client
+                .edit_message_raw(jid, id.clone(), message, Default::default())
+                .await
+                .is_ok();
             let _ = Completion {
                 generation: session_generation,
                 done: Done::Edited {
@@ -1748,9 +1742,7 @@ impl Worker {
                 },
             }
             .send(&commands);
-            if result.is_err()
-                && session_generation_shared.load(Ordering::Acquire) == session_generation
-            {
+            if !success && session_generation_shared.load(Ordering::Acquire) == session_generation {
                 let _ = events.send(Event::Error("Could not edit the message".to_owned()));
                 waker.wake();
             }

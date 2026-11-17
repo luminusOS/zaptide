@@ -171,11 +171,17 @@ mod tests {
         let error = whatsapp_rust::IqError::Disconnected(Box::new(node));
         assert_eq!(
             redact(&error.to_string()),
-            "received disconnect node during IQ wait: Node { tag: \"failure\" … }"
+            "received disconnect node during IQ wait: <failure …>"
         );
         assert_eq!(
             redact(&format!("Failed to send post-connect active IQ: {error:?}")),
-            "Failed to send post-connect active IQ: Disconnected(Node { tag: \"failure\" … }"
+            "Failed to send post-connect active IQ: Disconnected(<failure …>"
+        );
+        assert_eq!(
+            redact(
+                r#"Disconnected(Node { tag: "failure", attrs: {"from": "5500900000000@s.whatsapp.net"} })"#
+            ),
+            "Disconnected(Node { tag: \"failure\" … }"
         );
     }
 

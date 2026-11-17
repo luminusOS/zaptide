@@ -57,8 +57,8 @@ fn photo(seed: usize) -> wa::Message {
     let thumbnail = (0..RAW_BYTES - 256)
         .map(|byte| (byte.wrapping_mul(31) ^ seed) as u8)
         .collect();
-    wa::Message {
-        image_message: MessageField::some(wa::message::ImageMessage {
+    from_default!(wa::Message {
+        image_message: MessageField::some(from_default!(wa::message::ImageMessage {
             caption: Some(format!("synthetic photo {seed}")),
             mimetype: Some("image/jpeg".into()),
             file_length: Some(200_000 + seed as u64),
@@ -69,10 +69,8 @@ fn photo(seed: usize) -> wa::Message {
             file_enc_sha256: Some(vec![2; 32]),
             direct_path: Some(format!("/v/t62.7118-24/synthetic-{seed}.enc")),
             jpeg_thumbnail: Some(thumbnail),
-            ..Default::default()
-        }),
-        ..Default::default()
-    }
+        })),
+    })
 }
 
 struct Fixture {
@@ -169,21 +167,19 @@ struct Entry<'a> {
 }
 
 fn history_entry(chat: &str, entry: Entry<'_>) -> wa::HistorySyncMsg {
-    wa::HistorySyncMsg {
-        message: MessageField::some(wa::WebMessageInfo {
-            key: MessageField::some(wa::MessageKey {
+    from_default!(wa::HistorySyncMsg {
+        message: MessageField::some(from_default!(wa::WebMessageInfo {
+            key: MessageField::some(from_default!(wa::MessageKey {
                 remote_jid: Some(chat.into()),
                 from_me: Some(entry.from_me),
                 id: Some(entry.id),
                 participant: entry.sender.map(str::to_owned),
-            }),
+            })),
             message: MessageField::some(entry.message),
             message_timestamp: Some(entry.timestamp as u64),
             push_name: entry.sender.map(|sender| format!("Pushed {sender}")),
-            ..Default::default()
-        }),
-        ..Default::default()
-    }
+        })),
+    })
 }
 
 /// A history chunk shaped like the phone's first sync: a few busy groups,
@@ -225,13 +221,12 @@ fn history() -> ParsedHistory {
                         .map(|sender| (sender.clone(), format!("Pushed {sender}"))),
                 );
             }
-            parse_conversation(wa::Conversation {
+            parse_conversation(from_default!(wa::Conversation {
                 id,
                 name: Some(format!("Synthetic history chat {chat}")),
                 conversation_timestamp: Some(BASE_TIME as u64),
                 messages,
-                ..Default::default()
-            })
+            }))
         })
         .collect();
     ParsedHistory {
@@ -263,12 +258,11 @@ fn replayed_group() -> ParsedHistory {
         })
         .collect();
     ParsedHistory {
-        chats: vec![parse_conversation(wa::Conversation {
+        chats: vec![parse_conversation(from_default!(wa::Conversation {
             id,
             conversation_timestamp: Some(BASE_TIME as u64),
             messages,
-            ..Default::default()
-        })],
+        }))],
         push_names: Vec::new(),
         lids: Vec::new(),
         stickers: Vec::new(),

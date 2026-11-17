@@ -2,15 +2,13 @@ use super::*;
 use crate::contact_cards::ContactCard;
 
 fn contact_message(contact: &ContactCard, context: Option<wa::ContextInfo>) -> wa::Message {
-    wa::Message {
-        contact_message: MessageField::some(wa::message::ContactMessage {
+    from_default!(wa::Message {
+        contact_message: MessageField::some(from_default!(wa::message::ContactMessage {
             display_name: Some(contact.name.clone()),
             vcard: Some(contact.vcard.clone()),
             context_info: context.map_or_else(MessageField::none, MessageField::some),
-            ..Default::default()
-        }),
-        ..Default::default()
-    }
+        })),
+    })
 }
 
 impl Worker {
@@ -33,7 +31,7 @@ impl Worker {
         let (context, quoted) = self.quote_context(&chat, quoting.as_deref());
         let mut message = contact_message(contact, context);
         let expiration = self.apply_ephemeral(&chat, &mut message);
-        let id = client.generate_message_id();
+        let id = client.generate_message_id().into_string();
         let row = Message {
             id: id.clone(),
             chat: chat.clone(),
@@ -116,10 +114,9 @@ mod tests {
     #[test]
     fn contact_wire_round_trip_preserves_vcard_quote_and_expiration() {
         let contact = ContactCard::from_saved("15555550123@s.whatsapp.net", "Ada Example").unwrap();
-        let context = wa::ContextInfo {
+        let context = from_default!(wa::ContextInfo {
             stanza_id: Some("QUOTED".into()),
-            ..Default::default()
-        };
+        });
         let mut wire = contact_message(&contact, Some(context));
         assert_eq!(
             apply_ephemeral_expiration(&mut wire, Some(3600)),

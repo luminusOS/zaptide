@@ -1,6 +1,8 @@
 use super::*;
 use std::io::{Read, Write};
-use whatsapp_rust::download::{DownloadParams, MediaDownloader, MediaHost, MediaRoute};
+use whatsapp_rust::download::{
+    DownloadLimits, DownloadParams, MediaDownloader, MediaHost, MediaRoute,
+};
 use whatsapp_rust::http::{HttpClient, HttpRequest, HttpResponse};
 use whatsapp_rust::wacore::net::StreamingHttpResponse;
 
@@ -14,10 +16,7 @@ impl HttpClient for FakeCdn {
     async fn execute(&self, _request: HttpRequest) -> anyhow::Result<HttpResponse> {
         let mut body = Vec::new();
         (self.1)().read_to_end(&mut body)?;
-        Ok(HttpResponse {
-            status_code: self.0,
-            body,
-        })
+        Ok(HttpResponse::new(self.0, body))
     }
 
     fn supports_streaming(&self) -> bool {
@@ -25,10 +24,7 @@ impl HttpClient for FakeCdn {
     }
 
     fn execute_streaming(&self, _request: HttpRequest) -> anyhow::Result<StreamingHttpResponse> {
-        Ok(StreamingHttpResponse {
-            status_code: self.0,
-            body: (self.1)(),
-        })
+        Ok(StreamingHttpResponse::new(self.0, (self.1)()))
     }
 }
 
@@ -40,7 +36,7 @@ fn downloader_answering(status: u16, body: Body) -> MediaDownloader {
     MediaDownloader::new(
         Arc::new(FakeCdn(status, body)),
         Arc::new(whatsapp_rust::TokioRuntime),
-        MediaRoute::unauthenticated(vec![MediaHost::new("cdn.invalid")]),
+        MediaRoute::new(vec![MediaHost::new("cdn.invalid")]),
     )
 }
 
@@ -54,7 +50,8 @@ fn encrypted(plaintext: &[u8]) -> (DownloadParams, Vec<u8>) {
         &media.file_enc_sha256,
         plaintext.len() as u64,
         MediaType::Document,
-    );
+    )
+    .expect("synthetic media parameters are valid");
     (params, media.data_to_upload)
 }
 
@@ -111,7 +108,9 @@ async fn a_verified_library_download_streams_the_plaintext_to_disk() {
     let downloader = downloader(shared(body));
 
     let result = stream_session_cache_file(&dir, &staging, 1, &generation, &lock, |file| async {
-        downloader.download_to_writer(&params, file).await
+        downloader
+            .download_to_writer(&params, file, DownloadLimits::default())
+            .await
     })
     .await;
 
@@ -133,7 +132,9 @@ async fn a_download_that_fails_verification_leaves_no_file_behind() {
     let downloader = downloader(shared(body));
 
     let result = stream_session_cache_file(&dir, &staging, 1, &generation, &lock, |file| async {
-        downloader.download_to_writer(&params, file).await
+        downloader
+            .download_to_writer(&params, file, DownloadLimits::default())
+            .await
     })
     .await;
 
@@ -155,7 +156,9 @@ async fn a_cdn_refusal_keeps_its_status_through_the_staging_file() {
         let staging = download_staging_path(dir).expect("synthetic staging entropy");
         let result =
             stream_session_cache_file(dir, &staging, 1, &generation, &lock, |file| async {
-                downloader.download_to_writer(&params, file).await
+                downloader
+                    .download_to_writer(&params, file, DownloadLimits::default())
+                    .await
             })
             .await;
         let Err(StagedDownload::Fetch(error)) = result else {
@@ -300,7 +303,8 @@ async fn streaming_a_large_download_keeps_peak_memory_flat() {
         &info.file_enc_sha256,
         SIZE,
         MediaType::Document,
-    );
+    )
+    .expect("synthetic media parameters are valid");
     let body_path = encrypted_path.clone();
     let downloader = downloader(Box::new(move || {
         Box::new(std::io::BufReader::new(
@@ -313,14 +317,19 @@ async fn streaming_a_large_download_keeps_peak_memory_flat() {
 
     let before = peak_resident_kib();
     let result = stream_session_cache_file(&dir, &staging, 1, &generation, &lock, |file| async {
-        downloader.download_to_writer(&params, file).await
+        downloader
+            .download_to_writer(&params, file, DownloadLimits::default())
+            .await
     })
     .await;
     let streamed = peak_resident_kib();
     assert_eq!(result.unwrap(), staging);
     assert_eq!(std::fs::metadata(&staging).unwrap().len(), SIZE);
 
-    let in_memory = downloader.download(&params).await.unwrap();
+    let in_memory = downloader
+        .download(&params, DownloadLimits::default())
+        .await
+        .unwrap();
     let buffered = peak_resident_kib();
     assert_eq!(in_memory.len() as u64, SIZE);
     eprintln!(

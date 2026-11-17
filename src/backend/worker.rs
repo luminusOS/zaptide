@@ -22,12 +22,13 @@ use whatsapp_rust::media::{
 };
 use whatsapp_rust::pair_code::PairCodeOptions;
 use whatsapp_rust::prelude::{
-    Bot, BotHandle, Client, Jid, MessageBuilderExt, MessageExt, MessageField, SendOptions, wa,
+    Bot, BotHandle, Client, Jid, MessageBuilderExt, MessageExt, MessageField, SendOptions,
+    SendRequest, wa,
 };
 use whatsapp_rust::send::RevokeType;
 use whatsapp_rust::types::events as wa_events;
 use whatsapp_rust::types::message::{MessageInfo, MessageSource};
-use whatsapp_rust::types::presence::{ChatPresence, ReceiptType};
+use whatsapp_rust::types::presence::{ChatActivity, ReceiptType};
 use whatsapp_rust::upload::UploadOptions;
 use whatsapp_rust::wacore::download::Downloadable;
 use whatsapp_rust::wacore::history_sync::{HistorySyncStream, MAX_DECOMPRESSED};
@@ -282,12 +283,11 @@ fn app_version() -> wa::device_props::AppVersion {
     let mut parts = env!("CARGO_PKG_VERSION")
         .split('.')
         .map(|part| part.parse::<u32>().ok());
-    wa::device_props::AppVersion {
+    from_default!(wa::device_props::AppVersion {
         primary: parts.next().flatten(),
         secondary: parts.next().flatten(),
         tertiary: parts.next().flatten(),
-        ..Default::default()
-    }
+    })
 }
 
 fn message_raw_fingerprint(raw: &[u8]) -> [u8; 32] {
@@ -547,13 +547,25 @@ impl PictureSource for ClientPictures {
         preview: bool,
         existing_id: Option<&str>,
     ) -> Result<ProfilePictureLookup, String> {
-        let options = whatsapp_rust::features::ProfilePictureLookupOptions::new(jid)
-            .preview(preview)
+        use whatsapp_rust::{ProfilePictureRequest, ProfilePictureTarget, ProfilePictureType};
+        let target = if jid.is_group() {
+            ProfilePictureTarget::Group(jid)
+        } else {
+            ProfilePictureTarget::Contact(jid)
+        };
+        let size = if preview {
+            ProfilePictureType::Preview
+        } else {
+            ProfilePictureType::Full
+        };
+        let request = ProfilePictureRequest::new(target, size)
             .existing_id(existing_id)
             .timeout(Some(AVATAR_TIMEOUT));
+        // A rate limit now arrives as an error, which counts as a failed
+        // lookup like any other.
         self.0
-            .contacts()
-            .lookup_profile_picture_with_options(options)
+            .pictures()
+            .lookup(request)
             .await
             .map_err(|error| error.to_string())
     }
@@ -609,10 +621,6 @@ async fn fetch_picture(
                 // unchanged; a removed picture still arrives as PictureUpdate.
                 Ok(ProfilePictureLookup::Unchanged) if existing.is_some() => {
                     return Ok(FetchedPicture::Unchanged);
-                }
-                Ok(ProfilePictureLookup::RateOverlimit) => {
-                    log::debug!("picture lookup rate-limited");
-                    failed = true;
                 }
                 Ok(_) => {}
                 Err(error) => {
@@ -1711,7 +1719,7 @@ async fn send_outgoing_with_kind(
             // exactly as encryption would. No separate burst of metadata queries.
             let group = client
                 .groups()
-                .query_info(&jid)
+                .routing_info(&jid)
                 .await
                 .map_err(|error| error.to_string())?;
             let lids = group
@@ -1745,11 +1753,12 @@ async fn send_outgoing_with_kind(
         if !session_is_current() {
             return Err("The linked account changed before the message was sent".to_owned());
         }
-        let mut options = SendOptions::default().with_message_id(id.clone());
+        let message_id = whatsapp_rust::MessageId::new(&id).map_err(|error| error.to_string())?;
+        let mut options = SendOptions::default().with_message_id(message_id);
         if let Some(expiration) = ephemeral_expiration {
             options = options.with_ephemeral_expiration(expiration);
         }
-        let send = client.send_message_with_options(jid, message, options);
+        let send = client.send(SendRequest::new(&jid, message).with_options(options));
         tokio::pin!(send);
         loop {
             tokio::select! {
@@ -1922,18 +1931,18 @@ fn with_link_preview(
         .extended_text_message
         .as_option()
         .and_then(|extended| extended.context_info.as_option().cloned());
-    let mut wire = wa::Message {
-        extended_text_message: MessageField::some(wa::message::ExtendedTextMessage {
-            text: Some(text.to_owned()),
-            matched_text: Some(preview.url),
-            title: preview.title,
-            description: preview.description,
-            jpeg_thumbnail: thumbnail,
-            context_info: context.map_or_else(MessageField::none, MessageField::some),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
+    let mut wire = from_default!(wa::Message {
+        extended_text_message: MessageField::some(from_default!(
+            wa::message::ExtendedTextMessage {
+                text: Some(text.to_owned()),
+                matched_text: Some(preview.url),
+                title: preview.title,
+                description: preview.description,
+                jpeg_thumbnail: thumbnail,
+                context_info: context.map_or_else(MessageField::none, MessageField::some),
+            }
+        )),
+    });
     apply_ephemeral_expiration(&mut wire, expiration);
     wire
 }
@@ -1942,15 +1951,16 @@ fn with_link_preview(
 fn buttons_response(button_id: &str, label: &str, context: Option<wa::ContextInfo>) -> wa::Message {
     use wa::__buffa::oneof::message::buttons_response_message::Response;
     use whatsapp_rust::prelude::MessageField;
-    wa::Message {
-        buttons_response_message: MessageField::some(wa::message::ButtonsResponseMessage {
-            selected_button_id: Some(button_id.to_owned()),
-            context_info: context.map_or_else(MessageField::none, MessageField::some),
-            r#type: Some(wa::message::buttons_response_message::Type::DISPLAY_TEXT),
-            response: Some(Response::SelectedDisplayText(label.to_owned())),
-        }),
-        ..Default::default()
-    }
+    from_default!(wa::Message {
+        buttons_response_message: MessageField::some(from_default!(
+            wa::message::ButtonsResponseMessage {
+                selected_button_id: Some(button_id.to_owned()),
+                context_info: context.map_or_else(MessageField::none, MessageField::some),
+                r#type: Some(wa::message::buttons_response_message::Type::DISPLAY_TEXT),
+                response: Some(Response::SelectedDisplayText(label.to_owned())),
+            }
+        )),
+    })
 }
 
 /// Wire message answering a list row.
@@ -1961,20 +1971,21 @@ fn list_response(
     context: Option<wa::ContextInfo>,
 ) -> wa::Message {
     use whatsapp_rust::prelude::MessageField;
-    wa::Message {
-        list_response_message: MessageField::some(wa::message::ListResponseMessage {
-            title: Some(title.to_owned()),
-            list_type: Some(wa::message::list_response_message::ListType::SINGLE_SELECT),
-            single_select_reply: MessageField::some(
-                wa::message::list_response_message::SingleSelectReply {
-                    selected_row_id: Some(row_id.to_owned()),
-                },
-            ),
-            context_info: context.map_or_else(MessageField::none, MessageField::some),
-            description,
-        }),
-        ..Default::default()
-    }
+    from_default!(wa::Message {
+        list_response_message: MessageField::some(from_default!(
+            wa::message::ListResponseMessage {
+                title: Some(title.to_owned()),
+                list_type: Some(wa::message::list_response_message::ListType::SINGLE_SELECT),
+                single_select_reply: MessageField::some(from_default!(
+                    wa::message::list_response_message::SingleSelectReply {
+                        selected_row_id: Some(row_id.to_owned()),
+                    }
+                ),),
+                context_info: context.map_or_else(MessageField::none, MessageField::some),
+                description,
+            }
+        )),
+    })
 }
 
 fn response_choice_id(base: &wa::Message) -> Option<String> {

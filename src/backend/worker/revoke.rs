@@ -79,7 +79,7 @@ impl Worker {
         let commands = self.commands.clone();
         tokio::spawn(async move {
             let success = client
-                .revoke_message(jid, &id, RevokeType::Sender)
+                .revoke_message_raw(jid, &id, RevokeType::Sender)
                 .await
                 .is_ok();
             let _ = Completion {

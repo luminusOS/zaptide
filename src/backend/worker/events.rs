@@ -181,7 +181,10 @@ impl Worker {
                 self.emit(Event::Typing {
                     chat: self.canonical(&presence.source.chat),
                     sender: self.canonical(&presence.source.sender),
-                    composing: matches!(presence.state, ChatPresence::Composing),
+                    composing: matches!(
+                        presence.state,
+                        ChatActivity::Typing | ChatActivity::RecordingAudio
+                    ),
                 });
             }
             E::DisableLinkPreviewsUpdate(update) => {
@@ -190,7 +193,8 @@ impl Worker {
             E::Presence(presence) => {
                 self.emit(Event::Presence {
                     id: self.canonical(&presence.from),
-                    online: !presence.unavailable,
+                    online: presence.status
+                        == whatsapp_rust::types::presence::PresenceStatus::Available,
                     last_seen: presence.last_seen.map(|when| when.timestamp()),
                 });
             }

@@ -98,10 +98,7 @@ fn synthetic_newsletter_history_does_not_replace_metadata_with_fallback() {
     let (mut worker, _, _, _) = worker();
     let id = "123456@newsletter";
     worker.archive.ensure_chat(id, "Synthetic Channel").unwrap();
-    let conversation = wa::Conversation {
-        id: id.into(),
-        ..Default::default()
-    };
+    let conversation = from_default!(wa::Conversation { id: id.into() });
     let history = ParsedHistory {
         chats: vec![parse_conversation(conversation)],
         push_names: vec![],
@@ -473,17 +470,15 @@ macro_rules! assert_emitted {
 }
 
 fn wa_text(text: &str) -> wa::Message {
-    wa::Message {
+    from_default!(wa::Message {
         conversation: Some(text.into()),
-        ..Default::default()
-    }
+    })
 }
 
 fn wa_image(image: wa::message::ImageMessage) -> wa::Message {
-    wa::Message {
+    from_default!(wa::Message {
         image_message: MessageField::some(image),
-        ..Default::default()
-    }
+    })
 }
 
 fn group_message_id_info(sender: &str) -> MessageInfo {
@@ -501,10 +496,9 @@ fn group_message_id_info(sender: &str) -> MessageInfo {
 }
 
 fn snapshot_history(update_id: &str, sender: &str, alias: (&str, &str)) -> ParsedHistory {
-    let mut chat = parse_conversation(wa::Conversation {
+    let mut chat = parse_conversation(from_default!(wa::Conversation {
         id: "123-456@g.us".into(),
-        ..Default::default()
-    });
+    }));
     chat.messages.push(super::history::ParsedMessage {
         id: "poll".into(),
         sender: Some("999@s.whatsapp.net".into()),
@@ -527,20 +521,18 @@ fn snapshot_history(update_id: &str, sender: &str, alias: (&str, &str)) -> Parse
         thumbnail: None,
         raw: Vec::new(),
         poll_secret: None,
-        poll_votes: vec![wa::PollUpdate {
-            poll_update_message_key: MessageField::some(wa::MessageKey {
+        poll_votes: vec![from_default!(wa::PollUpdate {
+            poll_update_message_key: MessageField::some(from_default!(wa::MessageKey {
                 id: Some(update_id.into()),
                 participant: Some(sender.into()),
-                ..Default::default()
-            }),
-            vote: MessageField::some(wa::message::PollVoteMessage {
+            })),
+            vote: MessageField::some(from_default!(wa::message::PollVoteMessage {
                 selected_options: vec![
                     whatsapp_rust::wacore::poll::compute_option_hash("Pizza").to_vec(),
                 ],
-            }),
+            })),
             sender_timestamp_ms: Some(50),
-            ..Default::default()
-        }],
+        })],
     });
     ParsedHistory {
         chats: vec![chat],
@@ -684,16 +676,13 @@ fn group_message_id_sender_alt_cannot_poison_colliding_envelope() {
     );
     assert!(events.try_iter().next().is_none());
 
-    let poll = wa::Message {
-        poll_update_message: MessageField::some(wa::message::PollUpdateMessage {
-            poll_creation_message_key: MessageField::some(wa::MessageKey {
+    let poll = from_default!(wa::Message {
+        poll_update_message: MessageField::some(from_default!(wa::message::PollUpdateMessage {
+            poll_creation_message_key: MessageField::some(from_default!(wa::MessageKey {
                 id: Some("poll".into()),
-                ..Default::default()
-            }),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
+            })),
+        })),
+    });
     worker.ingest(&Arc::new(poll), &info);
     assert!(worker.archive.pending_poll_votes(10).unwrap().is_empty());
     assert!(!worker.identity.lid_to_pn.contains_key("222"));
@@ -749,10 +738,7 @@ fn group_message_id_history_mapping_cannot_authorize_same_chunk_collision() {
         .archive
         .insert_message(&original, Some(b"original"))
         .unwrap();
-    let mut conversation = parse_conversation(wa::Conversation {
-        id: chat.into(),
-        ..Default::default()
-    });
+    let mut conversation = parse_conversation(from_default!(wa::Conversation { id: chat.into() }));
     conversation.messages.push(super::history::ParsedMessage {
         id: "collision".into(),
         sender: Some("222@lid".into()),
@@ -810,43 +796,34 @@ fn group_message_id_collision_blocks_live_reaction_poll_and_protocol() {
     let target = crate::archive::tests::message(chat, "target", 1, false);
     worker.archive.insert_message(&target, None).unwrap();
     let key = || {
-        MessageField::some(wa::MessageKey {
+        MessageField::some(from_default!(wa::MessageKey {
             id: Some("target".into()),
-            ..Default::default()
-        })
+        }))
     };
-    let reaction = wa::Message {
-        reaction_message: MessageField::some(wa::message::ReactionMessage {
+    let reaction = from_default!(wa::Message {
+        reaction_message: MessageField::some(from_default!(wa::message::ReactionMessage {
             key: key(),
             text: Some("x".into()),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-    let poll = wa::Message {
-        poll_update_message: MessageField::some(wa::message::PollUpdateMessage {
+        })),
+    });
+    let poll = from_default!(wa::Message {
+        poll_update_message: MessageField::some(from_default!(wa::message::PollUpdateMessage {
             poll_creation_message_key: key(),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-    let revoke = wa::Message {
-        protocol_message: MessageField::some(wa::message::ProtocolMessage {
+        })),
+    });
+    let revoke = from_default!(wa::Message {
+        protocol_message: MessageField::some(from_default!(wa::message::ProtocolMessage {
             key: key(),
             r#type: Some(wa::message::protocol_message::Type::REVOKE),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-    let edit = wa::Message {
-        protocol_message: MessageField::some(wa::message::ProtocolMessage {
+        })),
+    });
+    let edit = from_default!(wa::Message {
+        protocol_message: MessageField::some(from_default!(wa::message::ProtocolMessage {
             key: key(),
             r#type: Some(wa::message::protocol_message::Type::MESSAGE_EDIT),
             edited_message: MessageField::some(wa_text("forged edit")),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
+        })),
+    });
     for raw in [reaction.clone(), poll, revoke, edit] {
         worker.ingest(&Arc::new(raw), &group_message_id_info("222@s.whatsapp.net"));
     }
@@ -870,55 +847,46 @@ fn group_message_id_collision_blocks_history_reaction_poll_and_revoke() {
     let target = crate::archive::tests::message(chat, "target", 1, false);
     worker.archive.insert_message(&target, None).unwrap();
     let key = || {
-        MessageField::some(wa::MessageKey {
+        MessageField::some(from_default!(wa::MessageKey {
             id: Some("target".into()),
-            ..Default::default()
-        })
+        }))
     };
-    let reaction = wa::Message {
-        reaction_message: MessageField::some(wa::message::ReactionMessage {
+    let reaction = from_default!(wa::Message {
+        reaction_message: MessageField::some(from_default!(wa::message::ReactionMessage {
             key: key(),
             text: Some("x".into()),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-    let poll = wa::Message {
-        poll_update_message: MessageField::some(wa::message::PollUpdateMessage {
+        })),
+    });
+    let poll = from_default!(wa::Message {
+        poll_update_message: MessageField::some(from_default!(wa::message::PollUpdateMessage {
             poll_creation_message_key: key(),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-    let revoke = wa::Message {
-        protocol_message: MessageField::some(wa::message::ProtocolMessage {
+        })),
+    });
+    let revoke = from_default!(wa::Message {
+        protocol_message: MessageField::some(from_default!(wa::message::ProtocolMessage {
             key: key(),
             r#type: Some(wa::message::protocol_message::Type::REVOKE),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
+        })),
+    });
     let messages = [reaction, poll, revoke]
         .into_iter()
-        .map(|message| wa::HistorySyncMsg {
-            message: MessageField::some(wa::WebMessageInfo {
-                key: MessageField::some(wa::MessageKey {
-                    id: Some("collision".into()),
-                    participant: Some("222@s.whatsapp.net".into()),
-                    remote_jid: Some(chat.into()),
-                    ..Default::default()
-                }),
-                message: MessageField::some(message),
-                ..Default::default()
-            }),
-            ..Default::default()
+        .map(|message| {
+            from_default!(wa::HistorySyncMsg {
+                message: MessageField::some(from_default!(wa::WebMessageInfo {
+                    key: MessageField::some(from_default!(wa::MessageKey {
+                        id: Some("collision".into()),
+                        participant: Some("222@s.whatsapp.net".into()),
+                        remote_jid: Some(chat.into()),
+                    })),
+                    message: MessageField::some(message),
+                })),
+            })
         })
         .collect();
-    let parsed = parse_conversation(wa::Conversation {
+    let parsed = parse_conversation(from_default!(wa::Conversation {
         id: chat.into(),
         messages,
-        ..Default::default()
-    });
+    }));
     let (_, committed) = worker.apply_history(
         ParsedHistory {
             chats: vec![parsed],
@@ -987,10 +955,7 @@ fn group_message_id_lookup_error_rolls_back_history_and_keeps_request_retryable(
         .archive
         .execute_batch_for_test("ALTER TABLE lids RENAME TO lids_unavailable")
         .unwrap();
-    let mut conversation = parse_conversation(wa::Conversation {
-        id: chat.into(),
-        ..Default::default()
-    });
+    let mut conversation = parse_conversation(from_default!(wa::Conversation { id: chat.into() }));
     conversation.ephemeral_expiration = Some(42);
     conversation.messages.push(super::history::ParsedMessage {
         id: "collision".into(),
@@ -1416,27 +1381,24 @@ fn long_ids_and_chats_are_capped() {
 #[test]
 fn classification_reads_quick_reply_buttons_and_lists() {
     use whatsapp_rust::prelude::MessageField;
-    let buttons = wa::Message {
-        buttons_message: MessageField::some(wa::message::ButtonsMessage {
+    let buttons = from_default!(wa::Message {
+        buttons_message: MessageField::some(from_default!(wa::message::ButtonsMessage {
             content_text: Some("Pick one".into()),
             footer_text: Some("Footer".into()),
             buttons: vec![
-                wa::message::buttons_message::Button {
+                from_default!(wa::message::buttons_message::Button {
                     button_id: Some("a".into()),
-                    button_text: MessageField::some(
+                    button_text: MessageField::some(from_default!(
                         wa::message::buttons_message::button::ButtonText {
                             display_text: Some("Yes".into()),
-                        },
-                    ),
-                    ..Default::default()
-                },
+                        }
+                    ),),
+                }),
                 // No id or label: nothing to answer with, so it is dropped.
                 wa::message::buttons_message::Button::default(),
             ],
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
+        })),
+    });
     assert_eq!(
         classify(&buttons),
         Some(Content::Buttons {
@@ -1449,22 +1411,19 @@ fn classification_reads_quick_reply_buttons_and_lists() {
             answered: None,
         })
     );
-    let list = wa::Message {
-        list_message: MessageField::some(wa::message::ListMessage {
+    let list = from_default!(wa::Message {
+        list_message: MessageField::some(from_default!(wa::message::ListMessage {
             title: Some("Menu".into()),
             button_text: Some("Open".into()),
-            sections: vec![wa::message::list_message::Section {
+            sections: vec![from_default!(wa::message::list_message::Section {
                 title: Some("Drinks".into()),
-                rows: vec![wa::message::list_message::Row {
+                rows: vec![from_default!(wa::message::list_message::Row {
                     title: Some("Tea".into()),
                     row_id: Some("t".into()),
-                    ..Default::default()
-                }],
-            }],
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
+                })],
+            })],
+        })),
+    });
     let Some(Content::List {
         title,
         button,
@@ -1477,28 +1436,23 @@ fn classification_reads_quick_reply_buttons_and_lists() {
     assert_eq!((title.as_str(), button.as_str()), ("Menu", "Open"));
     assert_eq!(sections[0].rows[0].id, "t");
     // Native-flow buttons, product lists and empty lists are not answerable.
-    let native = wa::Message {
-        buttons_message: MessageField::some(wa::message::ButtonsMessage {
-            buttons: vec![wa::message::buttons_message::Button {
+    let native = from_default!(wa::Message {
+        buttons_message: MessageField::some(from_default!(wa::message::ButtonsMessage {
+            buttons: vec![from_default!(wa::message::buttons_message::Button {
                 button_id: Some("x".into()),
                 r#type: Some(wa::message::buttons_message::button::Type::NATIVE_FLOW),
-                ..Default::default()
-            }],
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
+            })],
+        })),
+    });
     assert!(matches!(
         classify(&native),
         Some(Content::Unsupported { .. })
     ));
-    let product = wa::Message {
-        list_message: MessageField::some(wa::message::ListMessage {
+    let product = from_default!(wa::Message {
+        list_message: MessageField::some(from_default!(wa::message::ListMessage {
             list_type: Some(wa::message::list_message::ListType::PRODUCT_LIST),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
+        })),
+    });
     assert!(matches!(
         classify(&product),
         Some(Content::Unsupported { .. })
@@ -1508,32 +1462,29 @@ fn classification_reads_quick_reply_buttons_and_lists() {
 #[test]
 fn business_templates_show_their_text_and_web_buttons() {
     use wa::__buffa::oneof::hydrated_template_button::HydratedButton;
-    let url_button = |label: &str, url: &str| wa::HydratedTemplateButton {
-        hydrated_button: Some(HydratedButton::UrlButton(Box::new(
-            wa::hydrated_template_button::HydratedURLButton {
-                display_text: Some(label.into()),
-                url: Some(url.into()),
-                ..Default::default()
-            },
-        ))),
-        ..Default::default()
+    let url_button = |label: &str, url: &str| {
+        from_default!(wa::HydratedTemplateButton {
+            hydrated_button: Some(HydratedButton::UrlButton(Box::new(from_default!(
+                wa::hydrated_template_button::HydratedURLButton {
+                    display_text: Some(label.into()),
+                    url: Some(url.into()),
+                }
+            ),))),
+        })
     };
-    let hydrated = wa::Message {
-        template_message: MessageField::some(wa::message::TemplateMessage {
-            hydrated_template: MessageField::some(
+    let hydrated = from_default!(wa::Message {
+        template_message: MessageField::some(from_default!(wa::message::TemplateMessage {
+            hydrated_template: MessageField::some(from_default!(
                 wa::message::template_message::HydratedFourRowTemplate {
                     hydrated_content_text: Some("Your assembly is booked".into()),
                     hydrated_buttons: vec![
                         url_button("Assembly status", "https://example.com/status"),
                         url_button("Unsafe", "javascript:alert(1)"),
                     ],
-                    ..Default::default()
-                },
-            ),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
+                }
+            ),),
+        })),
+    });
     let Some(Content::Template { text, links, .. }) = classify(&hydrated) else {
         panic!("a hydrated template is shown");
     };
@@ -1543,35 +1494,32 @@ fn business_templates_show_their_text_and_web_buttons() {
     assert_eq!(links[0].url, "https://example.com/status");
 
     use wa::message::interactive_message as flow;
-    let native = wa::Message {
-        interactive_message: MessageField::some(wa::message::InteractiveMessage {
-            body: MessageField::some(flow::Body {
-                text: Some("Track it".into()),
-            }),
-            interactive_message: Some(
+    let native = from_default!(wa::Message {
+            interactive_message: MessageField::some(from_default!(wa::message::InteractiveMessage {
+                body: MessageField::some(from_default!(flow::Body {
+                    text: Some("Track it".into()),
+                })),
+                interactive_message: Some(
                 wa::__buffa::oneof::message::interactive_message::InteractiveMessage::NativeFlowMessage(
-                    Box::new(flow::NativeFlowMessage {
-                        buttons: vec![
-                            flow::native_flow_message::NativeFlowButton {
-                                name: Some("cta_url".into()),
-                                button_params_json: Some(
+                    Box::new(from_default!(flow::NativeFlowMessage {
+                            buttons: vec![
+                            from_default!(flow::native_flow_message::NativeFlowButton {
+                                    name: Some("cta_url".into()),
+                                    button_params_json: Some(
                                     r#"{"display_text":"Open","url":"https://example.com/t"}"#
                                         .into(),
                                 ),
-                            },
-                            flow::native_flow_message::NativeFlowButton {
-                                name: Some("cta_copy".into()),
-                                button_params_json: Some(r#"{"display_text":"Copy"}"#.into()),
-                            },
+                                }),
+                            from_default!(flow::native_flow_message::NativeFlowButton {
+                                    name: Some("cta_copy".into()),
+                                    button_params_json: Some(r#"{"display_text":"Copy"}"#.into()),
+                                }),
                         ],
-                        ..Default::default()
-                    }),
+                        })),
                 ),
             ),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
+            })),
+        });
     let Some(Content::Template { text, links, .. }) = classify(&native) else {
         panic!("a native-flow message is shown");
     };
@@ -1582,10 +1530,9 @@ fn business_templates_show_their_text_and_web_buttons() {
 #[test]
 fn button_answers_carry_the_id_label_and_quote() {
     use wa::__buffa::oneof::message::buttons_response_message::Response;
-    let context = wa::ContextInfo {
+    let context = from_default!(wa::ContextInfo {
         stanza_id: Some("ORIGINAL".into()),
-        ..Default::default()
-    };
+    });
     let message = buttons_response("a", "Yes", Some(context));
     let response = message.buttons_response_message.as_option().expect("set");
     assert_eq!(response.selected_button_id.as_deref(), Some("a"));
@@ -1612,10 +1559,9 @@ fn button_answers_carry_the_id_label_and_quote() {
 
 #[test]
 fn received_interactive_answers_keep_their_text_and_quote() {
-    let context = wa::ContextInfo {
+    let context = from_default!(wa::ContextInfo {
         stanza_id: Some("ORIGINAL".into()),
-        ..Default::default()
-    };
+    });
     for message in [
         buttons_response("a", "Yes", Some(context.clone())),
         list_response("t", "Tea", Some("hot".into()), Some(context.clone())),
@@ -1640,19 +1586,18 @@ fn received_interactive_answers_keep_their_text_and_quote() {
 fn reply_uses_full_sender_label_even_when_display_is_clipped() {
     use whatsapp_rust::prelude::MessageField;
     let full = "A".repeat(protocol::MAX_INTERACTIVE_CHARS + 20);
-    let raw = wa::Message {
-        buttons_message: MessageField::some(wa::message::ButtonsMessage {
-            buttons: vec![wa::message::buttons_message::Button {
+    let raw = from_default!(wa::Message {
+        buttons_message: MessageField::some(from_default!(wa::message::ButtonsMessage {
+            buttons: vec![from_default!(wa::message::buttons_message::Button {
                 button_id: Some("a".into()),
-                button_text: MessageField::some(wa::message::buttons_message::button::ButtonText {
-                    display_text: Some(full.clone()),
-                }),
-                ..Default::default()
-            }],
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
+                button_text: MessageField::some(from_default!(
+                    wa::message::buttons_message::button::ButtonText {
+                        display_text: Some(full.clone()),
+                    }
+                )),
+            })],
+        })),
+    });
     let Some(Content::Buttons { buttons, .. }) = classify(&raw) else {
         panic!("buttons expected")
     };
@@ -1663,47 +1608,45 @@ fn reply_uses_full_sender_label_even_when_display_is_clipped() {
 #[test]
 fn repeated_button_and_row_ids_keep_only_the_first() {
     use whatsapp_rust::prelude::MessageField;
-    let row = |title: &str| wa::message::list_message::Row {
-        title: Some(title.into()),
-        row_id: Some("same".into()),
-        ..Default::default()
+    let row = |title: &str| {
+        from_default!(wa::message::list_message::Row {
+            title: Some(title.into()),
+            row_id: Some("same".into()),
+        })
     };
-    let list = wa::Message {
-        list_message: MessageField::some(wa::message::ListMessage {
+    let list = from_default!(wa::Message {
+        list_message: MessageField::some(from_default!(wa::message::ListMessage {
             sections: vec![
-                wa::message::list_message::Section {
+                from_default!(wa::message::list_message::Section {
                     rows: vec![row("First")],
-                    ..Default::default()
-                },
-                wa::message::list_message::Section {
+                }),
+                from_default!(wa::message::list_message::Section {
                     rows: vec![row("Second")],
-                    ..Default::default()
-                },
+                }),
             ],
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
+        })),
+    });
     let Some(Content::List { sections, .. }) = classify(&list) else {
         panic!("list expected");
     };
     // The second section had only the repeated id, so it is gone.
     assert_eq!(sections.len(), 1);
     assert_eq!(sections[0].rows[0].title, "First");
-    let button = |label: &str| wa::message::buttons_message::Button {
-        button_id: Some("same".into()),
-        button_text: MessageField::some(wa::message::buttons_message::button::ButtonText {
-            display_text: Some(label.into()),
-        }),
-        ..Default::default()
+    let button = |label: &str| {
+        from_default!(wa::message::buttons_message::Button {
+            button_id: Some("same".into()),
+            button_text: MessageField::some(from_default!(
+                wa::message::buttons_message::button::ButtonText {
+                    display_text: Some(label.into()),
+                }
+            )),
+        })
     };
-    let buttons = wa::Message {
-        buttons_message: MessageField::some(wa::message::ButtonsMessage {
+    let buttons = from_default!(wa::Message {
+        buttons_message: MessageField::some(from_default!(wa::message::ButtonsMessage {
             buttons: vec![button("One"), button("Two")],
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
+        })),
+    });
     let Some(Content::Buttons { buttons, .. }) = classify(&buttons) else {
         panic!("buttons expected");
     };
@@ -1713,10 +1656,9 @@ fn repeated_button_and_row_ids_keep_only_the_first() {
 
 #[test]
 fn list_answers_carry_the_row_id_title_and_quote() {
-    let context = wa::ContextInfo {
+    let context = from_default!(wa::ContextInfo {
         stanza_id: Some("ORIGINAL".into()),
-        ..Default::default()
-    };
+    });
     let message = list_response("t", "Tea", Some("hot".into()), Some(context));
     let response = message.list_response_message.as_option().expect("set");
     assert_eq!(response.title.as_deref(), Some("Tea"));
@@ -1740,20 +1682,21 @@ fn list_answers_carry_the_row_id_title_and_quote() {
 #[test]
 fn interactive_messages_are_capped() {
     use whatsapp_rust::prelude::MessageField;
-    let button = |index: usize| wa::message::buttons_message::Button {
-        button_id: Some(format!("b{index}")),
-        button_text: MessageField::some(wa::message::buttons_message::button::ButtonText {
-            display_text: Some("é".repeat(1_500)),
-        }),
-        ..Default::default()
+    let button = |index: usize| {
+        from_default!(wa::message::buttons_message::Button {
+            button_id: Some(format!("b{index}")),
+            button_text: MessageField::some(from_default!(
+                wa::message::buttons_message::button::ButtonText {
+                    display_text: Some("é".repeat(1_500)),
+                }
+            )),
+        })
     };
-    let buttons = wa::Message {
-        buttons_message: MessageField::some(wa::message::ButtonsMessage {
+    let buttons = from_default!(wa::Message {
+        buttons_message: MessageField::some(from_default!(wa::message::ButtonsMessage {
             buttons: (0..15).map(button).collect(),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
+        })),
+    });
     let Some(Content::Buttons { buttons, .. }) = classify(&buttons) else {
         panic!("buttons expected");
     };
@@ -1763,22 +1706,22 @@ fn interactive_messages_are_capped() {
         protocol::MAX_INTERACTIVE_CHARS + 1
     );
     assert!(buttons[0].label.ends_with('…'));
-    let row = |index: usize| wa::message::list_message::Row {
-        title: Some(format!("r{index}")),
-        row_id: Some(format!("id{index}")),
-        ..Default::default()
+    let row = |index: usize| {
+        from_default!(wa::message::list_message::Row {
+            title: Some(format!("r{index}")),
+            row_id: Some(format!("id{index}")),
+        })
     };
-    let section = |start: usize| wa::message::list_message::Section {
-        rows: (start..start + 80).map(row).collect(),
-        ..Default::default()
+    let section = |start: usize| {
+        from_default!(wa::message::list_message::Section {
+            rows: (start..start + 80).map(row).collect(),
+        })
     };
-    let list = wa::Message {
-        list_message: MessageField::some(wa::message::ListMessage {
+    let list = from_default!(wa::Message {
+        list_message: MessageField::some(from_default!(wa::message::ListMessage {
             sections: vec![section(0), section(80)],
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
+        })),
+    });
     let Some(Content::List { sections, .. }) = classify(&list) else {
         panic!("list expected");
     };
@@ -1790,18 +1733,18 @@ fn interactive_messages_are_capped() {
 fn classification_covers_text_and_media() {
     let text = wa::Message::text("hello");
     assert_eq!(classify(&text), Some(Content::text("hello")));
-    let image = wa::Message {
-        image_message: whatsapp_rust::prelude::MessageField::some(wa::message::ImageMessage {
-            caption: Some("look".into()),
-            mimetype: Some("image/jpeg".into()),
-            file_length: Some(10),
-            width: Some(4),
-            height: Some(3),
-            jpeg_thumbnail: Some(vec![0xff, 0xd8]),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
+    let image = from_default!(wa::Message {
+        image_message: whatsapp_rust::prelude::MessageField::some(from_default!(
+            wa::message::ImageMessage {
+                caption: Some("look".into()),
+                mimetype: Some("image/jpeg".into()),
+                file_length: Some(10),
+                width: Some(4),
+                height: Some(3),
+                jpeg_thumbnail: Some(vec![0xff, 0xd8]),
+            }
+        )),
+    });
     match classify(&image) {
         Some(Content::Image { caption, media }) => {
             assert_eq!(caption.as_deref(), Some("look"));
@@ -1811,17 +1754,15 @@ fn classification_covers_text_and_media() {
         other => panic!("unexpected {other:?}"),
     }
     assert_eq!(thumbnail_of(&image), Some(vec![0xff, 0xd8]));
-    let place = wa::Message {
-        location_message: whatsapp_rust::prelude::MessageField::some(
+    let place = from_default!(wa::Message {
+        location_message: whatsapp_rust::prelude::MessageField::some(from_default!(
             wa::message::LocationMessage {
                 degrees_latitude: Some(-23.5),
                 degrees_longitude: Some(-46.6),
                 jpeg_thumbnail: Some(vec![0xff, 0xd8, 1]),
-                ..Default::default()
-            },
-        ),
-        ..Default::default()
-    };
+            }
+        ),),
+    });
     assert!(matches!(
         classify(&place),
         Some(Content::Location { latitude, .. }) if latitude == -23.5
@@ -1832,12 +1773,14 @@ fn classification_covers_text_and_media() {
 
 #[test]
 fn ingest_keeps_only_small_jpeg_png_and_webp_thumbnails() {
-    let image_with = |thumbnail: Vec<u8>| wa::Message {
-        image_message: whatsapp_rust::prelude::MessageField::some(wa::message::ImageMessage {
-            jpeg_thumbnail: Some(thumbnail),
-            ..Default::default()
-        }),
-        ..Default::default()
+    let image_with = |thumbnail: Vec<u8>| {
+        from_default!(wa::Message {
+            image_message: whatsapp_rust::prelude::MessageField::some(from_default!(
+                wa::message::ImageMessage {
+                    jpeg_thumbnail: Some(thumbnail),
+                }
+            )),
+        })
     };
     let png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
     let webp = b"RIFF\x10\0\0\0WEBPVP8 ".to_vec();
@@ -1855,15 +1798,15 @@ fn ingest_keeps_only_small_jpeg_png_and_webp_thumbnails() {
 
 #[test]
 fn unsafe_preview_metadata_cannot_launch_a_desktop_handler() {
-    let message = wa::Message {
-        extended_text_message: MessageField::some(wa::message::ExtendedTextMessage {
-            text: Some("Read this".into()),
-            matched_text: Some("file:///fixture.exe".into()),
-            title: Some("An ordinary title".into()),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
+    let message = from_default!(wa::Message {
+        extended_text_message: MessageField::some(from_default!(
+            wa::message::ExtendedTextMessage {
+                text: Some("Read this".into()),
+                matched_text: Some("file:///fixture.exe".into()),
+                title: Some("An ordinary title".into()),
+            }
+        )),
+    });
     assert!(matches!(
         classify(&message),
         Some(Content::Text { preview: None, .. })
@@ -2140,13 +2083,11 @@ fn version_three_archive_rederives_unsupported_buttons() {
     const PEER: &str = "fixture@s.whatsapp.net";
     let (mut worker, _, _, _) = worker();
     worker.archive.ensure_chat(PEER, "Fixture").unwrap();
-    let raw = wa::Message {
-        buttons_message: MessageField::some(wa::message::ButtonsMessage {
+    let raw = from_default!(wa::Message {
+        buttons_message: MessageField::some(from_default!(wa::message::ButtonsMessage {
             content_text: Some("Pick".into()),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
+        })),
+    });
     let mut row = crate::archive::tests::message(PEER, "OLD", 10, false);
     row.content = Content::Unsupported {
         what: "interactive message".into(),
@@ -2173,13 +2114,11 @@ fn backfill_does_not_advance_checkpoint_when_a_row_write_fails() {
     const PEER: &str = "fixture@s.whatsapp.net";
     let (mut worker, _, _, _) = worker();
     worker.archive.ensure_chat(PEER, "Fixture").unwrap();
-    let raw = wa::Message {
-        buttons_message: MessageField::some(wa::message::ButtonsMessage {
+    let raw = from_default!(wa::Message {
+        buttons_message: MessageField::some(from_default!(wa::message::ButtonsMessage {
             content_text: Some("Pick".into()),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
+        })),
+    });
     let mut row = crate::archive::tests::message(PEER, "OLD", 10, false);
     row.content = Content::Unsupported {
         what: "interactive message".into(),
@@ -2804,22 +2743,21 @@ fn partial_settings_recovery_warns_once_about_stale_settings() {
 
 #[test]
 fn link_previews_and_mentions_come_from_extended_text() {
-    let message = wa::Message {
-        extended_text_message: whatsapp_rust::prelude::MessageField::some(
+    let message = from_default!(wa::Message {
+        extended_text_message: whatsapp_rust::prelude::MessageField::some(from_default!(
             wa::message::ExtendedTextMessage {
                 text: Some("see spotifast.rocks @123456@lid".into()),
                 matched_text: Some("https://spotifast.rocks/".into()),
                 title: Some("spotifast.rocks".into()),
                 description: Some("Spotify, native and fast".into()),
-                context_info: whatsapp_rust::prelude::MessageField::some(wa::ContextInfo {
-                    mentioned_jid: vec!["123456@lid".into()],
-                    ..Default::default()
-                }),
-                ..Default::default()
-            },
-        ),
-        ..Default::default()
-    };
+                context_info: whatsapp_rust::prelude::MessageField::some(from_default!(
+                    wa::ContextInfo {
+                        mentioned_jid: vec!["123456@lid".into()],
+                    }
+                )),
+            }
+        ),),
+    });
     match classify(&message) {
         Some(Content::Text { preview, .. }) => {
             let preview = preview.expect("preview");
@@ -2836,10 +2774,9 @@ fn outgoing_mentions_share_context_with_a_quote() {
     let mentions = vec!["491702222222@s.whatsapp.net".to_owned()];
     let message = outgoing_text(
         "hello @491702222222".to_owned(),
-        Some(wa::ContextInfo {
+        Some(from_default!(wa::ContextInfo {
             stanza_id: Some("quoted".to_owned()),
-            ..Default::default()
-        }),
+        })),
         &mentions,
     );
 
@@ -2874,10 +2811,9 @@ fn configured_expiration_is_added_to_text() {
 fn ephemeral_reply_preserves_quote_context() {
     let mut message = outgoing_text(
         "reply".to_owned(),
-        Some(wa::ContextInfo {
+        Some(from_default!(wa::ContextInfo {
             stanza_id: Some("quoted".to_owned()),
-            ..Default::default()
-        }),
+        })),
         &[],
     );
 
@@ -2890,13 +2826,11 @@ fn ephemeral_reply_preserves_quote_context() {
 
 #[test]
 fn ephemeral_media_preserves_caption() {
-    let mut message = wa::Message {
-        image_message: MessageField::some(wa::message::ImageMessage {
+    let mut message = from_default!(wa::Message {
+        image_message: MessageField::some(from_default!(wa::message::ImageMessage {
             caption: Some("look".to_owned()),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
+        })),
+    });
 
     apply_ephemeral_expiration(&mut message, Some(7_776_000));
 
@@ -2913,31 +2847,28 @@ fn ephemeral_media_preserves_caption() {
 
 #[test]
 fn forwards_use_only_the_destination_timer() {
-    let context = wa::ContextInfo {
+    let context = from_default!(wa::ContextInfo {
         expiration: Some(7_776_000),
         ephemeral_setting_timestamp: Some(123),
         ephemeral_shared_secret: Some(vec![1, 2, 3]),
         is_forwarded: Some(true),
         forwarding_score: Some(2),
-        ..Default::default()
-    };
+    });
     let text = wa::Message::text_with_context("forward me", context.clone());
-    let image = wa::Message {
-        image_message: MessageField::some(wa::message::ImageMessage {
+    let image = from_default!(wa::Message {
+        image_message: MessageField::some(from_default!(wa::message::ImageMessage {
             caption: Some("caption".into()),
             direct_path: Some("/media/path".into()),
             context_info: MessageField::some(context.clone()),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-    let contacts = wa::Message {
-        contacts_array_message: MessageField::some(wa::message::ContactsArrayMessage {
-            context_info: MessageField::some(context),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
+        })),
+    });
+    let contacts = from_default!(wa::Message {
+        contacts_array_message: MessageField::some(from_default!(
+            wa::message::ContactsArrayMessage {
+                context_info: MessageField::some(context),
+            }
+        )),
+    });
     for original in [text, image, contacts] {
         for timer in [None, Some(0), Some(86_400)] {
             let expected = timer.filter(|value| *value > 0);
@@ -3373,10 +3304,7 @@ fn failed_history_commit_keeps_older_request_retryable() {
             early_responses: HashMap::new(),
         },
     );
-    let mut conversation = parse_conversation(wa::Conversation {
-        id: chat.clone(),
-        ..Default::default()
-    });
+    let mut conversation = parse_conversation(from_default!(wa::Conversation { id: chat.clone() }));
     conversation.ephemeral_expiration = Some(1);
     conversation.more_on_phone = Some(false);
     let (filed, committed) = worker.apply_history(
@@ -3416,15 +3344,11 @@ fn history_commit_failure_restores_identity_contacts_and_defers_requests() {
     ).unwrap();
     let history = || ParsedHistory {
         chats: vec![
-            parse_conversation(wa::Conversation {
+            parse_conversation(from_default!(wa::Conversation {
                 id: LID.into(),
                 display_name: Some("Synthetic Contact".into()),
-                ..Default::default()
-            }),
-            parse_conversation(wa::Conversation {
-                id: GROUP.into(),
-                ..Default::default()
-            }),
+            })),
+            parse_conversation(from_default!(wa::Conversation { id: GROUP.into() })),
         ],
         push_names: vec![(LID.into(), "Synthetic Push".into())],
         lids: vec![(LID.into(), PN.into())],
@@ -3456,10 +3380,9 @@ fn history_commit_failure_restores_identity_contacts_and_defers_requests() {
         .execute_batch_for_test("DROP TRIGGER synthetic_commit_failure;")
         .unwrap();
     let ingest = |worker: &mut Worker, id: &str| {
-        let message = Arc::new(wa::Message {
+        let message = Arc::new(from_default!(wa::Message {
             conversation: Some("Synthetic message".into()),
-            ..Default::default()
-        });
+        }));
         let info = MessageInfo {
             id: id.into(),
             source: MessageSource {
@@ -3521,10 +3444,9 @@ fn history_unwind_restores_identity_contacts_archive_and_events() {
     const GROUP: &str = "123-456@g.us";
     let (mut worker, events, _, _) = worker();
     let history = || ParsedHistory {
-        chats: vec![parse_conversation(wa::Conversation {
+        chats: vec![parse_conversation(from_default!(wa::Conversation {
             id: GROUP.into(),
-            ..Default::default()
-        })],
+        }))],
         push_names: vec![(LID.into(), "Synthetic Push".into())],
         lids: vec![(LID.into(), PN.into())],
         stickers: Vec::new(),
@@ -3791,10 +3713,7 @@ fn history_commit_failure_keeps_pending_revoke_retryable() {
          BEGIN INSERT INTO synthetic_child VALUES (1); END;",
     ).unwrap();
     let history = || {
-        let mut direct = parse_conversation(wa::Conversation {
-            id: chat.into(),
-            ..Default::default()
-        });
+        let mut direct = parse_conversation(from_default!(wa::Conversation { id: chat.into() }));
         direct.revoked.push(super::history::HistoryRevoke {
             id: "revoke-event".into(),
             target: "M".into(),
@@ -3804,10 +3723,9 @@ fn history_commit_failure_keeps_pending_revoke_retryable() {
         ParsedHistory {
             chats: vec![
                 direct,
-                parse_conversation(wa::Conversation {
+                parse_conversation(from_default!(wa::Conversation {
                     id: "123-456@g.us".into(),
-                    ..Default::default()
-                }),
+                })),
             ],
             push_names: Vec::new(),
             lids: Vec::new(),
@@ -3876,10 +3794,8 @@ async fn confirmed_revoke_cannot_be_undone_by_failed_request() {
         let attempt_id = worker.begin_revoke(chat, "message").unwrap().unwrap();
 
         if from_history {
-            let mut conversation = parse_conversation(wa::Conversation {
-                id: chat.into(),
-                ..Default::default()
-            });
+            let mut conversation =
+                parse_conversation(from_default!(wa::Conversation { id: chat.into() }));
             conversation.revoked.push(super::history::HistoryRevoke {
                 id: "revoke".into(),
                 target: "message".into(),
@@ -3896,17 +3812,14 @@ async fn confirmed_revoke_cannot_be_undone_by_failed_request() {
                 false,
             );
         } else {
-            let confirmation = wa::Message {
-                protocol_message: MessageField::some(wa::message::ProtocolMessage {
+            let confirmation = from_default!(wa::Message {
+                protocol_message: MessageField::some(from_default!(wa::message::ProtocolMessage {
                     r#type: Some(wa::message::protocol_message::Type::REVOKE),
-                    key: MessageField::some(wa::MessageKey {
+                    key: MessageField::some(from_default!(wa::MessageKey {
                         id: Some("message".into()),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            };
+                    })),
+                })),
+            });
             let info = MessageInfo {
                 source: MessageSource {
                     chat: chat.parse().unwrap(),
@@ -5038,12 +4951,11 @@ pub(super) mod receipt_tests {
 
     #[test]
     fn history_keeps_ephemeral_metadata() {
-        let parsed = parse_conversation(wa::Conversation {
+        let parsed = parse_conversation(from_default!(wa::Conversation {
             id: PEER.into(),
             ephemeral_expiration: Some(7_776_000),
             ephemeral_setting_timestamp: Some(1_700_000_000),
-            ..Default::default()
-        });
+        }));
 
         assert_eq!(parsed.ephemeral_expiration, Some(7_776_000));
         assert_eq!(parsed.ephemeral_setting_timestamp, Some(1_700_000_000));
@@ -5058,22 +4970,20 @@ pub(super) mod receipt_tests {
         reactions: Vec<wa::Reaction>,
         secret: Option<Vec<u8>>,
     ) -> wa::HistorySyncMsg {
-        wa::HistorySyncMsg {
-            message: MessageField::some(wa::WebMessageInfo {
-                key: MessageField::some(wa::MessageKey {
+        from_default!(wa::HistorySyncMsg {
+            message: MessageField::some(from_default!(wa::WebMessageInfo {
+                key: MessageField::some(from_default!(wa::MessageKey {
                     remote_jid: Some(chat.into()),
                     from_me: Some(from_me),
                     id: Some(id.into()),
                     participant: participant.map(str::to_owned),
-                }),
+                })),
                 message: MessageField::some(message),
                 message_timestamp: Some(100),
                 reactions,
                 message_secret: secret,
-                ..Default::default()
-            }),
-            ..Default::default()
-        }
+            })),
+        })
     }
 
     #[test]
@@ -5091,7 +5001,7 @@ pub(super) mod receipt_tests {
     fn history_applies_a_standalone_custom_reaction_from_another_sender() {
         let group = "123-456@g.us";
         let reactor = "12025550999@s.whatsapp.net";
-        let parsed = parse_conversation(wa::Conversation {
+        let parsed = parse_conversation(from_default!(wa::Conversation {
             id: group.into(),
             messages: vec![
                 history_entry(
@@ -5099,10 +5009,9 @@ pub(super) mod receipt_tests {
                     "photo",
                     false,
                     Some(PEER),
-                    wa::Message {
+                    from_default!(wa::Message {
                         conversation: Some("caption".into()),
-                        ..Default::default()
-                    },
+                    }),
                     Vec::new(),
                     None,
                 ),
@@ -5111,25 +5020,24 @@ pub(super) mod receipt_tests {
                     "react",
                     false,
                     Some(reactor),
-                    wa::Message {
-                        reaction_message: MessageField::some(wa::message::ReactionMessage {
-                            key: MessageField::some(wa::MessageKey {
-                                remote_jid: Some(group.into()),
-                                from_me: Some(false),
-                                id: Some("photo".into()),
-                                participant: Some(PEER.into()),
-                            }),
-                            text: Some("🏆".into()),
-                            ..Default::default()
-                        }),
-                        ..Default::default()
-                    },
+                    from_default!(wa::Message {
+                        reaction_message: MessageField::some(from_default!(
+                            wa::message::ReactionMessage {
+                                key: MessageField::some(from_default!(wa::MessageKey {
+                                    remote_jid: Some(group.into()),
+                                    from_me: Some(false),
+                                    id: Some("photo".into()),
+                                    participant: Some(PEER.into()),
+                                })),
+                                text: Some("🏆".into()),
+                            }
+                        )),
+                    }),
                     Vec::new(),
                     None,
                 ),
             ],
-            ..Default::default()
-        });
+        }));
         assert!(parsed.messages.iter().all(|message| message.id != "react"));
         assert_eq!(parsed.reactions.len(), 1);
         let (mut worker, _events, _inbox, _wa) = worker();
@@ -5173,11 +5081,10 @@ pub(super) mod receipt_tests {
             }
             entry
         };
-        let parsed = parse_conversation(wa::Conversation {
+        let parsed = parse_conversation(from_default!(wa::Conversation {
             id: group.into(),
             messages: vec![entry("a", first), entry("b", second), entry("c", first)],
-            ..Default::default()
-        });
+        }));
         let (mut worker, events, _inbox, _wa) = worker();
         worker.apply_history(
             ParsedHistory {
@@ -5210,30 +5117,26 @@ pub(super) mod receipt_tests {
 
     #[test]
     fn history_reads_aggregated_reactions_from_grouping_key() {
-        let parsed = parse_conversation(wa::Conversation {
+        let parsed = parse_conversation(from_default!(wa::Conversation {
             id: PEER.into(),
             messages: vec![history_entry(
                 PEER,
                 "photo",
                 false,
                 None,
-                wa::Message {
+                from_default!(wa::Message {
                     conversation: Some("caption".into()),
-                    ..Default::default()
-                },
-                vec![wa::Reaction {
-                    key: MessageField::some(wa::MessageKey {
+                }),
+                vec![from_default!(wa::Reaction {
+                    key: MessageField::some(from_default!(wa::MessageKey {
                         from_me: Some(false),
                         participant: Some(PEER.into()),
-                        ..Default::default()
-                    }),
+                    })),
                     grouping_key: Some("🏆".into()),
-                    ..Default::default()
-                }],
+                })],
                 None,
             )],
-            ..Default::default()
-        });
+        }));
         assert_eq!(parsed.messages[0].reactions.len(), 1);
         assert_eq!(parsed.messages[0].reactions[0].2, "🏆");
         assert!(!parsed.messages[0].reactions[0].1);
@@ -5247,19 +5150,16 @@ pub(super) mod receipt_tests {
             .archive
             .insert_message(&incoming("photo", 10), None)
             .unwrap();
-        let raw = wa::Message {
-            reaction_message: MessageField::some(wa::message::ReactionMessage {
-                key: MessageField::some(wa::MessageKey {
+        let raw = from_default!(wa::Message {
+            reaction_message: MessageField::some(from_default!(wa::message::ReactionMessage {
+                key: MessageField::some(from_default!(wa::MessageKey {
                     remote_jid: Some(PEER.into()),
                     from_me: Some(false),
                     id: Some("photo".into()),
-                    ..Default::default()
-                }),
+                })),
                 grouping_key: Some("🏆".into()),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
+            })),
+        });
         let info = MessageInfo {
             source: MessageSource {
                 chat: PEER.parse().unwrap(),
@@ -5294,33 +5194,32 @@ pub(super) mod receipt_tests {
             reactor,
         )
         .expect("encrypt");
-        let parent_raw = wa::Message {
+        let parent_raw = from_default!(wa::Message {
             conversation: Some("caption".into()),
-            message_context_info: MessageField::some(wa::MessageContextInfo {
+            message_context_info: MessageField::some(from_default!(wa::MessageContextInfo {
                 message_secret: Some(secret.to_vec()),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
+            })),
+        });
         let (mut worker, _events, _inbox, _wa) = worker();
         worker.archive.ensure_chat(PEER, "Ada").unwrap();
         worker
             .archive
             .insert_message(&incoming("photo", 10), Some(&parent_raw.encode_to_vec()))
             .unwrap();
-        let raw = wa::Message {
-            enc_reaction_message: MessageField::some(wa::message::EncReactionMessage {
-                target_message_key: MessageField::some(wa::MessageKey {
-                    remote_jid: Some(PEER.into()),
-                    from_me: Some(false),
-                    id: Some("photo".into()),
-                    participant: Some(PEER.into()),
-                }),
-                enc_payload: Some(payload),
-                enc_iv: Some(iv.to_vec()),
-            }),
-            ..Default::default()
-        };
+        let raw = from_default!(wa::Message {
+            enc_reaction_message: MessageField::some(from_default!(
+                wa::message::EncReactionMessage {
+                    target_message_key: MessageField::some(from_default!(wa::MessageKey {
+                        remote_jid: Some(PEER.into()),
+                        from_me: Some(false),
+                        id: Some("photo".into()),
+                        participant: Some(PEER.into()),
+                    })),
+                    enc_payload: Some(payload),
+                    enc_iv: Some(iv.to_vec()),
+                }
+            )),
+        });
         let info = MessageInfo {
             source: MessageSource {
                 chat: PEER.parse().unwrap(),
@@ -5356,10 +5255,9 @@ pub(super) mod receipt_tests {
                 .timestamp(whatsapp_rust::wacore::time::from_secs(timestamp).unwrap())
                 .is_lid_addressing_mode(false)
                 .action(Box::new(
-                    whatsapp_rust::wacore::stanza::groups::GroupNotificationAction::Ephemeral {
-                        expiration,
-                        trigger: None,
-                    },
+                    whatsapp_rust::wacore::stanza::groups::GroupNotificationAction::ephemeral()
+                        .expiration(expiration)
+                        .build(),
                 ))
                 .build();
             worker
@@ -5418,8 +5316,7 @@ pub(super) mod receipt_tests {
                     is_group: chat.ends_with("@g.us"),
                     ..Default::default()
                 })
-                .state(ChatPresence::Composing)
-                .media(whatsapp_rust::types::presence::ChatPresenceMedia::Text)
+                .state(whatsapp_rust::types::presence::ChatActivity::Typing)
                 .build();
             worker
                 .handle_wa_event(Arc::new(wa_events::Event::ChatPresence(presence)))
@@ -5439,31 +5336,25 @@ pub(super) mod receipt_tests {
     fn partial_group_history_receipts_do_not_override_the_phone_aggregate() {
         use wa::web_message_info::Status;
         let parsed = |chat: &str, status| {
-            parse_conversation(wa::Conversation {
+            parse_conversation(from_default!(wa::Conversation {
                 id: chat.into(),
-                messages: vec![wa::HistorySyncMsg {
-                    message: MessageField::some(wa::WebMessageInfo {
-                        key: MessageField::some(wa::MessageKey {
+                messages: vec![from_default!(wa::HistorySyncMsg {
+                    message: MessageField::some(from_default!(wa::WebMessageInfo {
+                        key: MessageField::some(from_default!(wa::MessageKey {
                             id: Some("history".into()),
                             from_me: Some(true),
-                            ..Default::default()
-                        }),
-                        message: MessageField::some(wa::Message {
+                        })),
+                        message: MessageField::some(from_default!(wa::Message {
                             conversation: Some("hello".into()),
-                            ..Default::default()
-                        }),
+                        })),
                         status: Some(status),
-                        user_receipt: vec![wa::UserReceipt {
+                        user_receipt: vec![from_default!(wa::UserReceipt {
                             user_jid: PEER.into(),
                             read_timestamp: Some(123),
-                            ..Default::default()
-                        }],
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            })
+                        })],
+                    })),
+                })],
+            }))
         };
         assert_eq!(
             parsed("123-456@g.us", Status::SERVER_ACK).messages[0].status,
@@ -5579,12 +5470,11 @@ pub(super) mod receipt_tests {
 
     fn history(unread: u32) -> ParsedHistory {
         ParsedHistory {
-            chats: vec![parse_conversation(wa::Conversation {
+            chats: vec![parse_conversation(from_default!(wa::Conversation {
                 id: PEER.into(),
                 unread_count: Some(unread),
                 conversation_timestamp: Some(200),
-                ..Default::default()
-            })],
+            }))],
             push_names: Vec::new(),
             lids: Vec::new(),
             stickers: Vec::new(),
@@ -5593,31 +5483,28 @@ pub(super) mod receipt_tests {
 
     #[test]
     fn history_preserves_pin_time_and_distinguishes_missing_mute_metadata() {
-        let chat = parse_conversation(wa::Conversation {
+        let chat = parse_conversation(from_default!(wa::Conversation {
             id: PEER.into(),
             pinned: Some(1_700_000_000),
             mute_end_time: Some(1_800_000_000),
-            ..Default::default()
-        });
+        }));
         assert_eq!(chat.pinned_at, Some(1_700_000_000_000));
         assert_eq!(chat.muted_until, Some(Some(1_800_000_000)));
         assert_eq!(chat.locked, None, "absence must preserve existing state");
-        let chat = parse_conversation(wa::Conversation {
+        let chat = parse_conversation(from_default!(wa::Conversation {
             id: PEER.into(),
             locked: Some(true),
-            ..Default::default()
-        });
+        }));
         assert_eq!(chat.locked, Some(true));
         for (end, expected) in [
             (None, None),
             (Some(0), Some(None)),
             (Some(u64::MAX), Some(Some(0))),
         ] {
-            let chat = parse_conversation(wa::Conversation {
+            let chat = parse_conversation(from_default!(wa::Conversation {
                 id: PEER.into(),
                 mute_end_time: end,
-                ..Default::default()
-            });
+            }));
             assert_eq!(chat.muted_until, expected);
         }
     }
@@ -5631,19 +5518,18 @@ pub(super) mod receipt_tests {
                 .jid(PEER.parse().unwrap())
                 .timestamp(time)
                 .from_full_sync(true)
-                .action(Box::new(wa::sync_action_value::MuteAction {
+                .action(Box::new(from_default!(wa::sync_action_value::MuteAction {
                     muted: Some(enabled),
                     mute_end_timestamp: Some(-1),
-                    ..Default::default()
-                }))
+                })))
                 .build();
             let pin = wa_events::PinUpdate::builder()
                 .jid(PEER.parse().unwrap())
                 .timestamp(time)
                 .from_full_sync(true)
-                .action(Box::new(wa::sync_action_value::PinAction {
+                .action(Box::new(from_default!(wa::sync_action_value::PinAction {
                     pinned: Some(enabled),
-                }))
+                })))
                 .build();
             worker
                 .handle_wa_event(Arc::new(wa_events::Event::MuteUpdate(mute)))
@@ -5682,9 +5568,9 @@ pub(super) mod receipt_tests {
             .jid(PEER.parse().unwrap())
             .timestamp(time)
             .from_full_sync(true)
-            .action(Box::new(wa::sync_action_value::LockChatAction {
-                locked: Some(true),
-            }))
+            .action(Box::new(from_default!(
+                wa::sync_action_value::LockChatAction { locked: Some(true) }
+            )))
             .build();
         worker
             .handle_wa_event(Arc::new(wa_events::Event::LockChatUpdate(lock)))
@@ -6171,14 +6057,16 @@ pub(super) mod receipt_tests {
             .jid(PEER.parse().unwrap())
             .timestamp(whatsapp_rust::wacore::time::now_utc())
             .from_full_sync(false)
-            .action(Box::new(wa::sync_action_value::MarkChatAsReadAction {
-                read: Some(true),
-                message_range: MessageField::some(whatsapp_rust::message_range(
-                    200,
-                    None,
-                    Vec::new(),
-                )),
-            }))
+            .action(Box::new(from_default!(
+                wa::sync_action_value::MarkChatAsReadAction {
+                    read: Some(true),
+                    message_range: MessageField::some(whatsapp_rust::message_range(
+                        200,
+                        None,
+                        Vec::new(),
+                    )),
+                }
+            )))
             .build();
         worker
             .handle_wa_event(Arc::new(wa_events::Event::MarkChatAsReadUpdate(event)))
@@ -6322,9 +6210,9 @@ mod stars {
                 whatsapp_rust::wacore::chrono::DateTime::from_timestamp_millis(millis).unwrap(),
             )
             .from_full_sync(true)
-            .action(Box::new(wa::sync_action_value::StarAction {
+            .action(Box::new(from_default!(wa::sync_action_value::StarAction {
                 starred: Some(starred),
-            }))
+            })))
             .build()
     }
 
@@ -6376,10 +6264,9 @@ async fn shutdown_drains_queued_whatsapp_events_up_to_limit() {
         .timestamp(whatsapp_rust::wacore::time::from_secs(200).unwrap())
         .is_lid_addressing_mode(false)
         .action(Box::new(
-            whatsapp_rust::wacore::stanza::groups::GroupNotificationAction::Ephemeral {
-                expiration: 86_400,
-                trigger: None,
-            },
+            whatsapp_rust::wacore::stanza::groups::GroupNotificationAction::ephemeral()
+                .expiration(86_400)
+                .build(),
         ))
         .build();
     worker
@@ -6419,10 +6306,9 @@ mod maintenance {
     fn stale_archive(worker: &mut Worker, count: usize) {
         worker.archive.ensure_chat(PEER, "Fixture").unwrap();
         for n in 0..count {
-            let raw = wa::Message {
+            let raw = from_default!(wa::Message {
                 conversation: Some(format!("derived {n}")),
-                ..Default::default()
-            };
+            });
             let mut row =
                 crate::archive::tests::message(PEER, &format!("M{n}"), 10 + n as i64, false);
             row.content = Content::text("stale");
@@ -6486,10 +6372,9 @@ mod maintenance {
             .timestamp(whatsapp_rust::wacore::time::from_secs(200).unwrap())
             .is_lid_addressing_mode(false)
             .action(Box::new(
-                whatsapp_rust::wacore::stanza::groups::GroupNotificationAction::Ephemeral {
-                    expiration: 86_400,
-                    trigger: None,
-                },
+                whatsapp_rust::wacore::stanza::groups::GroupNotificationAction::ephemeral()
+                    .expiration(86_400)
+                    .build(),
             ))
             .build();
         RuntimeEvent::WhatsApp(Arc::new(wa_events::Event::GroupUpdate(update)))
@@ -6575,13 +6460,11 @@ mod maintenance {
         let (mut worker, events, _, _) = worker();
         worker.dirs = AppDirs::under(root.path());
         worker.archive.ensure_chat(PEER, "Fixture").unwrap();
-        let image = wa::Message {
-            image_message: MessageField::some(wa::message::ImageMessage {
+        let image = from_default!(wa::Message {
+            image_message: MessageField::some(from_default!(wa::message::ImageMessage {
                 direct_path: Some("/media/path".into()),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
+            })),
+        });
         let present = root.path().join("present.jpg");
         std::fs::write(&present, b"").unwrap();
         let cache = worker.dirs.media_cache_dir();
@@ -6897,10 +6780,9 @@ fn backfill_preserves_edited_content_from_before_restart() {
     const PEER: &str = "fixture@s.whatsapp.net";
     let (mut worker, _, _, _) = worker();
     worker.archive.ensure_chat(PEER, "Fixture").unwrap();
-    let raw = wa::Message {
+    let raw = from_default!(wa::Message {
         conversation: Some("before edit".into()),
-        ..Default::default()
-    };
+    });
     let row = crate::archive::tests::message(PEER, "EDITED", 10, false);
     worker
         .archive
@@ -6926,15 +6808,13 @@ fn backfill_refreshes_edited_image_metadata_without_losing_edit() {
         .write_to(&mut thumbnail, image::ImageFormat::Png)
         .unwrap();
     let thumbnail = thumbnail.into_inner();
-    let raw = wa_image(wa::message::ImageMessage {
+    let raw = wa_image(from_default!(wa::message::ImageMessage {
         caption: Some("before edit".into()),
         jpeg_thumbnail: Some(thumbnail.clone()),
-        context_info: MessageField::some(wa::ContextInfo {
+        context_info: MessageField::some(from_default!(wa::ContextInfo {
             is_forwarded: Some(true),
-            ..Default::default()
-        }),
-        ..Default::default()
-    });
+        })),
+    }));
     assert_eq!(thumbnail_of(&raw), Some(thumbnail.clone()));
     let mut row = crate::archive::tests::message(PEER, "IMAGE", 10, false);
     row.content = classify(&raw).unwrap();
@@ -6966,10 +6846,9 @@ fn backfill_rejects_unsupported_edited_image_thumbnail_and_keeps_existing() {
     const PEER: &str = "fixture@s.whatsapp.net";
     let (mut worker, _, _, _) = worker();
     worker.archive.ensure_chat(PEER, "Fixture").unwrap();
-    let raw = wa_image(wa::message::ImageMessage {
+    let raw = wa_image(from_default!(wa::message::ImageMessage {
         jpeg_thumbnail: Some(vec![1, 2, 3]),
-        ..Default::default()
-    });
+    }));
     assert_eq!(thumbnail_of(&raw), None);
     let mut row = crate::archive::tests::message(PEER, "IMAGE", 10, false);
     row.content = classify(&raw).unwrap();
@@ -6991,14 +6870,12 @@ fn backfill_leaves_revoked_rows_untouched() {
     const PEER: &str = "fixture@s.whatsapp.net";
     let (mut worker, _, _, _) = worker();
     worker.archive.ensure_chat(PEER, "Fixture").unwrap();
-    let raw = wa_image(wa::message::ImageMessage {
+    let raw = wa_image(from_default!(wa::message::ImageMessage {
         jpeg_thumbnail: Some(vec![1, 2, 3]),
-        context_info: MessageField::some(wa::ContextInfo {
+        context_info: MessageField::some(from_default!(wa::ContextInfo {
             is_forwarded: Some(true),
-            ..Default::default()
-        }),
-        ..Default::default()
-    });
+        })),
+    }));
     let mut row = crate::archive::tests::message(PEER, "REVOKED", 10, false);
     row.content = Content::Revoked;
     row.thumbnail = Some(vec![9]);

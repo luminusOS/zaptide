@@ -49,14 +49,15 @@ fn creation_archive(content: &Content, secret: &[u8], correct: Option<usize>) ->
     else {
         unreachable!()
     };
-    let poll = wa::message::PollCreationMessage {
+    let poll = from_default!(wa::message::PollCreationMessage {
         name: Some(question.clone()),
         options: options
             .iter()
-            .map(|name| wa::message::poll_creation_message::Option {
-                option_name: Some(name.clone()),
-                ..Default::default()
-            })
+            .map(
+                |name| from_default!(wa::message::poll_creation_message::Option {
+                    option_name: Some(name.clone()),
+                })
+            )
             .collect(),
         selectable_options_count: Some(state.selectable as u32),
         poll_content_type: Some(wa::message::PollContentType::TEXT),
@@ -64,23 +65,20 @@ fn creation_archive(content: &Content, secret: &[u8], correct: Option<usize>) ->
         correct_answer: correct.and_then(|index| options.get(index)).map_or_else(
             MessageField::none,
             |name| {
-                MessageField::some(wa::message::poll_creation_message::Option {
+                MessageField::some(from_default!(wa::message::poll_creation_message::Option {
                     option_name: Some(name.clone()),
                     option_hash: Some(hex::encode(
                         whatsapp_rust::wacore::poll::compute_option_hash(name),
                     )),
-                })
+                }))
             },
         ),
-        ..Default::default()
-    };
-    let mut message = wa::Message {
-        message_context_info: MessageField::some(wa::MessageContextInfo {
+    });
+    let mut message = from_default!(wa::Message {
+        message_context_info: MessageField::some(from_default!(wa::MessageContextInfo {
             message_secret: Some(secret.into()),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
+        })),
+    });
     if state.selectable == 1 {
         message.poll_creation_message_v3 = MessageField::some(poll);
     } else {
@@ -378,7 +376,7 @@ impl Worker {
                 let recipients = if jid.is_group() {
                     client
                         .groups()
-                        .query_info(&jid)
+                        .routing_info(&jid)
                         .await
                         .map_err(|_| "Could not load the group recipients")?
                         .participants
@@ -407,11 +405,12 @@ impl Worker {
                         )
                         .await
                 };
-                let (sent, secret) =
-                    result.map_err(|_| "Could not send the poll. Please try again.")?;
+                let (sent, _, secret) = result
+                    .map_err(|_| "Could not send the poll. Please try again.")?
+                    .into_parts();
                 Ok(super::super::CreatedPoll {
-                    id: sent.message_id,
-                    secret,
+                    id: sent.message_id.into_string(),
+                    secret: secret.into_bytes().to_vec(),
                     creator,
                     recipients,
                 })
@@ -549,9 +548,9 @@ impl Worker {
             let at = jiff::Timestamp::now().as_millisecond();
             let result = client
                 .polls()
-                .vote(jid, &id, &creator, &secret, &names)
+                .vote_raw(jid, &id, &creator, &secret, &names)
                 .await
-                .map(|sent| sent.message_id)
+                .map(|sent| sent.message_id.into_string())
                 .map_err(|_| "Could not send your vote. Please try again.".into());
             let _ = Completion {
                 generation: session_generation,
@@ -717,7 +716,7 @@ impl Worker {
                     };
                     client
                         .polls()
-                        .decrypt_vote(ciphertext, &secret, &vote.poll, &creator, &voter)
+                        .decrypt_vote_raw(ciphertext, &secret, &vote.poll, &creator, &voter)
                         .await
                         .ok()
                         .and_then(|hashes| choices_for(&options, &hashes))
@@ -965,7 +964,7 @@ mod tests {
         let session_path = directory.path().join("session.db");
         let bot = Bot::builder()
             .with_backend(
-                whatsapp_rust::store::SqliteStore::new(session_path.to_str().unwrap())
+                whatsapp_rust::store::SqliteStore::open(session_path.to_str().unwrap())
                     .await
                     .unwrap(),
             )
@@ -982,18 +981,16 @@ mod tests {
             &hashes, &key, "poll", creator, voter,
         )
         .unwrap();
-        let update = wa::message::PollUpdateMessage {
-            poll_creation_message_key: MessageField::some(wa::MessageKey {
+        let update = from_default!(wa::message::PollUpdateMessage {
+            poll_creation_message_key: MessageField::some(from_default!(wa::MessageKey {
                 id: Some("poll".into()),
-                ..Default::default()
-            }),
-            vote: MessageField::some(wa::message::PollEncValue {
+            })),
+            vote: MessageField::some(from_default!(wa::message::PollEncValue {
                 enc_payload: Some(payload),
                 enc_iv: Some(iv.to_vec()),
-            }),
+            })),
             sender_timestamp_ms: Some(20_000),
-            ..Default::default()
-        };
+        });
         worker.ingest_poll_vote("chat", "vote", voter, false, 20, &update);
         assert_eq!(worker.poll_decrypting, 0);
         let mut row = crate::archive::tests::message("chat", "poll", 1, false);
@@ -1033,7 +1030,7 @@ mod tests {
         let session_path = directory.path().join("session.db");
         let bot = Bot::builder()
             .with_backend(
-                whatsapp_rust::store::SqliteStore::new(session_path.to_str().unwrap())
+                whatsapp_rust::store::SqliteStore::open(session_path.to_str().unwrap())
                     .await
                     .unwrap(),
             )
@@ -1057,18 +1054,16 @@ mod tests {
                 voter,
             )
             .unwrap();
-            let update = wa::message::PollUpdateMessage {
-                poll_creation_message_key: MessageField::some(wa::MessageKey {
+            let update = from_default!(wa::message::PollUpdateMessage {
+                poll_creation_message_key: MessageField::some(from_default!(wa::MessageKey {
                     id: Some(id.into()),
-                    ..Default::default()
-                }),
-                vote: MessageField::some(wa::message::PollEncValue {
+                })),
+                vote: MessageField::some(from_default!(wa::message::PollEncValue {
                     enc_payload: Some(payload),
                     enc_iv: Some(iv.to_vec()),
-                }),
+                })),
                 sender_timestamp_ms: Some(20_000),
-                ..Default::default()
-            };
+            });
             if before {
                 worker.ingest_poll_vote("chat", "vote", voter, true, 20, &update);
             }
@@ -1129,20 +1124,18 @@ mod tests {
                 .unwrap();
         }
         worker.learn_lid("200", "300");
-        let update = wa::PollUpdate {
-            poll_update_message_key: MessageField::some(wa::MessageKey {
+        let update = from_default!(wa::PollUpdate {
+            poll_update_message_key: MessageField::some(from_default!(wa::MessageKey {
                 id: Some("5".into()),
                 participant: Some("200@lid".into()),
-                ..Default::default()
-            }),
-            vote: MessageField::some(wa::message::PollVoteMessage {
+            })),
+            vote: MessageField::some(from_default!(wa::message::PollVoteMessage {
                 selected_options: vec![
                     whatsapp_rust::wacore::poll::compute_option_hash("Pizza").to_vec(),
                 ],
-            }),
+            })),
             sender_timestamp_ms: Some(5),
-            ..Default::default()
-        };
+        });
         worker.history_poll_votes(&row, &[update]);
         worker.polish_poll(&mut row);
         let Content::Poll { state, .. } = row.content else {

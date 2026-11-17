@@ -78,7 +78,7 @@ impl Worker {
             _ => buttons_response(&choice, &wire_label, context),
         };
         let expiration = self.apply_ephemeral(&chat, &mut message);
-        let id = client.generate_message_id();
+        let id = client.generate_message_id().into_string();
         let row = Message {
             id: id.clone(),
             chat: chat.clone(),

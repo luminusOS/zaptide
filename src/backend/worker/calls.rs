@@ -311,7 +311,7 @@ impl Worker {
             chat,
             CallDirection::Incoming,
             video,
-            call.timestamp.timestamp(),
+            offer_time(call),
         );
         self.begin_call(session, Some(Box::new(call.clone())));
     }
@@ -333,7 +333,7 @@ impl Worker {
             chat,
             CallDirection::Incoming,
             video,
-            call.timestamp.timestamp(),
+            offer_time(call),
         );
         self.calls.waiting = Some(Waiting {
             session: session.clone(),
@@ -630,4 +630,11 @@ impl Worker {
         let hangup = hang_up(&call.shared, client.as_deref(), offer.as_deref());
         let _ = tokio::time::timeout(SHUTDOWN_HANGUP, hangup).await;
     }
+}
+
+/// The server time of an offer, which only mid-call rekeys omit.
+fn offer_time(call: &IncomingCall) -> i64 {
+    call.timestamp
+        .unwrap_or_else(whatsapp_rust::chrono::Utc::now)
+        .timestamp()
 }

@@ -47,7 +47,7 @@ impl Worker {
         let connected = self
             .client
             .as_ref()
-            .is_some_and(|client| client.is_connected());
+            .is_some_and(|client| client.is_socket_connected());
         let Some(client) = self.client.clone().filter(|_| connected) else {
             // Defer profile-picture lookup until connected.
             self.pending_avatars.entry((id, full)).or_insert(0);
@@ -157,7 +157,7 @@ impl Worker {
         if !self
             .client
             .as_ref()
-            .is_some_and(|client| client.is_connected())
+            .is_some_and(|client| client.is_socket_connected())
         {
             return;
         }
