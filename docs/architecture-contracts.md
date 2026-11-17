@@ -131,6 +131,17 @@ newer transaction or publish to a replaced adjustment. Release Rust borrows
 before calling GTK setters that can emit signals. Selection and application state
 remain owned by Relm4; the bridge owns only widget coordinates and geometry.
 
+## Transcript scrolling
+
+A transcript resting at its end stays there when content grows after layout,
+such as decoded thumbnails, the typing indicator or a taller composer.
+Leaving the end through any input stops following until the view rests at the
+end again. Programmatic positioning (unread marker, message jumps, reading
+anchor restoration) stops following before its model change is laid out,
+corrects the row's place each frame until it holds, and yields to user input
+through the shared scroll generation. A placed row clamped at the end of the
+list rests there, so later growth below it is followed like any other.
+
 ## Polls
 
 Use whatsapp-rust's `Client::polls()` for creation, voting and decryption.

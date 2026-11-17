@@ -1850,33 +1850,23 @@ impl NativeApplication {
         };
         self.message_target = Some(id.to_owned());
         self.message_target_selection = None;
-        let view = self.messages.view.clone();
-        let id = id.to_owned();
-        gtk::glib::idle_add_local_once(move || {
-            if let Some(window) = view.root().and_downcast::<gtk::Window>() {
-                window.set_focus_visible(true);
-            }
-            view.scroll_to(position as u32, gtk::ListScrollFlags::FOCUS, None);
-            // The row may not exist until the scroll lands; each row's root is
-            // named after its message id.
-            let id = id.clone();
-            gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(150), move || {
-                let mut child = view.first_child();
-                while let Some(item) = child {
-                    if let Some(root) = item.first_child()
-                        && root.widget_name() == id
-                    {
-                        root.add_css_class("zaptide-message-flash");
-                        gtk::glib::timeout_add_local_once(
-                            std::time::Duration::from_millis(1800),
-                            move || root.remove_css_class("zaptide-message-flash"),
-                        );
-                        return;
-                    }
-                    child = item.next_sibling();
-                }
-            });
-        });
+        if let Some(window) = self.messages.view.root().and_downcast::<gtk::Window>() {
+            window.set_focus_visible(true);
+        }
+        motion::place_row(
+            &self.messages.view,
+            position as u32,
+            id.to_owned(),
+            motion::RowPlace::UpperThird,
+            gtk::ListScrollFlags::FOCUS,
+            |root| {
+                root.add_css_class("zaptide-message-flash");
+                gtk::glib::timeout_add_local_once(
+                    std::time::Duration::from_millis(1800),
+                    move || root.remove_css_class("zaptide-message-flash"),
+                );
+            },
+        );
     }
 
     fn show_message_menu(

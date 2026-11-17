@@ -271,6 +271,7 @@ impl SimpleComponent for TranscriptView {
         });
         widgets.message_scroller.add_controller(keys);
         super::motion::install_scroll_cancellation(&widgets.message_scroller, message_view);
+        super::motion::install_end_following(&widgets.message_scroller);
         let adjustment = widgets.message_scroller.vadjustment();
         let output = sender.clone();
         let away = std::rc::Rc::new(std::cell::Cell::new(false));
@@ -485,9 +486,11 @@ mod tests {
             .and_downcast::<gtk::ScrolledWindow>()
             .expect("scroller")
             .vadjustment();
+        adjustment.set_value(0.0);
+        spin();
         window.set_visible(false);
         spin();
-        adjustment.configure(0.0, 0.0, 100.0, 1.0, 10.0, 100.0);
+        adjustment.configure(0.0, 0.0, 200.0, 1.0, 10.0, 100.0);
         spin();
         events.borrow_mut().clear();
         let changed = std::rc::Rc::new(std::cell::Cell::new(0));
@@ -533,6 +536,14 @@ mod tests {
         );
 
         adjustment.set_upper(1000.0);
+        spin();
+        assert_eq!(
+            adjustment.value(),
+            900.0,
+            "growth follows a view resting at the end"
+        );
+        assert!(!button.get_visible());
+        adjustment.set_value(0.0);
         spin();
         assert!(button.get_visible());
         events.borrow_mut().clear();
