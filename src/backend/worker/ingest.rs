@@ -295,8 +295,10 @@ impl Worker {
         ) {
             self.confirm_answers_for(&chat, &message.id);
         }
+        let read_elsewhere = is_new && !message.from_me && self.read_elsewhere.take(&message.id);
         let unread = is_new
             && !message.from_me
+            && !read_elsewhere
             && self
                 .archive
                 .read_through(&chat)
@@ -307,6 +309,8 @@ impl Worker {
                 .is_none_or(|through| message.timestamp >= through);
         if unread {
             let _ = self.archive.bump_unread(&chat);
+        } else if read_elsewhere {
+            let _ = self.archive.mark_read_to(&chat, &message.id);
         } else if message.from_me
             && matches!(
                 message.status,

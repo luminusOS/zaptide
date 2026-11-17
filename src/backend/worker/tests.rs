@@ -6041,6 +6041,81 @@ pub(super) mod receipt_tests {
     }
 
     #[test]
+    fn a_phone_read_that_overtakes_its_message_keeps_the_message_read() {
+        let (mut worker, events, _inbox, _wa) = worker();
+        worker.store_message(incoming("old", 100), None, None);
+        worker.on_receipt(&receipt(PEER, &["late"], ReceiptType::ReadSelf));
+        assert_eq!(unread(&worker), 1);
+        while events.try_recv().is_ok() {}
+        worker.store_message(incoming("late", 200), None, None);
+        assert_eq!(unread(&worker), 0);
+        assert!(
+            !events
+                .try_iter()
+                .any(|event| matches!(event, Event::Incoming { .. })),
+            "a message already read on the phone does not notify"
+        );
+        worker.store_message(incoming("new", 300), None, None);
+        assert_eq!(unread(&worker), 1, "later arrivals stay unread");
+        assert!(
+            events
+                .try_iter()
+                .any(|event| matches!(event, Event::Incoming { .. })),
+            "an unread arrival still notifies"
+        );
+    }
+
+    #[test]
+    fn a_receipt_naming_stored_and_missing_messages_reads_both() {
+        let (mut worker, _events, _inbox, _wa) = worker();
+        worker.store_message(incoming("stored", 100), None, None);
+        worker.on_receipt(&receipt(
+            PEER,
+            &["stored", "missing"],
+            ReceiptType::ReadSelf,
+        ));
+        assert_eq!(unread(&worker), 0);
+        worker.store_message(incoming("missing", 200), None, None);
+        assert_eq!(unread(&worker), 0);
+    }
+
+    #[test]
+    fn an_early_group_read_applies_once_to_the_incoming_message() {
+        const GROUP: &str = "120363000000000001@g.us";
+        let (mut worker, _events, _inbox, _wa) = worker();
+        let group_unread = |worker: &Worker| worker.archive.chat(GROUP).unwrap().unwrap().unread;
+        let mut receipt = receipt(GROUP, &["seen"], ReceiptType::ReadSelf);
+        receipt.source.sender = ME.parse().expect("jid");
+        worker.on_receipt(&receipt);
+        let in_group = |id: &str, timestamp| Message {
+            chat: GROUP.into(),
+            ..incoming(id, timestamp)
+        };
+        worker.store_message(in_group("seen", 100), None, None);
+        assert_eq!(group_unread(&worker), 0);
+        worker.store_message(in_group("other", 200), None, None);
+        assert_eq!(group_unread(&worker), 1, "unrelated messages stay unread");
+    }
+
+    #[test]
+    fn early_phone_reads_are_bounded_and_ignore_our_own_messages() {
+        let (mut worker, _events, _inbox, _wa) = worker();
+        worker.on_receipt(&receipt(PEER, &["mine"], ReceiptType::ReadSelf));
+        worker.store_message(own_message("mine", 50), None, None);
+        worker.store_message(incoming("after-mine", 60), None, None);
+        assert_eq!(unread(&worker), 1);
+        worker.mark_read(PEER.into(), false);
+        let ids: Vec<String> = (0..=1024).map(|index| format!("early-{index}")).collect();
+        for id in &ids {
+            worker.on_receipt(&receipt(PEER, &[id.as_str()], ReceiptType::ReadSelf));
+        }
+        worker.store_message(incoming("early-0", 100), None, None);
+        assert_eq!(unread(&worker), 1, "the oldest remembered read was evicted");
+        worker.store_message(incoming("early-1024", 200), None, None);
+        assert_eq!(unread(&worker), 0);
+    }
+
+    #[test]
     fn a_phone_read_addressed_to_an_unmapped_privacy_id_still_reads_the_chat() {
         let (mut worker, _events, _inbox, _wa) = worker();
         worker.store_message(incoming("seen", 100), None, None);

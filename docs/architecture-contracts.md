@@ -98,6 +98,11 @@ them and backs off the whole queue on failure; do not add per-chat retry
 queues. Pending positions remain archived until acknowledged. Snapshot
 recovery and no-progress conflict detection belong to whatsapp-rust.
 
+whatsapp-rust handles receipts inline but decrypts messages in per-chat lanes,
+so a read from another of our devices can arrive before its message. Remember
+such message ids in memory, at most 1,024, and apply each one when the
+incoming message is stored: it neither counts as unread nor notifies.
+
 The linked-device name and icon come from `DevicePropsOverride` in `start_bot`:
 `os` names the device and platform type picks its icon. Changes take effect
 only after unlinking and pairing again.
