@@ -40,6 +40,25 @@ pub(super) trait LegacySecretStore {
     fn get(&self, identity: &str) -> Result<Option<Secret>>;
 }
 
+/// The host Secret Service, written only to hand keys to the renamed app.
+pub(super) trait HostSecretStore {
+    fn get(&self, identity: &str) -> Result<Option<Secret>>;
+    fn create(&self, identity: &str, secret: &[u8]) -> Result<()>;
+    fn delete(&self, identity: &str) -> Result<()>;
+}
+
+/// The Flatpak ID this build bridges keys away from.
+pub(super) const PREVIOUS_FLATPAK_ID: &str = "dev.luminusos.ZapTide";
+/// The Flatpak ID that takes over its data, luminusOS/zaptide#234.
+pub(super) const NEXT_FLATPAK_ID: &str = "org.luminusos.ZapTide";
+
+/// The Secret portal ties the file keyring to the app ID, so the renamed app
+/// cannot open the previous one. Only the previous ID's sandbox hands keys
+/// over; native installs already keep them in the host Secret Service.
+fn bridges_keys(file_keyring: bool, flatpak_id: Option<&std::ffi::OsStr>) -> bool {
+    file_keyring && flatpak_id == Some(std::ffi::OsStr::new(PREVIOUS_FLATPAK_ID))
+}
+
 /// The result of looking a key up.
 pub(super) enum Lookup {
     Found(Secret),
@@ -152,6 +171,42 @@ fn with_stores<T>(operation: impl FnOnce(&Keyring<'_>) -> Result<T>) -> Result<T
         current: &current,
         legacy,
     })
+}
+
+/// Runs `operation` on the keyring thread, without waiting, when this build
+/// hands keys over to the renamed app; otherwise does nothing. Its error is
+/// logged.
+pub(super) fn with_key_bridge_later(
+    operation: impl FnOnce(&Keyring<'_>, &dyn HostSecretStore) -> Result<()> + Send + 'static,
+) -> Result<()> {
+    if cfg!(test) {
+        anyhow::bail!("tests must not use the OS keyring");
+    }
+    if std::env::var_os("FLATPAK_ID").as_deref() != Some(std::ffi::OsStr::new(PREVIOUS_FLATPAK_ID))
+    {
+        return Ok(());
+    }
+    queue(Box::new(move || {
+        let result = (|| {
+            let current = Oo7::open()?;
+            if !bridges_keys(
+                matches!(*current.backend, Backend::File(_)),
+                std::env::var_os("FLATPAK_ID").as_deref(),
+            ) {
+                return Ok(());
+            }
+            operation(
+                &Keyring {
+                    current: &current,
+                    legacy: &SecretService,
+                },
+                &SecretService,
+            )
+        })();
+        if let Err(error) = result {
+            log::warn!("could not hand archive keys over to the renamed app: {error:#}");
+        }
+    }))
 }
 
 /// Runs `operation` with the OS keyring stores and waits for its result.
@@ -406,6 +461,42 @@ impl LegacySecretStore for SecretService {
     }
 }
 
+impl HostSecretStore for SecretService {
+    fn get(&self, identity: &str) -> Result<Option<Secret>> {
+        LegacySecretStore::get(self, identity)
+    }
+
+    fn create(&self, identity: &str, secret: &[u8]) -> Result<()> {
+        let attributes = attributes(identity);
+        let label = label(identity);
+        let secret = oo7::Secret::blob(secret);
+        block_on(async move {
+            let service = oo7::dbus::Service::new().await?;
+            let collection = service.default_collection().await?;
+            if collection.is_locked().await? {
+                collection.unlock(None).await?;
+            }
+            collection
+                .create_item(&label, &attributes, secret, false, None)
+                .await?;
+            Ok(())
+        })
+    }
+
+    fn delete(&self, identity: &str) -> Result<()> {
+        let attributes = attributes(identity);
+        block_on(async move {
+            let service = oo7::dbus::Service::new().await?;
+            for collection in service.collections().await? {
+                for item in collection.search_items(&attributes).await? {
+                    item.delete(None).await?;
+                }
+            }
+            Ok(())
+        })
+    }
+}
+
 /// The current store already is the old one, so there is nothing to migrate.
 struct NoLegacy;
 
@@ -443,6 +534,10 @@ pub(super) mod memory {
                 .lock()
                 .unwrap()
                 .insert(identity.to_owned(), secret.to_vec());
+        }
+
+        pub(in crate::archive) fn len(&self) -> usize {
+            self.items.lock().unwrap().len()
         }
 
         pub(in crate::archive) fn read(&self, identity: &str) -> Option<Vec<u8>> {
@@ -519,12 +614,44 @@ pub(super) mod memory {
             SecretStore::get(self, identity)
         }
     }
+
+    impl HostSecretStore for Store {
+        fn get(&self, identity: &str) -> Result<Option<Secret>> {
+            SecretStore::get(self, identity)
+        }
+
+        fn create(&self, identity: &str, secret: &[u8]) -> Result<()> {
+            SecretStore::set(self, identity, secret)
+        }
+
+        fn delete(&self, identity: &str) -> Result<()> {
+            SecretStore::delete(self, identity)
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::memory::Store;
     use super::*;
+
+    #[test]
+    fn only_the_previous_ids_file_keyring_hands_keys_over() {
+        use std::ffi::OsStr;
+        assert!(bridges_keys(
+            true,
+            Some(OsStr::new("dev.luminusos.ZapTide"))
+        ));
+        assert!(!bridges_keys(
+            false,
+            Some(OsStr::new("dev.luminusos.ZapTide"))
+        ));
+        assert!(!bridges_keys(
+            true,
+            Some(OsStr::new("org.luminusos.ZapTide"))
+        ));
+        assert!(!bridges_keys(true, None));
+    }
 
     #[test]
     fn only_missing_portal_allows_host_fallback() {

@@ -216,6 +216,20 @@ pub struct Prepared {
     pub legacy: bool,
 }
 
+impl Prepared {
+    /// The archive of every account, wherever this layout keeps it.
+    fn archives(&self, dirs: &AppDirs) -> Vec<std::path::PathBuf> {
+        if self.legacy {
+            return vec![dirs.archive_db()];
+        }
+        self.registry
+            .accounts
+            .iter()
+            .map(|entry| dirs.for_account(entry.id).archive_db())
+            .collect()
+    }
+}
+
 /// Deletes a folder's key from the OS keyring, given its keyring identity.
 type ForgetKey<'a> = &'a dyn Fn(&str) -> anyhow::Result<()>;
 
@@ -224,7 +238,7 @@ fn forget_os_key(identity: &str) -> anyhow::Result<()> {
 }
 
 pub fn prepare(dirs: &AppDirs, global: &crate::settings::Settings) -> Prepared {
-    prepare_with(
+    let prepared = prepare_with(
         dirs,
         global,
         |from, to| {
@@ -232,7 +246,9 @@ pub fn prepare(dirs: &AppDirs, global: &crate::settings::Settings) -> Prepared {
                 .map_err(|error| std::io::Error::other(format!("{error:#}")))
         },
         &forget_os_key,
-    )
+    );
+    crate::archive::hand_over_archive_keys(prepared.archives(dirs));
+    prepared
 }
 
 fn prepare_with(

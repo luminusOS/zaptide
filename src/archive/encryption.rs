@@ -12,7 +12,7 @@ use rusqlite::{Connection, OpenFlags};
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
-use super::secrets::{self, Keyring, Lookup};
+use super::secrets::{self, HostSecretStore, Keyring, Lookup};
 
 const HEADER: &[u8; 16] = b"SQLite format 3\0";
 const ARCHIVE_FILE: &str = "archive.db";
@@ -105,8 +105,102 @@ pub(super) fn key_for(path: &Path) -> Result<Zeroizing<[u8; 32]>> {
 /// Separate profiles must not overwrite each other's keys. The credential
 /// label contains a digest, never a user path, phone number or message data.
 fn identity_for(parent: &Path) -> Result<String> {
-    let digest = Sha256::digest(parent.canonicalize()?.as_os_str().as_encoded_bytes());
-    Ok(format!("archive-{}", hex::encode(digest)))
+    Ok(identity_of(&parent.canonicalize()?))
+}
+
+fn identity_of(canonical: &Path) -> String {
+    let digest = Sha256::digest(canonical.as_os_str().as_encoded_bytes());
+    format!("archive-{}", hex::encode(digest))
+}
+
+/// `folder` as it is named once Flatpak moves `~/.var/app/<previous ID>` to
+/// the renamed app's folder, or `None` outside that folder.
+fn renamed_folder(folder: &Path) -> Option<PathBuf> {
+    use std::path::Component;
+    let components: Vec<Component<'_>> = folder.components().collect();
+    let at = components.windows(3).position(|window| {
+        window[0].as_os_str() == ".var"
+            && window[1].as_os_str() == "app"
+            && window[2].as_os_str() == secrets::PREVIOUS_FLATPAK_ID
+    })?;
+    let mut renamed = PathBuf::new();
+    for (index, component) in components.iter().enumerate() {
+        if index == at + 2 {
+            renamed.push(secrets::NEXT_FLATPAK_ID);
+        } else {
+            renamed.push(component.as_os_str());
+        }
+    }
+    Some(renamed)
+}
+
+/// Copies the key of each encrypted archive in `archives` to the host Secret
+/// Service, where the renamed app finds it (luminusOS/zaptide#234). Only the
+/// previous ID's Flatpak does anything; the work runs on the keyring thread
+/// and its failure is logged, to be tried again on the next start.
+pub fn hand_over_archive_keys(archives: Vec<PathBuf>) {
+    let queued = secrets::with_key_bridge_later(move |keyring, host| {
+        let mut failed = 0;
+        for archive in &archives {
+            if hand_over_in(archive, keyring, host).is_err() {
+                failed += 1;
+            }
+        }
+        ensure!(
+            failed == 0,
+            "{failed} of {} keys were not handed over",
+            archives.len()
+        );
+        Ok(())
+    });
+    if let Err(error) = queued {
+        log::warn!("could not hand archive keys over to the renamed app: {error:#}");
+    }
+}
+
+fn hand_over_in(archive: &Path, keyring: &Keyring<'_>, host: &dyn HostSecretStore) -> Result<()> {
+    if !archive.exists() && !device_store_beside(archive).exists() {
+        return Ok(());
+    }
+    if !folder_encrypted(archive)? {
+        return Ok(());
+    }
+    let folder = archive
+        .parent()
+        .context("Archive has no parent directory")?
+        .canonicalize()?;
+    let Some(renamed) = renamed_folder(&folder) else {
+        return Ok(());
+    };
+    let key = match keyring.get(&identity_of(&folder))? {
+        Lookup::Found(secret) => key_from(&secret)?,
+        Lookup::Missing { .. } => return Ok(()),
+    };
+    // Flatpak may leave the folder's canonical path at either name, so the
+    // renamed app may compute either identity.
+    for identity in [identity_of(&renamed), identity_of(&folder)] {
+        hand_over_key(&identity, &key, host)?;
+    }
+    Ok(())
+}
+
+fn hand_over_key(identity: &str, key: &[u8; 32], host: &dyn HostSecretStore) -> Result<()> {
+    if let Some(existing) = host.get(identity)? {
+        // Never replace a key someone else's data may depend on.
+        ensure!(
+            existing.as_slice() == key.as_slice(),
+            "The OS keyring already holds a different key for this folder"
+        );
+        return Ok(());
+    }
+    host.create(identity, key)?;
+    let saved = host.get(identity)?;
+    if saved.as_deref().map(Vec::as_slice) != Some(key.as_slice()) {
+        // Only the copy this run made goes.
+        host.delete(identity)?;
+        anyhow::bail!("The OS keyring did not retain the handed-over archive key");
+    }
+    Ok(())
 }
 
 /// The keyring identity of the archive at `path`, while its folder exists.
@@ -412,6 +506,161 @@ mod tests {
         assert_eq!(first, format!("archive-{previous}"));
         assert_ne!(first, archive_key_identity(&two).unwrap());
         assert!(first.starts_with("archive-") && !first.contains('/'));
+    }
+
+    /// An encrypted account archive inside the previous ID's Flatpak folder.
+    fn flatpak_archive(root: &Path, key: &[u8; 32]) -> PathBuf {
+        let archive =
+            root.join(".var/app/dev.luminusos.ZapTide/.local/state/zaptide/accounts/1/archive.db");
+        fs::create_dir_all(archive.parent().unwrap()).unwrap();
+        open(&archive, key, Database::Archive)
+            .unwrap()
+            .execute_batch("CREATE TABLE fixture(value TEXT)")
+            .unwrap();
+        archive
+    }
+
+    fn renamed(archive: &Path) -> PathBuf {
+        PathBuf::from(
+            archive
+                .to_str()
+                .unwrap()
+                .replace("/dev.luminusos.ZapTide/", "/org.luminusos.ZapTide/"),
+        )
+    }
+
+    #[test]
+    fn only_the_previous_ids_folder_is_renamed() {
+        assert_eq!(
+            renamed_folder(Path::new(
+                "/home/a/.var/app/dev.luminusos.ZapTide/data/zaptide"
+            )),
+            Some(PathBuf::from(
+                "/home/a/.var/app/org.luminusos.ZapTide/data/zaptide"
+            ))
+        );
+        assert_eq!(
+            renamed_folder(Path::new("/home/a/.local/state/zaptide")),
+            None
+        );
+        assert_eq!(
+            renamed_folder(Path::new("/home/a/.var/app/org.example.Other/data")),
+            None
+        );
+        assert_eq!(
+            renamed_folder(Path::new("/home/a/app/dev.luminusos.ZapTide/data")),
+            None
+        );
+    }
+
+    #[test]
+    fn a_handed_over_key_opens_the_archive_under_the_renamed_app() {
+        let directory = directory();
+        let key = [5u8; 32];
+        let archive = flatpak_archive(directory.path(), &key);
+        let identity = archive_key_identity(&archive).unwrap();
+        let (current, legacy, host) = (
+            Store::with(&identity, &key),
+            Store::default(),
+            Store::default(),
+        );
+
+        hand_over_in(&archive, &keyring(&current, &legacy), &host).unwrap();
+        assert_eq!(host.read(&identity), Some(key.to_vec()));
+        assert_eq!(current.read(&identity), Some(key.to_vec()));
+
+        // Flatpak moves the folder; the renamed app starts with an empty file
+        // keyring and only the host Secret Service as its old store.
+        let moved = renamed(&archive);
+        fs::create_dir_all(moved.parent().unwrap().parent().unwrap()).unwrap();
+        fs::rename(archive.parent().unwrap(), moved.parent().unwrap()).unwrap();
+        let new_identity = archive_key_identity(&moved).unwrap();
+        assert_ne!(new_identity, identity);
+        let renamed_keyring = Store::default();
+        let found = key_in(&moved, &new_identity, &keyring(&renamed_keyring, &host)).unwrap();
+        assert_eq!(*found, key);
+        keyed(&moved, &found, Database::Archive).unwrap();
+        assert_eq!(renamed_keyring.read(&new_identity), Some(key.to_vec()));
+    }
+
+    #[test]
+    fn handing_over_twice_keeps_one_equal_copy() {
+        let directory = directory();
+        let key = [5u8; 32];
+        let archive = flatpak_archive(directory.path(), &key);
+        let identity = archive_key_identity(&archive).unwrap();
+        let (current, legacy, host) = (
+            Store::with(&identity, &key),
+            Store::default(),
+            Store::default(),
+        );
+        hand_over_in(&archive, &keyring(&current, &legacy), &host).unwrap();
+        hand_over_in(&archive, &keyring(&current, &legacy), &host).unwrap();
+        assert_eq!(host.read(&identity), Some(key.to_vec()));
+    }
+
+    #[test]
+    fn a_different_key_in_the_host_keyring_is_never_replaced() {
+        let directory = directory();
+        let key = [5u8; 32];
+        let archive = flatpak_archive(directory.path(), &key);
+        let identity = archive_key_identity(&archive).unwrap();
+        let canonical = archive.parent().unwrap().canonicalize().unwrap();
+        let future = identity_of(&renamed_folder(&canonical).unwrap());
+        let (current, legacy) = (Store::with(&identity, &key), Store::default());
+        let host = Store::with(&future, &[6u8; 32]);
+        let error = hand_over_in(&archive, &keyring(&current, &legacy), &host).unwrap_err();
+        assert!(error.to_string().contains("different key"), "{error}");
+        assert_eq!(host.read(&future), Some(vec![6u8; 32]));
+        assert_eq!(current.read(&identity), Some(key.to_vec()));
+    }
+
+    #[test]
+    fn a_handed_over_copy_the_host_did_not_keep_is_removed() {
+        let directory = directory();
+        let key = [5u8; 32];
+        let archive = flatpak_archive(directory.path(), &key);
+        let identity = archive_key_identity(&archive).unwrap();
+        let (current, legacy, host) = (
+            Store::with(&identity, &key),
+            Store::default(),
+            Store::default(),
+        );
+        host.damage_writes();
+        let error = hand_over_in(&archive, &keyring(&current, &legacy), &host).unwrap_err();
+        assert!(error.to_string().contains("did not retain"), "{error}");
+        let canonical = archive.parent().unwrap().canonicalize().unwrap();
+        assert_eq!(
+            host.read(&identity_of(&renamed_folder(&canonical).unwrap())),
+            None
+        );
+        assert_eq!(current.read(&identity), Some(key.to_vec()));
+    }
+
+    #[test]
+    fn nothing_is_handed_over_outside_the_previous_flatpak_or_without_encryption() {
+        let directory = directory();
+        let (legacy, host) = (Store::default(), Store::default());
+
+        let native = directory.path().join("state/zaptide/accounts/1/archive.db");
+        fs::create_dir_all(native.parent().unwrap()).unwrap();
+        open(&native, &[5u8; 32], Database::Archive)
+            .unwrap()
+            .execute_batch("CREATE TABLE fixture(value TEXT)")
+            .unwrap();
+        let current = Store::with(&archive_key_identity(&native).unwrap(), &[5u8; 32]);
+        hand_over_in(&native, &keyring(&current, &legacy), &host).unwrap();
+
+        let plain = directory
+            .path()
+            .join(".var/app/dev.luminusos.ZapTide/.local/state/zaptide/accounts/2/archive.db");
+        fs::create_dir_all(plain.parent().unwrap()).unwrap();
+        fs::write(&plain, b"SQLite format 3\0rest").unwrap();
+        hand_over_in(&plain, &keyring(&current, &legacy), &host).unwrap();
+
+        let missing = plain.with_file_name("absent.db");
+        hand_over_in(&missing, &keyring(&current, &legacy), &host).unwrap();
+        assert_eq!(host.len(), 0);
     }
 
     #[test]

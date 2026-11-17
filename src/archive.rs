@@ -18,7 +18,9 @@ pub(crate) use encryption::{
     Database as EncryptedDatabase, device_store_key, key_literal as sqlcipher_key_literal,
     keyed as open_keyed, open as open_encrypted,
 };
-pub use encryption::{archive_key_identity, copy_archive_key, forget_archive_key};
+pub use encryption::{
+    archive_key_identity, copy_archive_key, forget_archive_key, hand_over_archive_keys,
+};
 mod media;
 mod polls;
 mod receipts;
