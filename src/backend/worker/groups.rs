@@ -96,7 +96,7 @@ impl Worker {
         let lids = self.identity.lid_to_pn.clone();
         let session_generation = self.session_generation;
         tokio::spawn(async move {
-            match client.groups().get_metadata(&jid).await {
+            match client.groups().fetch_metadata(&jid).await {
                 Ok(metadata) => {
                     let canonical = |jid: &Jid| -> String {
                         if jid.is_lid()
@@ -129,7 +129,10 @@ impl Worker {
                         generation: session_generation,
                         done: Done::GroupInfo {
                             chat,
-                            name: (!metadata.subject.is_empty()).then(|| metadata.subject.clone()),
+                            name: metadata
+                                .subject
+                                .clone()
+                                .filter(|subject| !subject.is_empty()),
                             participants,
                             read_only: metadata.is_announcement && !admin,
                             // GroupEphemeralSettings carries a trigger mode, not a

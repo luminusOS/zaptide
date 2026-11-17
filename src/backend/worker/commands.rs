@@ -654,7 +654,8 @@ impl Worker {
                         ));
                         return;
                     }
-                    client.logout().await;
+                    // The LoggedOut event drives the cleanup; the report adds nothing.
+                    let _ = client.logout().await;
                 } else {
                     self.on_logged_out().await;
                 }

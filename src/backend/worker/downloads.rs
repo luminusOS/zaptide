@@ -1,4 +1,6 @@
 use super::*;
+use whatsapp_rust::download::DownloadLimits;
+use whatsapp_rust::{MessageId, MessageRef};
 
 async fn download_with_reupload<T, F, Fut, R, Retry, U>(
     downloadable: T,
@@ -217,7 +219,12 @@ impl Worker {
                         session_generation,
                         &session_generation_shared,
                         &session_cache_lock,
-                        |file| async move { client.download_to_writer(&*downloadable, file).await },
+                        |file| async move {
+                            client
+                                .download_to_writer(&*downloadable, file, DownloadLimits::default())
+                                .await
+                                .map_err(anyhow::Error::new)
+                        },
                     )
                     .await
                 }
@@ -228,13 +235,17 @@ impl Worker {
                 fetch,
                 || async {
                     let jid = jid.as_ref()?;
-                    let request = MediaReuploadRequest {
-                        msg_id: &id,
-                        chat_jid: jid,
-                        media_key: &media_key,
-                        is_from_me,
-                        participant: participant.as_ref(),
+                    let media_key: &[u8; 32] = media_key.as_slice().try_into().ok()?;
+                    let target = match MessageId::new(&id).and_then(|message_id| {
+                        MessageRef::new(jid, message_id, participant.as_ref(), is_from_me)
+                    }) {
+                        Ok(target) => target,
+                        Err(error) => {
+                            log::info!("media re-upload has no valid target: {error}");
+                            return None;
+                        }
                     };
+                    let request = MediaReuploadRequest { target, media_key };
                     match client.media_reupload().request(&request).await {
                         Ok(MediaRetryResult::Success { direct_path }) => Some(direct_path),
                         Ok(_) => None,

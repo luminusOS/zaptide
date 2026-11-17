@@ -39,7 +39,7 @@ impl Worker {
                         );
                     }
                     let bytes = client
-                        .download(&PhoneSticker(meta))
+                        .download(&PhoneSticker(meta), Default::default())
                         .await
                         .map_err(|error| error.to_string())?;
                     let path = dir.join(format!("{hash}.webp"));

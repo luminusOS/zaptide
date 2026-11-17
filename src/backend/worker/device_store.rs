@@ -14,7 +14,7 @@ use std::{path::Path, sync::Arc};
 
 use anyhow::{Context, Result};
 use diesel::{RunQueryDsl, SqliteConnection, sql_types::Text};
-use whatsapp_rust::store::{SqliteStore, SqliteStoreConfig};
+use whatsapp_rust::store::{SqliteDatabase, SqliteDatabaseConfig, SqliteStore};
 use zeroize::Zeroizing;
 
 use crate::archive::EncryptedDatabase;
@@ -38,9 +38,12 @@ async fn open_with_key(path: &Path, key: Zeroizing<[u8; 32]>) -> Result<SqliteSt
     .await
     .context("Device store encryption task failed")??;
     let literal = Arc::new(crate::archive::sqlcipher_key_literal(&key));
-    let config = SqliteStoreConfig::default()
+    let config = SqliteDatabaseConfig::default()
         .with_connection_init(move |connection| unlock(connection, &literal));
-    let store = SqliteStore::with_config(&path.to_string_lossy(), config).await;
+    // ZapTide keeps one account per store, under the library's device id 1.
+    let store = SqliteDatabase::open(&path.to_string_lossy(), config)
+        .await
+        .map(|database| database.store(1));
     let path = path.to_owned();
     // Also repair after a later migration fails, before returning its error.
     tokio::task::spawn_blocking(move || preserve_legacy_column(&path, &key))
@@ -187,7 +190,7 @@ mod tests {
     }
 
     async fn plaintext_fixture(path: &Path) -> Vec<(String, i64)> {
-        drop(SqliteStore::new(&path.to_string_lossy()).await.unwrap());
+        drop(SqliteStore::open(&path.to_string_lossy()).await.unwrap());
         let connection = Connection::open(path).unwrap();
         // As the previous build's compatibility step left it.
         connection
@@ -293,10 +296,10 @@ mod tests {
     fn counting_unlock(
         key: &[u8; 32],
         calls: &Arc<std::sync::atomic::AtomicUsize>,
-    ) -> SqliteStoreConfig {
+    ) -> SqliteDatabaseConfig {
         let literal = crate::archive::sqlcipher_key_literal(key);
         let calls = Arc::clone(calls);
-        SqliteStoreConfig::default().with_connection_init(move |connection| {
+        SqliteDatabaseConfig::default().with_connection_init(move |connection| {
             calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             unlock(connection, &literal)
         })
@@ -310,7 +313,7 @@ mod tests {
         drop(open_with_key(&path, key()).await.unwrap());
         let url = path.to_string_lossy();
 
-        // Through with_config a wrong key only fails after r2d2's 30 s
+        // Through SqliteDatabase::open a wrong key only fails after r2d2's 30 s
         // connection timeout, so the hook is called on a bare connection.
         let mut connection = <SqliteConnection as diesel::Connection>::establish(&url).unwrap();
         let wrong = crate::archive::sqlcipher_key_literal(&[6; 32]);
@@ -321,9 +324,10 @@ mod tests {
         );
 
         let calls = Arc::new(AtomicUsize::new(0));
-        let store = SqliteStore::with_config(&url, counting_unlock(&KEY, &calls))
+        let store = SqliteDatabase::open(&url, counting_unlock(&KEY, &calls))
             .await
-            .unwrap();
+            .unwrap()
+            .store(1);
         assert!(
             calls.load(Ordering::Relaxed) >= 2,
             "the writer and the reader connection both ran the hook"

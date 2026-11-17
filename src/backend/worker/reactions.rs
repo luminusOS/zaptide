@@ -174,14 +174,14 @@ impl Worker {
         if let Ok(Some(updated)) = self.archive.set_reaction(&chat, &id, &me, true, &emoji) {
             self.emit(Event::MessageUpdated(Box::new(updated)));
         }
-        let key = wa::MessageKey {
+        let key = from_default!(wa::MessageKey {
             remote_jid: Some(chat.clone()),
             from_me: Some(target.from_me),
             id: Some(id),
             participant: (jid.is_group() && !target.from_me).then(|| target.sender.clone()),
-        };
+        });
         tokio::spawn(async move {
-            if client.send_reaction(jid, key, &emoji).await.is_err() {
+            if client.send_reaction_raw(jid, key, &emoji).await.is_err() {
                 log::warn!("could not send a reaction");
             }
         });

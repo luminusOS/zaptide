@@ -299,6 +299,7 @@ pub(super) fn parse_conversation(conversation: wa::Conversation) -> ParsedChat {
             | End::COMPLETE_ON_DEMAND_SYNC_BUT_MORE_MSG_REMAIN_ON_PRIMARY => true,
             End::COMPLETE_AND_NO_MORE_MESSAGE_REMAIN_ON_PRIMARY
             | End::COMPLETE_ON_DEMAND_SYNC_WITH_MORE_MSG_ON_PRIMARY_BUT_NO_ACCESS => false,
+            _ => false,
         });
     ParsedChat {
         id: conversation.id.clone(),

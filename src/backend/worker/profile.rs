@@ -2,13 +2,18 @@
 
 use super::*;
 use crate::backend::{PictureEdit, ProfileEdit};
+use whatsapp_rust::PushNameOutcome;
 
 /// WhatsApp profile pictures are square JPEGs of this many pixels.
 const PICTURE_SIZE: u32 = 640;
 
 impl Worker {
     pub(super) fn edit_profile(&mut self, edit: ProfileEdit) {
-        let Some(client) = self.client.clone().filter(|client| client.is_connected()) else {
+        let Some(client) = self
+            .client
+            .clone()
+            .filter(|client| client.is_socket_connected())
+        else {
             self.emit(Event::ProfileSaved {
                 error: Some("Not connected to WhatsApp".into()),
             });
@@ -65,10 +70,14 @@ impl Worker {
 async fn apply(client: &Client, edit: &ProfileEdit) -> Result<(), String> {
     let profile = client.profile();
     if let Some(name) = &edit.name {
-        profile
+        let outcome = profile
             .set_push_name(name)
             .await
             .map_err(|_| "Could not save the name")?;
+        // As before, the name already took effect; only linked devices lag.
+        if matches!(outcome, PushNameOutcome::SyncPending { .. }) {
+            log::warn!("push name sync to linked devices is pending");
+        }
     }
     if let Some(about) = &edit.about {
         profile

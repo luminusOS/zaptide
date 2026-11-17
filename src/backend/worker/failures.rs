@@ -17,11 +17,13 @@ pub(super) fn needs_reupload(error: &anyhow::Error) -> bool {
 
 /// The failure the bubble shows for a download that will not be retried.
 pub(super) fn download_failure(error: &anyhow::Error) -> DownloadFailure {
-    // 410 keeps showing the library's text, as it did before the failure
-    // was typed; only 403 and 404 were reported as gone.
+    // Only 403 and 404 are reported as gone; 410 and other statuses keep the
+    // status text older library versions showed. The library's own message
+    // now renders a diagnostic struct, so other failures show their cause.
     match http_status(error) {
         Some(403 | 404) => DownloadFailure::Expired,
-        _ => DownloadFailure::Other(error.to_string()),
+        Some(status) => DownloadFailure::Other(format!("Download failed with status: {status}")),
+        None => DownloadFailure::Other(error.root_cause().to_string()),
     }
 }
 
@@ -109,6 +111,35 @@ mod tests {
         assert_eq!(
             download_failure(&refused(500)),
             DownloadFailure::Other("Download failed with status: 500".into())
+        );
+    }
+
+    #[test]
+    fn client_download_errors_keep_their_status_and_plain_text() {
+        use whatsapp_rust::download::ClientDownloadError;
+        let client = |error: ClientDownloadError| anyhow::Error::new(error);
+
+        let rejected = client(ClientDownloadError::ReferenceRejected(refused(410)));
+        assert!(needs_reupload(&rejected));
+        assert_eq!(
+            download_failure(&rejected),
+            DownloadFailure::Other("Download failed with status: 410".into())
+        );
+        let unreachable = client(ClientDownloadError::HostsUnreachable(refused(500)));
+        assert!(!needs_reupload(&unreachable));
+        assert_eq!(
+            download_failure(&unreachable),
+            DownloadFailure::Other("Download failed with status: 500".into())
+        );
+        let gone = client(ClientDownloadError::ReferenceRejected(refused(404)));
+        assert!(needs_reupload(&gone));
+        assert_eq!(download_failure(&gone), DownloadFailure::Expired);
+        let timeout = client(ClientDownloadError::HostsUnreachable(anyhow::anyhow!(
+            "connection timed out"
+        )));
+        assert_eq!(
+            download_failure(&timeout),
+            DownloadFailure::Other("connection timed out".into())
         );
     }
 

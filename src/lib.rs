@@ -3,6 +3,24 @@
 #[cfg(not(target_os = "linux"))]
 compile_error!("ZapTide supports Linux only.");
 
+/// Builds a value of a `#[non_exhaustive]` type, such as a protobuf message or a
+/// whatsapp-rust options struct, from its `Default` and the given fields.
+/// Struct expressions cannot name such types outside their crate. Unlike a
+/// struct expression, an omitted field silently keeps its default.
+macro_rules! from_default {
+    (@value $field:ident $value:expr) => {
+        $value
+    };
+    (@value $field:ident) => {
+        $field
+    };
+    ($type:path { $($field:ident $(: $value:expr)?),* $(,)? }) => {{
+        let mut value = <$type>::default();
+        $(value.$field = from_default!(@value $field $($value)?);)*
+        value
+    }};
+}
+
 pub(crate) mod account;
 pub mod application;
 pub(crate) mod archive;

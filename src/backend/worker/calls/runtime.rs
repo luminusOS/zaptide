@@ -250,7 +250,13 @@ async fn adopt(handle: CallHandle, shared: Arc<CallShared>, reporter: Reporter) 
         return;
     }
     tokio::spawn(async move {
-        let events = handle.events();
+        // This task is the call's only event consumer.
+        let Some(mut events) = handle.take_events() else {
+            log::warn!("call events were already taken");
+            handle.wait_ended().await;
+            reporter.notice(CallNotice::Ended);
+            return;
+        };
         let ended = handle.wait_ended();
         tokio::pin!(ended);
         loop {

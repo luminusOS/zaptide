@@ -12,12 +12,13 @@ fn jid(id: &str) -> Jid {
 }
 
 fn incoming(action: CallAction) -> IncomingCall {
-    IncomingCall::new_for_test(
-        jid(PEER),
-        "stanza".into(),
-        whatsapp_rust::wacore::chrono::Utc::now(),
-        action,
-    )
+    IncomingCall::builder()
+        .from(jid(PEER))
+        .stanza_id("stanza".into())
+        .timestamp(whatsapp_rust::wacore::chrono::Utc::now())
+        .offline(false)
+        .action(action)
+        .build()
 }
 
 fn offer(id: &str, video: bool) -> IncomingCall {
@@ -606,13 +607,14 @@ async fn an_offline_missed_call_is_filed_once_even_if_replayed() {
 async fn phone_call_history_is_filed_quietly_and_replaces_the_live_record() {
     use wa::call_log_record::CallResult;
     let (mut worker, events, _, _) = worker();
-    let record = |result, incoming| wa::CallLogRecord {
-        call_result: Some(result),
-        duration: Some(138),
-        start_time: Some(1_700_000_000),
-        is_incoming: Some(incoming),
-        is_video: Some(true),
-        ..Default::default()
+    let record = |result, incoming| {
+        from_default!(wa::CallLogRecord {
+            call_result: Some(result),
+            duration: Some(138),
+            start_time: Some(1_700_000_000),
+            is_incoming: Some(incoming),
+            is_video: Some(true),
+        })
     };
     let sync = |id: &str, from_me: bool, result| {
         CallLogSync::builder()
