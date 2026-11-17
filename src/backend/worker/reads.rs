@@ -1,5 +1,38 @@
 use super::*;
 
+const READ_ELSEWHERE_LIMIT: usize = 1024;
+
+/// Incoming message ids that another of our devices read before this one
+/// stored them. Receipts are handled as they arrive, while messages wait in
+/// per-chat decryption lanes, so a reconnect can deliver the read first.
+#[derive(Default)]
+pub(super) struct ReadElsewhere {
+    order: std::collections::VecDeque<String>,
+    ids: HashSet<String>,
+}
+
+impl ReadElsewhere {
+    fn remember(&mut self, id: &str) {
+        if !self.ids.insert(id.to_owned()) {
+            return;
+        }
+        self.order.push_back(id.to_owned());
+        if self.order.len() > READ_ELSEWHERE_LIMIT
+            && let Some(oldest) = self.order.pop_front()
+        {
+            self.ids.remove(&oldest);
+        }
+    }
+
+    pub(super) fn take(&mut self, id: &str) -> bool {
+        if !self.ids.remove(id) {
+            return false;
+        }
+        self.order.retain(|remembered| remembered != id);
+        true
+    }
+}
+
 impl Worker {
     pub(super) fn mark_read(&mut self, chat: ChatId, receipts: bool) {
         let Ok(Some(row)) = self.archive.chat(&chat) else {
@@ -148,7 +181,14 @@ impl Worker {
                 for id in &receipt.message_ids {
                     let target = match self.archive.message(&chat, id).ok().flatten() {
                         Some(message) => (!message.from_me).then(|| chat.clone()),
-                        None => self.archive.incoming_chat_of(id).ok().flatten(),
+                        None => match self.archive.incoming_chat_of(id) {
+                            Ok(Some(target)) => Some(target),
+                            Ok(None) if !receipt.source.chat.is_status_broadcast() => {
+                                self.read_elsewhere.remember(id);
+                                None
+                            }
+                            Ok(None) | Err(_) => None,
+                        },
                     };
                     if let Some(target) = target {
                         let _ = self.archive.mark_read_to(&target, id);

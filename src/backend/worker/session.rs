@@ -64,6 +64,7 @@ impl Worker {
     /// account: used whenever a link ends, however it ends.
     pub(super) async fn on_logged_out(&mut self) {
         self.deferred_incoming.clear();
+        self.read_elsewhere = Default::default();
         self.privacy.privacy_generation = self.privacy.privacy_generation.wrapping_add(1);
         self.pair_request_id = self.pair_request_id.wrapping_add(1);
         self.session_generation = self.session_generation.wrapping_add(1);

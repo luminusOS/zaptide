@@ -1015,6 +1015,7 @@ struct Worker {
     /// window never shows a row that a rollback took away.
     uncommitted_events: std::sync::Mutex<Option<Vec<Event>>>,
     deferred_incoming: std::collections::VecDeque<(Arc<wa::Message>, MessageInfo)>,
+    read_elsewhere: reads::ReadElsewhere,
 }
 
 /// An archive batch begun by `Worker::begin_batch`.
@@ -1199,6 +1200,7 @@ impl Worker {
             maintenance_deferred: 0,
             uncommitted_events: std::sync::Mutex::new(None),
             deferred_incoming: std::collections::VecDeque::new(),
+            read_elsewhere: Default::default(),
             read_sync: ReadSync::default(),
             poll_decrypting: 0,
             poll_history: Default::default(),
