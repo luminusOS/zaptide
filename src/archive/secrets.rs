@@ -336,6 +336,49 @@ async fn host_item(
     Ok(Some(item))
 }
 
+/// The file oo7's `Keyring::sandboxed` opens in `file_keyring_dir`.
+const FILE_KEYRING: &str = "default.keyring";
+
+/// Where the previous Flatpak ID's file keyring is kept once this app moves
+/// it out of the way; only the previous ID's portal secret opens it.
+fn previous_file_keyring(path: &std::path::Path) -> PathBuf {
+    path.with_file_name(format!("{FILE_KEYRING}.{PREVIOUS_FLATPAK_ID}"))
+}
+
+fn incorrect_secret(error: &oo7::Error) -> bool {
+    matches!(error, oo7::Error::File(error) if matches!(**error, oo7::file::Error::IncorrectSecret))
+}
+
+/// Opens the file keyring at `path` with this app's portal secret. Flatpak
+/// moves the previous ID's data folder here, keyring included, and the portal
+/// gives each app ID its own secret, so after the rename that file cannot be
+/// opened (luminusOS/zaptide#234). It is then renamed aside, never deleted,
+/// and a new keyring starts; the archive keys come from the host copies
+/// ZapTide 0.9.0 handed over.
+async fn open_file_keyring(
+    path: &std::path::Path,
+    secret: oo7::Secret,
+    after_the_rename: bool,
+) -> std::result::Result<oo7::Keyring, oo7::Error> {
+    match oo7::Keyring::sandboxed_with_path(path, secret.clone()).await {
+        Err(error) if after_the_rename && incorrect_secret(&error) => {
+            let aside = previous_file_keyring(path);
+            if aside.try_exists().map_err(oo7::file::Error::from)? {
+                return Err(error);
+            }
+            std::fs::rename(path, &aside).map_err(oo7::file::Error::from)?;
+            if let Some(folder) = path.parent() {
+                std::fs::File::open(folder)
+                    .and_then(|folder| folder.sync_all())
+                    .map_err(oo7::file::Error::from)?;
+            }
+            log::warn!("set the previous app ID's keyring aside; using the handed-over keys");
+            oo7::Keyring::sandboxed_with_path(path, secret).await
+        }
+        opened => opened,
+    }
+}
+
 /// The oo7 file keyring's folder, as oo7 0.6 resolves it.
 fn file_keyring_dir() -> Option<PathBuf> {
     std::env::var_os("XDG_DATA_HOME")
@@ -367,7 +410,17 @@ impl Oo7 {
             if !ashpd::is_sandboxed() {
                 return Ok(Backend::Host(oo7::dbus::Service::new().await?));
             }
-            match oo7::Keyring::sandboxed().await {
+            let opened = match oo7::Secret::sandboxed().await {
+                Ok(secret) => match file_keyring_dir() {
+                    Some(folder) => {
+                        open_file_keyring(&folder.join(FILE_KEYRING), secret, after_the_rename())
+                            .await
+                    }
+                    None => Err(oo7::file::Error::NoDataDir.into()),
+                },
+                Err(error) => Err(error.into()),
+            };
+            match opened {
                 Ok(keyring) => {
                     if keyring.is_locked().await? {
                         keyring.unlock().await?;
@@ -715,6 +768,58 @@ mod tests {
         let denied = oo7::Error::from(oo7::file::Error::Portal(ashpd::Error::NoResponse));
         assert!(portal_unavailable(&missing));
         assert!(!portal_unavailable(&denied));
+    }
+
+    #[test]
+    fn the_previous_ids_keyring_is_set_aside_only_after_the_rename() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("default.keyring");
+        let fixture = include_bytes!("../../tests/fixtures/oo7-0.6/default.keyring");
+        std::fs::write(&path, fixture).unwrap();
+        let aside = directory
+            .path()
+            .join("default.keyring.dev.luminusos.ZapTide");
+        let (before, after) = (path.clone(), path.clone());
+        let refused = block_on(async move {
+            Ok(
+                open_file_keyring(&before, oo7::Secret::blob("other app"), false)
+                    .await
+                    .is_err(),
+            )
+        })
+        .unwrap();
+        assert!(refused);
+        assert_eq!(std::fs::read(&path).unwrap(), fixture);
+        assert!(!aside.exists());
+
+        block_on(async move {
+            let keyring = open_file_keyring(&after, oo7::Secret::blob("other app"), true).await?;
+            assert!(keyring.items().await?.is_empty());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(std::fs::read(&aside).unwrap(), fixture);
+
+        // The previous keyring is never overwritten by a second move.
+        let again = path.clone();
+        std::fs::write(&path, fixture).unwrap();
+        let refused = block_on(async move {
+            Ok(open_file_keyring(&again, oo7::Secret::blob("third"), true)
+                .await
+                .is_err())
+        })
+        .unwrap();
+        assert!(refused);
+        assert_eq!(std::fs::read(&aside).unwrap(), fixture);
+
+        // The right secret opens the file where it is.
+        let own = path.clone();
+        block_on(async move {
+            let keyring = open_file_keyring(&own, oo7::Secret::blob("test"), true).await?;
+            assert_eq!(keyring.items().await?.len(), 1);
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]

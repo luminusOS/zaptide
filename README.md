@@ -46,11 +46,11 @@ Release candidates use the testing channel:
 `https://flatpak.luminusos.org/testing/org.luminusos.ZapTide.flatpakref`.
 
 > [!IMPORTANT]
-> Before 1.0 the Flatpak was called `dev.luminusos.ZapTide`. If you installed
-> it from the Luminus repository, `flatpak update` moves it to the new ID and
-> keeps your chats. A Flatpak bundle from GitHub must move to the repository
-> first, and ZapTide 0.9.0 must have been opened once so it hands your archive
-> keys over:
+> Before 1.0 the Flatpak was called `dev.luminusos.ZapTide`. Do not install the
+> new ID next to it: run `flatpak update`, which offers to replace the old ID
+> and moves your chats, keys and settings along. This needs ZapTide 0.9.0 to
+> have been opened once, so it hands your archive keys over. A Flatpak bundle
+> from GitHub must move to the repository first:
 >
 > ```sh
 > flatpak remote-add --user --if-not-exists luminus https://flatpak.luminusos.org/stable/luminus-stable.flatpakrepo
@@ -59,7 +59,8 @@ Release candidates use the testing channel:
 > ```
 >
 > Quit it, then run `flatpak update`. Permissions you granted to the old ID,
-> such as camera access, are asked again.
+> such as camera access, are asked again. Going back to a version before 1.0
+> afterwards is not supported.
 
 Flatpak bundles and AppImages for x86_64 or aarch64 (ARM64) are also on the
 [releases page](https://github.com/luminusOS/zaptide/releases/latest). Native
