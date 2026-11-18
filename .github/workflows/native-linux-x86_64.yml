@@ -48,7 +48,7 @@ jobs:
              README.md LICENSE "dist/$name/"
 
           cp --parents \
-            data/dev.luminusos.ZapTide.desktop \
+            data/org.luminusos.ZapTide.desktop \
             data/icons/zaptide.svg \
             data/icons/zaptide-symbolic.svg \
             data/icons/zaptide-unread-symbolic.svg \

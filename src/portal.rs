@@ -70,7 +70,7 @@ mod tests {
         assert!(is_sandboxed(true, None));
         assert!(is_sandboxed(
             false,
-            Some(OsStr::new("dev.luminusos.ZapTide"))
+            Some(OsStr::new("org.luminusos.ZapTide"))
         ));
         assert!(!is_sandboxed(false, None));
         assert!(!is_sandboxed(false, Some(&OsString::new())));

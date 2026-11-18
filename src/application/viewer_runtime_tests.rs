@@ -98,7 +98,7 @@ fn viewer_album_displays_sender_profiles_and_clears_missing_picture() {
     use crate::native_media::NativeMediaAction;
 
     let data = tempfile::tempdir().expect("private synthetic fixtures");
-    let _relm: RelmApp<Input> = RelmApp::new("dev.luminusos.ZapTide.ViewerAvatarFixture");
+    let _relm: RelmApp<Input> = RelmApp::new("org.luminusos.ZapTide.ViewerAvatarFixture");
     relm4::main_application()
         .register(None::<&gtk::gio::Cancellable>)
         .expect("register fixture");

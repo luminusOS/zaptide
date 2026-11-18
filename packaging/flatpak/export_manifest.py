@@ -14,11 +14,11 @@ from jsonschema import Draft202012Validator
 
 
 HERE = Path(__file__).resolve().parent
-APP_ID = "dev.luminusos.ZapTide"
+APP_ID = "org.luminusos.ZapTide"
 REPOSITORY = "luminusOS/zaptide"
 WORKFLOW = ".github/workflows/release.yml"
 ARCHITECTURES = ("x86_64", "aarch64")
-PINNED_SCHEMA_SHA256 = "a17635d45c5a0f0c2c51a075133f31884ce14cd1393daa20600255836732fe8a"
+PINNED_SCHEMA_SHA256 = "c289b5cbc1acf03eb455a24b312c865e88e0430139f949220d9f2aacd52acec3"
 SCHEMA_PATH = HERE / "contract" / "distribution.schema.json"
 TAG_PATTERN = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-rc\.?([1-9][0-9]*))?\Z")
 REVISION_PATTERN = re.compile(r"[a-f0-9]{40}\Z")

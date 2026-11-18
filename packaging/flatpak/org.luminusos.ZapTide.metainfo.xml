@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>dev.luminusos.ZapTide</id>
+  <id>org.luminusos.ZapTide</id>
   <name>ZapTide</name>
   <summary>A native WhatsApp client</summary>
-  <developer id="dev.luminusos">
+  <developer id="org.luminusos">
     <name>LuminusOS</name>
   </developer>
   <metadata_license>CC0-1.0</metadata_license>
@@ -16,7 +16,13 @@
     running in the system tray. ZapTide is an independent project, not affiliated
     with WhatsApp or Meta.</p>
   </description>
-  <launchable type="desktop-id">dev.luminusos.ZapTide.desktop</launchable>
+  <launchable type="desktop-id">org.luminusos.ZapTide.desktop</launchable>
+  <provides>
+    <id>dev.luminusos.ZapTide</id>
+  </provides>
+  <replaces>
+    <id>dev.luminusos.ZapTide</id>
+  </replaces>
   <url type="homepage">https://github.com/luminusOS/zaptide</url>
   <url type="bugtracker">https://github.com/luminusOS/zaptide/issues</url>
   <url type="vcs-browser">https://github.com/luminusOS/zaptide</url>

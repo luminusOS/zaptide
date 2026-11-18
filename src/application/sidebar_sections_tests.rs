@@ -56,7 +56,7 @@ fn spin(duration: std::time::Duration) {
 #[ignore = "needs a display"]
 fn every_sidebar_section_switch_settles_on_the_chosen_section() {
     let data = tempfile::tempdir().unwrap();
-    let _app: RelmApp<Input> = RelmApp::new("dev.luminusos.ZapTide.SidebarSections");
+    let _app: RelmApp<Input> = RelmApp::new("org.luminusos.ZapTide.SidebarSections");
     let app = NativeApplication::builder().launch(Init {
         dirs: crate::paths::AppDirs::under(data.path()),
     });

@@ -151,7 +151,7 @@ and their backups.
 
 Outside Flatpak, the credential lives in a desktop Secret Service such as
 GNOME Keyring or KWallet. Inside Flatpak it normally lives in
-`~/.var/app/dev.luminusos.ZapTide/data/keyrings/default.keyring`, encrypted with
+`~/.var/app/org.luminusos.ZapTide/data/keyrings/default.keyring`, encrypted with
 a per-app secret stored in the desktop keyring by the Secret portal. Back up
 both the file and the desktop keyring. Without a Secret portal backend,
 Flatpak uses the desktop Secret Service directly.

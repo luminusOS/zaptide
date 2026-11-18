@@ -62,7 +62,7 @@ fn inline_poll_dispatches_explicit_votes_and_preserves_retry_and_identity() {
     use crate::native_media::NativeMediaAction;
 
     let data = tempfile::tempdir().unwrap();
-    let _relm: RelmApp<Input> = RelmApp::new("dev.luminusos.ZapTide.PollFixture");
+    let _relm: RelmApp<Input> = RelmApp::new("org.luminusos.ZapTide.PollFixture");
     relm4::main_application()
         .register(None::<&gtk::gio::Cancellable>)
         .unwrap();

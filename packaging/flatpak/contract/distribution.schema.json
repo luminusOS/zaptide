@@ -7,7 +7,7 @@
     "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$(?![\\s\\S])"},
     "channel": {"enum": ["stable", "testing"]},
     "architecture": {"enum": ["x86_64", "aarch64"]},
-    "application": {"enum": ["dev.luminusos.ZapTide", "org.luminusos.Aetheris", "sirius-installer"]},
+    "application": {"enum": ["dev.luminusos.ZapTide", "org.luminusos.ZapTide", "org.luminusos.Aetheris", "sirius-installer"]},
     "artifact": {
       "type": "object", "additionalProperties": false,
       "required": ["artifact_id", "filename", "sha256", "size_bytes"],
@@ -43,7 +43,7 @@
         }
       },
       "allOf": [
-        {"if": {"properties": {"application": {"const": "dev.luminusos.ZapTide"}}},
+        {"if": {"properties": {"application": {"enum": ["dev.luminusos.ZapTide", "org.luminusos.ZapTide"]}}},
          "then": {"properties": {"format": {"const": "flatpak"}, "source": {"properties": {
            "repository": {"const": "luminusOS/zaptide"}, "workflow": {"const": ".github/workflows/release.yml"}
          }}}}},
@@ -95,7 +95,7 @@
         "flatpak": {
           "type": "object", "additionalProperties": false, "required": ["ref", "commit"],
           "properties": {
-            "ref": {"type": "string", "pattern": "^app/(dev\\.luminusos\\.ZapTide|org\\.luminusos\\.Aetheris)/(x86_64|aarch64)/(stable|testing)$(?![\\s\\S])"},
+            "ref": {"type": "string", "pattern": "^app/(dev\\.luminusos\\.ZapTide|org\\.luminusos\\.ZapTide|org\\.luminusos\\.Aetheris)/(x86_64|aarch64)/(stable|testing)$(?![\\s\\S])"},
             "commit": {"$ref": "#/$defs/sha256"}
           }
         }
@@ -105,7 +105,7 @@
           "format": {"const": "rpm"}, "application": {"const": "sirius-installer"}
         }},
         {"required": ["flatpak"], "not": {"required": ["rpm"]}, "properties": {
-          "format": {"const": "flatpak"}, "application": {"enum": ["dev.luminusos.ZapTide", "org.luminusos.Aetheris"]}
+          "format": {"const": "flatpak"}, "application": {"enum": ["dev.luminusos.ZapTide", "org.luminusos.ZapTide", "org.luminusos.Aetheris"]}
         }}
       ]
     }

@@ -30,20 +30,20 @@ import yaml
 here, out = map(Path, sys.argv[1:3])
 commit = sys.argv[3]
 version = tomllib.loads(Path(sys.argv[4]).read_text())["package"]["version"]
-manifest = yaml.safe_load((here / "dev.luminusos.ZapTide.yml").read_text())
+manifest = yaml.safe_load((here / "org.luminusos.ZapTide.yml").read_text())
 manifest["build-options"].pop("build-args")
 manifest["modules"][0]["build-commands"][0] = "cargo --offline build --release --locked"
 manifest["modules"][0]["sources"][0] = {
     "type": "git", "url": "https://github.com/luminusOS/zaptide.git", "commit": commit
 }
 manifest["modules"][0]["sources"].append("cargo-sources.json")
-(out / "dev.luminusos.ZapTide.yml").write_text(yaml.safe_dump(manifest, sort_keys=False))
-meta = ET.parse(here / "dev.luminusos.ZapTide.metainfo.xml")
+(out / "org.luminusos.ZapTide.yml").write_text(yaml.safe_dump(manifest, sort_keys=False))
+meta = ET.parse(here / "org.luminusos.ZapTide.metainfo.xml")
 releases = meta.getroot().find("releases")
 releases.clear()
 date = subprocess.check_output(["git", "-C", str(here), "show", "-s", "--format=%cs", commit], text=True).strip()
 release = ET.SubElement(releases, "release", version=version, date=date)
 ET.SubElement(release, "url").text = f"https://github.com/luminusOS/zaptide/releases/tag/v{version}"
 ET.indent(meta, space="  ")
-meta.write(out / "dev.luminusos.ZapTide.metainfo.xml", encoding="UTF-8", xml_declaration=True)
+meta.write(out / "org.luminusos.ZapTide.metainfo.xml", encoding="UTF-8", xml_declaration=True)
 PY

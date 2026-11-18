@@ -2413,7 +2413,7 @@ fn add_window_toast(window: &adw::ApplicationWindow, toast: adw::Toast) {
 /// Runs the native shell and starts the backend only after the first main-context turn.
 pub fn run(dirs: AppDirs) {
     let application_id =
-        std::env::var("FLATPAK_ID").unwrap_or_else(|_| "dev.luminusos.ZapTide".into());
+        std::env::var("FLATPAK_ID").unwrap_or_else(|_| "org.luminusos.ZapTide".into());
     let app = RelmApp::new(&application_id);
     // GTK reports `screensaver-active` only for an app registered with the session.
     relm4::main_application().set_register_session(true);

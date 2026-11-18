@@ -38,25 +38,28 @@ with the rest of your Flatpak apps. Runtimes come from Flathub, which Flatpak
 adds if it is missing:
 
 ```sh
-flatpak install --user --from https://flatpak.luminusos.org/stable/dev.luminusos.ZapTide.flatpakref
-flatpak run dev.luminusos.ZapTide
+flatpak install --user --from https://flatpak.luminusos.org/stable/org.luminusos.ZapTide.flatpakref
+flatpak run org.luminusos.ZapTide
 ```
 
 Release candidates use the testing channel:
-`https://flatpak.luminusos.org/testing/dev.luminusos.ZapTide.flatpakref`.
+`https://flatpak.luminusos.org/testing/org.luminusos.ZapTide.flatpakref`.
 
-If you installed a Flatpak bundle from GitHub, move it to the repository once.
-Your chats, keys and settings stay:
-
-```sh
-flatpak remote-add --user --if-not-exists luminus https://flatpak.luminusos.org/stable/luminus-stable.flatpakrepo
-flatpak install --user --reinstall luminus dev.luminusos.ZapTide//stable
-```
-
-> [!NOTE]
-> ZapTide's Flatpak ID is changing to `org.luminusos.ZapTide`. Repository
-> installs move to it automatically. Open ZapTide 0.9.0 or later once before
-> that update so your archive keys move with it.
+> [!IMPORTANT]
+> Before 1.0 the Flatpak was called `dev.luminusos.ZapTide`. If you installed
+> it from the Luminus repository, `flatpak update` moves it to the new ID and
+> keeps your chats. A Flatpak bundle from GitHub must move to the repository
+> first, and ZapTide 0.9.0 must have been opened once so it hands your archive
+> keys over:
+>
+> ```sh
+> flatpak remote-add --user --if-not-exists luminus https://flatpak.luminusos.org/stable/luminus-stable.flatpakrepo
+> flatpak install --user --reinstall luminus dev.luminusos.ZapTide//stable
+> flatpak run dev.luminusos.ZapTide
+> ```
+>
+> Quit it, then run `flatpak update`. Permissions you granted to the old ID,
+> such as camera access, are asked again.
 
 Flatpak bundles and AppImages for x86_64 or aarch64 (ARM64) are also on the
 [releases page](https://github.com/luminusOS/zaptide/releases/latest). Native

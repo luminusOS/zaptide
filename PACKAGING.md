@@ -15,7 +15,7 @@ ZapTide needs libadwaita 1.10 (GNOME 51). Release binaries build in Fedora 45.
 
 ## Flatpak
 
-`packaging/flatpak/dev.luminusos.ZapTide.yml` builds this checkout and fetches
+`packaging/flatpak/org.luminusos.ZapTide.yml` builds this checkout and fetches
 Cargo dependencies. The bundle manifest beside it packages the Linux release
 binary. Both grant Wayland/X11, GPU, audio, network and keyring access.
 User-selected attachments go through portals; neither manifest grants access
@@ -25,15 +25,15 @@ on Flatpak versions without `XDG_STATE_HOME`.
 Build and install locally with Flatpak Builder (GNOME 51 runtime and SDK):
 
 ```sh
-flatpak-builder --user --install --force-clean --install-deps-from=flathub build-dir packaging/flatpak/dev.luminusos.ZapTide.yml
+flatpak-builder --user --install --force-clean --install-deps-from=flathub build-dir packaging/flatpak/org.luminusos.ZapTide.yml
 ```
 
 For a distributable bundle, export the build to a local repository:
 
 ```sh
 mkdir -p target/flatpak
-flatpak-builder --user --force-clean --install-deps-from=flathub --repo=target/flatpak/repo target/flatpak/build packaging/flatpak/dev.luminusos.ZapTide.yml
-flatpak build-bundle target/flatpak/repo target/flatpak/zaptide-dev.flatpak dev.luminusos.ZapTide
+flatpak-builder --user --force-clean --install-deps-from=flathub --repo=target/flatpak/repo target/flatpak/build packaging/flatpak/org.luminusos.ZapTide.yml
+flatpak build-bundle target/flatpak/repo target/flatpak/zaptide-dev.flatpak org.luminusos.ZapTide
 ```
 
 Generating a pinned offline Flathub checkout needs Python's `aiohttp`,
@@ -41,7 +41,7 @@ Generating a pinned offline Flathub checkout needs Python's `aiohttp`,
 
 ```sh
 packaging/flatpak/flathub.sh vX.Y.Z /path/to/flathub-checkout
-flatpak-builder --user --install --force-clean build-dir /path/to/flathub-checkout/dev.luminusos.ZapTide.yml
+flatpak-builder --user --install --force-clean build-dir /path/to/flathub-checkout/org.luminusos.ZapTide.yml
 ```
 
 Flathub submission is a separate, manual step.
@@ -50,7 +50,7 @@ prohibit AI agents from submitting or writing submission interactions and
 require disclosure of generated material.
 
 The release workflow builds native binaries for both architectures and packages
-them with `dev.luminusos.ZapTide.bundle.yml`. Package hashes go in `checksums.txt`.
+them with `org.luminusos.ZapTide.bundle.yml`. Package hashes go in `checksums.txt`.
 Two reports stay in the workflow artifacts, not the GitHub release:
 
 - `flatpak-release-manifest.json`: tag, source revision, workflow run, bundle
@@ -168,7 +168,7 @@ session portal outside a sandbox, not inside a built Flatpak.
 ### Keyring
 
 Inside Flatpak, oo7 keeps archive keys in
-`~/.var/app/dev.luminusos.ZapTide/data/keyrings/default.keyring`. The Secret
+`~/.var/app/org.luminusos.ZapTide/data/keyrings/default.keyring`. The Secret
 portal stores the per-app secret that encrypts this file in the host keyring.
 Backups and moves need both. Desktops without a Secret portal backend use the
 host Secret Service directly. Outside Flatpak, keys are found in any Secret

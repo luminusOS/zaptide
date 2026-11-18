@@ -28,7 +28,7 @@ class LicensePackaging(unittest.TestCase):
     def test_project_and_metadata_licenses(self):
         package = tomllib.loads((ROOT / "Cargo.toml").read_text())["package"]
         self.assertEqual(package["license"], "GPL-3.0-or-later")
-        metadata = ET.parse(ROOT / "packaging/flatpak/dev.luminusos.ZapTide.metainfo.xml").getroot()
+        metadata = ET.parse(ROOT / "packaging/flatpak/org.luminusos.ZapTide.metainfo.xml").getroot()
         self.assertEqual(metadata.findtext("project_license"), package["license"])
         self.assertEqual(metadata.findtext("metadata_license"), "CC0-1.0")
 
@@ -60,7 +60,7 @@ class LicensePackaging(unittest.TestCase):
             self.assert_notices(temp / "AppDir/share/licenses/zaptide")
 
             flatpak = ROOT / "packaging/flatpak"
-            source = yaml.safe_load((flatpak / "dev.luminusos.ZapTide.yml").read_text())
+            source = yaml.safe_load((flatpak / "org.luminusos.ZapTide.yml").read_text())
             source_command = next(c for c in source["modules"][0]["build-commands"] if "install-licenses.sh" in c)
             self.run_command(source_command.replace("/app/", f"{temp}/source-app/"))
             self.assert_notices(temp / "source-app/share/licenses/zaptide")
@@ -81,7 +81,7 @@ class LicensePackaging(unittest.TestCase):
             built = unpacked / "synthetic"
             self.assert_notices(built / "licenses/zaptide")
 
-            bundle = yaml.safe_load((flatpak / "dev.luminusos.ZapTide.bundle.yml").read_text())
+            bundle = yaml.safe_load((flatpak / "org.luminusos.ZapTide.bundle.yml").read_text())
             bundle_command = next(c for c in bundle["modules"][0]["build-commands"] if "licenses/zaptide/." in c)
             self.run_command(bundle_command.replace("/app/", f"{temp}/bundle-app/"), cwd=built)
             self.assert_notices(temp / "bundle-app/share/licenses/zaptide")
