@@ -149,6 +149,26 @@ jobs:
           branch: ${{ steps.flatpak-branch.outputs.branch }}
           cache: false
           upload-artifact: false
+      # flatpak-builder has no end-of-life setting, so the bundle's commit
+      # is copied with the rebase that retires this ID (#234); the tree is
+      # unchanged.
+      - name: Mark the Flatpak bundle as replaced by org.luminusos.ZapTide
+        env:
+          ARCH: ${{ matrix.arch }}
+          BRANCH: ${{ steps.flatpak-branch.outputs.branch }}
+          BUNDLE: zaptide-${{ github.ref_name }}-${{ matrix.arch }}.flatpak
+        run: |
+          set -euo pipefail
+          built="$RUNNER_TEMP/flatpak-built-${ARCH}.repo"
+          marked="$RUNNER_TEMP/flatpak-marked-${ARCH}.repo"
+          ref="app/dev.luminusos.ZapTide/${ARCH}/${BRANCH}"
+          ostree init --repo="$built" --mode=archive
+          ostree init --repo="$marked" --mode=archive
+          flatpak build-import-bundle "$built" "$BUNDLE"
+          flatpak build-commit-from --src-repo="$built" --src-ref="$ref" \
+              --end-of-life-rebase=dev.luminusos.ZapTide=org.luminusos.ZapTide "$marked" "$ref"
+          flatpak build-bundle "$marked" "$BUNDLE" --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo \
+              --arch="$ARCH" dev.luminusos.ZapTide "$BRANCH"
       - name: Verify Flatpak bundle
         env:
           ARCH: ${{ matrix.arch }}

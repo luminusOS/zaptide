@@ -15,9 +15,6 @@ sdk: org.gnome.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
 command: zaptide
-# Retires this ID: Flatpak offers to move installs and their data to the
-# renamed app (luminusOS/zaptide#234).
-end-of-life-rebase: org.luminusos.ZapTide
 finish-args:
   # Wayland first, X11 when that is what there is.
   - --socket=wayland
