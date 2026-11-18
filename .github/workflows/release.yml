@@ -163,6 +163,8 @@ jobs:
           expected_ref="app/dev.luminusos.ZapTide/${ARCH}/${BRANCH}"
           test "$ref" = "$expected_ref"
           commit="$(ostree rev-parse --repo="$repo" "$ref")"
+          rebase="$(ostree show --repo="$repo" "$commit" --print-metadata-key=ostree.endoflife-rebase)"
+          test "$rebase" = "'app/org.luminusos.ZapTide/${ARCH}/${BRANCH}'"
           ostree cat --repo="$repo" "$commit" metadata > "$RUNNER_TEMP/flatpak-metadata-${ARCH}"
           python3 - "$RUNNER_TEMP/flatpak-metadata-${ARCH}" "$ARCH" "$commit" "$BRANCH" > "flatpak-export-report-${ARCH}.json" <<'PY'
           import configparser
