@@ -16,3 +16,6 @@
 /build-dir/
 /AppDir/
 /quick-sharun
+
+__pycache__/
+*.pyc
