@@ -125,7 +125,7 @@ impl NativeApplication {
     fn show_about(&mut self) {
         let about = adw::AboutDialog::builder()
                 .application_name("ZapTide")
-                .application_icon("dev.luminusos.ZapTide")
+                .application_icon("org.luminusos.ZapTide")
                 .version(env!("CARGO_PKG_VERSION"))
                 .developer_name("LuminusOS")
                 .developers(["LuminusOS"])

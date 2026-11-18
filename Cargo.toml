@@ -12,7 +12,7 @@ categories = ["gui"]
 
 [package.metadata.appimage]
 icon = "data/icons/zaptide.svg"
-desktop_entry = "data/dev.luminusos.ZapTide.desktop"
+desktop_entry = "data/org.luminusos.ZapTide.desktop"
 auto_link = true
 auto_link_exclude_list = [
   "ld-linux*.so*",

@@ -21,14 +21,14 @@ pub(super) const APP_ICON: &str = include_str!("../../data/icons/zaptide.svg");
 
 pub(super) fn install_icons(dir: &std::path::Path) {
     let tray = [
-        ("dev.luminusos.ZapTide-symbolic.svg", TRAY_ICON),
+        ("org.luminusos.ZapTide-symbolic.svg", TRAY_ICON),
         (
-            "dev.luminusos.ZapTide-unread-symbolic.svg",
+            "org.luminusos.ZapTide-unread-symbolic.svg",
             TRAY_UNREAD_ICON,
         ),
     ];
     let icons = [
-        ("dev.luminusos.ZapTide.svg", APP_ICON),
+        ("org.luminusos.ZapTide.svg", APP_ICON),
         ("zaptide-filter-symbolic.svg", FILTER_ICON),
     ];
     write_icons(dir, tray.iter().chain(&icons));
@@ -39,7 +39,7 @@ pub(super) fn install_icons(dir: &std::path::Path) {
         let hicolor = gtk::glib::user_data_dir().join("icons/hicolor");
         // The colour icon goes in the theme too: with only the symbolic one
         // there, GTK resolves the app's name to it and About shows a bubble.
-        let app = [("dev.luminusos.ZapTide.svg", APP_ICON)];
+        let app = [("org.luminusos.ZapTide.svg", APP_ICON)];
         let tray_changed = write_icons(&hicolor.join("symbolic/apps"), tray.iter());
         if write_icons(&hicolor.join("scalable/apps"), app.iter()) | tray_changed {
             // Theme caches rescan only when the theme directory changes.

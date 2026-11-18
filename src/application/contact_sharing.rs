@@ -499,7 +499,7 @@ mod tests {
         gtk::init().unwrap();
         adw::init().unwrap();
         let app = adw::Application::builder()
-            .application_id("dev.luminusos.ZapTide.ContactFixture")
+            .application_id("org.luminusos.ZapTide.ContactFixture")
             .flags(gtk::gio::ApplicationFlags::NON_UNIQUE)
             .build();
         app.register(gtk::gio::Cancellable::NONE).unwrap();

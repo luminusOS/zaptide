@@ -28,7 +28,7 @@ fn message(chat: &str, index: i64) -> crate::model::Message {
 #[ignore = "requires an isolated graphical process"]
 fn final_history_page_preserves_reading_position_and_rejects_stale_clicks() {
     let data = tempfile::tempdir().expect("private fixture");
-    let _relm: RelmApp<Input> = RelmApp::new("dev.luminusos.ZapTide.HistoryFixture");
+    let _relm: RelmApp<Input> = RelmApp::new("org.luminusos.ZapTide.HistoryFixture");
     relm4::main_application()
         .register(None::<&gtk::gio::Cancellable>)
         .expect("register fixture");

@@ -15,7 +15,7 @@ import yaml
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
-APP_ID = "dev.luminusos.ZapTide"
+APP_ID = "org.luminusos.ZapTide"
 sys.path.insert(0, str(HERE))
 import export_manifest
 
@@ -167,7 +167,7 @@ pathlib.Path(sys.argv[sys.argv.index("-o") + 1]).write_text(json.dumps({"lock_sh
         }
         self.assertEqual(export_manifest.build_export_report(
             testing_reports, "v1.2.3-rc.1")["branch"], "testing")
-        reports["aarch64"]["ref"] = "app/dev.luminusos.ZapTide/x86_64/stable"
+        reports["aarch64"]["ref"] = "app/org.luminusos.ZapTide/x86_64/stable"
         with self.assertRaises(ValueError):
             export_manifest.build_export_report(reports, "v1.2.3")
 

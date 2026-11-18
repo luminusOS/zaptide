@@ -38,7 +38,7 @@ jobs:
           # `flatpak info` and software centres read the version from the
           # newest <release> in the metainfo, not from the binary.
           import xml.etree.ElementTree as ET
-          metainfo = ET.parse("packaging/flatpak/dev.luminusos.ZapTide.metainfo.xml").getroot()
+          metainfo = ET.parse("packaging/flatpak/org.luminusos.ZapTide.metainfo.xml").getroot()
           newest = metainfo.find("releases/release")
           assert newest is not None and newest.get("version") == version, "Newest metainfo release does not match"
           PY
@@ -90,7 +90,7 @@ jobs:
           mkdir -p "dist/$name"
           cp "target/${{ matrix.target }}/release/zaptide" README.md LICENSE "dist/$name/"
           # Desktop integration for package builds and hand-installs.
-          cp --parents data/dev.luminusos.ZapTide.desktop data/icons/zaptide.svg data/icons/zaptide-symbolic.svg data/icons/zaptide-unread-symbolic.svg "dist/$name/"
+          cp --parents data/org.luminusos.ZapTide.desktop data/icons/zaptide.svg data/icons/zaptide-symbolic.svg data/icons/zaptide-unread-symbolic.svg "dist/$name/"
           cp -r po "dist/$name/"
           sh packaging/install-licenses.sh "dist/$name/licenses/zaptide"
           cd dist
@@ -143,7 +143,7 @@ jobs:
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
       - uses: flatpak/flatpak-github-actions/flatpak-builder@79327416609af08178ad73b352877e51450790b3 # v6
         with:
-          manifest-path: packaging/flatpak/dev.luminusos.ZapTide.bundle.yml
+          manifest-path: packaging/flatpak/org.luminusos.ZapTide.bundle.yml
           bundle: zaptide-${{ github.ref_name }}-${{ matrix.arch }}.flatpak
           arch: ${{ matrix.arch }}
           branch: ${{ steps.flatpak-branch.outputs.branch }}
@@ -160,7 +160,7 @@ jobs:
           ostree init --repo="$repo" --mode=archive
           flatpak build-import-bundle "$repo" "$BUNDLE"
           ref="$(ostree refs --repo="$repo")"
-          expected_ref="app/dev.luminusos.ZapTide/${ARCH}/${BRANCH}"
+          expected_ref="app/org.luminusos.ZapTide/${ARCH}/${BRANCH}"
           test "$ref" = "$expected_ref"
           commit="$(ostree rev-parse --repo="$repo" "$ref")"
           ostree cat --repo="$repo" "$commit" metadata > "$RUNNER_TEMP/flatpak-metadata-${ARCH}"
@@ -175,7 +175,7 @@ jobs:
               raise SystemExit("bundle metadata is missing its Application section")
           app = metadata["Application"]
           expected_runtime = f"org.gnome.Platform/{arch}/51"
-          if app.get("name") != "dev.luminusos.ZapTide":
+          if app.get("name") != "org.luminusos.ZapTide":
               raise SystemExit("bundle application id does not match")
           if app.get("runtime") != expected_runtime:
               raise SystemExit("bundle runtime or architecture does not match")

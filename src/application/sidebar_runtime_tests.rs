@@ -406,7 +406,7 @@ fn identity_merge_redirect_fixture(edit: bool, mixed_attachments: bool) {
     const ALIAS: &str = "900001@lid";
     const PHONE: &str = "15550001001@s.whatsapp.net";
     let data = tempfile::tempdir().unwrap();
-    let _relm: RelmApp<Input> = RelmApp::new("dev.luminusos.ZapTide.IdentityFixture");
+    let _relm: RelmApp<Input> = RelmApp::new("org.luminusos.ZapTide.IdentityFixture");
     relm4::main_application()
         .register(None::<&gtk::gio::Cancellable>)
         .unwrap();
@@ -712,7 +712,7 @@ fn animated_native_wheel_survives_backend_reorder() {
 
 fn wheel_and_keyboard_survive_backend_reorder(animations: bool) {
     let data = tempfile::tempdir().expect("private fixture directory");
-    let _relm: RelmApp<Input> = RelmApp::new("dev.luminusos.ZapTide.SidebarNativeInputTest");
+    let _relm: RelmApp<Input> = RelmApp::new("org.luminusos.ZapTide.SidebarNativeInputTest");
     relm4::main_application()
         .register(None::<&gtk::gio::Cancellable>)
         .expect("register test application");
@@ -1103,7 +1103,7 @@ fn wheel_and_keyboard_survive_backend_reorder(animations: bool) {
 #[ignore = "requires a display and a dedicated test process"]
 fn backend_reorder_preserves_the_first_snapshot_and_open_chat() {
     let data = tempfile::tempdir().expect("private fixture directory");
-    let _relm: RelmApp<Input> = RelmApp::new("dev.luminusos.ZapTide.SidebarRuntimeTest");
+    let _relm: RelmApp<Input> = RelmApp::new("org.luminusos.ZapTide.SidebarRuntimeTest");
     let application = relm4::main_application();
     application
         .register(None::<&gtk::gio::Cancellable>)
@@ -1270,7 +1270,7 @@ fn backend_reorder_preserves_the_first_snapshot_and_open_chat() {
 #[ignore = "requires a display and a dedicated test process"]
 fn logout_and_account_switch_cancel_pending_restore() {
     let data = tempfile::tempdir().expect("private fixture directory");
-    let _relm: RelmApp<Input> = RelmApp::new("dev.luminusos.ZapTide.SidebarLifecycleTest");
+    let _relm: RelmApp<Input> = RelmApp::new("org.luminusos.ZapTide.SidebarLifecycleTest");
     relm4::main_application()
         .register(None::<&gtk::gio::Cancellable>)
         .unwrap();
@@ -1437,7 +1437,7 @@ fn logout_and_account_switch_cancel_pending_restore() {
 #[ignore = "requires private Xvfb, Python, X11 and XTest"]
 fn opening_a_chat_keeps_the_sidebar_position() {
     let data = tempfile::tempdir().expect("private fixture directory");
-    let _relm: RelmApp<Input> = RelmApp::new("dev.luminusos.ZapTide.SidebarOpenTest");
+    let _relm: RelmApp<Input> = RelmApp::new("org.luminusos.ZapTide.SidebarOpenTest");
     relm4::main_application()
         .register(None::<&gtk::gio::Cancellable>)
         .expect("register test application");

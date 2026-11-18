@@ -61,9 +61,9 @@ mod imp {
 
         fn glyph(&self) -> &'static str {
             if self.state.unread_chats > 0 {
-                "dev.luminusos.ZapTide-unread-symbolic"
+                "org.luminusos.ZapTide-unread-symbolic"
             } else {
-                "dev.luminusos.ZapTide-symbolic"
+                "org.luminusos.ZapTide-symbolic"
             }
         }
     }

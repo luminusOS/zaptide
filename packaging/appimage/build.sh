@@ -48,8 +48,8 @@ chmod +x ./quick-sharun
 export OUTPATH=./dist
 export OUTNAME="zaptide-${VERSION:-dev}-$ARCH.AppImage"
 export ICON=data/icons/zaptide.svg
-export DESKTOP=data/dev.luminusos.ZapTide.desktop
-export STARTUPWMCLASS=dev.luminusos.ZapTide
+export DESKTOP=data/org.luminusos.ZapTide.desktop
+export STARTUPWMCLASS=org.luminusos.ZapTide
 export GTK_CLASS_FIX=1
 # Delta updates: AppImageUpdate reads this from the AppImage and fetches the
 # .zsync published next to it in the latest GitHub release.

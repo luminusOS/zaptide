@@ -87,7 +87,7 @@ fn media_viewer_uses_the_main_panel_and_releases_files_on_navigation() {
     image::RgbaImage::from_pixel(64, 48, image::Rgba([20, 120, 200, 255]))
         .save(&path)
         .unwrap();
-    let _application: RelmApp<Input> = RelmApp::new("dev.luminusos.ZapTide.MediaViewerTest");
+    let _application: RelmApp<Input> = RelmApp::new("org.luminusos.ZapTide.MediaViewerTest");
     let app = NativeApplication::builder().launch(Init {
         dirs: crate::paths::AppDirs::under(data.path()),
     });

@@ -8,4 +8,4 @@ Icon=zaptide
 Terminal=false
 Categories=Network;InstantMessaging;Chat;
 Keywords=whatsapp;chat;messaging;
-StartupWMClass=dev.luminusos.ZapTide
+StartupWMClass=org.luminusos.ZapTide

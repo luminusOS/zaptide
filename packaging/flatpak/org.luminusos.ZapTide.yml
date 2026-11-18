@@ -3,12 +3,12 @@
 # To build and install locally:
 #
 #   flatpak-builder --user --install --force-clean --install-deps-from=flathub build-dir \
-#       packaging/flatpak/dev.luminusos.ZapTide.yml
+#       packaging/flatpak/org.luminusos.ZapTide.yml
 #
 # The release workflow does not build from source twice: it packages the
 # binary the Linux job already built, through the bundle manifest beside
 # this one, whose finish-args are the same as these.
-id: dev.luminusos.ZapTide
+id: org.luminusos.ZapTide
 runtime: org.gnome.Platform
 runtime-version: '51'
 sdk: org.gnome.Sdk
@@ -44,12 +44,12 @@ modules:
     build-commands:
       - cargo build --release --locked
       - install -Dm755 target/release/zaptide /app/bin/zaptide
-      - install -Dm644 data/dev.luminusos.ZapTide.desktop /app/share/applications/dev.luminusos.ZapTide.desktop
-      - sed -i 's/^Icon=zaptide$/Icon=dev.luminusos.ZapTide/' /app/share/applications/dev.luminusos.ZapTide.desktop
-      - install -Dm644 data/icons/zaptide.svg /app/share/icons/hicolor/scalable/apps/dev.luminusos.ZapTide.svg
-      - install -Dm644 data/icons/zaptide-symbolic.svg /app/share/icons/hicolor/symbolic/apps/dev.luminusos.ZapTide-symbolic.svg
-      - install -Dm644 data/icons/zaptide-unread-symbolic.svg /app/share/icons/hicolor/symbolic/apps/dev.luminusos.ZapTide-unread-symbolic.svg
-      - install -Dm644 packaging/flatpak/dev.luminusos.ZapTide.metainfo.xml /app/share/metainfo/dev.luminusos.ZapTide.metainfo.xml
+      - install -Dm644 data/org.luminusos.ZapTide.desktop /app/share/applications/org.luminusos.ZapTide.desktop
+      - sed -i 's/^Icon=zaptide$/Icon=org.luminusos.ZapTide/' /app/share/applications/org.luminusos.ZapTide.desktop
+      - install -Dm644 data/icons/zaptide.svg /app/share/icons/hicolor/scalable/apps/org.luminusos.ZapTide.svg
+      - install -Dm644 data/icons/zaptide-symbolic.svg /app/share/icons/hicolor/symbolic/apps/org.luminusos.ZapTide-symbolic.svg
+      - install -Dm644 data/icons/zaptide-unread-symbolic.svg /app/share/icons/hicolor/symbolic/apps/org.luminusos.ZapTide-unread-symbolic.svg
+      - install -Dm644 packaging/flatpak/org.luminusos.ZapTide.metainfo.xml /app/share/metainfo/org.luminusos.ZapTide.metainfo.xml
       - sh packaging/install-licenses.sh /app/share/licenses/zaptide
       - for lang in $(cat po/LINGUAS); do install -d /app/share/locale/$lang/LC_MESSAGES && msgfmt -o /app/share/locale/$lang/LC_MESSAGES/zaptide.mo po/$lang.po; done
     sources:
@@ -57,5 +57,5 @@ modules:
         path: ../..
       # Supply the current app ID even when generating a manifest for an older tag.
       - type: file
-        path: dev.luminusos.ZapTide.metainfo.xml
+        path: org.luminusos.ZapTide.metainfo.xml
         dest: packaging/flatpak

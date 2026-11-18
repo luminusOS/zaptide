@@ -20,7 +20,6 @@ pub(crate) use encryption::{
 };
 pub use encryption::{
     archive_key_identity, copy_archive_key, forget_archive_key, forget_handed_over_key,
-    hand_over_archive_keys,
 };
 mod media;
 mod polls;
@@ -291,7 +290,9 @@ impl Archive {
     /// archives before their first encrypted use. Never falls back to plaintext.
     pub fn open(path: &Path) -> anyhow::Result<Self> {
         let key = encryption::key_for(path)?;
-        Self::open_with_key(path, &key)
+        let archive = Self::open_with_key(path, &key)?;
+        encryption::retire_handed_over_key(path);
+        Ok(archive)
     }
 
     fn open_with_key(path: &Path, key: &[u8; 32]) -> anyhow::Result<Self> {

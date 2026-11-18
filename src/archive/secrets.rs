@@ -18,6 +18,8 @@ use std::{
 use anyhow::{Context, Result, anyhow};
 use zeroize::Zeroizing;
 
+/// The app ID before luminusOS/zaptide#234. Kept after the rename: it names
+/// the host items of earlier builds and the copies ZapTide 0.9.0 handed over.
 pub(super) const KEYRING_SERVICE: &str = "dev.luminusos.ZapTide";
 
 pub(super) type Secret = Zeroizing<Vec<u8>>;
@@ -40,28 +42,35 @@ pub(super) trait LegacySecretStore {
     fn get(&self, identity: &str) -> Result<Option<Secret>>;
 }
 
-/// The host Secret Service, written only to hand keys to the renamed app.
-pub(super) trait HostSecretStore {
-    fn get(&self, identity: &str) -> Result<Option<Secret>>;
-    fn create(&self, identity: &str, secret: &[u8]) -> Result<()>;
+/// The copies ZapTide 0.9.0 left in the host Secret Service for this app.
+pub(super) trait HandedOverStore {
+    /// Deletes the marked copy for `identity`, if there is one.
     fn delete(&self, identity: &str) -> Result<()>;
 }
 
-/// The Flatpak ID this build bridges keys away from.
+/// The Flatpak ID before luminusOS/zaptide#234.
 pub(super) const PREVIOUS_FLATPAK_ID: &str = "dev.luminusos.ZapTide";
-/// The Flatpak ID that takes over its data, luminusOS/zaptide#234.
-pub(super) const NEXT_FLATPAK_ID: &str = "org.luminusos.ZapTide";
+/// This app's Flatpak ID.
+pub(super) const FLATPAK_ID: &str = "org.luminusos.ZapTide";
 
-/// Marks the host items made for the renamed app, so that its cleanup never
-/// touches a key that an older build created and may still need.
+/// Marks the host items ZapTide 0.9.0 made for this app, so that their
+/// cleanup never touches a key that an older build created and may still need.
 pub(super) const HANDOVER_ATTRIBUTE: (&str, &str) = ("zaptide-handover", "1");
 
-/// The Secret portal ties the file keyring to the app ID, and a key's
-/// identity contains the app's data folder, so the renamed app finds no key.
-/// Only the previous ID's sandbox hands keys over, whether it keeps them in
-/// the file keyring or, without a Secret portal, in the host Secret Service.
-fn hands_keys_over(sandboxed: bool, flatpak_id: Option<&std::ffi::OsStr>) -> bool {
-    sandboxed && flatpak_id == Some(std::ffi::OsStr::new(PREVIOUS_FLATPAK_ID))
+/// Only this app's sandbox finds keys ZapTide 0.9.0 handed over: it copies
+/// them into its file keyring through the legacy lookup, or, without a Secret
+/// portal, uses them where they are.
+fn finds_handed_over_keys(sandboxed: bool, flatpak_id: Option<&std::ffi::OsStr>) -> bool {
+    sandboxed && flatpak_id == Some(std::ffi::OsStr::new(FLATPAK_ID))
+}
+
+/// Whether a missing key may be one the previous Flatpak ID never handed over.
+pub(super) fn after_the_rename() -> bool {
+    !cfg!(test)
+        && finds_handed_over_keys(
+            ashpd::is_sandboxed(),
+            std::env::var_os("FLATPAK_ID").as_deref(),
+        )
 }
 
 /// The result of looking a key up.
@@ -181,38 +190,38 @@ fn with_stores<T>(operation: impl FnOnce(&Keyring<'_>) -> Result<T>) -> Result<T
 /// Reads a key from this app's own store.
 pub(super) type ReadKey<'a> = &'a dyn Fn(&str) -> Result<Option<Secret>>;
 
-fn hands_keys_over_here() -> bool {
-    !cfg!(test)
-        && hands_keys_over(
-            ashpd::is_sandboxed(),
-            std::env::var_os("FLATPAK_ID").as_deref(),
-        )
-}
-
-/// Runs `operation` on a thread of its own when this build hands keys over
-/// to the renamed app; otherwise does nothing. It never unlocks host items,
-/// so a locked keyring waits for the next start, and its error is logged.
-pub(super) fn hand_keys_over_later(
-    operation: impl FnOnce(ReadKey<'_>, &dyn HostSecretStore) -> Result<()> + Send + 'static,
-) {
-    if !hands_keys_over_here() {
+/// Deletes the handed-over copy of `identity` once this app's file keyring
+/// holds the key, which the archive just opened with. Without a Secret portal
+/// the copy is the key itself and stays.
+pub(super) fn retire_handed_over_later(identity: String) {
+    if !after_the_rename() {
         return;
     }
     on_handover_thread(move || {
         let current = Oo7::open()?;
         match &*current.backend {
-            Backend::File(_) => operation(&|identity| current.get(identity), &Handover),
-            // Without a Secret portal the keys already are in the host
-            // Secret Service; read them there without unlocking.
-            Backend::Host(_) => operation(&|identity| Handover.get(identity), &Handover),
+            Backend::File(_) => retire_in(&identity, &|identity| current.get(identity), &Handover),
+            Backend::Host(_) => Ok(()),
         }
     });
 }
 
-/// Deletes the marked host copy of a removed folder's key, on a thread of
-/// its own, when this build hands keys over.
+pub(super) fn retire_in(
+    identity: &str,
+    current: ReadKey<'_>,
+    host: &dyn HandedOverStore,
+) -> Result<()> {
+    anyhow::ensure!(
+        current(identity)?.is_some(),
+        "The archive key is not in this app's keyring yet"
+    );
+    host.delete(identity)
+}
+
+/// Deletes the handed-over copy of a removed folder's key, on a thread of its
+/// own, inside this app's sandbox.
 pub(super) fn forget_handed_over_later(identity: String) {
-    if !hands_keys_over_here() {
+    if !after_the_rename() {
         return;
     }
     on_handover_thread(move || Handover.delete(&identity));
@@ -224,11 +233,11 @@ fn on_handover_thread(work: impl FnOnce() -> Result<()> + Send + 'static) {
         .spawn(move || {
             let _runtime = crate::portal::enter();
             if let Err(error) = work() {
-                log::warn!("could not hand archive keys over to the renamed app: {error:#}");
+                log::warn!("could not remove a handed-over archive key: {error:#}");
             }
         });
     if let Err(error) = spawned {
-        log::warn!("could not start handing archive keys over: {error}");
+        log::warn!("could not start removing a handed-over archive key: {error}");
     }
 }
 
@@ -327,12 +336,89 @@ async fn host_item(
     Ok(Some(item))
 }
 
-/// The oo7 file keyring's folder, as oo7 0.6 resolves it.
+/// The file oo7's `Keyring::sandboxed` opens in `file_keyring_dir`.
+const FILE_KEYRING: &str = "default.keyring";
+
+/// Where the previous Flatpak ID's file keyring is kept once this app moves
+/// it out of the way; only the previous ID's portal secret opens it.
+fn previous_file_keyring(path: &std::path::Path) -> PathBuf {
+    path.with_file_name(format!("{FILE_KEYRING}.{PREVIOUS_FLATPAK_ID}"))
+}
+
+/// Written beside the file keyring once this app has opened it, so only the
+/// file Flatpak moved over from the previous ID is ever set aside; a later
+/// incorrect secret leaves this app's own keyring where it is.
+fn opened_marker(path: &std::path::Path) -> PathBuf {
+    path.with_file_name(format!(".{FLATPAK_ID}.opened"))
+}
+
+fn mark_opened(path: &std::path::Path) -> std::io::Result<()> {
+    let marker = opened_marker(path);
+    if marker.try_exists()? {
+        return Ok(());
+    }
+    if let Some(folder) = path.parent() {
+        std::fs::create_dir_all(folder)?;
+    }
+    std::fs::File::create(&marker)?.sync_all()?;
+    if let Some(folder) = path.parent() {
+        std::fs::File::open(folder)?.sync_all()?;
+    }
+    Ok(())
+}
+
+fn incorrect_secret(error: &oo7::Error) -> bool {
+    matches!(error, oo7::Error::File(error) if matches!(**error, oo7::file::Error::IncorrectSecret))
+}
+
+/// Opens the file keyring at `path` with this app's portal secret. Flatpak
+/// moves the previous ID's data folder here, keyring included, and the portal
+/// gives each app ID its own secret, so after the rename that file cannot be
+/// opened (luminusOS/zaptide#234). It is then renamed aside, never deleted,
+/// and a new keyring starts; the archive keys come from the host copies
+/// ZapTide 0.9.0 handed over.
+async fn open_file_keyring(
+    path: &std::path::Path,
+    secret: oo7::Secret,
+    after_the_rename: bool,
+) -> std::result::Result<oo7::Keyring, oo7::Error> {
+    let opened = match oo7::Keyring::sandboxed_with_path(path, secret.clone()).await {
+        Err(error) if after_the_rename && incorrect_secret(&error) => {
+            let aside = previous_file_keyring(path);
+            if opened_marker(path)
+                .try_exists()
+                .map_err(oo7::file::Error::from)?
+                || aside.try_exists().map_err(oo7::file::Error::from)?
+            {
+                return Err(error);
+            }
+            std::fs::rename(path, &aside).map_err(oo7::file::Error::from)?;
+            if let Some(folder) = path.parent() {
+                std::fs::File::open(folder)
+                    .and_then(|folder| folder.sync_all())
+                    .map_err(oo7::file::Error::from)?;
+            }
+            log::warn!("set the previous app ID's keyring aside; using the handed-over keys");
+            oo7::Keyring::sandboxed_with_path(path, secret).await
+        }
+        opened => opened,
+    }?;
+    if after_the_rename {
+        mark_opened(path).map_err(oo7::file::Error::from)?;
+    }
+    Ok(opened)
+}
+
+/// The oo7 file keyring's folder, as oo7 0.7 resolves it.
 fn file_keyring_dir() -> Option<PathBuf> {
     std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
         .filter(|path| path.is_absolute())
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")))
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .filter(|home| !home.is_empty())
+                .map(|home| PathBuf::from(home).join(".local/share"))
+        })
         .map(|data| data.join("keyrings"))
 }
 
@@ -358,7 +444,17 @@ impl Oo7 {
             if !ashpd::is_sandboxed() {
                 return Ok(Backend::Host(oo7::dbus::Service::new().await?));
             }
-            match oo7::Keyring::sandboxed().await {
+            let opened = match oo7::Secret::sandboxed().await {
+                Ok(secret) => match file_keyring_dir() {
+                    Some(folder) => {
+                        open_file_keyring(&folder.join(FILE_KEYRING), secret, after_the_rename())
+                            .await
+                    }
+                    None => Err(oo7::file::Error::NoDataDir.into()),
+                },
+                Err(error) => Err(error.into()),
+            };
+            match opened {
                 Ok(keyring) => {
                     if keyring.is_locked().await? {
                         keyring.unlock().await?;
@@ -484,8 +580,8 @@ impl LegacySecretStore for SecretService {
     }
 }
 
-/// The host Secret Service as the key handover uses it: it never unlocks or
-/// prompts, and it only deletes the items it marked.
+/// The host Secret Service as the handed-over copies' cleanup uses it: it
+/// never unlocks or prompts, and it only deletes the items 0.9.0 marked.
 struct Handover;
 
 fn handover_attributes(identity: &str) -> [(&'static str, String); 3] {
@@ -497,50 +593,16 @@ fn handover_attributes(identity: &str) -> [(&'static str, String); 3] {
     ]
 }
 
-impl HostSecretStore for Handover {
-    fn get(&self, identity: &str) -> Result<Option<Secret>> {
-        let attributes = attributes(identity);
-        block_on(async move {
-            let service = oo7::dbus::Service::new().await?;
-            let mut items = Vec::new();
-            for collection in service.collections().await? {
-                items.extend(collection.search_items(&attributes).await?);
-            }
-            let Some(item) = unique(items)? else {
-                return Ok(None);
-            };
-            if item.is_locked().await? {
-                anyhow::bail!("The OS keyring is locked; trying again on the next start");
-            }
-            Ok(Some(Zeroizing::new(
-                item.secret().await?.as_bytes().to_vec(),
-            )))
-        })
-    }
-
-    fn create(&self, identity: &str, secret: &[u8]) -> Result<()> {
-        let attributes = handover_attributes(identity);
-        let label = label(identity);
-        let secret = oo7::Secret::blob(secret);
-        block_on(async move {
-            let service = oo7::dbus::Service::new().await?;
-            let collection = service.default_collection().await?;
-            if collection.is_locked().await? {
-                anyhow::bail!("The OS keyring is locked; trying again on the next start");
-            }
-            collection
-                .create_item(&label, &attributes, secret, false, None)
-                .await?;
-            Ok(())
-        })
-    }
-
+impl HandedOverStore for Handover {
     fn delete(&self, identity: &str) -> Result<()> {
         let attributes = handover_attributes(identity);
         block_on(async move {
             let service = oo7::dbus::Service::new().await?;
             for collection in service.collections().await? {
                 for item in collection.search_items(&attributes).await? {
+                    if item.is_locked().await? {
+                        anyhow::bail!("The OS keyring is locked; trying again on the next start");
+                    }
                     item.delete(None).await?;
                 }
             }
@@ -667,15 +729,7 @@ pub(super) mod memory {
         }
     }
 
-    impl HostSecretStore for Store {
-        fn get(&self, identity: &str) -> Result<Option<Secret>> {
-            SecretStore::get(self, identity)
-        }
-
-        fn create(&self, identity: &str, secret: &[u8]) -> Result<()> {
-            SecretStore::set(self, identity, secret)
-        }
-
+    impl HandedOverStore for Store {
         fn delete(&self, identity: &str) -> Result<()> {
             SecretStore::delete(self, identity)
         }
@@ -688,21 +742,49 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_the_previous_ids_sandbox_hands_keys_over() {
+    fn only_this_apps_sandbox_finds_handed_over_keys() {
         use std::ffi::OsStr;
-        assert!(hands_keys_over(
-            true,
-            Some(OsStr::new("dev.luminusos.ZapTide"))
-        ));
-        assert!(!hands_keys_over(
-            false,
-            Some(OsStr::new("dev.luminusos.ZapTide"))
-        ));
-        assert!(!hands_keys_over(
+        assert!(finds_handed_over_keys(
             true,
             Some(OsStr::new("org.luminusos.ZapTide"))
         ));
-        assert!(!hands_keys_over(false, None));
+        assert!(!finds_handed_over_keys(
+            false,
+            Some(OsStr::new("org.luminusos.ZapTide"))
+        ));
+        assert!(!finds_handed_over_keys(
+            true,
+            Some(OsStr::new("dev.luminusos.ZapTide"))
+        ));
+        assert!(!finds_handed_over_keys(false, None));
+        assert!(!after_the_rename(), "tests never reach the OS keyring");
+    }
+
+    #[test]
+    fn a_handed_over_copy_goes_only_once_the_key_is_in_this_apps_keyring() {
+        let host = Store::with("archive-1", &[5u8; 32]);
+        let empty = Store::default();
+        let error = retire_in(
+            "archive-1",
+            &|identity| SecretStore::get(&empty, identity),
+            &host,
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("not in this app's keyring"),
+            "{error}"
+        );
+        assert_eq!(host.read("archive-1"), Some(vec![5u8; 32]));
+
+        let current = Store::with("archive-1", &[5u8; 32]);
+        retire_in(
+            "archive-1",
+            &|identity| SecretStore::get(&current, identity),
+            &host,
+        )
+        .unwrap();
+        assert_eq!(host.read("archive-1"), None);
+        assert_eq!(current.read("archive-1"), Some(vec![5u8; 32]));
     }
 
     #[test]
@@ -720,6 +802,94 @@ mod tests {
         let denied = oo7::Error::from(oo7::file::Error::Portal(ashpd::Error::NoResponse));
         assert!(portal_unavailable(&missing));
         assert!(!portal_unavailable(&denied));
+    }
+
+    #[test]
+    fn the_previous_ids_keyring_is_set_aside_only_after_the_rename() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("default.keyring");
+        let fixture = include_bytes!("../../tests/fixtures/oo7-0.6/default.keyring");
+        std::fs::write(&path, fixture).unwrap();
+        let aside = directory
+            .path()
+            .join("default.keyring.dev.luminusos.ZapTide");
+        let (before, after) = (path.clone(), path.clone());
+        let refused = block_on(async move {
+            Ok(
+                open_file_keyring(&before, oo7::Secret::blob("other app"), false)
+                    .await
+                    .is_err(),
+            )
+        })
+        .unwrap();
+        assert!(refused);
+        assert_eq!(std::fs::read(&path).unwrap(), fixture);
+        assert!(!aside.exists());
+
+        block_on(async move {
+            let keyring = open_file_keyring(&after, oo7::Secret::blob("other app"), true).await?;
+            assert!(keyring.items().await?.is_empty());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(std::fs::read(&aside).unwrap(), fixture);
+
+        // The previous keyring is never overwritten by a second move.
+        let again = path.clone();
+        std::fs::write(&path, fixture).unwrap();
+        let refused = block_on(async move {
+            Ok(open_file_keyring(&again, oo7::Secret::blob("third"), true)
+                .await
+                .is_err())
+        })
+        .unwrap();
+        assert!(refused);
+        assert_eq!(std::fs::read(&aside).unwrap(), fixture);
+
+        // The right secret opens the file where it is.
+        let own = path.clone();
+        block_on(async move {
+            let keyring = open_file_keyring(&own, oo7::Secret::blob("test"), true).await?;
+            assert_eq!(keyring.items().await?.len(), 1);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn this_apps_own_keyring_is_never_set_aside() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("default.keyring");
+        let fixture = include_bytes!("../../tests/fixtures/oo7-0.6/default.keyring");
+        std::fs::write(&path, fixture).unwrap();
+        let (first, later) = (path.clone(), path.clone());
+        block_on(async move {
+            open_file_keyring(&first, oo7::Secret::blob("test"), true).await?;
+            Ok(())
+        })
+        .unwrap();
+        assert!(
+            directory
+                .path()
+                .join(".org.luminusos.ZapTide.opened")
+                .exists()
+        );
+
+        // A secret that changes later, say after a reset host keyring.
+        let refused = block_on(async move {
+            Ok(open_file_keyring(&later, oo7::Secret::blob("reset"), true)
+                .await
+                .is_err())
+        })
+        .unwrap();
+        assert!(refused);
+        assert_eq!(std::fs::read(&path).unwrap(), fixture);
+        assert!(
+            !directory
+                .path()
+                .join("default.keyring.dev.luminusos.ZapTide")
+                .exists()
+        );
     }
 
     #[test]
