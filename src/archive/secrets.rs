@@ -345,6 +345,28 @@ fn previous_file_keyring(path: &std::path::Path) -> PathBuf {
     path.with_file_name(format!("{FILE_KEYRING}.{PREVIOUS_FLATPAK_ID}"))
 }
 
+/// Written beside the file keyring once this app has opened it, so only the
+/// file Flatpak moved over from the previous ID is ever set aside; a later
+/// incorrect secret leaves this app's own keyring where it is.
+fn opened_marker(path: &std::path::Path) -> PathBuf {
+    path.with_file_name(format!(".{FLATPAK_ID}.opened"))
+}
+
+fn mark_opened(path: &std::path::Path) -> std::io::Result<()> {
+    let marker = opened_marker(path);
+    if marker.try_exists()? {
+        return Ok(());
+    }
+    if let Some(folder) = path.parent() {
+        std::fs::create_dir_all(folder)?;
+    }
+    std::fs::File::create(&marker)?.sync_all()?;
+    if let Some(folder) = path.parent() {
+        std::fs::File::open(folder)?.sync_all()?;
+    }
+    Ok(())
+}
+
 fn incorrect_secret(error: &oo7::Error) -> bool {
     matches!(error, oo7::Error::File(error) if matches!(**error, oo7::file::Error::IncorrectSecret))
 }
@@ -360,10 +382,14 @@ async fn open_file_keyring(
     secret: oo7::Secret,
     after_the_rename: bool,
 ) -> std::result::Result<oo7::Keyring, oo7::Error> {
-    match oo7::Keyring::sandboxed_with_path(path, secret.clone()).await {
+    let opened = match oo7::Keyring::sandboxed_with_path(path, secret.clone()).await {
         Err(error) if after_the_rename && incorrect_secret(&error) => {
             let aside = previous_file_keyring(path);
-            if aside.try_exists().map_err(oo7::file::Error::from)? {
+            if opened_marker(path)
+                .try_exists()
+                .map_err(oo7::file::Error::from)?
+                || aside.try_exists().map_err(oo7::file::Error::from)?
+            {
                 return Err(error);
             }
             std::fs::rename(path, &aside).map_err(oo7::file::Error::from)?;
@@ -376,15 +402,23 @@ async fn open_file_keyring(
             oo7::Keyring::sandboxed_with_path(path, secret).await
         }
         opened => opened,
+    }?;
+    if after_the_rename {
+        mark_opened(path).map_err(oo7::file::Error::from)?;
     }
+    Ok(opened)
 }
 
-/// The oo7 file keyring's folder, as oo7 0.6 resolves it.
+/// The oo7 file keyring's folder, as oo7 0.7 resolves it.
 fn file_keyring_dir() -> Option<PathBuf> {
     std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
         .filter(|path| path.is_absolute())
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")))
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .filter(|home| !home.is_empty())
+                .map(|home| PathBuf::from(home).join(".local/share"))
+        })
         .map(|data| data.join("keyrings"))
 }
 
@@ -820,6 +854,42 @@ mod tests {
             Ok(())
         })
         .unwrap();
+    }
+
+    #[test]
+    fn this_apps_own_keyring_is_never_set_aside() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("default.keyring");
+        let fixture = include_bytes!("../../tests/fixtures/oo7-0.6/default.keyring");
+        std::fs::write(&path, fixture).unwrap();
+        let (first, later) = (path.clone(), path.clone());
+        block_on(async move {
+            open_file_keyring(&first, oo7::Secret::blob("test"), true).await?;
+            Ok(())
+        })
+        .unwrap();
+        assert!(
+            directory
+                .path()
+                .join(".org.luminusos.ZapTide.opened")
+                .exists()
+        );
+
+        // A secret that changes later, say after a reset host keyring.
+        let refused = block_on(async move {
+            Ok(open_file_keyring(&later, oo7::Secret::blob("reset"), true)
+                .await
+                .is_err())
+        })
+        .unwrap();
+        assert!(refused);
+        assert_eq!(std::fs::read(&path).unwrap(), fixture);
+        assert!(
+            !directory
+                .path()
+                .join("default.keyring.dev.luminusos.ZapTide")
+                .exists()
+        );
     }
 
     #[test]
