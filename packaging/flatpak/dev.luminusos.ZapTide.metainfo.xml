@@ -36,6 +36,13 @@
     <control>keyboard</control>
   </supports>
   <releases>
+    <release version="0.9.1" date="2026-12-01">
+      <description>
+        <p>ZapTide is now org.luminusos.ZapTide. This last release of
+        dev.luminusos.ZapTide lets Flatpak and software centres replace it
+        with the new app, keeping chats, keys and settings.</p>
+      </description>
+    </release>
     <release version="0.9.0" date="2026-11-17">
       <description>
         <p>Polls can be quizzes that reveal the answer after voting. The
