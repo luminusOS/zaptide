@@ -8,7 +8,10 @@ Link from WhatsApp's **Linked devices**, using a QR code or your phone number.
 The avatar adds or switches accounts. **Remove Account…** unlinks that account
 and deletes its local data; other accounts are unaffected.
 
-To update a Flatpak bundle, download the new version and replace the filename:
+Flatpak installs from the Luminus repository update with `flatpak update`, or
+from GNOME Software or Discover. To update a Flatpak bundle instead, download
+the new version and replace the filename, or move it to the repository as the
+[README](../README.md#install) shows:
 
 ```sh
 flatpak install --user --reinstall ./zaptide-vX.Y.Z-x86_64.flatpak

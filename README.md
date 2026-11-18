@@ -33,16 +33,34 @@ Group calls, status posts, communities and group administration are not supporte
 
 ## Install
 
-Download a [Flatpak or AppImage](https://github.com/luminusOS/zaptide/releases/latest)
-for x86_64 or aarch64 (ARM64). Native distribution packages are not available.
-
-For Flatpak, configure [Flathub](https://flathub.org/setup), then install the
-downloaded bundle (replace the filename):
+Install the Flatpak from the Luminus repository, which keeps ZapTide updated
+with the rest of your Flatpak apps. Runtimes come from Flathub, which Flatpak
+adds if it is missing:
 
 ```sh
-flatpak install --user ./zaptide-vX.Y.Z-x86_64.flatpak
+flatpak install --user --from https://flatpak.luminusos.org/stable/dev.luminusos.ZapTide.flatpakref
 flatpak run dev.luminusos.ZapTide
 ```
+
+Release candidates use the testing channel:
+`https://flatpak.luminusos.org/testing/dev.luminusos.ZapTide.flatpakref`.
+
+If you installed a Flatpak bundle from GitHub, move it to the repository once.
+Your chats, keys and settings stay:
+
+```sh
+flatpak remote-add --user --if-not-exists luminus https://flatpak.luminusos.org/stable/luminus-stable.flatpakrepo
+flatpak install --user --reinstall luminus dev.luminusos.ZapTide//stable
+```
+
+> [!NOTE]
+> ZapTide's Flatpak ID is changing to `org.luminusos.ZapTide`. Repository
+> installs move to it automatically. Open ZapTide 0.9.0 or later once before
+> that update so your archive keys move with it.
+
+Flatpak bundles and AppImages for x86_64 or aarch64 (ARM64) are also on the
+[releases page](https://github.com/luminusOS/zaptide/releases/latest). Native
+distribution packages are not available.
 
 For AppImage, save the download as `zaptide.AppImage`:
 
