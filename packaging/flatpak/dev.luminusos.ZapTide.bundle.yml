@@ -6,6 +6,9 @@ runtime: org.gnome.Platform
 runtime-version: '51'
 sdk: org.gnome.Sdk
 command: zaptide
+# Retires this ID: Flatpak offers to move installs and their data to the
+# renamed app (luminusOS/zaptide#234).
+end-of-life-rebase: org.luminusos.ZapTide
 finish-args:
   - --socket=wayland
   - --socket=fallback-x11

@@ -5543,7 +5543,7 @@ dependencies = [
 
 [[package]]
 name = "zaptide"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "ashpd",
