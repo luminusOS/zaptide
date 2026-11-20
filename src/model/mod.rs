@@ -633,6 +633,19 @@ impl Content {
             _ => None,
         }
     }
+
+    /// Which automatic-download preference governs this content, if any.
+    pub fn attachment_category(&self) -> Option<crate::settings::AttachmentCategory> {
+        use crate::settings::AttachmentCategory;
+        match self {
+            Self::Image { .. } => Some(AttachmentCategory::Images),
+            Self::Video { .. } => Some(AttachmentCategory::Videos),
+            Self::Audio { .. } => Some(AttachmentCategory::Audio),
+            Self::Document { .. } => Some(AttachmentCategory::Documents),
+            Self::Sticker { .. } => Some(AttachmentCategory::Other),
+            _ => None,
+        }
+    }
 }
 
 fn unsupported_summary(what: &str) -> String {

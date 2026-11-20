@@ -4,7 +4,7 @@ impl Worker {
     /// Repairs moved attachment paths or clears missing files for redownload,
     /// over the next `limit` rows. Returns true once the pass has ended.
     pub(super) fn relocate_step(&mut self, relocation: &mut Relocation, limit: usize) -> bool {
-        let dir = self.dirs.media_cache_dir();
+        let dir = self.effective_media_dir();
         let rows = match self.archive.media_paths_after(relocation.after, limit) {
             Ok(rows) => rows,
             Err(error) => {

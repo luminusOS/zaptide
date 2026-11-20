@@ -124,6 +124,7 @@ impl Worker {
             Command::SetLinkPreviews(enabled) => self.set_link_previews(enabled),
             Command::SetOnline(online) => self.set_online(online),
             Command::SetMediaRetention(days) => self.set_media_retention(days),
+            Command::SetMediaDownloadDir(dir) => self.set_media_download_dir(dir),
             Command::Completed(Completion {
                 done: Done::MediaSwept(swept),
                 ..
@@ -208,13 +209,75 @@ impl Worker {
                 Err(error) => log::warn!("could not list starred messages: {error}"),
             },
             Command::DeleteLocal { chat, id } => {
+                // Read before deleting: the phone sync below needs the
+                // sender and timing the row carried.
+                let message = self.archive.message(&chat, &id).ok().flatten();
                 if let Ok(true) = self.archive.delete_message(&chat, &id) {
                     self.emit(Event::MessageDeleted {
                         chat: chat.clone(),
-                        id,
+                        id: id.clone(),
                     });
                     self.emit_chat(&chat);
                 }
+                if let Some(message) = message {
+                    // The phone names the sender of a group message from
+                    // someone else; everywhere else the key has no participant.
+                    let participant = (ChatKind::from_id(&chat) == ChatKind::Group
+                        && !message.from_me)
+                        .then(|| Self::jid_of(&message.sender))
+                        .flatten();
+                    let from_me = message.from_me;
+                    let timestamp = message.timestamp;
+                    self.tell_phone(&chat, move |client, jid| async move {
+                        let target = whatsapp_rust::MessageId::new(&id)
+                            .and_then(|message_id| {
+                                whatsapp_rust::MessageRef::new(
+                                    &jid,
+                                    message_id,
+                                    participant.as_ref(),
+                                    from_me,
+                                )
+                            })
+                            .map_err(|error| error.to_string())?;
+                        client
+                            .chat_actions()
+                            .delete_message_for_me(&target, false, Some(timestamp))
+                            .await
+                            .map_err(|error| error.to_string())
+                    });
+                }
+            }
+            Command::ClearChat(chat) => {
+                // Starred messages stay until #20 adds a user-facing choice.
+                let _ = self.archive.clear_chat_messages(&chat, i64::MAX, true);
+                self.emit(Event::RefreshTranscript);
+                self.emit_chat(&chat);
+                self.tell_phone(&chat, move |client, jid| async move {
+                    client
+                        .chat_actions()
+                        .clear_chat_with_options(
+                            &jid,
+                            whatsapp_rust::ClearChatOptions::default(),
+                            None,
+                        )
+                        .await
+                        .map_err(|error| error.to_string())
+                });
+            }
+            Command::DeleteChat(chat) => {
+                if self.archive.delete_chat(&chat, i64::MAX).unwrap_or(false) {
+                    self.emit(Event::ChatDeleted(chat.clone()));
+                } else {
+                    self.emit(Event::RefreshTranscript);
+                    self.emit_chat(&chat);
+                }
+                self.tell_phone(&chat, move |client, jid| async move {
+                    client
+                        .chat_actions()
+                        .delete_chat(&jid, false, None)
+                        .await
+                        .map_err(|error| error.to_string())
+                });
             }
             Command::Completed(Completion {
                 generation: _,

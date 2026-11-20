@@ -33,6 +33,7 @@ mod selection;
 mod sidebar;
 mod sidebar_coordinates;
 mod stars;
+mod storage_preferences;
 mod themes;
 mod transcript_view;
 
@@ -176,6 +177,9 @@ fn avatar_texture_is_referenced(path: &std::path::Path) -> bool {
 enum ChatChange {
     Snapshot(Vec<crate::model::Chat>),
     Update(crate::model::Chat),
+    /// The chat was deleted here or on another device; it reappears, as a
+    /// fresh `Update`, on its own next activity.
+    Remove(String),
 }
 
 #[derive(Default)]
@@ -756,6 +760,14 @@ pub enum Input {
         id: String,
     },
     DeleteSelected(bool),
+    /// Asks to clear the open chat's messages, with a confirmation dialog.
+    ClearSelectedChat,
+    /// The clear was confirmed; sends `Command::ClearChat`.
+    ConfirmClearChat,
+    /// Asks to delete the open chat entirely, with a confirmation dialog.
+    DeleteSelectedChat,
+    /// The delete was confirmed; sends `Command::DeleteChat`.
+    ConfirmDeleteChat,
     VoteOption(usize),
     CreatePoll(crate::model::PollDraft),
     Recording(crate::native_voice::RecordingIntent),
@@ -811,6 +823,11 @@ pub enum Input {
     OpenThemesFolder,
     ThemesFolderPrepared(bool),
     ThemesFolderFinished(bool),
+    /// User activated the Storage preferences' folder picker.
+    ChooseDownloadDirectory,
+    /// A new download folder was chosen, or "Restore default location" was
+    /// activated (`None`). Not sent when the picker was cancelled.
+    DownloadDirectoryChosen(Option<std::path::PathBuf>),
     SplitCollapsed(bool),
     ApplyPreferences,
     /// A per-account setting changed in the profile dialog.
@@ -2168,11 +2185,10 @@ impl NativeApplication {
     /// Stickers are small and meaningless as placeholders, so loaded history
     /// fetches them the way live messages are fetched.
     fn download_missing_stickers(&mut self) {
-        let Some(backend) = self
-            .backend
-            .as_ref()
-            .filter(|_| self.settings.auto_download)
-        else {
+        let Some(backend) = self.backend.as_ref().filter(|_| {
+            self.settings
+                .auto_download_enabled(crate::settings::AttachmentCategory::Other)
+        }) else {
             return;
         };
         for message in self.open_chat.message_snapshots.values_mut() {
