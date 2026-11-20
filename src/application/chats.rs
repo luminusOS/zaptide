@@ -324,27 +324,31 @@ impl NativeApplication {
         };
         let section = gtk::gio::Menu::new();
         let info = if group {
-            "_Group Info"
+            gettext("_Group Info")
         } else {
-            "_Contact Info"
+            gettext("_Contact Info")
         };
-        section.append(Some(info), Some("win.chat-info"));
+        section.append(Some(&info), Some("win.chat-info"));
         self.chat_menu.append_section(None, &section);
         let section = gtk::gio::Menu::new();
-        let pin = if pinned { "Un_pin Chat" } else { "_Pin Chat" };
-        section.append(Some(pin), Some("win.chat-pin"));
+        let pin = if pinned {
+            gettext("Un_pin Chat")
+        } else {
+            gettext("_Pin Chat")
+        };
+        section.append(Some(&pin), Some("win.chat-pin"));
         let mute = if muted {
-            "_Unmute Notifications"
+            gettext("_Unmute Notifications")
         } else {
-            "_Mute Notifications"
+            gettext("_Mute Notifications")
         };
-        section.append(Some(mute), Some("win.chat-mute"));
+        section.append(Some(&mute), Some("win.chat-mute"));
         let archive = if archived {
-            "Un_archive Chat"
+            gettext("Un_archive Chat")
         } else {
-            "_Archive Chat"
+            gettext("_Archive Chat")
         };
-        section.append(Some(archive), Some("win.chat-archive"));
+        section.append(Some(&archive), Some("win.chat-archive"));
         self.chat_menu.append_section(None, &section);
         let section = gtk::gio::Menu::new();
         section.append(Some(&gettext("_Close Chat")), Some("win.chat-close"));

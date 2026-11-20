@@ -16,9 +16,24 @@ pub enum ThemeChoice {
     System,
 }
 
+/// Interface language, shared by all accounts and applied on startup.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Language {
+    #[serde(rename = "en")]
+    English,
+    #[serde(rename = "es")]
+    Spanish,
+    #[serde(rename = "pt_BR")]
+    PortugueseBrazil,
+    #[default]
+    #[serde(other, rename = "system")]
+    System,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    pub language: Language,
     pub theme: ThemeChoice,
     /// Filename of the selected local JSON palette.
     pub custom_theme: Option<String>,
@@ -91,6 +106,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            language: Language::System,
             theme: ThemeChoice::Dark,
             custom_theme: None,
             custom_theme_cache: None,
@@ -216,6 +232,31 @@ impl Settings {
 mod tests {
     use super::*;
     use hex::encode as hex;
+
+    #[test]
+    fn language_is_optional_and_survives_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        for json in [r#"{"zoom":1.5}"#, r#"{"zoom":1.5,"language":"unknown"}"#] {
+            std::fs::write(&path, json).unwrap();
+            let settings = Settings::load(&path);
+            assert_eq!(settings.language, Language::System);
+            assert_eq!(settings.zoom, 1.5);
+        }
+        let mut settings = Settings::load(&path);
+        for language in [
+            Language::Spanish,
+            Language::PortugueseBrazil,
+            Language::English,
+            Language::System,
+        ] {
+            crate::native_preferences::PreferenceChange::SetLanguage(language)
+                .apply(&mut settings)
+                .unwrap();
+            settings.save(&path).unwrap();
+            assert_eq!(Settings::load(&path), settings);
+        }
+    }
 
     #[test]
     fn byte_encoding_golden_vectors() {

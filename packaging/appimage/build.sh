@@ -18,14 +18,14 @@ if command -v pacman >/dev/null; then
 	# A digest-pinned image carries an old keyring that may not trust newer
 	# packager keys, so refresh it before the full upgrade.
 	pacman -Sy --noconfirm archlinux-keyring
-	pacman -Syu --noconfirm base-devel git wget rustup gtk4 libadwaita \
+	pacman -Syu --noconfirm base-devel gettext git wget rustup gtk4 libadwaita \
 		gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-libav cmake libseccomp fontconfig \
 		glycin bubblewrap xorg-server-xvfb patchelf strace adwaita-icon-theme
 	rustup default stable
 else
 	# Fedora 45 has libadwaita 1.10; used for aarch64, where Arch has no official image.
 	dnf install -y --setopt=install_weak_deps=False \
-		@development-tools git wget file xz perl make rust cargo gtk4-devel libadwaita-devel \
+		@development-tools gettext git wget file xz perl make rust cargo gtk4-devel libadwaita-devel \
 		gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugins-bad-free gstreamer1-plugin-openh264 \
 		cmake libseccomp-devel fontconfig-devel glycin-loaders bubblewrap \
 		xorg-x11-server-Xvfb dbus-daemon patchelf strace adwaita-icon-theme \
@@ -57,6 +57,11 @@ export UPINFO="gh-releases-zsync|luminusOS|zaptide|latest|zaptide-*-$ARCH.AppIma
 
 ./quick-sharun /usr/bin/zaptide
 sh packaging/install-licenses.sh AppDir/share/licenses/zaptide
+while read -r lang; do
+    dir="AppDir/share/locale/$lang/LC_MESSAGES"
+    mkdir -p "$dir"
+    msgfmt --check -o "$dir/zaptide.mo" "po/$lang.po"
+done < po/LINGUAS
 
 # quick-sharun bundles only the build system's hicolor icons and expects the
 # desktop to provide Adwaita, so a system without it shows missing-image icons.

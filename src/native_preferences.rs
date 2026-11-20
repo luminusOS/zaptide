@@ -6,11 +6,12 @@
 //! snapshots expose whether they are configured, never their contents.
 
 use crate::i18n::gettext;
-use crate::settings::{Settings, ThemeChoice};
+use crate::settings::{Language, Settings, ThemeChoice};
 
 /// Existing JSON field that persists a control.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SettingsField {
+    Language,
     Theme,
     CustomTheme,
     Zoom,
@@ -53,6 +54,7 @@ pub struct NativePreferences {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct AppearancePreferences {
+    pub language: Language,
     pub theme: ThemeChoice,
     pub custom_theme: Option<String>,
     pub zoom: f32,
@@ -105,6 +107,7 @@ impl From<&Settings> for NativePreferences {
     fn from(settings: &Settings) -> Self {
         Self {
             appearance: AppearancePreferences {
+                language: settings.language,
                 theme: settings.theme,
                 custom_theme: settings.custom_theme.clone(),
                 zoom: settings.zoom,
@@ -148,6 +151,7 @@ impl From<&Settings> for NativePreferences {
 /// getter in [`NativePreferences`].
 #[derive(Clone, PartialEq)]
 pub enum PreferenceChange {
+    SetLanguage(Language),
     SetTheme(ThemeChoice),
     SetCustomTheme(Option<String>),
     SetZoom(f32),
@@ -179,6 +183,9 @@ impl std::fmt::Debug for PreferenceChange {
         use PreferenceChange as Change;
 
         match self {
+            Change::SetLanguage(value) => {
+                formatter.debug_tuple("SetLanguage").field(value).finish()
+            }
             Change::SetTheme(value) => formatter.debug_tuple("SetTheme").field(value).finish(),
             Change::SetCustomTheme(value) => formatter
                 .debug_tuple("SetCustomTheme")
@@ -274,6 +281,7 @@ impl PreferenceChange {
     /// Existing JSON field changed by this request. Secret values are never returned.
     pub const fn settings_field(&self) -> SettingsField {
         match self {
+            Self::SetLanguage(_) => SettingsField::Language,
             Self::SetTheme(_) => SettingsField::Theme,
             Self::SetCustomTheme(_) => SettingsField::CustomTheme,
             Self::SetZoom(_) => SettingsField::Zoom,
@@ -340,7 +348,7 @@ impl NativePreferencesDialog {
         use libadwaita::prelude::*;
 
         let dialog = libadwaita::PreferencesDialog::new();
-        dialog.set_title("Preferences");
+        dialog.set_title(&gettext("Preferences"));
         dialog.set_can_close(true);
         dialog.set_search_enabled(true);
         let changes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
@@ -352,17 +360,49 @@ impl NativePreferencesDialog {
             on_change: on_change.clone(),
         };
         let appearance = libadwaita::PreferencesPage::new();
-        appearance.set_title("Appearance");
+        appearance.set_title(&gettext("Appearance"));
         appearance.set_icon_name(Some("preferences-desktop-appearance-symbolic"));
         let appearance_group = libadwaita::PreferencesGroup::new();
-        appearance_group.set_title("Display and input");
+        appearance_group.set_title(&gettext("Display and input"));
         appearance.add(&appearance_group);
         dialog.add(&appearance);
 
+        let language_row = libadwaita::ComboRow::new();
+        language_row.set_title(&gettext("Language"));
+        language_row.set_subtitle(&gettext("Quit and reopen ZapTide to apply the language"));
+        let languages = [
+            (Language::System, gettext("System default")),
+            (Language::English, "English".into()),
+            (Language::Spanish, "Español".into()),
+            (Language::PortugueseBrazil, "Português (Brasil)".into()),
+        ];
+        language_row.set_model(Some(&gtk4::StringList::new(
+            &languages.each_ref().map(|(_, label)| label.as_str()),
+        )));
+        if let Some(index) = languages
+            .iter()
+            .position(|(language, _)| *language == preferences.appearance.language)
+        {
+            language_row.set_selected(index as u32);
+        }
+        {
+            let change_sink = change_sink.clone();
+            language_row.connect_selected_notify(move |row| {
+                if let Some((language, _)) = languages.get(row.selected() as usize) {
+                    change_sink.push(PreferenceChange::SetLanguage(*language));
+                }
+            });
+        }
+        appearance_group.add(&language_row);
+
         let theme_row = libadwaita::ComboRow::new();
-        theme_row.set_title("Theme");
-        theme_row.set_subtitle("Choose how ZapTide looks");
-        let themes = gtk4::StringList::new(&["Follow system", "Light", "Dark"]);
+        theme_row.set_title(&gettext("Theme"));
+        theme_row.set_subtitle(&gettext("Choose how ZapTide looks"));
+        let themes = gtk4::StringList::new(&[
+            &gettext("Follow system"),
+            &gettext("Light"),
+            &gettext("Dark"),
+        ]);
         theme_row.set_model(Some(&themes));
         theme_row.set_selected(match preferences.appearance.theme {
             ThemeChoice::System => 0,
@@ -383,11 +423,11 @@ impl NativePreferencesDialog {
         appearance_group.add(&theme_row);
 
         let custom_theme_row = libadwaita::ComboRow::new();
-        custom_theme_row.set_title("Custom palette");
-        custom_theme_row.set_subtitle("Choose a palette from the themes folder");
+        custom_theme_row.set_title(&gettext("Custom palette"));
+        custom_theme_row.set_subtitle(&gettext("Choose a palette from the themes folder"));
         let custom_theme_choices =
             std::rc::Rc::new(std::cell::RefCell::new(theme_choices.to_vec()));
-        let mut custom_theme_labels = vec!["System palette".to_owned()];
+        let mut custom_theme_labels = vec![gettext("System palette")];
         custom_theme_labels.extend(theme_choices.iter().cloned());
         let custom_theme_label_refs: Vec<_> =
             custom_theme_labels.iter().map(String::as_str).collect();
@@ -421,93 +461,95 @@ impl NativePreferencesDialog {
             .valign(gtk4::Align::Center)
             .css_classes(["flat"])
             .build();
-        set_accessible_label(&open_themes_folder, "Open themes folder");
+        set_accessible_label(&open_themes_folder, &gettext("Open Themes Folder"));
         custom_theme_row.add_suffix(&open_themes_folder);
 
         add_numeric_row(
             &appearance_group,
-            "Zoom",
-            "UI scale, from 0.6× to 2.0×",
+            &gettext("Zoom"),
+            &gettext("UI scale, from 0.6× to 2.0×"),
             (f64::from(preferences.appearance.zoom), 0.6, 2.0, 0.05, 2),
             change_sink.clone(),
             PreferenceChange::SetZoom,
         );
         add_switch(
             &appearance_group,
-            "Send messages with Enter",
-            "Shift+Enter inserts a new line",
+            &gettext("Send messages with Enter"),
+            &gettext("Shift+Enter inserts a new line"),
             preferences.appearance.enter_sends,
             change_sink.clone(),
             PreferenceChange::SetEnterSends,
         );
         add_switch(
             &appearance_group,
-            "Show sender pictures",
-            "Show avatars next to messages",
+            &gettext("Show sender pictures"),
+            &gettext("Show avatars next to messages"),
             preferences.appearance.show_sender_pictures,
             change_sink.clone(),
             PreferenceChange::SetShowSenderPictures,
         );
         add_switch(
             &appearance_group,
-            "Show shortcut hints",
-            "Show keyboard shortcut hints",
+            &gettext("Show shortcut hints"),
+            &gettext("Show keyboard shortcut hints"),
             preferences.appearance.show_shortcut_hints,
             change_sink.clone(),
             PreferenceChange::SetShowShortcutHints,
         );
         add_switch(
             &appearance_group,
-            "Translucent sidebar",
-            "Blur the desktop behind the chat list. Needs a compositor that supports background blur",
+            &gettext("Translucent sidebar"),
+            &gettext(
+                "Blur the desktop behind the chat list. Needs a compositor that supports background blur",
+            ),
             preferences.appearance.translucent_sidebar,
             change_sink.clone(),
             PreferenceChange::SetTranslucentSidebar,
         );
 
         let account_page = libadwaita::PreferencesPage::new();
-        account_page.set_title("Account");
+        account_page.set_title(&gettext("Account"));
         account_page.set_icon_name(Some("avatar-default-symbolic"));
         let account_group = libadwaita::PreferencesGroup::new();
-        account_group.set_title("Contacts");
+        account_group.set_title(&gettext("Contacts"));
         account_page.add(&account_group);
         dialog.add(&account_page);
         add_switch(
             &account_group,
-            "Prefer contact names",
-            "Use address-book names instead of profile names",
+            &gettext("Prefer contact names"),
+            &gettext("Use address-book names instead of profile names"),
             preferences.account.names_from_contacts,
             change_sink.clone(),
             PreferenceChange::SetNamesFromContacts,
         );
         add_switch(
             &account_group,
-            "Save contacts to phone",
-            "Also add saved contacts to the device address book",
+            &gettext("Save contacts to phone"),
+            &gettext("Also add saved contacts to the device address book"),
             preferences.account.save_contacts_to_phone,
             change_sink.clone(),
             PreferenceChange::SetSaveContactsToPhone,
         );
 
         let notifications_page = libadwaita::PreferencesPage::new();
-        notifications_page.set_title("Notifications");
+        notifications_page.set_title(&gettext("Notifications"));
         notifications_page.set_icon_name(Some("preferences-system-notifications-symbolic"));
         let notifications_group = libadwaita::PreferencesGroup::new();
-        notifications_group.set_title("Notifications");
+        notifications_group.set_title(&gettext("Notifications"));
         notifications_page.add(&notifications_group);
         dialog.add(&notifications_page);
         add_switch(
             &notifications_group,
-            "Desktop notifications",
-            "Notify when messages arrive while away",
+            &gettext("Desktop notifications"),
+            &gettext("Notify when messages arrive while away"),
             preferences.notifications.enabled,
             change_sink.clone(),
             PreferenceChange::SetNotifications,
         );
         add_switch(
             &notifications_group,
-            "Show previews",
-            "Include the sender and message text",
+            &gettext("Show previews"),
+            &gettext("Include the sender and message text"),
             preferences.notifications.previews,
             change_sink.clone(),
             PreferenceChange::SetNotificationPreviews,
@@ -565,16 +607,16 @@ impl NativePreferencesDialog {
         );
 
         let storage_page = libadwaita::PreferencesPage::new();
-        storage_page.set_title("Storage");
+        storage_page.set_title(&gettext("Storage"));
         storage_page.set_icon_name(Some("drive-harddisk-symbolic"));
         let storage_group = libadwaita::PreferencesGroup::new();
-        storage_group.set_title("Downloads");
+        storage_group.set_title(&gettext("Downloads"));
         storage_page.add(&storage_group);
         dialog.add(&storage_page);
         add_switch(
             &storage_group,
-            "Automatically download attachments",
-            "Download attachments when they enter view",
+            &gettext("Automatically download attachments"),
+            &gettext("Download attachments when they enter view"),
             preferences.storage.auto_download,
             change_sink.clone(),
             PreferenceChange::SetAutoDownload,
@@ -582,30 +624,30 @@ impl NativePreferencesDialog {
         add_media_retention(&storage_page, &preferences.storage, &change_sink);
 
         let background_page = libadwaita::PreferencesPage::new();
-        background_page.set_title("Background");
+        background_page.set_title(&gettext("Background"));
         background_page.set_icon_name(Some("preferences-system-time-symbolic"));
         let background_group = libadwaita::PreferencesGroup::new();
-        background_group.set_title("Background and updates");
+        background_group.set_title(&gettext("Background and updates"));
         background_page.add(&background_group);
         dialog.add(&background_page);
         add_switch(
             &background_group,
-            "Keep running in background",
-            "Keep ZapTide available after closing its window",
+            &gettext("Keep running in background"),
+            &gettext("Keep ZapTide available after closing its window"),
             preferences.background.keep_running,
             change_sink.clone(),
             PreferenceChange::SetKeepRunningInBackground,
         );
 
         let protocol_page = libadwaita::PreferencesPage::new();
-        protocol_page.set_title("Messaging");
+        protocol_page.set_title(&gettext("Messaging"));
         protocol_page.set_icon_name(Some("mail-send-symbolic"));
         let protocol_group = libadwaita::PreferencesGroup::new();
-        protocol_group.set_title("Messaging and media");
+        protocol_group.set_title(&gettext("Messaging and media"));
         protocol_page.add(&protocol_group);
         dialog.add(&protocol_page);
         let voice_row = libadwaita::ComboRow::new();
-        voice_row.set_title("Voice playback speed");
+        voice_row.set_title(&gettext("Voice playback speed"));
         voice_row.set_model(Some(&gtk4::StringList::new(&["1×", "1.5×", "2×"])));
         voice_row.set_selected(match preferences.protocol.voice_speed {
             1.5 => 1,
@@ -651,7 +693,7 @@ impl NativePreferencesDialog {
         use libadwaita::prelude::*;
 
         *self.custom_theme_choices.borrow_mut() = filenames.to_vec();
-        let mut labels = vec!["System palette".to_owned()];
+        let mut labels = vec![gettext("System palette")];
         labels.extend(filenames.iter().cloned());
         let label_refs: Vec<_> = labels.iter().map(String::as_str).collect();
         let model = gtk4::StringList::new(&label_refs);
@@ -807,22 +849,22 @@ fn add_online_status(
 ) {
     use libadwaita::prelude::*;
     let group = libadwaita::PreferencesGroup::new();
-    group.set_title("Online status");
-    group.set_description(Some(
+    group.set_title(&gettext("Online status"));
+    group.set_description(Some(&gettext(
         "While ZapTide shows you as online, your phone does not receive notifications.",
-    ));
+    )));
     page.add(&group);
     add_offline_row(
         &group,
         (
-            "Go offline when I leave ZapTide",
-            "Switch to another app or lock the screen",
+            &gettext("Go offline when I leave ZapTide"),
+            &gettext("Switch to another app or lock the screen"),
         ),
         &[
-            ("After 10 seconds", 10),
-            ("After 1 minute", 60),
-            ("After 5 minutes", 300),
-            ("Never", 0),
+            (&gettext("After 10 seconds"), 10),
+            (&gettext("After 1 minute"), 60),
+            (&gettext("After 5 minutes"), 300),
+            (&gettext("Never"), 0),
         ],
         preferences.offline_after_leaving_seconds,
         change_sink,
@@ -831,14 +873,14 @@ fn add_online_status(
     add_offline_row(
         &group,
         (
-            "Go offline when inactive",
-            "No typing, clicks or pointer movement in ZapTide",
+            &gettext("Go offline when inactive"),
+            &gettext("No typing, clicks or pointer movement in ZapTide"),
         ),
         &[
-            ("After 1 minute", 60),
-            ("After 5 minutes", 300),
-            ("After 15 minutes", 900),
-            ("Never", 0),
+            (&gettext("After 1 minute"), 60),
+            (&gettext("After 5 minutes"), 300),
+            (&gettext("After 15 minutes"), 900),
+            (&gettext("Never"), 0),
         ],
         preferences.offline_after_inactive_seconds,
         change_sink,
@@ -880,7 +922,10 @@ fn offline_choices(choices: &[(&str, u32)], current: u32) -> (Vec<String>, Vec<u
     let mut values: Vec<u32> = choices.iter().map(|(_, value)| *value).collect();
     let selected = values.iter().position(|value| *value == current);
     if selected.is_none() {
-        labels.insert(0, format!("Custom ({current} s)"));
+        labels.insert(
+            0,
+            gettext("Custom ({seconds} s)").replace("{seconds}", &current.to_string()),
+        );
         values.insert(0, current);
     }
     (labels, values, selected.unwrap_or(0))
@@ -976,6 +1021,7 @@ impl PreferenceChange {
     /// Validate and apply one change. Invalid values leave `settings` untouched.
     pub fn apply(self, settings: &mut Settings) -> Result<(), ValidationError> {
         match self {
+            Self::SetLanguage(value) => settings.language = value,
             Self::SetTheme(value) => settings.theme = value,
             Self::SetCustomTheme(value) => {
                 if value.as_deref().is_some_and(|filename| {
@@ -1248,6 +1294,55 @@ mod tests {
         assert_eq!(settings.zoom, 2.0);
         assert_eq!(settings.voice_speed, 1.5);
         assert!(settings.chat_lock_code_hash.is_none());
+    }
+
+    #[test]
+    #[ignore = "requires a display"]
+    fn language_row_restores_selection_and_emits_changes() {
+        use libadwaita::prelude::*;
+
+        fn find_language_row(widget: &gtk4::Widget) -> Option<libadwaita::ComboRow> {
+            if let Some(row) = widget.downcast_ref::<libadwaita::ComboRow>()
+                && row.title() == gettext("Language")
+            {
+                return Some(row.clone());
+            }
+            let mut child = widget.first_child();
+            while let Some(widget) = child {
+                if let Some(row) = find_language_row(&widget) {
+                    return Some(row);
+                }
+                child = widget.next_sibling();
+            }
+            None
+        }
+
+        libadwaita::init().unwrap();
+        let settings = Settings {
+            language: Language::Spanish,
+            ..Settings::default()
+        };
+        let dialog = NativePreferencesDialog::new(&NativePreferences::from(&settings), &[], || {});
+        let window = libadwaita::Window::new();
+        window.present();
+        dialog.present(&window);
+        let page = dialog.dialog().visible_page().expect("appearance page");
+        let row = find_language_row(page.upcast_ref()).expect("language selector");
+        assert_eq!(row.selected(), 2);
+        assert!(dialog.take_changes().is_empty());
+        assert!(row.is_focusable());
+        for (index, language) in [
+            (3, Language::PortugueseBrazil),
+            (1, Language::English),
+            (0, Language::System),
+        ] {
+            row.set_selected(index);
+            assert_eq!(
+                dialog.take_changes(),
+                [PreferenceChange::SetLanguage(language)]
+            );
+        }
+        window.destroy();
     }
 
     #[test]

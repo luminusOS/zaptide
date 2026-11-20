@@ -65,8 +65,9 @@ channel without opening a window.
 UI strings use gettext through `src/i18n.rs`. `just pot` refreshes
 `po/zaptide.pot` and merges languages in `po/LINGUAS`; `just run` compiles them
 into `target/locale`. Flatpak installs catalogues under `/app/share/locale`.
-Brazilian Portuguese is the first translation. Strings built with `format!`
-and the AppImage build are not translated yet.
+AppImages bundle the catalogues under `usr/share/locale`. The shared language
+preference takes effect before GTK starts. The system default follows the
+desktop locale. Some strings still lack gettext calls.
 
 ## Building
 

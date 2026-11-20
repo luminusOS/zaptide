@@ -6,6 +6,8 @@ runtime: org.gnome.Platform
 runtime-version: '51'
 sdk: org.gnome.Sdk
 command: zaptide
+# The in-app language can differ from Flatpak's installed locale subset.
+separate-locales: false
 finish-args:
   - --socket=wayland
   - --socket=fallback-x11

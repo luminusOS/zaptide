@@ -45,6 +45,8 @@ name = "zaptide"
 path = "src/main.rs"
 
 [dependencies]
+# Read an explicit interface catalogue independently of the desktop locale.
+gettext = "0.4.0"
 gettext-rs = { version = "0.8", features = ["gettext-system"] }
 anyhow = "1"
 hex = "0.4"
