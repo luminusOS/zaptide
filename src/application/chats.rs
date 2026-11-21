@@ -428,11 +428,7 @@ impl NativeApplication {
     }
 
     fn remove_chat(&mut self, id: &str) {
-        if let Some(index) = self
-            .chat_snapshots
-            .iter()
-            .position(|known| known.id == id)
-        {
+        if let Some(index) = self.chat_snapshots.iter().position(|known| known.id == id) {
             self.chat_snapshots.remove(index);
             self.chats_dirty = true;
         }

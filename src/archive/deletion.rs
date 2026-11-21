@@ -90,9 +90,7 @@ mod tests {
     #[test]
     fn clearing_keeps_messages_newer_than_the_bound() {
         let archive = archive_with_messages(&[1, 2, 3]);
-        let remaining = archive
-            .clear_chat_messages(CHAT, 2, false)
-            .expect("clear");
+        let remaining = archive.clear_chat_messages(CHAT, 2, false).expect("clear");
         assert_eq!(remaining, 1);
         assert!(archive.message(CHAT, "m1").expect("read").is_none());
         assert!(archive.message(CHAT, "m2").expect("read").is_none());
@@ -124,9 +122,7 @@ mod tests {
     #[test]
     fn clearing_recomputes_the_last_activity_preview() {
         let archive = archive_with_messages(&[1, 2, 3]);
-        archive
-            .clear_chat_messages(CHAT, 2, false)
-            .expect("clear");
+        archive.clear_chat_messages(CHAT, 2, false).expect("clear");
         assert_eq!(archive.chat(CHAT).expect("chat").unwrap().last_activity, 3);
         archive
             .clear_chat_messages(CHAT, i64::MAX, false)

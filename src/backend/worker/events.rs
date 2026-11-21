@@ -307,9 +307,9 @@ impl Worker {
                     .and_then(|range| range.last_message_timestamp)
                     .map(seconds)
                     .unwrap_or(i64::MAX);
-                let _ =
-                    self.archive
-                        .clear_chat_messages(&chat, through, !update.delete_starred);
+                let _ = self
+                    .archive
+                    .clear_chat_messages(&chat, through, !update.delete_starred);
                 self.emit(Event::RefreshTranscript);
                 self.emit_chat(&chat);
             }
