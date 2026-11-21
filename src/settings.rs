@@ -1,6 +1,6 @@
 //! User preferences stored in JSON.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +14,66 @@ pub enum ThemeChoice {
     Dark,
     Light,
     System,
+}
+
+/// The kinds of attachment that can each have their own automatic-download
+/// setting. `Sticker` and any other downloadable content fall back to `Other`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AttachmentCategory {
+    Images,
+    Videos,
+    Audio,
+    Documents,
+    Other,
+}
+
+/// Whether each attachment category is fetched automatically. Disabling a
+/// category never blocks a manual download of that attachment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AttachmentAutoDownload {
+    pub images: bool,
+    pub videos: bool,
+    pub audio: bool,
+    pub documents: bool,
+    pub other: bool,
+}
+
+impl Default for AttachmentAutoDownload {
+    /// Matches the behavior ZapTide had before per-category settings
+    /// existed: every category follows the single `auto_download` switch.
+    fn default() -> Self {
+        Self {
+            images: true,
+            videos: true,
+            audio: true,
+            documents: true,
+            other: true,
+        }
+    }
+}
+
+impl AttachmentAutoDownload {
+    pub fn get(&self, category: AttachmentCategory) -> bool {
+        match category {
+            AttachmentCategory::Images => self.images,
+            AttachmentCategory::Videos => self.videos,
+            AttachmentCategory::Audio => self.audio,
+            AttachmentCategory::Documents => self.documents,
+            AttachmentCategory::Other => self.other,
+        }
+    }
+
+    pub fn set(&mut self, category: AttachmentCategory, enabled: bool) {
+        match category {
+            AttachmentCategory::Images => self.images = enabled,
+            AttachmentCategory::Videos => self.videos = enabled,
+            AttachmentCategory::Audio => self.audio = enabled,
+            AttachmentCategory::Documents => self.documents = enabled,
+            AttachmentCategory::Other => self.other = enabled,
+        }
+    }
 }
 
 /// Interface language, shared by all accounts and applied on startup.
@@ -56,6 +116,12 @@ pub struct Settings {
     /// Download attachments when they enter view instead of on click.
     #[serde(alias = "auto_download_images")]
     pub auto_download: bool,
+    /// Per-category refinement of `auto_download`. A category here is only
+    /// ever consulted while `auto_download` itself is on.
+    pub attachment_auto_download: AttachmentAutoDownload,
+    /// Custom folder for newly downloaded attachments; `None` keeps using the
+    /// application's own cache directory.
+    pub download_directory: Option<PathBuf>,
     /// Show sender avatars outside groups too.
     pub show_sender_pictures: bool,
     /// Last open chat, restored at startup.
@@ -116,6 +182,8 @@ impl Default for Settings {
             send_typing: true,
             link_previews: true,
             auto_download: true,
+            attachment_auto_download: AttachmentAutoDownload::default(),
+            download_directory: None,
             show_sender_pictures: false,
             last_chat: None,
             show_shortcut_hints: true,
@@ -141,6 +209,25 @@ impl Default for Settings {
     }
 }
 
+/// Whether `dir` can currently be used for downloads: it exists (creating it
+/// if needed) and a plain file can be created inside it. Catches a folder on
+/// a drive that is disconnected, unmounted, or no longer writable, so a
+/// chosen directory that has become unavailable falls back to the default
+/// cache directory instead of failing every download.
+pub(crate) fn directory_usable(dir: &Path) -> bool {
+    if std::fs::create_dir_all(dir).is_err() {
+        return false;
+    }
+    let probe = dir.join(format!(".zaptide-probe-{}", std::process::id()));
+    match std::fs::File::create(&probe) {
+        Ok(_) => {
+            let _ = std::fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
 impl Settings {
     pub(crate) fn cached_palette(&self) -> Option<crate::theme::Palette> {
         self.custom_theme
@@ -158,6 +245,23 @@ impl Settings {
                 crate::media_retention::MAX_DAYS,
             )
         })
+    }
+
+    /// Whether `category` should be fetched automatically. Always false while
+    /// the master `auto_download` switch is off; a manual download from the
+    /// message itself is never affected by either setting.
+    pub fn auto_download_enabled(&self, category: AttachmentCategory) -> bool {
+        self.auto_download && self.attachment_auto_download.get(category)
+    }
+
+    /// Where new attachments should be written: the user's chosen folder, or
+    /// `default_dir` (the application's own cache directory) when none was
+    /// chosen or the chosen one cannot currently be used.
+    pub fn effective_media_dir(&self, default_dir: &Path) -> PathBuf {
+        match &self.download_directory {
+            Some(custom) if directory_usable(custom) => custom.clone(),
+            _ => default_dir.to_path_buf(),
+        }
     }
 
     pub fn load(path: &Path) -> Self {

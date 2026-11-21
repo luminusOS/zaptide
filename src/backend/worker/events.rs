@@ -282,6 +282,51 @@ impl Worker {
                         .set_locked_at(&chat, locked, update.timestamp.timestamp_millis());
                 self.emit_chat(&chat);
             }
+            E::DeleteChatUpdate(update) => {
+                let chat = self.canonical(&update.jid);
+                let through = update
+                    .action
+                    .message_range
+                    .as_option()
+                    .and_then(|range| range.last_message_timestamp)
+                    .map(seconds)
+                    .unwrap_or(i64::MAX);
+                if self.archive.delete_chat(&chat, through).unwrap_or(false) {
+                    self.emit(Event::ChatDeleted(chat));
+                } else {
+                    self.emit(Event::RefreshTranscript);
+                    self.emit_chat(&chat);
+                }
+            }
+            E::ClearChatUpdate(update) => {
+                let chat = self.canonical(&update.jid);
+                let through = update
+                    .action
+                    .message_range
+                    .as_option()
+                    .and_then(|range| range.last_message_timestamp)
+                    .map(seconds)
+                    .unwrap_or(i64::MAX);
+                let _ = self
+                    .archive
+                    .clear_chat_messages(&chat, through, !update.delete_starred);
+                self.emit(Event::RefreshTranscript);
+                self.emit_chat(&chat);
+            }
+            E::DeleteMessageForMeUpdate(update) => {
+                let chat = self.canonical(&update.chat_jid);
+                if self
+                    .archive
+                    .delete_message(&chat, &update.message_id)
+                    .unwrap_or(false)
+                {
+                    self.emit(Event::MessageDeleted {
+                        chat: chat.clone(),
+                        id: update.message_id.clone(),
+                    });
+                    self.emit_chat(&chat);
+                }
+            }
             E::MarkChatAsReadUpdate(update) => {
                 let chat = self.canonical(&update.jid);
                 self.ensure_chat(&chat, None);

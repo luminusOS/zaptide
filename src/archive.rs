@@ -11,6 +11,7 @@ use crate::model::{Chat, ChatKind, Content, Delivery, Message};
 
 mod calls;
 mod contacts;
+mod deletion;
 mod encryption;
 mod identity;
 mod secrets;

@@ -171,6 +171,9 @@ pub(super) fn handle_backend_ready(
                 app.apply_chat_changes(vec![ChatChange::Update(*chat)]);
                 app.read_open_chat();
             }
+            Event::ChatDeleted(chat) => {
+                app.apply_chat_changes(vec![ChatChange::Remove(chat)]);
+            }
 
             Event::RefreshTranscript => {
                 if let (Some(backend), Some(chat)) =
@@ -295,7 +298,11 @@ pub(super) fn handle_backend_ready(
             | Event::CallVideo(_)
             | Event::CallFrames) => app.handle_call_event(account, event, &sender),
             Event::Incoming { chat, message } => {
-                if app.settings.auto_download
+                let category_auto_download = message
+                    .content
+                    .attachment_category()
+                    .is_some_and(|category| app.settings.auto_download_enabled(category));
+                if category_auto_download
                     && should_auto_download(message.content.media())
                     && let Some(backend) = &app.backend
                 {
