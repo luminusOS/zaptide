@@ -145,8 +145,8 @@ minutes. After six failures or 14 days it is dropped, leaving the local
 deletion in place. Keep this queue separate from the read-state queue.
 
 Incoming chat deletions and clears are bounded by the action's message range.
-Without one, the action's own timestamp bounds them. With neither, nothing is
-deleted: an unknown reach must never mean "everything".
+Without a valid range, keep the archive unchanged. The action timestamp says
+when the deletion was requested, not which messages it covered.
 
 ## Sidebar scrolling
 

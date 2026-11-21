@@ -290,7 +290,6 @@ impl Worker {
                         .message_range
                         .as_option()
                         .and_then(|range| range.last_message_timestamp),
-                    update.action_timestamp.map(|time| time.timestamp()),
                 ) else {
                     log::warn!("ignored a chat deletion that names no bound");
                     return;
@@ -310,7 +309,6 @@ impl Worker {
                         .message_range
                         .as_option()
                         .and_then(|range| range.last_message_timestamp),
-                    update.action_timestamp.map(|time| time.timestamp()),
                 ) else {
                     log::warn!("ignored a chat clear that names no bound");
                     return;
@@ -431,17 +429,8 @@ impl Worker {
     }
 }
 
-/// How far a chat deletion or clear from another device reaches, in Unix
-/// seconds. The message range is the authority. Without one, the time the
-/// action was made stands in, because an action cannot cover messages sent
-/// after it. With neither the reach is unknown, and the caller must delete
-/// nothing: the old behaviour of treating "unknown" as "everything" would let
-/// one malformed or replayed action wipe the only retained copy of a chat.
-fn deletion_bound(range_end: Option<i64>, action_time: Option<i64>) -> Option<i64> {
-    range_end
-        .or(action_time)
-        .map(seconds)
-        .filter(|bound| *bound > 0)
+fn deletion_bound(range_end: Option<i64>) -> Option<i64> {
+    range_end.map(seconds).filter(|bound| *bound > 0)
 }
 
 #[cfg(test)]
@@ -449,27 +438,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_message_range_wins_over_the_action_time() {
-        assert_eq!(deletion_bound(Some(100), Some(500)), Some(100));
-    }
-
-    #[test]
-    fn the_action_time_bounds_a_deletion_without_a_range() {
-        assert_eq!(deletion_bound(None, Some(500)), Some(500));
+    fn the_message_range_bounds_a_deletion() {
+        assert_eq!(deletion_bound(Some(100)), Some(100));
     }
 
     #[test]
     fn millisecond_bounds_are_read_as_seconds() {
-        assert_eq!(
-            deletion_bound(Some(1_700_000_000_000), None),
-            Some(1_700_000_000)
-        );
+        assert_eq!(deletion_bound(Some(1_700_000_000_000)), Some(1_700_000_000));
     }
 
     #[test]
     fn an_unknown_reach_deletes_nothing() {
-        assert_eq!(deletion_bound(None, None), None);
-        assert_eq!(deletion_bound(Some(0), None), None);
-        assert_eq!(deletion_bound(None, Some(-5)), None);
+        assert_eq!(deletion_bound(None), None);
+        assert_eq!(deletion_bound(Some(0)), None);
+        assert_eq!(deletion_bound(Some(-5)), None);
     }
 }
