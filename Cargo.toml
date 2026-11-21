@@ -93,7 +93,7 @@ url = "2"
 url-batch = { package = "url", path = "vendor/absolute-url", features = ["batch-research"] }
 idna-batch = { package = "idna", path = "vendor/idna-1.1.0", features = ["research-batch"] }
 icu_normalizer = { version = "=2.3.0", default-features = false, features = ["experimental_linear_ccc"] }
-jiff = "0.2"
+jiff = "1.0"
 mime_guess = "2"
 # Promotes downloads with renameat2(RENAME_NOREPLACE). Already in the tree
 # through tempfile, polling and async-io.
