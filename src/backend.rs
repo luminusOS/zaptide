@@ -519,18 +519,10 @@ pub enum Command {
     },
     /// Asks for the starred messages of one chat.
     LoadStarred(ChatId),
-    /// Removes one message locally and tells the phone to do the same on
-    /// every other linked device ("Delete for me").
     DeleteLocal {
         chat: ChatId,
         id: String,
     },
-    /// Clears a chat's messages, synced with the phone. Starred messages are
-    /// kept until #20 adds a user-facing choice; the chat stays in the list.
-    ClearChat(ChatId),
-    /// Deletes a chat entirely, synced with the phone. It reappears, with
-    /// default preferences, the next time new activity arrives for it.
-    DeleteChat(ChatId),
     /// Sends files with the caption on the first. Paths in `documents` go
     /// as documents even when they are images, videos, or audio.
     SendFiles {
@@ -789,9 +781,6 @@ pub enum Event {
         chat: ChatId,
         id: String,
     },
-    /// A chat was deleted here or on another device, and is now gone from
-    /// the list; it reappears on its own next activity.
-    ChatDeleted(ChatId),
     /// A message was starred or unstarred here or on another device.
     StarChanged {
         chat: ChatId,

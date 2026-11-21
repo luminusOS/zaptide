@@ -359,10 +359,6 @@ impl NativeApplication {
             Some("win.copy-transcript"),
         );
         self.chat_menu.append_section(None, &section);
-        let section = gtk::gio::Menu::new();
-        section.append(Some(&gettext("Clear Chat")), Some("win.chat-clear"));
-        section.append(Some(&gettext("Delete Chat")), Some("win.chat-delete"));
-        self.chat_menu.append_section(None, &section);
     }
 
     /// Archived chats with unread messages, as counted on the phone.
@@ -426,18 +422,7 @@ impl NativeApplication {
                     self.request_avatar(&chat.id);
                     self.update_chat(chat)
                 }
-                ChatChange::Remove(id) => self.remove_chat(&id),
             }
-        }
-    }
-
-    fn remove_chat(&mut self, id: &str) {
-        if let Some(index) = self.chat_snapshots.iter().position(|known| known.id == id) {
-            self.chat_snapshots.remove(index);
-            self.chats_dirty = true;
-        }
-        if self.open_chat.active_chat.as_deref() == Some(id) {
-            self.clear_active_chat();
         }
     }
 
@@ -507,28 +492,6 @@ impl NativeApplication {
                 chat: chat.to_owned(),
                 receipts: self.settings.send_read_receipts && !self.account_receipts_off,
             });
-        }
-    }
-
-    /// Clears the open chat's messages, synced with the phone. Confirmation
-    /// already happened in `confirm_clear_chat`.
-    pub(super) fn send_clear_chat(&mut self) {
-        let Some(chat) = self.open_chat.active_chat.clone() else {
-            return;
-        };
-        if let Some(backend) = &self.backend {
-            backend.send(crate::backend::Command::ClearChat(chat));
-        }
-    }
-
-    /// Deletes the open chat entirely, synced with the phone. Confirmation
-    /// already happened in `confirm_delete_chat`.
-    pub(super) fn send_delete_chat(&mut self) {
-        let Some(chat) = self.open_chat.active_chat.clone() else {
-            return;
-        };
-        if let Some(backend) = &self.backend {
-            backend.send(crate::backend::Command::DeleteChat(chat));
         }
     }
 

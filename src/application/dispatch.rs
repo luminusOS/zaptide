@@ -608,50 +608,6 @@ impl NativeApplication {
         dialog.present(Some(&self.window));
     }
 
-    fn confirm_clear_chat(&mut self, sender: ComponentSender<Self>) {
-        if self.open_chat.active_chat.is_none() {
-            return;
-        }
-        let dialog = adw::AlertDialog::builder()
-            .heading(gettext("Clear chat?"))
-            .body(gettext(
-                "This chat's messages will be cleared here and on your other linked devices. Starred messages are kept.",
-            ))
-            .build();
-        dialog.add_response("cancel", &gettext("Cancel"));
-        dialog.add_response("clear", &gettext("Clear"));
-        dialog.set_response_appearance("clear", adw::ResponseAppearance::Destructive);
-        let input = sender.clone();
-        dialog.connect_response(None, move |_, response| {
-            if response == "clear" {
-                input.input(Input::ConfirmClearChat);
-            }
-        });
-        dialog.present(Some(&self.window));
-    }
-
-    fn confirm_delete_chat(&mut self, sender: ComponentSender<Self>) {
-        if self.open_chat.active_chat.is_none() {
-            return;
-        }
-        let dialog = adw::AlertDialog::builder()
-            .heading(gettext("Delete chat?"))
-            .body(gettext(
-                "This chat will be removed from the list here and on your other linked devices. It reappears if a new message arrives.",
-            ))
-            .build();
-        dialog.add_response("cancel", &gettext("Cancel"));
-        dialog.add_response("delete", &gettext("Delete"));
-        dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
-        let input = sender.clone();
-        dialog.connect_response(None, move |_, response| {
-            if response == "delete" {
-                input.input(Input::ConfirmDeleteChat);
-            }
-        });
-        dialog.present(Some(&self.window));
-    }
-
     fn viewer_details(
         &self,
         message: &crate::model::Message,
@@ -1356,10 +1312,6 @@ impl NativeApplication {
             Input::OpenStarred { chat, id } => self.open_starred(chat, id),
             Input::DeleteSelected(everyone) => self.confirm_delete(everyone, sender),
             Input::ConfirmDelete(everyone) => self.delete_selected(everyone),
-            Input::ClearSelectedChat => self.confirm_clear_chat(sender),
-            Input::ConfirmClearChat => self.send_clear_chat(),
-            Input::DeleteSelectedChat => self.confirm_delete_chat(sender),
-            Input::ConfirmDeleteChat => self.send_delete_chat(),
             Input::VoteOption(choice) => {
                 self.poll_choice = choice;
                 self.vote_selected();
