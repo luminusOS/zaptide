@@ -74,6 +74,7 @@ impl AttachmentAutoDownload {
             AttachmentCategory::Other => self.other = enabled,
         }
     }
+}
 
 /// Interface language, shared by all accounts and applied on startup.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
