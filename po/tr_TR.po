@@ -1,0 +1,2097 @@
+# Turkish translation for zaptide.
+# Copyright (C) 2026 zaptide contributors
+# This file is distributed under the same license as the zaptide package.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: zaptide\n"
+"Report-Msgid-Bugs-To: https://github.com/luminusOS/zaptide/issues\n"
+"POT-Creation-Date: 2026-11-15 15:17-0300\n"
+"PO-Revision-Date: 2026-11-21 02:16+0300\n"
+"Last-Translator: f4646\n"
+"Language-Team: f4646\n"
+"Language: tr_TR\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+#: src/application.rs:900
+msgid "Chat"
+msgstr "Sohbet"
+
+#: src/application.rs:913
+msgid "Chat details"
+msgstr "Sohbet bilgisi"
+
+#: src/application.rs:930
+msgid "Chat menu"
+msgstr "Sohbet menüsü"
+
+#: src/application.rs:937 src/application.rs:938
+msgid "Start video call"
+msgstr "Görüntülü arama başlat"
+
+#: src/application.rs:947 src/application.rs:948
+msgid "Start voice call"
+msgstr "Sesli arama başlat"
+
+#: src/application.rs:957
+msgid "Connection lost"
+msgstr "Bağlantı kesildi"
+
+#: src/application.rs:1027 src/application.rs:2378
+#: src/application/composer.rs:235 src/application/contact_sharing.rs:442
+#: src/application/dialogs.rs:54 src/application/dialogs.rs:79
+#: src/application/dialogs.rs:283 src/application/dialogs.rs:463
+#: src/application/dispatch.rs:591 src/application/document_safety.rs:196
+#: src/application/link_page.rs:85
+msgid "Cancel"
+msgstr "İptal"
+
+#: src/application.rs:1040
+msgid "Forward selected messages"
+msgstr "Seçili mesajları ilet"
+
+#: src/application.rs:1044 src/application/dialogs.rs:723
+msgid "Forward"
+msgstr "İlet"
+
+#: src/application.rs:1070
+msgid "Drop Files to Attach"
+msgstr "Eklemek için dosyaları buraya bırakın"
+
+#: src/application.rs:1276 src/application.rs:1312
+msgid "_Remove Account…"
+msgstr "Hesabı _Kaldır…"
+
+#: src/application.rs:1277 src/application.rs:1315
+msgid "_Preferences"
+msgstr "_Tercihler"
+
+#: src/application.rs:1278 src/application.rs:1317
+msgid "_About ZapTide"
+msgstr "ZapTide _Hakkında"
+
+#: src/application.rs:1279 src/application.rs:1318
+msgid "_Quit"
+msgstr "_Çıkış"
+
+#: src/application.rs:1311
+msgid "_New Chat"
+msgstr "_Yeni Sohbet"
+
+#: src/application.rs:1316
+msgid "_Keyboard Shortcuts"
+msgstr "_Klavye Kısayolları"
+
+#: src/application.rs:1734 src/application.rs:1759
+msgid "Load older messages"
+msgstr "Daha eski mesajları yükle"
+
+#: src/application.rs:1757 src/application/transcript_view.rs:806
+msgid "Loading older messages…"
+msgstr "Daha eski mesajlar yükleniyor…"
+
+#: src/application.rs:1955
+msgid "Open Attachment"
+msgstr "Eki aç"
+
+#: src/application.rs:1957
+msgid "Download Attachment"
+msgstr "Eki indir"
+
+#: src/application.rs:1962 src/native_media_widgets/photo.rs:451
+#: src/native_media_widgets/viewer/photo.rs:404
+#: src/native_media_widgets/viewer/video.rs:334
+msgid "Show in Folder"
+msgstr "Klasörde göster"
+
+#: src/application.rs:1963
+msgid "Save Attachment…"
+msgstr "Eki kaydet…"
+
+#: src/application.rs:1973
+msgid "Open Link"
+msgstr "Bağlantıyı aç"
+
+#: src/application.rs:1977
+msgid "Go to Quoted Message"
+msgstr "Alıntılanan mesaja git"
+
+#: src/application.rs:1987 src/native_media_widgets/viewer/photo.rs:402
+msgid "Copy Image"
+msgstr "Görseli kopyala"
+
+#: src/application.rs:1990
+msgid "Copy Text"
+msgstr "Metni kopyala"
+
+#: src/application.rs:1992
+msgid "Reply"
+msgstr "Yanıtla"
+
+#: src/application.rs:1994
+msgid "Edit"
+msgstr "Düzenle"
+
+#: src/application.rs:1996
+msgid "Forward…"
+msgstr "İlet…"
+
+#: src/application.rs:1998 src/application/dialogs.rs:1120
+msgid "Unstar"
+msgstr "Yıldızı kaldır"
+
+#: src/application.rs:2000
+msgid "Star"
+msgstr "Yıldız ekle"
+
+#: src/application.rs:2003
+msgid "Select"
+msgstr "Seç"
+
+#: src/application.rs:2013
+#, rust-format
+msgid "Vote: {option}"
+msgstr "Oy ver: {option}"
+
+#: src/application.rs:2024
+msgid "Delete for Me"
+msgstr "Benden sil"
+
+#: src/application.rs:2027
+msgid "Delete for Everyone"
+msgstr "Herkesten sil"
+
+#: src/application.rs:2097
+msgid "Enter a question and two different poll options"
+msgstr "Bir soru ve birbirinden farklı iki anket seçeneği girin"
+
+#: src/application.rs:2105
+msgid "Creating poll"
+msgstr "Anket oluşturuluyor"
+
+#: src/application.rs:2287
+msgid "Message deleted"
+msgstr "Mesaj silindi"
+
+#: src/application.rs:2294
+msgid "This chat is no longer available."
+msgstr "Bu sohbet artık kullanılamıyor."
+
+#: src/application.rs:2338 src/application/accounts.rs:151
+#: src/application/accounts.rs:152 src/application/dispatch.rs:225
+#: src/application/dispatch.rs:226 src/application/dispatch.rs:359
+#: src/application/dispatch/backend_events.rs:447
+msgid "Could not save preferences"
+msgstr "Tercihler kaydedilemedi"
+
+#: src/application.rs:2340
+msgid "Shutdown requested"
+msgstr "Kapatma isteği alındı"
+
+#: src/application.rs:2379 src/application/dispatch.rs:166
+msgid "Quit"
+msgstr "Çıkış"
+
+#: src/application/accounts.rs:154
+msgid "Preferences saved"
+msgstr "Tercihler kaydedildi"
+
+#: src/application/accounts.rs:157 src/application/accounts.rs:158
+#: src/application/dispatch.rs:230 src/application/dispatch.rs:231
+msgid "Preference value is invalid"
+msgstr "Tercih değeri geçersiz"
+
+#: src/application/attachment_helpers.rs:44
+msgid "Downloading attachment"
+msgstr "Ek indiriliyor"
+
+#: src/application/attachment_helpers.rs:81
+#: src/application/document_safety.rs:215
+msgid "Could not open attachment"
+msgstr "Ek açılamadı"
+
+#: src/application/attachment_helpers.rs:98
+#: src/application/dispatch/attachments.rs:55
+msgid "Finish the active portal action first"
+msgstr "Önce devam eden portal işlemini tamamlayın"
+
+#: src/application/attachment_helpers.rs:102
+msgid "Clipboard is unavailable"
+msgstr "Pano kullanılamıyor"
+
+#: src/application/attachment_helpers.rs:160
+msgid "Reading clipboard image"
+msgstr "Panodaki görsel okunuyor"
+
+#: src/application/attachment_helpers.rs:162
+msgid "Could not read clipboard image"
+msgstr "Panodaki görsel okunamadı"
+
+#: src/application/attachment_helpers.rs:169
+msgid "Choose an available conversation before pasting an image"
+msgstr "Görsel yapıştırmadan önce kullanılabilir bir sohbet seçin"
+
+#: src/application/attachment_helpers.rs:183
+msgid "Send or clear the staged attachment before pasting an image"
+msgstr "Görsel yapıştırmadan önce bekleyen eki gönderin veya kaldırın"
+
+#: src/application/attachment_helpers.rs:187
+msgid "Clipboard image ready"
+msgstr "Panodaki görsel hazır"
+
+#: src/application/attachment_helpers.rs:220
+msgid "Opening link"
+msgstr "Bağlantı açılıyor"
+
+#: src/application/attachment_helpers.rs:222
+msgid "Link is not supported"
+msgstr "Bağlantı desteklenmiyor"
+
+#: src/application/attachment_helpers.rs:258
+msgid "Choose save location"
+msgstr "Kayıt konumunu seçin"
+
+#: src/application/attachment_helpers.rs:260
+msgid "Could not open save dialog"
+msgstr "Kaydetme penceresi açılamadı"
+
+#: src/application/audio.rs:248 src/application/audio.rs:513
+msgid "Could not save voice playback speed"
+msgstr "Sesli mesaj oynatma hızı kaydedilemedi"
+
+#: src/application/audio.rs:335
+msgid "Downloading voice"
+msgstr "Sesli mesaj indiriliyor"
+
+#: src/application/audio.rs:346
+msgid "Voice playback could not start."
+msgstr "Sesli mesaj oynatılamadı."
+
+#: src/application/audio.rs:371
+msgid "Voice playback could not seek"
+msgstr "Sesli mesajda istenen konuma gidilemedi"
+
+#: src/application/audio.rs:406
+msgid "Recording canceled"
+msgstr "Kayıt iptal edildi"
+
+#: src/application/audio.rs:429
+msgid "Sending voice message"
+msgstr "Sesli mesaj gönderiliyor"
+
+#: src/application/audio.rs:432
+msgid "Could not record voice message"
+msgstr "Sesli mesaj kaydedilemedi"
+
+#: src/application/audio.rs:441
+msgid "Audio playback could not continue."
+msgstr "Ses oynatılmaya devam edilemedi."
+
+#: src/application/bubbles.rs:115 src/application/bubbles.rs:118
+#: src/application/bubbles.rs:231 src/application/dialogs.rs:1160
+msgid "Starred"
+msgstr "Yıldızlı"
+
+#: src/application/bubbles.rs:346 src/application/reaction_drawer.rs:467
+msgid "Remove reaction"
+msgstr "Tepkiyi kaldır"
+
+#: src/application/bubbles.rs:365 src/application/reaction_drawer.rs:301
+msgid "More Reactions"
+msgstr "Daha fazla tepki"
+
+#: src/application/calls.rs:142
+msgid "No Call Selected"
+msgstr "Arama seçilmedi"
+
+#: src/application/calls.rs:143
+msgid "Pick a call to see its details"
+msgstr "Ayrıntılarını görmek için bir arama seçin"
+
+#: src/application/calls.rs:157 src/application/dispatch.rs:174
+msgid "Open chat"
+msgstr "Sohbeti aç"
+
+#: src/application/calls.rs:165
+msgid "Call back"
+msgstr "Geri ara"
+
+#: src/application/calls.rs:197
+msgid "Call details"
+msgstr "Arama bilgileri"
+
+#: src/application/calls/screen.rs:236
+msgid "Video call"
+msgstr "Görüntülü arama"
+
+#: src/application/calls/screen.rs:238
+msgid "Voice call"
+msgstr "Sesli arama"
+
+#: src/application/calls/screen.rs:245
+msgid "%1$s is calling, with video"
+msgstr "%1$s görüntülü arıyor"
+
+#: src/application/calls/screen.rs:247
+msgid "%1$s is calling"
+msgstr "%1$s arıyor"
+
+#: src/application/calls/screen.rs:253
+msgid "Answering ends your call with %1$s"
+msgstr "Yanıtlarsanız %1$s ile olan aramanız sona erecek"
+
+#: src/application/calls/screen.rs:257 src/application/calls/screen.rs:402
+#: src/native_notifications.rs:326
+msgid "Decline"
+msgstr "Reddet"
+
+#: src/application/calls/screen.rs:264 src/native_notifications.rs:332
+msgid "End and answer"
+msgstr "Bitir ve yanıtla"
+
+#: src/application/calls/screen.rs:293
+msgid "Back to chat"
+msgstr "Sohbete dön"
+
+#: src/application/calls/screen.rs:328 src/application/calls/screen.rs:439
+msgid "No camera available"
+msgstr "Kamera bulunamadı"
+
+#: src/application/calls/screen.rs:329
+msgid "Your video is not being sent"
+msgstr "Görüntünüz gönderilmiyor"
+
+#: src/application/calls/screen.rs:345
+msgid "Call ended"
+msgstr "Arama sona erdi"
+
+#: src/application/calls/screen.rs:359
+msgid "Calling…"
+msgstr "Aranıyor…"
+
+#: src/application/calls/screen.rs:359
+msgid "Cancel call"
+msgstr "Aramayı iptal et"
+
+#: src/application/calls/screen.rs:360
+msgid "Connecting…"
+msgstr "Bağlanıyor…"
+
+#: src/application/calls/screen.rs:360 src/application/calls/screen.rs:497
+msgid "End call"
+msgstr "Aramayı sonlandır"
+
+#: src/application/calls/screen.rs:368
+msgid "Check your connection and try again."
+msgstr "Bağlantınızı kontrol edip tekrar deneyin."
+
+#: src/application/calls/screen.rs:370
+msgid "Couldn't connect the call"
+msgstr "Arama bağlantısı kurulamadı"
+
+#: src/application/calls/screen.rs:374
+msgid "Try again"
+msgstr "Tekrar dene"
+
+#: src/application/calls/screen.rs:409 src/native_notifications.rs:331
+msgid "Answer"
+msgstr "Yanıtla"
+
+#: src/application/calls/screen.rs:419
+msgid "Unmute"
+msgstr "Sesi aç"
+
+#: src/application/calls/screen.rs:421
+msgid "Mute"
+msgstr "Sesi kapat"
+
+#: src/application/calls/screen.rs:444
+msgid "Turn camera off"
+msgstr "Kamerayı kapat"
+
+#: src/application/calls/screen.rs:446
+msgid "Turn camera on"
+msgstr "Kamerayı aç"
+
+#: src/application/calls/screen.rs:448
+msgid "Start video"
+msgstr "Görüntüyü başlat"
+
+#: src/application/calls/screen.rs:474
+msgid "Microphone muted"
+msgstr "Mikrofon kapalı"
+
+#: src/application/calls/screen.rs:476
+msgid "Connected"
+msgstr "Bağlandı"
+
+#: src/application/calls/screen.rs:481
+msgid "%1$s wants to switch to video"
+msgstr "%1$s görüntülü aramaya geçmek istiyor"
+
+#: src/application/calls/screen.rs:485
+msgid "Accept video"
+msgstr "Görüntülü aramayı kabul et"
+
+#: src/application/calls/window.rs:479
+msgid "Your camera preview"
+msgstr "Kamera önizlemeniz"
+
+#: src/application/calls/window.rs:484
+msgid "Camera off"
+msgstr "Kamera kapalı"
+
+#: src/application/calls/window.rs:498 src/application/stars.rs:84
+#: src/native_media_widgets/viewer/details.rs:19
+msgid "You"
+msgstr "Siz"
+
+#: src/application/chats.rs:245
+msgid "Loading messages"
+msgstr "Mesajlar yükleniyor"
+
+#: src/application/chats.rs:327
+msgid "_Group Info"
+msgstr "_Grup bilgisi"
+
+#: src/application/chats.rs:329
+msgid "_Contact Info"
+msgstr "_Kişi bilgisi"
+
+#: src/application/chats.rs:335
+msgid "Un_pin Chat"
+msgstr "Sohbetin _sabitlenmesini kaldır"
+
+#: src/application/chats.rs:337
+msgid "_Pin Chat"
+msgstr "Sohbeti _sabitle"
+
+#: src/application/chats.rs:341
+msgid "_Unmute Notifications"
+msgstr "Bildirimlerin _sesini aç"
+
+#: src/application/chats.rs:343
+msgid "_Mute Notifications"
+msgstr "Bildirimleri _sessize al"
+
+#: src/application/chats.rs:347
+msgid "Un_archive Chat"
+msgstr "Sohbeti arşivden _çıkar"
+
+#: src/application/chats.rs:349
+msgid "_Archive Chat"
+msgstr "Sohbeti _arşivle"
+
+#: src/application/chats.rs:354
+msgid "_Close Chat"
+msgstr "Sohbeti _kapat"
+
+#: src/application/chats.rs:358
+msgid "Copy _Transcript"
+msgstr "Sohbet _geçmişini kopyala"
+
+#: src/application/composer.rs:172
+msgid "Discard recording"
+msgstr "Kaydı sil"
+
+#: src/application/composer.rs:179
+msgid "Recording"
+msgstr "Kaydediliyor"
+
+#: src/application/composer.rs:194 src/application/composer.rs:195
+msgid "Send voice message"
+msgstr "Sesli mesaj gönder"
+
+#: src/application/composer.rs:273
+msgid "Remove All"
+msgstr "Tümünü kaldır"
+
+#: src/application/composer.rs:306
+msgid "Attach"
+msgstr "Ekle"
+
+#: src/application/composer.rs:322
+msgid "Send photos and videos"
+msgstr "Fotoğraf ve video gönder"
+
+#: src/application/composer.rs:331
+msgid "Send any file as a document"
+msgstr "Herhangi bir dosyayı belge olarak gönder"
+
+#: src/application/composer.rs:340
+msgid "Create a poll"
+msgstr "Anket oluştur"
+
+#: src/application/composer.rs:349
+msgid "Mention a participant"
+msgstr "Bir katılımcıdan bahset"
+
+#: src/application/composer.rs:358 src/application/composer.rs:359
+msgid "Share a contact"
+msgstr "Kişi paylaş"
+
+#: src/application/composer.rs:372
+msgid "Emoji"
+msgstr "Emoji"
+
+#: src/application/composer.rs:387 src/model/mod.rs:485
+#: src/native_media_widgets/sticker.rs:12
+#: src/native_media_widgets/sticker.rs:21
+#: src/native_media_widgets/sticker.rs:23
+#: src/native_media_widgets/sticker.rs:323
+msgid "Sticker"
+msgstr "Çıkartma"
+
+#: src/application/composer.rs:412
+msgid "Message composer"
+msgstr "Mesaj yazma alanı"
+
+#: src/application/composer.rs:413
+msgid ""
+"Write a message. Return inserts a line; use Send to submit when using IME."
+msgstr ""
+"Bir mesaj yazın. Enter tuşu yeni satır ekler; giriş yöntemi düzenleyicisini (IME) kullanırken mesajı göndermek için Gönder'e basın."
+
+#: src/application/composer.rs:423
+msgid "Record voice message"
+msgstr "Sesli mesaj kaydet"
+
+#: src/application/composer.rs:473
+msgid "Mention suggestions"
+msgstr "Bahsetme önerileri"
+
+#: src/application/composer.rs:838 src/application/composer/link_preview.rs:65
+#: src/application/composer/link_preview.rs:81
+msgid "Loading link preview"
+msgstr "Bağlantı önizlemesi yükleniyor"
+
+#: src/application/composer.rs:852
+msgid "Clipboard image"
+msgstr "Panodaki görsel"
+
+#: src/application/contact_sharing.rs:24
+msgid "Choose a writable chat while connected to share a contact"
+msgstr "Kişi paylaşmak için bağlantı kurulduğunda mesaj gönderebileceğiniz bir sohbet seçin"
+
+#: src/application/contact_sharing.rs:66
+msgid "Contact not sent: the conversation or linked account changed"
+msgstr "Kişi gönderilemedi: Sohbet veya bağlı hesap değişti"
+
+#: src/application/contact_sharing.rs:76
+msgid "Sending contact"
+msgstr "Kişi gönderiliyor"
+
+#: src/application/contact_sharing.rs:78 src/application/dispatch.rs:258
+#: src/application/dispatch.rs:402 src/application/dispatch.rs:735
+#: src/application/dispatch.rs:750 src/application/dispatch.rs:765
+#: src/application/dispatch.rs:772 src/application/dispatch.rs:1016
+#: src/application/dispatch.rs:1079
+msgid "Backend unavailable"
+msgstr "Arka uç kullanılamıyor"
+
+#: src/application/contact_sharing.rs:87 src/application/contact_sharing.rs:150
+msgid "Finish the active file chooser first"
+msgstr "Önce açık olan dosya seçiciyi tamamlayın"
+
+#: src/application/contact_sharing.rs:91
+msgid "Contact cards (.vcf)"
+msgstr "Kişi kartları (.vcf)"
+
+#: src/application/contact_sharing.rs:127
+msgid "Could not open the contact file chooser"
+msgstr "Kişi dosyası seçicisi açılamadı"
+
+#: src/application/contact_sharing.rs:188
+msgid "Could not open the contact save dialog"
+msgstr "Kişi kaydetme penceresi açılamadı"
+
+#: src/application/contact_sharing.rs:247
+msgid "Share Contact"
+msgstr "Kişi paylaş"
+
+#: src/application/contact_sharing.rs:271
+#: src/application/contact_sharing.rs:273
+msgid "Import vCard File…"
+msgstr "vCard dosyasını içe aktar…"
+
+#: src/application/contact_sharing.rs:278
+msgid "Search names or phone numbers"
+msgstr "İsim veya telefon numarası ara"
+
+#: src/application/contact_sharing.rs:285 src/application/dialogs.rs:329
+msgid "Search contacts"
+msgstr "Kişilerde ara"
+
+#: src/application/contact_sharing.rs:289
+msgid "No Saved Contacts"
+msgstr "Kayıtlı kişi yok"
+
+#: src/application/contact_sharing.rs:291
+msgid "Saved contacts appear here after syncing with your phone."
+msgstr "Telefonunuzla eşitlendikten sonra kayıtlı kişiler burada görünür."
+
+#: src/application/contact_sharing.rs:303
+msgid "No Results Found"
+msgstr "Sonuç bulunamadı"
+
+#: src/application/contact_sharing.rs:304
+msgid "Try a different name or phone number."
+msgstr "Farklı bir isim veya telefon numarası deneyin."
+
+#: src/application/contact_sharing.rs:431
+msgid "Send Contact"
+msgstr "Kişiyi gönder"
+
+#: src/application/contact_sharing.rs:443
+msgid "Send"
+msgstr "Gönder"
+
+#: src/application/conversation.rs:97
+msgid "Loading quoted message"
+msgstr "Alıntılanan mesaj yükleniyor"
+
+#: src/application/conversation.rs:113 src/application/conversation.rs:145
+msgid "Replying to selected message"
+msgstr "Seçili mesaja yanıt veriliyor"
+
+#: src/application/conversation.rs:119 src/application/conversation.rs:248
+#: src/application/conversation.rs:259
+msgid "Saving edit"
+msgstr "Düzenleme kaydediliyor"
+
+#: src/application/conversation.rs:136
+msgid "Editing selected message"
+msgstr "Seçili mesaj düzenleniyor"
+
+#: src/application/conversation.rs:220
+msgid "Waiting for previous message."
+msgstr "Önceki mesaj bekleniyor."
+
+#: src/application/conversation.rs:236
+msgid "This conversation is read-only."
+msgstr "Bu sohbet salt okunur."
+
+#: src/application/conversation.rs:241
+msgid "Finish editing before sending attachments."
+msgstr "Ekleri göndermeden önce düzenlemeyi tamamlayın."
+
+#: src/application/conversation.rs:303
+msgid "Sending attachments"
+msgstr "Ekler gönderiliyor"
+
+#: src/application/conversation.rs:314
+msgid "Sending clipboard image"
+msgstr "Panodaki görsel gönderiliyor"
+
+#: src/application/conversation.rs:327
+msgid "Sending message"
+msgstr "Mesaj gönderiliyor"
+
+#: src/application/conversation.rs:333
+msgid "Backend unavailable. Draft kept."
+msgstr "Arka uç kullanılamıyor. Taslak korundu."
+
+#: src/application/conversation.rs:409
+msgid "Conversation loaded"
+msgstr "Sohbet yüklendi"
+
+#: src/application/conversation.rs:458
+msgid "Message updated"
+msgstr "Mesaj güncellendi"
+
+#: src/application/conversation.rs:466
+msgid "Edit could not be saved. Draft kept."
+msgstr "Düzenleme kaydedilemedi. Taslak korundu."
+
+#: src/application/conversation.rs:546
+msgid "Message sent"
+msgstr "Mesaj gönderildi"
+
+#: src/application/conversation.rs:572
+msgid "Message could not be sent. Draft kept."
+msgstr "Mesaj gönderilemedi. Taslak korundu."
+
+#: src/application/conversation.rs:800
+msgid "Transcript copied"
+msgstr "Sohbet geçmişi kopyalandı"
+
+#: src/application/dialogs.rs:48
+msgid "Archive Chat?"
+msgstr "Sohbet arşivlensin mi?"
+
+#: src/application/dialogs.rs:55
+msgid "Archive"
+msgstr "Arşivle"
+
+#: src/application/dialogs.rs:80 src/application/dialogs.rs:1112
+#: src/application/profile_dialog.rs:122
+msgid "Remove"
+msgstr "Kaldır"
+
+#: src/application/dialogs.rs:99
+msgid "New Poll"
+msgstr "Yeni anket"
+
+#: src/application/dialogs.rs:104
+msgid "Question"
+msgstr "Soru"
+
+#: src/application/dialogs.rs:112
+msgid "Add Option"
+msgstr "Seçenek ekle"
+
+#: src/application/dialogs.rs:117
+msgid "Allow Multiple Answers"
+msgstr "Birden fazla yanıta izin ver"
+
+#: src/application/dialogs.rs:120 src/native_media_widgets/poll.rs:43
+msgid "Quiz"
+msgstr "Test"
+
+#: src/application/dialogs.rs:121 src/application/dialogs.rs:197
+msgid "Choose the correct answer"
+msgstr "Doğru yanıtı seçin"
+
+#: src/application/dialogs.rs:124
+msgid "Create"
+msgstr "Oluştur"
+
+#: src/application/dialogs.rs:185
+#, rust-format
+msgid "Correct answer for option {number}"
+msgstr "{number} numaralı seçeneğin doğru yanıtı"
+
+#: src/application/dialogs.rs:209 src/application/dialogs.rs:213
+#: src/native_media_widgets/poll.rs:59
+msgid "Correct answer"
+msgstr "Doğru yanıt"
+
+#: src/application/dialogs.rs:220
+msgid "Remove option"
+msgstr "Seçeneği kaldır"
+
+#: src/application/dialogs.rs:274
+msgid "Options"
+msgstr "Seçenekler"
+
+#: src/application/dialogs.rs:324
+msgid "New Chat"
+msgstr "Yeni sohbet"
+
+#: src/application/dialogs.rs:348
+msgid "New Contact"
+msgstr "Yeni kişi"
+
+#: src/application/dialogs.rs:349
+msgid "Message a phone number"
+msgstr "Bir telefon numarasına mesaj gönder"
+
+#: src/application/dialogs.rs:436
+msgid "New contact"
+msgstr "Yeni kişi"
+
+#: src/application/dialogs.rs:450
+msgid "Phone number, including country code"
+msgstr "Ülke koduyla birlikte telefon numarası"
+
+#: src/application/dialogs.rs:455
+msgid "Name (optional)"
+msgstr "İsim (isteğe bağlı)"
+
+#: src/application/dialogs.rs:464
+msgid "Add contact"
+msgstr "Kişi ekle"
+
+#: src/application/dialogs.rs:504
+msgid "Mention"
+msgstr "Bahset"
+
+#: src/application/dialogs.rs:509
+msgid "Search participants"
+msgstr "Katılımcılarda ara"
+
+#: src/application/dialogs.rs:525
+msgid "No participants match this search."
+msgstr "Aramanızla eşleşen katılımcı bulunamadı."
+
+#: src/application/dialogs.rs:653
+msgid "Forward To"
+msgstr "Şuna ilet"
+
+#: src/application/dialogs.rs:658 src/application/sidebar.rs:140
+msgid "Search chats"
+msgstr "Sohbetlerde ara"
+
+#: src/application/dialogs.rs:682
+msgid "Forwarding"
+msgstr "İletiliyor"
+
+#: src/application/dialogs.rs:1144
+msgid "Your recently used stickers appear here."
+msgstr "Son kullandığınız çıkartmalar burada görünür."
+
+#: src/application/dialogs.rs:1145
+msgid "To add your own, copy .webp files into:"
+msgstr "Kendi çıkartmalarınızı eklemek için .webp dosyalarını şu konuma kopyalayın:"
+
+#: src/application/dialogs.rs:1149
+msgid "No Stickers Yet"
+msgstr "Henüz çıkartma yok"
+
+#: src/application/dialogs.rs:1151 src/application/sidebar.rs:177
+#: src/application/sidebar.rs:179
+msgid "All"
+msgstr "Tümü"
+
+#: src/application/dialogs.rs:1156
+msgid "No Starred Stickers"
+msgstr "Yıldızlı çıkartma yok"
+
+#: src/application/dialogs.rs:1157
+msgid "Star a sticker in a chat to keep it here."
+msgstr "Burada saklamak için bir sohbette çıkartmaya yıldız ekleyin."
+
+#: src/application/dialogs.rs:1250
+msgid "Phone"
+msgstr "Telefon"
+
+#: src/application/dialogs.rs:1258 src/native_media_widgets/contacts.rs:65
+msgid "Copy phone number"
+msgstr "Telefon numarasını kopyala"
+
+#: src/application/dialogs.rs:1343 src/application/dialogs.rs:1447
+#: src/application/dialogs.rs:1512
+msgid "Starred Messages"
+msgstr "Yıldızlı mesajlar"
+
+#: src/application/dialogs.rs:1390
+msgid "Participants"
+msgstr "Katılımcılar"
+
+#: src/application/dialogs.rs:1454
+msgid "No Starred Messages"
+msgstr "Yıldızlı mesaj yok"
+
+#: src/application/dialogs.rs:1455
+msgid "Star a message from its menu to find it here."
+msgstr "Bir mesajı burada bulabilmek için menüsünden yıldız ekleyin."
+
+#: src/application/dispatch.rs:163
+msgid "General"
+msgstr "Genel"
+
+#: src/application/dispatch.rs:165
+msgid "Close window"
+msgstr "Pencereyi kapat"
+
+#: src/application/dispatch.rs:170
+msgid "Chat List"
+msgstr "Sohbet listesi"
+
+#: src/application/dispatch.rs:172
+msgid "Previous chat"
+msgstr "Önceki sohbet"
+
+#: src/application/dispatch.rs:173
+msgid "Next chat"
+msgstr "Sonraki sohbet"
+
+#: src/application/dispatch.rs:178
+msgid "Composer"
+msgstr "Mesaj yazma alanı"
+
+#: src/application/dispatch.rs:180
+msgid "Send message"
+msgstr "Mesaj gönder"
+
+#: src/application/dispatch.rs:181
+msgid "New line"
+msgstr "Yeni satır"
+
+#: src/application/dispatch.rs:185
+msgid "Messages"
+msgstr "Mesajlar"
+
+#: src/application/dispatch.rs:187
+msgid "Open message menu"
+msgstr "Mesaj menüsünü aç"
+
+#: src/application/dispatch.rs:188
+msgid "Copy selected text"
+msgstr "Seçili metni kopyala"
+
+#: src/application/dispatch.rs:192
+msgid "Media viewer"
+msgstr "Medya görüntüleyici"
+
+#: src/application/dispatch.rs:194
+msgid "Previous photo"
+msgstr "Önceki fotoğraf"
+
+#: src/application/dispatch.rs:195
+msgid "Next photo"
+msgstr "Sonraki fotoğraf"
+
+#: src/application/dispatch.rs:196
+msgid "Zoom in"
+msgstr "Yakınlaştır"
+
+#: src/application/dispatch.rs:197
+msgid "Zoom out"
+msgstr "Uzaklaştır"
+
+#: src/application/dispatch.rs:198
+msgid "Fit to window"
+msgstr "Pencereye sığdır"
+
+#: src/application/dispatch.rs:199
+msgid "Actual size"
+msgstr "Gerçek boyut"
+
+#: src/application/dispatch.rs:241
+msgid "Starting backend"
+msgstr "Arka uç başlatılıyor"
+
+#: src/application/dispatch.rs:309
+msgid "Refreshing messages"
+msgstr "Mesajlar yenileniyor"
+
+#: src/application/dispatch.rs:382 src/application/dispatch.rs:383
+#: src/application/dispatch.rs:1071 src/application/dispatch.rs:1072
+msgid "Enter valid phone number with country code"
+msgstr "Ülke koduyla birlikte geçerli bir telefon numarası girin"
+
+#: src/application/dispatch.rs:400
+msgid "Checking contact on WhatsApp"
+msgstr "Kişi WhatsApp'ta kontrol ediliyor"
+
+#: src/application/dispatch.rs:584
+msgid "Delete message?"
+msgstr "Mesaj silinsin mi?"
+
+#: src/application/dispatch.rs:592
+msgid "Delete"
+msgstr "Sil"
+
+#: src/application/dispatch.rs:690
+msgid "Phone number copied"
+msgstr "Telefon numarası kopyalandı"
+
+#: src/application/dispatch.rs:820
+msgid "Not connected to WhatsApp"
+msgstr "WhatsApp'a bağlı değil"
+
+#: src/application/dispatch.rs:828 src/application/dispatch.rs:829
+#: src/application/dispatch.rs:839 src/application/themes.rs:105
+#: src/application/themes.rs:106 src/application/themes.rs:120
+#: src/application/themes.rs:121 src/application/themes.rs:145
+#: src/application/themes.rs:146
+msgid "Could not open themes folder"
+msgstr "Temalar klasörü açılamadı"
+
+#: src/application/dispatch.rs:998
+msgid "Reconnecting to WhatsApp"
+msgstr "WhatsApp'a yeniden bağlanılıyor"
+
+#: src/application/dispatch.rs:1014
+msgid "Unlinking this computer"
+msgstr "Bu bilgisayarın bağlantısı kaldırılıyor"
+
+#: src/application/dispatch.rs:1055 src/application/dispatch.rs:1063
+msgid "Code copied"
+msgstr "Kod kopyalandı"
+
+#: src/application/dispatch.rs:1077
+msgid "Requesting a pairing code from WhatsApp"
+msgstr "WhatsApp'tan eşleştirme kodu isteniyor"
+
+#: src/application/dispatch.rs:1146
+msgid "Contact opened"
+msgstr "Kişi açıldı"
+
+#: src/application/dispatch.rs:1207
+msgid "Could not save attachment"
+msgstr "Ek kaydedilemedi"
+
+#: src/application/dispatch.rs:1212
+msgid "Clipboard or portal action failed"
+msgstr "Pano veya portal işlemi başarısız oldu"
+
+#: src/application/dispatch.rs:1235
+msgid "Copied"
+msgstr "Kopyalandı"
+
+#: src/application/dispatch.rs:1332
+msgid "Shutdown complete"
+msgstr "Kapatma tamamlandı"
+
+#: src/application/dispatch/attachments.rs:11
+msgid "Choose a writable chat before attaching files"
+msgstr "Dosya eklemeden önce mesaj gönderebileceğiniz bir sohbet seçin"
+
+#: src/application/dispatch/attachments.rs:18
+#: src/application/dispatch/attachments.rs:59
+#: src/application/dispatch/attachments.rs:112
+msgid "Clear the staged clipboard image before adding files"
+msgstr "Dosya eklemeden önce panodan alınan bekleyen görseli kaldırın"
+
+#: src/application/dispatch/attachments.rs:68
+msgid "Photos and videos"
+msgstr "Fotoğraflar ve videolar"
+
+#: src/application/dispatch/backend_events.rs:10
+msgid "The poll was sent, but its voting key could not be saved."
+msgstr "Anket gönderildi ancak oylama anahtarı kaydedilemedi."
+
+#: src/application/dispatch/backend_events.rs:13
+#: src/application/dispatch/backend_events.rs:525
+msgid "Poll creation could not be completed."
+msgstr "Anket oluşturma işlemi tamamlanamadı."
+
+#: src/application/dispatch/backend_events.rs:18
+msgid "Your vote was sent, but could not be saved locally."
+msgstr "Oyunuz gönderildi ancak yerel olarak kaydedilemedi."
+
+#: src/application/dispatch/backend_events.rs:20
+#: src/application/dispatch/backend_events.rs:529
+#: src/application/poll_runtime_tests.rs:130
+msgid "Could not send your vote."
+msgstr "Oyunuz gönderilemedi."
+
+#: src/application/dispatch/backend_events.rs:233
+msgid "No older messages available"
+msgstr "Daha eski mesaj bulunamadı"
+
+#: src/application/dispatch/backend_events.rs:441
+msgid "Profile saved"
+msgstr "Profil kaydedildi"
+
+#: src/application/dispatch/backend_events.rs:472
+msgid "Contact is on WhatsApp"
+msgstr "Kişi WhatsApp kullanıyor"
+
+#: src/application/document_safety.rs:188
+msgid "Open This File?"
+msgstr "Bu dosya açılsın mı?"
+
+#: src/application/document_safety.rs:191
+#, rust-format
+msgid ""
+"“{name}” may contain programs or active content. Open it only if you trust "
+"the sender."
+msgstr ""
+"“{name}” dosyası programlar veya etkin içerik barındırabilir. Yalnızca "
+"gönderen kişiye güveniyorsanız açın."
+
+#: src/application/document_safety.rs:197 src/native_media_widgets/photo.rs:517
+#: src/native_notifications/adapters.rs:228
+msgid "Open"
+msgstr "Aç"
+
+#: src/application/helpers.rs:80
+msgid "Country"
+msgstr "Ülke"
+
+#: src/application/helpers.rs:221
+msgid "Connection failed. Check your network and try again."
+msgstr "Bağlantı kurulamadı. Ağ bağlantınızı kontrol edip tekrar deneyin."
+
+#: src/application/helpers.rs:223
+msgid "Permission denied. Check access and try again."
+msgstr "İzin reddedildi. Erişim izinlerini kontrol edip tekrar deneyin."
+
+#: src/application/helpers.rs:225
+msgid "Storage operation failed. Check available disk space."
+msgstr "Depolama işlemi başarısız oldu. Kullanılabilir disk alanını kontrol edin."
+
+#: src/application/helpers.rs:227
+msgid "Action failed. Check connection and try again."
+msgstr "İşlem başarısız oldu. Bağlantınızı kontrol edip tekrar deneyin."
+
+#: src/application/link_page.rs:92 src/application/sidebar.rs:93
+#: src/application/sidebar.rs:94
+msgid "Main menu"
+msgstr "Ana menü"
+
+#: src/application/link_page.rs:133
+msgid "WhatsApp device-linking QR code"
+msgstr "WhatsApp cihaz bağlama QR kodu"
+
+#: src/application/link_page.rs:155
+msgid "Copy Code"
+msgstr "Kodu kopyala"
+
+#: src/application/link_page.rs:180
+msgid "Phone number"
+msgstr "Telefon numarası"
+
+#: src/application/link_page.rs:189
+msgid "Get Code"
+msgstr "Kod al"
+
+#: src/application/link_page.rs:209
+msgid "Try Again"
+msgstr "Tekrar dene"
+
+#: src/application/profile_dialog.rs:29
+msgid "Privacy"
+msgstr "Gizlilik"
+
+#: src/application/profile_dialog.rs:34 src/application/profile_dialog.rs:376
+msgid "Send read receipts"
+msgstr "Okundu bilgisini gönder"
+
+#: src/application/profile_dialog.rs:35
+msgid "Let contacts know when messages are read"
+msgstr "Kişilerinizin mesajlarını ne zaman okuduğunuzu görmesini sağlayın"
+
+#: src/application/profile_dialog.rs:40 src/application/profile_dialog.rs:377
+msgid "Send typing status"
+msgstr "Yazıyor bilgisini gönder"
+
+#: src/application/profile_dialog.rs:41
+msgid "Let contacts know while you are typing"
+msgstr "Kişilerinizin yazdığınızı görmesini sağlayın"
+
+#: src/application/profile_dialog.rs:46 src/application/profile_dialog.rs:378
+msgid "Link previews"
+msgstr "Bağlantı önizlemeleri"
+
+#: src/application/profile_dialog.rs:47
+msgid "Show a preview of the links you send"
+msgstr "Gönderdiğiniz bağlantıların önizlemesini göster"
+
+#: src/application/profile_dialog.rs:118
+msgid "Change Photo…"
+msgstr "Fotoğrafı değiştir…"
+
+#: src/application/profile_dialog.rs:133
+msgid "Name"
+msgstr "İsim"
+
+#: src/application/profile_dialog.rs:135
+msgid "About"
+msgstr "Hakkımda"
+
+#: src/application/profile_dialog.rs:144
+msgid "Your name and About text are visible to your contacts."
+msgstr "İsminiz ve Hakkımda bilginiz kişileriniz tarafından görülebilir."
+
+#: src/application/profile_dialog.rs:149
+msgid "Save"
+msgstr "Kaydet"
+
+#: src/application/profile_dialog.rs:179
+msgid "Profile"
+msgstr "Profil"
+
+#: src/application/profile_dialog.rs:228
+msgid "Images"
+msgstr "Görseller"
+
+#: src/application/profile_dialog.rs:233
+msgid "Choose a Profile Photo"
+msgstr "Profil fotoğrafı seçin"
+
+#: src/application/reaction_drawer.rs:469
+#, rust-format
+msgid "React with {emoji}"
+msgstr "{emoji} ile tepki ver"
+
+#: src/application/rows.rs:345
+msgid "Unread messages"
+msgstr "Okunmamış mesajlar"
+
+#: src/application/selection.rs:115
+msgid "Choose another available conversation"
+msgstr "Kullanılabilir başka bir sohbet seçin"
+
+#: src/application/selection.rs:174
+msgid "Deleting message for everyone"
+msgstr "Mesaj herkesten siliniyor"
+
+#: src/application/selection.rs:178
+msgid "Deleting message"
+msgstr "Mesaj siliniyor"
+
+#: src/application/sidebar.rs:87
+msgid "Updating messages"
+msgstr "Mesajlar güncelleniyor"
+
+#: src/application/sidebar.rs:100 src/application/sidebar.rs:101
+msgid "New chat"
+msgstr "Yeni sohbet"
+
+#: src/application/sidebar.rs:109 src/application/sidebar.rs:110
+#: src/application/sidebar.rs:123
+msgid "Return to call"
+msgstr "Aramaya dön"
+
+#: src/application/sidebar.rs:147
+msgid "Filters"
+msgstr "Filtreler"
+
+#: src/application/sidebar.rs:148
+msgid "Filter chats"
+msgstr "Sohbetleri filtrele"
+
+#: src/application/sidebar.rs:162
+msgid "Chat Type"
+msgstr "Sohbet türü"
+
+#: src/application/sidebar.rs:190 src/application/sidebar.rs:192
+msgid "Private"
+msgstr "Kişisel"
+
+#: src/application/sidebar.rs:204 src/application/sidebar.rs:206
+msgid "Groups"
+msgstr "Gruplar"
+
+#: src/application/sidebar.rs:216
+msgid "Show Only"
+msgstr "Yalnızca şunları göster"
+
+#: src/application/sidebar.rs:230 src/application/sidebar.rs:232
+msgid "Unread"
+msgstr "Okunmamış"
+
+#: src/application/sidebar.rs:243 src/application/sidebar.rs:245
+msgid "Pinned"
+msgstr "Sabitlenmiş"
+
+#: src/application/sidebar.rs:256 src/application/sidebar.rs:258
+msgid "Muted"
+msgstr "Sessize alınmış"
+
+#: src/application/sidebar.rs:287
+msgid "Archived"
+msgstr "Arşivlenmiş"
+
+#: src/application/sidebar.rs:310
+msgid "Calls"
+msgstr "Aramalar"
+
+#: src/application/sidebar.rs:374
+msgid "No Calls Yet"
+msgstr "Henüz arama yok"
+
+#: src/application/sidebar.rs:375
+msgid "Voice and video calls appear here"
+msgstr "Sesli ve görüntülü aramalar burada görünür"
+
+#: src/application/stars.rs:14
+msgid "Message starred"
+msgstr "Mesaja yıldız eklendi"
+
+#: src/application/themes.rs:54
+msgid "Could not save theme preference"
+msgstr "Tema tercihi kaydedilemedi"
+
+#: src/application/themes.rs:115
+msgid "Preparing themes folder"
+msgstr "Temalar klasörü hazırlanıyor"
+
+#: src/application/themes.rs:142
+msgid "Opening themes folder"
+msgstr "Temalar klasörü açılıyor"
+
+#: src/application/transcript_view.rs:87
+msgid "No Conversation Selected"
+msgstr "Sohbet seçilmedi"
+
+#: src/application/transcript_view.rs:112
+#: src/application/transcript_view.rs:113
+msgid "Go to latest message"
+msgstr "En son mesaja git"
+
+#: src/application/transcript_view.rs:127
+msgid "Go to new messages"
+msgstr "Yeni mesajlara git"
+
+#: src/application/transcript_view.rs:140
+msgid "New messages"
+msgstr "Yeni mesajlar"
+
+#: src/backend/worker/calls.rs:377
+msgid "Connect to WhatsApp to place a call"
+msgstr "Arama yapmak için WhatsApp'a bağlanın"
+
+#: src/backend/worker/calls.rs:381
+msgid "You are already in a call"
+msgstr "Zaten bir aramadasınız"
+
+#: src/backend/worker/calls.rs:388
+msgid "Calls are only available in one-to-one chats"
+msgstr "Aramalar yalnızca bire bir sohbetlerde kullanılabilir"
+
+#: src/backend/worker/calls.rs:418 src/backend/worker/calls/runtime.rs:361
+msgid "The call could not be answered"
+msgstr "Arama yanıtlanamadı"
+
+#: src/backend/worker/calls.rs:582
+msgid "The camera stopped working"
+msgstr "Kamera çalışmayı durdurdu"
+
+#: src/backend/worker/calls/runtime.rs:360
+msgid "The call could not be placed"
+msgstr "Arama yapılamadı"
+
+#: src/backend/worker/calls/runtime.rs:453
+#: src/backend/worker/calls/runtime.rs:490
+msgid "Video could not be started"
+msgstr "Görüntü başlatılamadı"
+
+#: src/calls/mod.rs:41
+msgid "No microphone is available"
+msgstr "Mikrofon bulunamadı"
+
+#: src/calls/mod.rs:42
+msgid "No audio output is available"
+msgstr "Ses çıkış aygıtı bulunamadı"
+
+#: src/calls/mod.rs:43
+msgid "No camera is available"
+msgstr "Kamera bulunamadı"
+
+#: src/calls/mod.rs:44
+msgid "Camera access was denied"
+msgstr "Kamera erişimine izin verilmedi"
+
+#: src/calls/mod.rs:46
+msgid "Camera access was not answered in time"
+msgstr "Kamera erişim izni isteği zamanında yanıtlanmadı"
+
+#: src/calls/mod.rs:49
+msgid "The system camera portal is not available"
+msgstr "Sistem kamera portalı kullanılamıyor"
+
+#: src/calls/mod.rs:52
+msgid ""
+"Video calls need an H.264 encoder (the GStreamer x264 or OpenH264 plugin)"
+msgstr ""
+"Görüntülü aramalar için bir H.264 kodlayıcı (GStreamer x264 veya OpenH264 eklentisi) gerekir"
+
+#: src/calls/mod.rs:55
+msgid ""
+"Video calls need an H.264 decoder (the GStreamer libav or OpenH264 plugin)"
+msgstr ""
+"Görüntülü aramalar için bir H.264 kod çözücü (GStreamer libav veya OpenH264 eklentisi) gerekir"
+
+#: src/calls/mod.rs:57
+msgid "Call audio is unavailable"
+msgstr "Arama sesi kullanılamıyor"
+
+#: src/model/call.rs:42
+msgid "Voice call ended"
+msgstr "Sesli arama sona erdi"
+
+#: src/model/call.rs:43
+msgid "Video call ended"
+msgstr "Görüntülü arama sona erdi"
+
+#: src/model/call.rs:44
+msgid "Missed voice call"
+msgstr "Cevapsız sesli arama"
+
+#: src/model/call.rs:45
+msgid "Missed video call"
+msgstr "Cevapsız görüntülü arama"
+
+#: src/model/call.rs:46
+msgid "Voice call declined"
+msgstr "Sesli arama reddedildi"
+
+#: src/model/call.rs:47
+msgid "Video call declined"
+msgstr "Görüntülü arama reddedildi"
+
+#: src/model/call.rs:48
+msgid "Voice call, no answer"
+msgstr "Sesli arama, yanıt yok"
+
+#: src/model/call.rs:49
+msgid "Voice call cancelled"
+msgstr "Sesli arama iptal edildi"
+
+#: src/model/call.rs:50
+msgid "Video call, no answer"
+msgstr "Görüntülü arama, yanıt yok"
+
+#: src/model/call.rs:51
+msgid "Video call cancelled"
+msgstr "Görüntülü arama iptal edildi"
+
+#: src/model/call.rs:52
+msgid "Voice call failed"
+msgstr "Sesli arama başarısız oldu"
+
+#: src/model/call.rs:53
+msgid "Video call failed"
+msgstr "Görüntülü arama başarısız oldu"
+
+#: src/model/call.rs:93
+msgid "%1$s · %2$s"
+msgstr "%1$s · %2$s"
+
+#: src/model/call.rs:291
+msgid "Outgoing voice call"
+msgstr "Giden sesli arama"
+
+#: src/model/call.rs:292
+msgid "Outgoing video call"
+msgstr "Giden görüntülü arama"
+
+#: src/model/call.rs:293
+msgid "Incoming voice call"
+msgstr "Gelen sesli arama"
+
+#: src/model/call.rs:294
+msgid "Incoming video call"
+msgstr "Gelen görüntülü arama"
+
+#: src/model/mod.rs:458
+msgid "Photo"
+msgstr "Fotoğraf"
+
+#: src/model/mod.rs:461
+msgid "GIF"
+msgstr "GIF"
+
+#: src/model/mod.rs:463
+msgid "Video"
+msgstr "Video"
+
+#: src/model/mod.rs:473
+msgid "Voice message"
+msgstr "Sesli mesaj"
+
+#: src/model/mod.rs:475
+msgid "Audio"
+msgstr "Ses"
+
+#: src/model/mod.rs:483
+#, rust-format
+msgid "Document: {name}"
+msgstr "Belge: {name}"
+
+#: src/model/mod.rs:487
+#, rust-format
+msgid "Location: {name}"
+msgstr "Konum: {name}"
+
+#: src/model/mod.rs:488
+msgid "Location"
+msgstr "Konum"
+
+#: src/model/mod.rs:491
+#, rust-format
+msgid "Contact: {name}"
+msgstr "Kişi: {name}"
+
+#: src/model/mod.rs:494
+#, rust-format
+msgid "Poll: {question}"
+msgstr "Anket: {question}"
+
+#: src/model/mod.rs:498
+msgid "Buttons"
+msgstr "Düğmeler"
+
+#: src/model/mod.rs:502
+#, rust-format
+msgid "List: {title}"
+msgstr "Liste: {title}"
+
+#: src/model/mod.rs:503
+msgid "List"
+msgstr "Liste"
+
+#: src/model/mod.rs:514
+msgid "This message was deleted"
+msgstr "Bu mesaj silindi"
+
+#: src/model/mod.rs:522
+msgid "Message"
+msgstr "Mesaj"
+
+#: src/model/mod.rs:640
+msgid "Animated sticker"
+msgstr "Hareketli çıkartma"
+
+#: src/model/mod.rs:641
+msgid "Call"
+msgstr "Arama"
+
+#: src/model/mod.rs:642
+msgid "Event"
+msgstr "Etkinlik"
+
+#: src/model/mod.rs:643
+msgid "Group invitation"
+msgstr "Grup daveti"
+
+#: src/model/mod.rs:644
+msgid "Interactive message"
+msgstr "Etkileşimli mesaj"
+
+#: src/model/mod.rs:645
+msgid "List message"
+msgstr "Liste mesajı"
+
+#: src/model/mod.rs:646
+msgid "Payment"
+msgstr "Ödeme"
+
+#: src/model/mod.rs:647
+msgid "Product"
+msgstr "Ürün"
+
+#: src/model/mod.rs:648
+msgid "Sticker pack"
+msgstr "Çıkartma paketi"
+
+#: src/model/mod.rs:650
+msgid "Waiting for this message. Open WhatsApp on your phone"
+msgstr "Bu mesaj bekleniyor. Telefonunuzda WhatsApp'ı açın"
+
+#: src/model/mod.rs:652
+msgid "Unsupported message"
+msgstr "Desteklenmeyen mesaj"
+
+#: src/native_emoji.rs:147
+msgid "Search emoji"
+msgstr "Emoji ara"
+
+#: src/native_media_widgets/audio.rs:78
+msgid "Microphone level"
+msgstr "Mikrofon seviyesi"
+
+#: src/native_media_widgets/audio.rs:148
+msgid "Seek audio"
+msgstr "Seste ileri veya geri git"
+
+#: src/native_media_widgets/contacts.rs:110
+msgid "No phone number"
+msgstr "Telefon numarası yok"
+
+#: src/native_media_widgets/photo.rs:213
+msgid "Download all photos"
+msgstr "Tüm fotoğrafları indir"
+
+#: src/native_media_widgets/photo.rs:247 src/native_media_widgets/photo.rs:250
+msgid "View photo"
+msgstr "Fotoğrafı görüntüle"
+
+#: src/native_media_widgets/photo.rs:269
+msgid "Download photo"
+msgstr "Fotoğrafı indir"
+
+#: src/native_media_widgets/photo.rs:392
+msgid "Play video"
+msgstr "Videoyu oynat"
+
+#: src/native_media_widgets/photo.rs:550
+msgid "Downloading"
+msgstr "İndiriliyor"
+
+#: src/native_media_widgets/poll.rs:10
+#, rust-format
+msgid "{count} vote"
+msgstr "{count} oy"
+
+#: src/native_media_widgets/poll.rs:12
+#, rust-format
+msgid "{count} votes"
+msgstr "{count} oy"
+
+#: src/native_media_widgets/poll.rs:19
+msgid "Vote"
+msgstr "Oy ver"
+
+#: src/native_media_widgets/poll.rs:21 src/native_media_widgets/poll.rs:171
+msgid "Remove vote"
+msgstr "Oyu geri al"
+
+#: src/native_media_widgets/poll.rs:23
+msgid "Update vote"
+msgstr "Oyu güncelle"
+
+#: src/native_media_widgets/poll.rs:45
+msgid "Poll"
+msgstr "Anket"
+
+#: src/native_media_widgets/poll.rs:60
+msgid "Incorrect answer"
+msgstr "Yanlış cevap"
+
+#: src/native_media_widgets/poll.rs:61
+msgid "Answer submitted"
+msgstr "Cevap gönderildi"
+
+#: src/native_media_widgets/poll.rs:64
+msgid "This poll is not ready for voting. Reconnect and try again."
+msgstr "Bu ankette henüz oy kullanılamıyor. Yeniden bağlanıp tekrar deneyin."
+
+#: src/native_media_widgets/poll.rs:66
+msgid "Choose one answer"
+msgstr "Bir cevap seçin"
+
+#: src/native_media_widgets/poll.rs:68
+#, rust-format
+msgid "Select up to {count} answers"
+msgstr "En fazla {count} cevap seçin"
+
+#: src/native_media_widgets/poll.rs:227
+#, rust-format
+msgid "Your answer: {answer}"
+msgstr "Cevabınız: {answer}"
+
+#: src/native_media_widgets/poll.rs:232
+msgid "Results may be incomplete"
+msgstr "Sonuçlar eksik olabilir"
+
+#: src/native_media_widgets/viewer.rs:53
+#, rust-format
+msgid "{current} of {total}"
+msgstr "{current} / {total}"
+
+#: src/native_media_widgets/viewer.rs:85
+#, rust-format
+msgid "Photo from {name}"
+msgstr "{name} tarafından gönderilen fotoğraf"
+
+#: src/native_media_widgets/viewer.rs:125
+#, rust-format
+msgid "Zoom level {percent} percent"
+msgstr "Yakınlaştırma düzeyi yüzde {percent}"
+
+#: src/native_media_widgets/viewer.rs:130
+msgid "Zoom Out"
+msgstr "Uzaklaştır"
+
+#: src/native_media_widgets/viewer.rs:131
+msgid "Zoom In"
+msgstr "Yakınlaştır"
+
+#: src/native_media_widgets/viewer.rs:206
+msgid "Actual Size"
+msgstr "Gerçek boyut"
+
+#: src/native_media_widgets/viewer.rs:208
+msgid "Fit to Window"
+msgstr "Pencereye sığdır"
+
+#: src/native_media_widgets/viewer.rs:353
+msgid "Back"
+msgstr "Geri"
+
+#: src/native_media_widgets/viewer/caption.rs:54
+msgid "View Caption"
+msgstr "Açıklamayı görüntüle"
+
+#: src/native_media_widgets/viewer/photo.rs:407
+#: src/native_media_widgets/viewer/video.rs:341
+msgid "Open With Another App"
+msgstr "Başka bir uygulamayla aç"
+
+#: src/native_media_widgets/viewer/photo.rs:411
+msgid "Previous Photo"
+msgstr "Önceki fotoğraf"
+
+#: src/native_media_widgets/viewer/photo.rs:414
+msgid "Next Photo"
+msgstr "Sonraki fotoğraf"
+
+#: src/native_media_widgets/viewer/video.rs:11
+#, rust-format
+msgid "Video from {name}"
+msgstr "{name} tarafından gönderilen video"
+
+#: src/native_media_widgets/viewer/video.rs:44
+#: src/native_media_widgets/viewer/video.rs:125
+#: src/native_media_widgets/viewer/video.rs:131
+msgid "Play"
+msgstr "Oynat"
+
+#: src/native_media_widgets/viewer/video.rs:57
+msgid "Seek"
+msgstr "İleri veya geri sar"
+
+#: src/native_media_widgets/viewer/video.rs:73
+#: src/native_media_widgets/viewer/video.rs:76
+#: src/native_media_widgets/viewer/video.rs:82
+msgid "Volume"
+msgstr "Ses düzeyi"
+
+#: src/native_media_widgets/viewer/video.rs:83
+#: src/native_media_widgets/viewer/video.rs:88
+msgid "Fullscreen"
+msgstr "Tam ekran"
+
+#: src/native_media_widgets/viewer/video.rs:86
+msgid "Exit Fullscreen"
+msgstr "Tam ekrandan çık"
+
+#: src/native_media_widgets/viewer/video.rs:324
+msgid "Can't Play This Video"
+msgstr "Bu video oynatılamıyor"
+
+#: src/native_media_widgets/viewer/video.rs:325
+msgid "Open it with another app instead"
+msgstr "Bunun yerine başka bir uygulamayla açın"
+
+#: src/native_media_widgets/viewer/video.rs:328
+msgid "Open in Another App"
+msgstr "Başka bir uygulamada aç"
+
+#: src/native_media_widgets/widget.rs:373
+msgid "This message type cannot be displayed"
+msgstr "Bu mesaj türü görüntülenemiyor"
+
+#: src/native_media_widgets/widget.rs:396
+msgid "Image preview"
+msgstr "Görsel önizlemesi"
+
+#: src/native_media_widgets/widget.rs:408
+msgid "Open or download attachment"
+msgstr "Eki aç veya indir"
+
+#: src/native_media_widgets/widget.rs:472
+msgid "This link can't be opened"
+msgstr "Bu bağlantı açılamıyor"
+
+#: src/native_preferences.rs:351
+msgid "Preferences"
+msgstr "Tercihler"
+
+#: src/native_preferences.rs:363
+msgid "Appearance"
+msgstr "Görünüm"
+
+#: src/native_preferences.rs:366
+msgid "Display and input"
+msgstr "Görüntüleme ve giriş"
+
+#: src/native_preferences.rs:371
+msgid "Language"
+msgstr "Dil"
+
+#: src/native_preferences.rs:372
+msgid "Quit and reopen ZapTide to apply the language"
+msgstr "Dil değişikliğini uygulamak için ZapTide'dan çıkıp yeniden açın"
+
+#: src/native_preferences.rs:374
+msgid "System default"
+msgstr "Sistem varsayılanı"
+
+#: src/native_preferences.rs:399
+msgid "Theme"
+msgstr "Tema"
+
+#: src/native_preferences.rs:400
+msgid "Choose how ZapTide looks"
+msgstr "ZapTide'ın görünümünü seçin"
+
+#: src/native_preferences.rs:402
+msgid "Follow system"
+msgstr "Sistem ayarlarını kullan"
+
+#: src/native_preferences.rs:403
+msgid "Light"
+msgstr "Açık"
+
+#: src/native_preferences.rs:404
+msgid "Dark"
+msgstr "Koyu"
+
+#: src/native_preferences.rs:426
+msgid "Custom palette"
+msgstr "Özel renk paleti"
+
+#: src/native_preferences.rs:427
+msgid "Choose a palette from the themes folder"
+msgstr "Temalar klasöründen bir renk paleti seçin"
+
+#: src/native_preferences.rs:430 src/native_preferences.rs:696
+msgid "System palette"
+msgstr "Sistem renk paleti"
+
+#: src/native_preferences.rs:460 src/native_preferences.rs:464
+msgid "Open Themes Folder"
+msgstr "Temalar klasörünü aç"
+
+#: src/native_preferences.rs:469
+msgid "Zoom"
+msgstr "Yakınlaştırma"
+
+#: src/native_preferences.rs:470
+msgid "UI scale, from 0.6× to 2.0×"
+msgstr "Arayüz ölçeği: 0,6× ile 2,0× arasında"
+
+#: src/native_preferences.rs:477
+msgid "Send messages with Enter"
+msgstr "Enter tuşuyla mesaj gönder"
+
+#: src/native_preferences.rs:478
+msgid "Shift+Enter inserts a new line"
+msgstr "Shift+Enter yeni satır ekler"
+
+#: src/native_preferences.rs:485
+msgid "Show sender pictures"
+msgstr "Gönderenlerin fotoğraflarını göster"
+
+#: src/native_preferences.rs:486
+msgid "Show avatars next to messages"
+msgstr "Mesajların yanında profil fotoğraflarını göster"
+
+#: src/native_preferences.rs:493
+msgid "Show shortcut hints"
+msgstr "Klavye kısayollarını göster"
+
+#: src/native_preferences.rs:494
+msgid "Show keyboard shortcut hints"
+msgstr "Klavye kısayollarıyla ilgili ipuçlarını göster"
+
+#: src/native_preferences.rs:501
+msgid "Translucent sidebar"
+msgstr "Yarı saydam kenar çubuğu"
+
+#: src/native_preferences.rs:503
+msgid ""
+"Blur the desktop behind the chat list. Needs a compositor that supports "
+"background blur"
+msgstr ""
+"Sohbet listesinin arkasındaki masaüstünü bulanıklaştırır. Arka plan "
+"bulanıklaştırmayı destekleyen bir birleştirici gerektirir."
+
+#: src/native_preferences.rs:511
+msgid "Account"
+msgstr "Hesap"
+
+#: src/native_preferences.rs:514
+msgid "Contacts"
+msgstr "Kişiler"
+
+#: src/native_preferences.rs:519
+msgid "Prefer contact names"
+msgstr "Kişi adlarını tercih et"
+
+#: src/native_preferences.rs:520
+msgid "Use address-book names instead of profile names"
+msgstr "Profil adları yerine adres defterindeki adları kullan"
+
+#: src/native_preferences.rs:527
+msgid "Save contacts to phone"
+msgstr "Kişileri telefona kaydet"
+
+#: src/native_preferences.rs:528
+msgid "Also add saved contacts to the device address book"
+msgstr "Kaydedilen kişileri cihazın adres defterine de ekle"
+
+#: src/native_preferences.rs:535 src/native_preferences.rs:538
+msgid "Notifications"
+msgstr "Bildirimler"
+
+#: src/native_preferences.rs:543
+msgid "Desktop notifications"
+msgstr "Masaüstü bildirimleri"
+
+#: src/native_preferences.rs:544
+msgid "Notify when messages arrive while away"
+msgstr "Uzakta olduğunuzda yeni mesajlar geldiğinde bildirim gönder"
+
+#: src/native_preferences.rs:551
+msgid "Show previews"
+msgstr "Önizlemeleri göster"
+
+#: src/native_preferences.rs:552
+msgid "Include the sender and message text"
+msgstr "Göndereni ve mesaj metnini göster"
+
+#: src/native_preferences.rs:558
+msgid "Notification sound"
+msgstr "Bildirim sesi"
+
+#: src/native_preferences.rs:560
+msgid "Play a short sound with notifications, where the desktop supports it"
+msgstr "Masaüstü desteklediğinde bildirimlerle birlikte kısa bir ses çal"
+
+#: src/native_preferences.rs:572
+msgid "Pause between sounds"
+msgstr "Sesler arasındaki bekleme süresi"
+
+#: src/native_preferences.rs:573
+msgid "Messages that arrive sooner stay silent"
+msgstr "Bu süre dolmadan gelen mesajlar için ses çalınmaz"
+
+#: src/native_preferences.rs:575
+msgid "No pause"
+msgstr "Bekleme yok"
+
+#: src/native_preferences.rs:576
+msgid "10 seconds"
+msgstr "10 saniye"
+
+#: src/native_preferences.rs:577
+msgid "30 seconds"
+msgstr "30 saniye"
+
+#: src/native_preferences.rs:578
+msgid "1 minute"
+msgstr "1 dakika"
+
+#: src/native_preferences.rs:579
+msgid "2 minutes"
+msgstr "2 dakika"
+
+#: src/native_preferences.rs:610
+msgid "Storage"
+msgstr "Depolama"
+
+#: src/native_preferences.rs:613
+msgid "Downloads"
+msgstr "İndirilenler"
+
+#: src/native_preferences.rs:618
+msgid "Automatically download attachments"
+msgstr "Ekleri otomatik indir"
+
+#: src/native_preferences.rs:619
+msgid "Download attachments when they enter view"
+msgstr "Ekler görüntülendiğinde otomatik olarak indir"
+
+#: src/native_preferences.rs:627
+msgid "Background"
+msgstr "Arka plan"
+
+#: src/native_preferences.rs:630
+msgid "Background and updates"
+msgstr "Arka plan ve güncellemeler"
+
+#: src/native_preferences.rs:635
+msgid "Keep running in background"
+msgstr "Arka planda çalışmaya devam et"
+
+#: src/native_preferences.rs:636
+msgid "Keep ZapTide available after closing its window"
+msgstr "Pencereyi kapattıktan sonra da ZapTide çalışmaya devam etsin"
+
+#: src/native_preferences.rs:643
+msgid "Messaging"
+msgstr "Mesajlaşma"
+
+#: src/native_preferences.rs:646
+msgid "Messaging and media"
+msgstr "Mesajlaşma ve medya"
+
+#: src/native_preferences.rs:650
+msgid "Voice playback speed"
+msgstr "Sesli mesaj oynatma hızı"
+
+#: src/native_preferences.rs:784
+msgid "Free up space"
+msgstr "Yer aç"
+
+#: src/native_preferences.rs:786
+msgid ""
+"Messages stay. A removed file downloads again when you open it, if WhatsApp "
+"still has it. Files you can't download again from WhatsApp are lost."
+msgstr ""
+"Mesajlarınız silinmez. Kaldırılan bir dosyayı açtığınızda, WhatsApp'ta hâlâ "
+"mevcutsa yeniden indirilir. WhatsApp'tan tekrar indirilemeyen dosyalar ise "
+"kalıcı olarak kaybolur."
+
+#: src/native_preferences.rs:791
+msgid "Delete old downloads"
+msgstr "Eski indirilenleri sil"
+
+#: src/native_preferences.rs:793
+msgid "Remove photos, videos, audio and files from this computer after a while"
+msgstr "Fotoğrafları, videoları, sesleri ve dosyaları bir süre sonra bu bilgisayardan kaldır"
+
+#: src/native_preferences.rs:803
+msgid "Keep downloads for"
+msgstr "İndirilenleri şu süre boyunca sakla"
+
+#: src/native_preferences.rs:826
+msgid "30 days"
+msgstr "30 gün"
+
+#: src/native_preferences.rs:827
+msgid "60 days"
+msgstr "60 gün"
+
+#: src/native_preferences.rs:828
+msgid "90 days"
+msgstr "90 gün"
+
+#: src/native_preferences.rs:829
+msgid "180 days"
+msgstr "180 gün"
+
+#: src/native_preferences.rs:830
+msgid "1 year"
+msgstr "1 yıl"
+
+#: src/native_preferences.rs:838
+#, rust-format
+msgid "Custom ({} days)"
+msgstr "Özel ({} gün)"
+
+#: src/native_preferences.rs:852
+msgid "Online status"
+msgstr "Çevrimiçi durumu"
+
+#: src/native_preferences.rs:854
+msgid ""
+"While ZapTide shows you as online, your phone does not receive notifications."
+msgstr ""
+"ZapTide sizi çevrimiçi gösterdiği sürece telefonunuza bildirim gelmez."
+
+#: src/native_preferences.rs:860
+msgid "Go offline when I leave ZapTide"
+msgstr "ZapTide'dan ayrıldığımda çevrimdışı ol"
+
+#: src/native_preferences.rs:861
+msgid "Switch to another app or lock the screen"
+msgstr "Başka bir uygulamaya geçtiğimde veya ekranı kilitlediğimde"
+
+#: src/native_preferences.rs:864
+msgid "After 10 seconds"
+msgstr "10 saniye sonra"
+
+#: src/native_preferences.rs:865 src/native_preferences.rs:880
+msgid "After 1 minute"
+msgstr "1 dakika sonra"
+
+#: src/native_preferences.rs:866 src/native_preferences.rs:881
+msgid "After 5 minutes"
+msgstr "5 dakika sonra"
+
+#: src/native_preferences.rs:867 src/native_preferences.rs:883
+msgid "Never"
+msgstr "Asla"
+
+#: src/native_preferences.rs:876
+msgid "Go offline when inactive"
+msgstr "Etkin olmadığımda çevrimdışı ol"
+
+#: src/native_preferences.rs:877
+msgid "No typing, clicks or pointer movement in ZapTide"
+msgstr "ZapTide'da yazma, tıklama veya işaretçi hareketi olmadığında"
+
+#: src/native_preferences.rs:882
+msgid "After 15 minutes"
+msgstr "15 dakika sonra"
+
+#: src/native_preferences.rs:927
+#, rust-format
+msgid "Custom ({seconds} s)"
+msgstr "Özel ({seconds} sn)"
+
+#: src/services/media.rs:27
+msgid "Playing faster needs the GStreamer scaletempo plugin (gst-plugins-good)"
+msgstr "Daha hızlı oynatma için GStreamer scaletempo eklentisi (gst-plugins-good) gereklidir"
