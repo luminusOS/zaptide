@@ -375,6 +375,7 @@ impl NativePreferencesDialog {
             (Language::English, "English".into()),
             (Language::Spanish, "Español".into()),
             (Language::PortugueseBrazil, "Português (Brasil)".into()),
+            (Language::Turkish, "Türkçe".into()),
         ];
         language_row.set_model(Some(&gtk4::StringList::new(
             &languages.each_ref().map(|(_, label)| label.as_str()),
