@@ -1,15 +1,15 @@
 //! Small formatting helpers shared by the views.
 
 use jiff::civil::{Date, DateTime};
-use jiff::{Timestamp, Zoned};
+use jiff::{Timestamp, ZonedDateTime};
 
-fn zoned(unix_seconds: i64) -> Option<Zoned> {
+fn zoned(unix_seconds: i64) -> Option<ZonedDateTime> {
     let timestamp = Timestamp::from_second(unix_seconds).ok()?;
-    Some(timestamp.to_zoned(jiff::tz::TimeZone::system()))
+    Some(timestamp.to_zoned_datetime(jiff::tz::TimeZone::system()))
 }
 
 fn today() -> Date {
-    Zoned::now().date()
+    ZonedDateTime::now().date()
 }
 
 /// Local message time such as "14:05".
@@ -83,7 +83,7 @@ pub fn same_day(first: i64, second: i64) -> bool {
 pub fn noon_today() -> i64 {
     today()
         .at(12, 0, 0, 0)
-        .to_zoned(jiff::tz::TimeZone::system())
+        .to_zoned_datetime(jiff::tz::TimeZone::system())
         .map(|noon| noon.timestamp().as_second())
         .unwrap_or_else(|_| now())
 }
