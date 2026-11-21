@@ -6052,7 +6052,3 @@ dependencies = [
  "syn 3.0.4",
  "winnow",
 ]
-
-[[patch.unused]]
-name = "libsqlite3-sys"
-version = "0.39.1"
