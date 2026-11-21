@@ -284,13 +284,16 @@ impl Worker {
             }
             E::DeleteChatUpdate(update) => {
                 let chat = self.canonical(&update.jid);
-                let through = update
+                let Some(through) = update
                     .action
                     .message_range
                     .as_option()
                     .and_then(|range| range.last_message_timestamp)
                     .map(seconds)
-                    .unwrap_or(i64::MAX);
+                    .filter(|through| *through > 0)
+                else {
+                    return;
+                };
                 if self.archive.delete_chat(&chat, through).unwrap_or(false) {
                     self.emit(Event::ChatDeleted(chat));
                 } else {
@@ -300,13 +303,16 @@ impl Worker {
             }
             E::ClearChatUpdate(update) => {
                 let chat = self.canonical(&update.jid);
-                let through = update
+                let Some(through) = update
                     .action
                     .message_range
                     .as_option()
                     .and_then(|range| range.last_message_timestamp)
                     .map(seconds)
-                    .unwrap_or(i64::MAX);
+                    .filter(|through| *through > 0)
+                else {
+                    return;
+                };
                 let _ = self
                     .archive
                     .clear_chat_messages(&chat, through, !update.delete_starred);
@@ -420,5 +426,50 @@ impl Worker {
             E::CallLogSync(sync) => self.on_call_log(sync),
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::tests::worker;
+    use super::*;
+    use crate::archive::tests::message;
+
+    #[tokio::test]
+    async fn unbounded_phone_actions_preserve_archived_messages() {
+        let (mut worker, _, _, _) = worker();
+        let chat = "12345@s.whatsapp.net";
+        let jid: Jid = chat.parse().unwrap();
+        worker.archive.ensure_chat(chat, "Test").unwrap();
+        worker
+            .archive
+            .insert_message(&message(chat, "m1", 10, false), None)
+            .unwrap();
+
+        let timestamp = whatsapp_rust::wacore::chrono::DateTime::from_timestamp(20, 0).unwrap();
+        let clear = wa_events::ClearChatUpdate::builder()
+            .jid(jid.clone())
+            .delete_starred(true)
+            .delete_media(false)
+            .timestamp(timestamp)
+            .action(Box::default())
+            .from_full_sync(false)
+            .build();
+        worker
+            .handle_wa_event(Arc::new(wa_events::Event::ClearChatUpdate(clear)))
+            .await;
+        assert!(worker.archive.message(chat, "m1").unwrap().is_some());
+
+        let delete = wa_events::DeleteChatUpdate::builder()
+            .jid(jid)
+            .delete_media(false)
+            .timestamp(timestamp)
+            .action(Box::default())
+            .from_full_sync(false)
+            .build();
+        worker
+            .handle_wa_event(Arc::new(wa_events::Event::DeleteChatUpdate(delete)))
+            .await;
+        assert!(worker.archive.message(chat, "m1").unwrap().is_some());
     }
 }
