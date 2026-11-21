@@ -171,6 +171,9 @@ pub(super) fn handle_backend_ready(
                 app.apply_chat_changes(vec![ChatChange::Update(*chat)]);
                 app.read_open_chat();
             }
+            Event::ChatDeleted(chat) => {
+                app.apply_chat_changes(vec![ChatChange::Remove(chat)]);
+            }
 
             Event::RefreshTranscript => {
                 if let (Some(backend), Some(chat)) =

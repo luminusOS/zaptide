@@ -64,6 +64,16 @@ Formatting has not met the required work and whole-process memory bounds for
 large, densely formatted messages and is not release-ready. The private GTK
 and Pango builds used to investigate this are not supported dependencies.
 
+**Delete for Me**, **Clear Chat** and **Delete Chat** remove messages here and
+ask your phone and other linked devices to do the same. The request waits in
+the encrypted archive until ZapTide is connected and history sync has
+finished, so a delay does not lose it. After repeated failures, or after 14
+days, ZapTide gives up and your other devices keep the messages. A chat-level
+request covers only messages up to the newest one saved on this computer, so
+newer messages elsewhere stay. A chat with no saved messages is removed here
+only. Deletions made on your phone are applied here. Missing archive data, a
+reset archive or an unfinished sync never delete anything on your phone.
+
 ## Notifications
 
 Under **Preferences → Notifications**, choose whether to play a sound and the

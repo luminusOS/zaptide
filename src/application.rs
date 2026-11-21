@@ -177,6 +177,9 @@ fn avatar_texture_is_referenced(path: &std::path::Path) -> bool {
 enum ChatChange {
     Snapshot(Vec<crate::model::Chat>),
     Update(crate::model::Chat),
+    /// The chat was deleted here or on another device; it reappears, as a
+    /// fresh `Update`, on its own next activity.
+    Remove(String),
 }
 
 #[derive(Default)]
@@ -757,6 +760,14 @@ pub enum Input {
         id: String,
     },
     DeleteSelected(bool),
+    /// Asks to clear the open chat's messages, with a confirmation dialog.
+    ClearSelectedChat,
+    /// The clear was confirmed; sends `Command::ClearChat`.
+    ConfirmClearChat(crate::account::AccountId, String),
+    /// Asks to delete the open chat entirely, with a confirmation dialog.
+    DeleteSelectedChat,
+    /// The delete was confirmed; sends `Command::DeleteChat`.
+    ConfirmDeleteChat(crate::account::AccountId, String),
     VoteOption(usize),
     CreatePoll(crate::model::PollDraft),
     Recording(crate::native_voice::RecordingIntent),
