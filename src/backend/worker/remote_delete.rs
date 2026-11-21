@@ -285,7 +285,7 @@ impl Worker {
         let jids = self.remote_deletion_jids(&request);
         if jids.is_empty() {
             // Addressability was checked when the row was queued.
-            let _ = self.archive.finish_remote_deletion(&key);
+            let _ = self.archive.finish_remote_deletion(&key, request.bound);
             return;
         }
         let Some(attempt_id) = self.remote_delete.start(&key, now) else {
@@ -312,6 +312,7 @@ impl Worker {
                 done: Done::RemoteDeletionFinished {
                     attempt_id,
                     key,
+                    bound: request.bound,
                     success,
                 },
             }
@@ -344,7 +345,13 @@ impl Worker {
 
     /// Records the outcome of one attempt. Only the phone's acceptance
     /// removes the row; a failure keeps it for a later attempt.
-    pub(super) fn remote_deletion_finished(&mut self, attempt_id: u64, key: &str, success: bool) {
+    pub(super) fn remote_deletion_finished(
+        &mut self,
+        attempt_id: u64,
+        key: &str,
+        bound: i64,
+        success: bool,
+    ) {
         if !self
             .remote_delete
             .finish(attempt_id, key, success, Instant::now())
@@ -352,9 +359,9 @@ impl Worker {
             return;
         }
         if success {
-            let _ = self.archive.finish_remote_deletion(key);
+            let _ = self.archive.finish_remote_deletion(key, bound);
             self.pump_remote_deletions();
-        } else if let Ok(true) = self.archive.fail_remote_deletion(key, MAX_ATTEMPTS) {
+        } else if let Ok(true) = self.archive.fail_remote_deletion(key, bound, MAX_ATTEMPTS) {
             log::warn!("gave up sending a deletion to the other devices");
             self.emit(Event::Error(
                 "A deletion could not reach your other devices, which still have it.".to_owned(),
@@ -502,7 +509,7 @@ mod tests {
         let first = queued(&worker).expect("queued");
         worker
             .archive
-            .finish_remote_deletion(&first.key())
+            .finish_remote_deletion(&first.key(), first.bound)
             .expect("sent");
         worker.delete_message_everywhere(CHAT.to_owned(), "m1".to_owned());
         assert_eq!(queued(&worker), None, "the message is already gone");
@@ -612,16 +619,17 @@ mod tests {
     fn only_the_phones_acceptance_removes_a_queued_deletion() {
         let mut worker = worker_with_messages(CHAT, &[1]);
         worker.delete_message_everywhere(CHAT.to_owned(), "m1".to_owned());
-        let key = queued(&worker).expect("queued").key();
+        let request = queued(&worker).expect("queued");
+        let key = request.key();
 
         let attempt = worker
             .remote_delete
             .start(&key, Instant::now())
             .expect("starts");
-        worker.remote_deletion_finished(attempt + 1, &key, true);
+        worker.remote_deletion_finished(attempt + 1, &key, request.bound, true);
         assert!(queued(&worker).is_some(), "a stale attempt changes nothing");
 
-        worker.remote_deletion_finished(attempt, &key, false);
+        worker.remote_deletion_finished(attempt, &key, request.bound, false);
         assert!(queued(&worker).is_some(), "a failure keeps the request");
 
         worker.remote_delete.retry_at = None;
@@ -629,8 +637,28 @@ mod tests {
             .remote_delete
             .start(&key, Instant::now())
             .expect("retry");
-        worker.remote_deletion_finished(retry, &key, true);
+        worker.remote_deletion_finished(retry, &key, request.bound, true);
         assert_eq!(queued(&worker), None);
+    }
+
+    #[test]
+    fn an_in_flight_acknowledgment_preserves_a_newer_chat_deletion() {
+        let mut worker = worker_with_messages(CHAT, &[1]);
+        worker.delete_chat_everywhere(CHAT.to_owned());
+        let first = queued(&worker).unwrap();
+        let key = first.key();
+        let attempt = worker.remote_delete.start(&key, Instant::now()).unwrap();
+
+        worker.archive.ensure_chat(CHAT, "Test").unwrap();
+        worker
+            .archive
+            .insert_message(&message(CHAT, "m2", 2, false), None)
+            .unwrap();
+        worker.delete_chat_everywhere(CHAT.to_owned());
+
+        worker.remote_deletion_finished(attempt, &key, first.bound, true);
+
+        assert_eq!(queued(&worker).unwrap().bound, 2);
     }
 
     #[test]
@@ -642,14 +670,15 @@ mod tests {
             .insert_message(&message(CHAT, "m1", 1, false), None)
             .expect("insert");
         worker.delete_message_everywhere(CHAT.to_owned(), "m1".to_owned());
-        let key = queued(&worker).expect("queued").key();
+        let request = queued(&worker).expect("queued");
+        let key = request.key();
         for _ in 0..MAX_ATTEMPTS {
             worker.remote_delete.retry_at = None;
             let attempt = worker
                 .remote_delete
                 .start(&key, Instant::now())
                 .expect("starts");
-            worker.remote_deletion_finished(attempt, &key, false);
+            worker.remote_deletion_finished(attempt, &key, request.bound, false);
         }
         assert_eq!(queued(&worker), None);
         assert!(

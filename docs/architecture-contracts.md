@@ -138,7 +138,9 @@ request replaces its queued twin only when it reaches a newer message.
 `pump_remote_deletions` runs each tick and sends one request at a time. It
 waits unless the link is `Connected`, history sync is quiet, privacy ids are
 resolved and no logout cleanup is pending. Only the phone's acceptance removes
-a row. A failure or timeout keeps it and backs off from 30 seconds to 15
+a row. A result applies only to the range sent by that attempt, even if a
+newer request for the same chat arrived while it was in flight.
+A failure or timeout keeps it and backs off from 30 seconds to 15
 minutes. After six failures or 14 days it is dropped, leaving the local
 deletion in place. Keep this queue separate from the read-state queue.
 

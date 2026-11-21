@@ -218,9 +218,10 @@ impl Worker {
                     Done::RemoteDeletionFinished {
                         attempt_id,
                         key,
+                        bound,
                         success,
                     },
-            }) => self.remote_deletion_finished(attempt_id, &key, success),
+            }) => self.remote_deletion_finished(attempt_id, &key, bound, success),
             Command::Completed(Completion {
                 generation: _,
                 done:

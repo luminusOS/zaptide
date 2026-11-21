@@ -289,6 +289,7 @@ pub enum Done {
     RemoteDeletionFinished {
         attempt_id: u64,
         key: String,
+        bound: i64,
         success: bool,
     },
     /// Completes one optimistic revoke attempt, unless the phone confirmed it first.

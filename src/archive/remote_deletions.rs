@@ -193,23 +193,25 @@ impl Archive {
     }
 
     /// Removes a deletion that reached the other devices.
-    pub fn finish_remote_deletion(&self, key: &str) -> Result<()> {
-        self.connection
-            .execute("DELETE FROM remote_deletions WHERE key = ?1", params![key])?;
+    pub fn finish_remote_deletion(&self, key: &str, bound: i64) -> Result<()> {
+        self.connection.execute(
+            "DELETE FROM remote_deletions WHERE key = ?1 AND bound = ?2",
+            params![key, bound],
+        )?;
         Ok(())
     }
 
     /// Counts a failed attempt and gives up on the deletion once it has
     /// failed `max_attempts` times. Returns whether it was given up. The
     /// local deletion stays; only its propagation is abandoned.
-    pub fn fail_remote_deletion(&self, key: &str, max_attempts: u32) -> Result<bool> {
+    pub fn fail_remote_deletion(&self, key: &str, bound: i64, max_attempts: u32) -> Result<bool> {
         self.connection.execute(
-            "UPDATE remote_deletions SET attempts = attempts + 1 WHERE key = ?1",
-            params![key],
+            "UPDATE remote_deletions SET attempts = attempts + 1 WHERE key = ?1 AND bound = ?2",
+            params![key, bound],
         )?;
         let removed = self.connection.execute(
-            "DELETE FROM remote_deletions WHERE key = ?1 AND attempts >= ?2",
-            params![key, max_attempts],
+            "DELETE FROM remote_deletions WHERE key = ?1 AND bound = ?2 AND attempts >= ?3",
+            params![key, bound, max_attempts],
         )?;
         Ok(removed > 0)
     }
@@ -267,7 +269,7 @@ mod tests {
             Some(request.clone())
         );
         archive
-            .finish_remote_deletion(&request.key())
+            .finish_remote_deletion(&request.key(), request.bound)
             .expect("finish");
         assert_eq!(archive.next_remote_deletion().expect("next"), None);
     }
@@ -283,6 +285,22 @@ mod tests {
         let queued = archive.next_remote_deletion().expect("next").expect("row");
         assert_eq!(queued.message_id, "m5");
         assert_eq!(queued.bound, 5);
+    }
+
+    #[test]
+    fn a_failed_older_attempt_does_not_consume_the_replacements_retry() {
+        let archive = archive_with_messages(&[]);
+        let older = deletion(RemoteDeletionKind::Chat, "m1", 1);
+        let newer = deletion(RemoteDeletionKind::Chat, "m2", 2);
+        archive.queue_remote_deletion(&older, 10).unwrap();
+        archive.queue_remote_deletion(&newer, 11).unwrap();
+
+        assert!(
+            !archive
+                .fail_remote_deletion(&older.key(), older.bound, 1)
+                .unwrap()
+        );
+        assert_eq!(archive.next_remote_deletion().unwrap(), Some(newer));
     }
 
     #[test]
@@ -303,7 +321,9 @@ mod tests {
         archive.queue_remote_deletion(&first, 10).expect("first");
         archive.queue_remote_deletion(&second, 10).expect("second");
         assert_eq!(archive.next_remote_deletion().unwrap(), Some(first.clone()));
-        archive.finish_remote_deletion(&first.key()).unwrap();
+        archive
+            .finish_remote_deletion(&first.key(), first.bound)
+            .unwrap();
         assert_eq!(archive.next_remote_deletion().unwrap(), Some(second));
     }
 
@@ -312,10 +332,22 @@ mod tests {
         let archive = archive_with_messages(&[]);
         let request = deletion(RemoteDeletionKind::Message, "m1", 1);
         archive.queue_remote_deletion(&request, 10).expect("queue");
-        assert!(!archive.fail_remote_deletion(&request.key(), 3).unwrap());
-        assert!(!archive.fail_remote_deletion(&request.key(), 3).unwrap());
+        assert!(
+            !archive
+                .fail_remote_deletion(&request.key(), request.bound, 3)
+                .unwrap()
+        );
+        assert!(
+            !archive
+                .fail_remote_deletion(&request.key(), request.bound, 3)
+                .unwrap()
+        );
         assert!(archive.next_remote_deletion().unwrap().is_some());
-        assert!(archive.fail_remote_deletion(&request.key(), 3).unwrap());
+        assert!(
+            archive
+                .fail_remote_deletion(&request.key(), request.bound, 3)
+                .unwrap()
+        );
         assert_eq!(archive.next_remote_deletion().unwrap(), None);
     }
 
