@@ -445,7 +445,7 @@ mod tests {
     }
 
     #[test]
-    fn a_group_message_from_someone_else_names_its_sender() {
+    fn only_a_group_message_from_someone_else_needs_a_participant() {
         assert_eq!(
             participant_of("room@g.us", false, "15550002222@s.whatsapp.net"),
             Ok(Some("15550002222@s.whatsapp.net".to_owned()))

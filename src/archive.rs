@@ -30,7 +30,7 @@ mod remote_deletions;
 mod row;
 mod stars;
 pub use polls::PollVote;
-pub use remote_deletions::{NewestMessage, RemoteDeletion, RemoteDeletionKind};
+pub use remote_deletions::{RemoteDeletion, RemoteDeletionKind};
 pub use stars::StarredMessage;
 
 #[derive(Clone, Debug)]
