@@ -67,6 +67,7 @@ fn selected_catalog(dir: &Path, language: Language) -> std::io::Result<Option<Ca
         Language::English => return Ok(Some(Catalog::empty())),
         Language::Spanish => "es",
         Language::PortugueseBrazil => "pt_BR",
+        Language::Turkish => "tr_TR",
     };
     let file = std::fs::File::open(dir.join(code).join("LC_MESSAGES/zaptide.mo"))?;
     Catalog::parse(file)
@@ -87,6 +88,7 @@ mod tests {
         for (language, label) in [
             (Language::Spanish, "Reenviar…"),
             (Language::PortugueseBrazil, "Encaminhar…"),
+            (Language::Turkish, "İlet…"),
             (Language::English, "Forward…"),
         ] {
             let catalog = selected_catalog(&dir, language).unwrap().unwrap();

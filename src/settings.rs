@@ -85,6 +85,8 @@ pub enum Language {
     Spanish,
     #[serde(rename = "pt_BR")]
     PortugueseBrazil,
+    #[serde(rename = "tr_TR")]
+    Turkish,
     #[default]
     #[serde(other, rename = "system")]
     System,
@@ -351,6 +353,7 @@ mod tests {
         for language in [
             Language::Spanish,
             Language::PortugueseBrazil,
+            Language::Turkish,
             Language::English,
             Language::System,
         ] {
