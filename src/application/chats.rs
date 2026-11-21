@@ -510,25 +510,22 @@ impl NativeApplication {
         }
     }
 
-    /// Clears the open chat's messages, synced with the phone. Confirmation
-    /// already happened in `confirm_clear_chat`.
-    pub(super) fn send_clear_chat(&mut self) {
-        let Some(chat) = self.open_chat.active_chat.clone() else {
+    pub(super) fn send_chat_deletion(
+        &self,
+        account: crate::account::AccountId,
+        chat: String,
+        delete_chat: bool,
+    ) {
+        if self.active_account != account || self.open_chat.active_chat.as_ref() != Some(&chat) {
             return;
-        };
-        if let Some(backend) = &self.backend {
-            backend.send(crate::backend::Command::ClearChat(chat));
         }
-    }
-
-    /// Deletes the open chat entirely, synced with the phone. Confirmation
-    /// already happened in `confirm_delete_chat`.
-    pub(super) fn send_delete_chat(&mut self) {
-        let Some(chat) = self.open_chat.active_chat.clone() else {
-            return;
-        };
         if let Some(backend) = &self.backend {
-            backend.send(crate::backend::Command::DeleteChat(chat));
+            let command = if delete_chat {
+                crate::backend::Command::DeleteChat(chat)
+            } else {
+                crate::backend::Command::ClearChat(chat)
+            };
+            backend.send(command);
         }
     }
 

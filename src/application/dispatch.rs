@@ -609,9 +609,10 @@ impl NativeApplication {
     }
 
     fn confirm_clear_chat(&mut self, sender: ComponentSender<Self>) {
-        if self.open_chat.active_chat.is_none() {
+        let Some(chat) = self.open_chat.active_chat.clone() else {
             return;
-        }
+        };
+        let account = self.active_account;
         let dialog = adw::AlertDialog::builder()
             .heading(gettext("Clear chat?"))
             .body(gettext(
@@ -624,16 +625,17 @@ impl NativeApplication {
         let input = sender.clone();
         dialog.connect_response(None, move |_, response| {
             if response == "clear" {
-                input.input(Input::ConfirmClearChat);
+                input.input(Input::ConfirmClearChat(account, chat.clone()));
             }
         });
         dialog.present(Some(&self.window));
     }
 
     fn confirm_delete_chat(&mut self, sender: ComponentSender<Self>) {
-        if self.open_chat.active_chat.is_none() {
+        let Some(chat) = self.open_chat.active_chat.clone() else {
             return;
-        }
+        };
+        let account = self.active_account;
         let dialog = adw::AlertDialog::builder()
             .heading(gettext("Delete chat?"))
             .body(gettext(
@@ -646,7 +648,7 @@ impl NativeApplication {
         let input = sender.clone();
         dialog.connect_response(None, move |_, response| {
             if response == "delete" {
-                input.input(Input::ConfirmDeleteChat);
+                input.input(Input::ConfirmDeleteChat(account, chat.clone()));
             }
         });
         dialog.present(Some(&self.window));
@@ -1357,9 +1359,13 @@ impl NativeApplication {
             Input::DeleteSelected(everyone) => self.confirm_delete(everyone, sender),
             Input::ConfirmDelete(everyone) => self.delete_selected(everyone),
             Input::ClearSelectedChat => self.confirm_clear_chat(sender),
-            Input::ConfirmClearChat => self.send_clear_chat(),
+            Input::ConfirmClearChat(account, chat) => {
+                self.send_chat_deletion(account, chat, false);
+            }
             Input::DeleteSelectedChat => self.confirm_delete_chat(sender),
-            Input::ConfirmDeleteChat => self.send_delete_chat(),
+            Input::ConfirmDeleteChat(account, chat) => {
+                self.send_chat_deletion(account, chat, true);
+            }
             Input::VoteOption(choice) => {
                 self.poll_choice = choice;
                 self.vote_selected();

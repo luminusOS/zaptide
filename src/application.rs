@@ -763,11 +763,11 @@ pub enum Input {
     /// Asks to clear the open chat's messages, with a confirmation dialog.
     ClearSelectedChat,
     /// The clear was confirmed; sends `Command::ClearChat`.
-    ConfirmClearChat,
+    ConfirmClearChat(crate::account::AccountId, String),
     /// Asks to delete the open chat entirely, with a confirmation dialog.
     DeleteSelectedChat,
     /// The delete was confirmed; sends `Command::DeleteChat`.
-    ConfirmDeleteChat,
+    ConfirmDeleteChat(crate::account::AccountId, String),
     VoteOption(usize),
     CreatePoll(crate::model::PollDraft),
     Recording(crate::native_voice::RecordingIntent),
