@@ -25,6 +25,14 @@ they lack update information.
 After updating, quit with Ctrl+Q or the menu and reopen. Closing the window
 with Ctrl+W can leave the old version running. ZapTide has no built-in updater.
 
+## Interface language
+
+ZapTide follows the desktop language by default. To choose a language for
+ZapTide, open **Preferences → Appearance → Language**. Choose **English**,
+**Español** or **Português (Brasil)**, then quit with Ctrl+Q and reopen the
+application. Choose **System default** to follow the desktop again. Standard
+GTK controls and system dialogs follow the desktop language.
+
 ## Messages
 
 Enter sends and Shift+Enter adds a line; this is configurable. Escape dismisses

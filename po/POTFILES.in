@@ -1,3 +1,4 @@
+src/application.rs
 src/application/accounts.rs
 src/application/attachment_helpers.rs
 src/application/audio.rs
@@ -6,14 +7,14 @@ src/application/calls.rs
 src/application/calls/screen.rs
 src/application/calls/window.rs
 src/application/chats.rs
-src/application/composer/link_preview.rs
 src/application/composer.rs
+src/application/composer/link_preview.rs
 src/application/contact_sharing.rs
 src/application/conversation.rs
 src/application/dialogs.rs
+src/application/dispatch.rs
 src/application/dispatch/attachments.rs
 src/application/dispatch/backend_events.rs
-src/application/dispatch.rs
 src/application/document_safety.rs
 src/application/helpers.rs
 src/application/link_page.rs
@@ -21,7 +22,6 @@ src/application/poll_runtime_tests.rs
 src/application/profile_dialog.rs
 src/application/reaction_drawer.rs
 src/application/rows.rs
-src/application.rs
 src/application/selection.rs
 src/application/sidebar.rs
 src/application/stars.rs
@@ -38,13 +38,13 @@ src/native_media_widgets/contacts.rs
 src/native_media_widgets/photo.rs
 src/native_media_widgets/poll.rs
 src/native_media_widgets/sticker.rs
+src/native_media_widgets/viewer.rs
 src/native_media_widgets/viewer/caption.rs
 src/native_media_widgets/viewer/details.rs
 src/native_media_widgets/viewer/photo.rs
-src/native_media_widgets/viewer.rs
 src/native_media_widgets/viewer/video.rs
 src/native_media_widgets/widget.rs
-src/native_notifications/adapters.rs
 src/native_notifications.rs
+src/native_notifications/adapters.rs
 src/native_preferences.rs
 src/services/media.rs

@@ -1968,10 +1968,10 @@ impl NativeApplication {
                 .media()
                 .is_some_and(|media| media.path.is_some());
             open.append(
-                Some(if downloaded {
-                    "Open Attachment"
+                Some(&if downloaded {
+                    gettext("Open Attachment")
                 } else {
-                    "Download Attachment"
+                    gettext("Download Attachment")
                 }),
                 Some("message.attachment"),
             );
@@ -2026,7 +2026,10 @@ impl NativeApplication {
                 .iter()
                 .enumerate()
             {
-                let item = gtk::gio::MenuItem::new(Some(&format!("Vote: {option}")), None);
+                let item = gtk::gio::MenuItem::new(
+                    Some(&gettext("Vote: {option}").replace("{option}", option)),
+                    None,
+                );
                 item.set_action_and_target_value(
                     Some("message.vote"),
                     Some(&(index as u32).to_variant()),

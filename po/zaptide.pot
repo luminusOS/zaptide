@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: zaptide\n"
 "Report-Msgid-Bugs-To: https://github.com/luminusOS/zaptide/issues\n"
-"POT-Creation-Date: 2026-11-15 15:17-0300\n"
+"POT-Creation-Date: 2026-11-17 16:27-0300\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -17,11 +17,183 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 
-#: src/application/accounts.rs:151 src/application/accounts.rs:152
+#: src/application.rs:900
+msgid "Chat"
+msgstr ""
+
+#: src/application.rs:913
+msgid "Chat details"
+msgstr ""
+
+#: src/application.rs:930
+msgid "Chat menu"
+msgstr ""
+
+#: src/application.rs:937 src/application.rs:938
+msgid "Start video call"
+msgstr ""
+
+#: src/application.rs:947 src/application.rs:948
+msgid "Start voice call"
+msgstr ""
+
+#: src/application.rs:957
+msgid "Connection lost"
+msgstr ""
+
+#: src/application.rs:1027 src/application.rs:2378
+#: src/application/composer.rs:235 src/application/contact_sharing.rs:442
+#: src/application/dialogs.rs:54 src/application/dialogs.rs:79
+#: src/application/dialogs.rs:283 src/application/dialogs.rs:463
+#: src/application/dispatch.rs:591 src/application/document_safety.rs:196
+#: src/application/link_page.rs:85
+msgid "Cancel"
+msgstr ""
+
+#: src/application.rs:1040
+msgid "Forward selected messages"
+msgstr ""
+
+#: src/application.rs:1044 src/application/dialogs.rs:723
+msgid "Forward"
+msgstr ""
+
+#: src/application.rs:1070
+msgid "Drop Files to Attach"
+msgstr ""
+
+#: src/application.rs:1276 src/application.rs:1312
+msgid "_Remove Account…"
+msgstr ""
+
+#: src/application.rs:1277 src/application.rs:1315
+msgid "_Preferences"
+msgstr ""
+
+#: src/application.rs:1278 src/application.rs:1317
+msgid "_About ZapTide"
+msgstr ""
+
+#: src/application.rs:1279 src/application.rs:1318
+msgid "_Quit"
+msgstr ""
+
+#: src/application.rs:1311
+msgid "_New Chat"
+msgstr ""
+
+#: src/application.rs:1316
+msgid "_Keyboard Shortcuts"
+msgstr ""
+
+#: src/application.rs:1734 src/application.rs:1759
+msgid "Load older messages"
+msgstr ""
+
+#: src/application.rs:1757 src/application/transcript_view.rs:806
+msgid "Loading older messages…"
+msgstr ""
+
+#: src/application.rs:1955
+msgid "Open Attachment"
+msgstr ""
+
+#: src/application.rs:1957
+msgid "Download Attachment"
+msgstr ""
+
+#: src/application.rs:1962 src/native_media_widgets/photo.rs:451
+#: src/native_media_widgets/viewer/photo.rs:404
+#: src/native_media_widgets/viewer/video.rs:334
+msgid "Show in Folder"
+msgstr ""
+
+#: src/application.rs:1963
+msgid "Save Attachment…"
+msgstr ""
+
+#: src/application.rs:1973
+msgid "Open Link"
+msgstr ""
+
+#: src/application.rs:1977
+msgid "Go to Quoted Message"
+msgstr ""
+
+#: src/application.rs:1987 src/native_media_widgets/viewer/photo.rs:402
+msgid "Copy Image"
+msgstr ""
+
+#: src/application.rs:1990
+msgid "Copy Text"
+msgstr ""
+
+#: src/application.rs:1992
+msgid "Reply"
+msgstr ""
+
+#: src/application.rs:1994
+msgid "Edit"
+msgstr ""
+
+#: src/application.rs:1996
+msgid "Forward…"
+msgstr ""
+
+#: src/application.rs:1998 src/application/dialogs.rs:1120
+msgid "Unstar"
+msgstr ""
+
+#: src/application.rs:2000
+msgid "Star"
+msgstr ""
+
+#: src/application.rs:2003
+msgid "Select"
+msgstr ""
+
+#: src/application.rs:2013
+#, rust-format
+msgid "Vote: {option}"
+msgstr ""
+
+#: src/application.rs:2024
+msgid "Delete for Me"
+msgstr ""
+
+#: src/application.rs:2027
+msgid "Delete for Everyone"
+msgstr ""
+
+#: src/application.rs:2097
+msgid "Enter a question and two different poll options"
+msgstr ""
+
+#: src/application.rs:2105
+msgid "Creating poll"
+msgstr ""
+
+#: src/application.rs:2287
+msgid "Message deleted"
+msgstr ""
+
+#: src/application.rs:2294
+msgid "This chat is no longer available."
+msgstr ""
+
+#: src/application.rs:2338 src/application/accounts.rs:151
+#: src/application/accounts.rs:152 src/application/dispatch.rs:225
+#: src/application/dispatch.rs:226 src/application/dispatch.rs:359
 #: src/application/dispatch/backend_events.rs:447
-#: src/application/dispatch.rs:225 src/application/dispatch.rs:226
-#: src/application/dispatch.rs:359 src/application.rs:2342
 msgid "Could not save preferences"
+msgstr ""
+
+#: src/application.rs:2340
+msgid "Shutdown requested"
+msgstr ""
+
+#: src/application.rs:2379 src/application/dispatch.rs:166
+msgid "Quit"
 msgstr ""
 
 #: src/application/accounts.rs:154
@@ -278,21 +450,48 @@ msgstr ""
 msgid "You"
 msgstr ""
 
-#: src/application/chats.rs:202
+#: src/application/chats.rs:245
 msgid "Loading messages"
 msgstr ""
 
-#: src/application/chats.rs:307
+#: src/application/chats.rs:327
+msgid "_Group Info"
+msgstr ""
+
+#: src/application/chats.rs:329
+msgid "_Contact Info"
+msgstr ""
+
+#: src/application/chats.rs:335
+msgid "Un_pin Chat"
+msgstr ""
+
+#: src/application/chats.rs:337
+msgid "_Pin Chat"
+msgstr ""
+
+#: src/application/chats.rs:341
+msgid "_Unmute Notifications"
+msgstr ""
+
+#: src/application/chats.rs:343
+msgid "_Mute Notifications"
+msgstr ""
+
+#: src/application/chats.rs:347
+msgid "Un_archive Chat"
+msgstr ""
+
+#: src/application/chats.rs:349
+msgid "_Archive Chat"
+msgstr ""
+
+#: src/application/chats.rs:354
 msgid "_Close Chat"
 msgstr ""
 
-#: src/application/chats.rs:311
+#: src/application/chats.rs:358
 msgid "Copy _Transcript"
-msgstr ""
-
-#: src/application/composer/link_preview.rs:65
-#: src/application/composer/link_preview.rs:81 src/application/composer.rs:838
-msgid "Loading link preview"
 msgstr ""
 
 #: src/application/composer.rs:172
@@ -305,15 +504,6 @@ msgstr ""
 
 #: src/application/composer.rs:194 src/application/composer.rs:195
 msgid "Send voice message"
-msgstr ""
-
-#: src/application/composer.rs:235 src/application/contact_sharing.rs:442
-#: src/application/dialogs.rs:54 src/application/dialogs.rs:79
-#: src/application/dialogs.rs:283 src/application/dialogs.rs:463
-#: src/application/dispatch.rs:591 src/application/document_safety.rs:196
-#: src/application/link_page.rs:85 src/application.rs:1024
-#: src/application.rs:2382
-msgid "Cancel"
 msgstr ""
 
 #: src/application/composer.rs:273
@@ -371,6 +561,11 @@ msgstr ""
 
 #: src/application/composer.rs:473
 msgid "Mention suggestions"
+msgstr ""
+
+#: src/application/composer.rs:838 src/application/composer/link_preview.rs:65
+#: src/application/composer/link_preview.rs:81
+msgid "Loading link preview"
 msgstr ""
 
 #: src/application/composer.rs:852
@@ -634,14 +829,6 @@ msgstr ""
 msgid "Forwarding"
 msgstr ""
 
-#: src/application/dialogs.rs:723 src/application.rs:1041
-msgid "Forward"
-msgstr ""
-
-#: src/application/dialogs.rs:1120 src/application.rs:2005
-msgid "Unstar"
-msgstr ""
-
 #: src/application/dialogs.rs:1144
 msgid "Your recently used stickers appear here."
 msgstr ""
@@ -692,61 +879,12 @@ msgstr ""
 msgid "Star a message from its menu to find it here."
 msgstr ""
 
-#: src/application/dispatch/attachments.rs:11
-msgid "Choose a writable chat before attaching files"
-msgstr ""
-
-#: src/application/dispatch/attachments.rs:18
-#: src/application/dispatch/attachments.rs:59
-#: src/application/dispatch/attachments.rs:112
-msgid "Clear the staged clipboard image before adding files"
-msgstr ""
-
-#: src/application/dispatch/attachments.rs:68
-msgid "Photos and videos"
-msgstr ""
-
-#: src/application/dispatch/backend_events.rs:10
-msgid "The poll was sent, but its voting key could not be saved."
-msgstr ""
-
-#: src/application/dispatch/backend_events.rs:13
-#: src/application/dispatch/backend_events.rs:525
-msgid "Poll creation could not be completed."
-msgstr ""
-
-#: src/application/dispatch/backend_events.rs:18
-msgid "Your vote was sent, but could not be saved locally."
-msgstr ""
-
-#: src/application/dispatch/backend_events.rs:20
-#: src/application/dispatch/backend_events.rs:529
-#: src/application/poll_runtime_tests.rs:119
-msgid "Could not send your vote."
-msgstr ""
-
-#: src/application/dispatch/backend_events.rs:233
-msgid "No older messages available"
-msgstr ""
-
-#: src/application/dispatch/backend_events.rs:441
-msgid "Profile saved"
-msgstr ""
-
-#: src/application/dispatch/backend_events.rs:472
-msgid "Contact is on WhatsApp"
-msgstr ""
-
 #: src/application/dispatch.rs:163
 msgid "General"
 msgstr ""
 
 #: src/application/dispatch.rs:165
 msgid "Close window"
-msgstr ""
-
-#: src/application/dispatch.rs:166 src/application.rs:2383
-msgid "Quit"
 msgstr ""
 
 #: src/application/dispatch.rs:170
@@ -890,6 +1028,51 @@ msgstr ""
 msgid "Shutdown complete"
 msgstr ""
 
+#: src/application/dispatch/attachments.rs:11
+msgid "Choose a writable chat before attaching files"
+msgstr ""
+
+#: src/application/dispatch/attachments.rs:18
+#: src/application/dispatch/attachments.rs:59
+#: src/application/dispatch/attachments.rs:112
+msgid "Clear the staged clipboard image before adding files"
+msgstr ""
+
+#: src/application/dispatch/attachments.rs:68
+msgid "Photos and videos"
+msgstr ""
+
+#: src/application/dispatch/backend_events.rs:10
+msgid "The poll was sent, but its voting key could not be saved."
+msgstr ""
+
+#: src/application/dispatch/backend_events.rs:13
+#: src/application/dispatch/backend_events.rs:525
+msgid "Poll creation could not be completed."
+msgstr ""
+
+#: src/application/dispatch/backend_events.rs:18
+msgid "Your vote was sent, but could not be saved locally."
+msgstr ""
+
+#: src/application/dispatch/backend_events.rs:20
+#: src/application/dispatch/backend_events.rs:529
+#: src/application/poll_runtime_tests.rs:130
+msgid "Could not send your vote."
+msgstr ""
+
+#: src/application/dispatch/backend_events.rs:233
+msgid "No older messages available"
+msgstr ""
+
+#: src/application/dispatch/backend_events.rs:441
+msgid "Profile saved"
+msgstr ""
+
+#: src/application/dispatch/backend_events.rs:472
+msgid "Contact is on WhatsApp"
+msgstr ""
+
 #: src/application/document_safety.rs:188
 msgid "Open This File?"
 msgstr ""
@@ -1016,146 +1199,8 @@ msgstr ""
 msgid "React with {emoji}"
 msgstr ""
 
-#: src/application/rows.rs:334
+#: src/application/rows.rs:345
 msgid "Unread messages"
-msgstr ""
-
-#: src/application.rs:897
-msgid "Chat"
-msgstr ""
-
-#: src/application.rs:910
-msgid "Chat details"
-msgstr ""
-
-#: src/application.rs:927
-msgid "Chat menu"
-msgstr ""
-
-#: src/application.rs:934 src/application.rs:935
-msgid "Start video call"
-msgstr ""
-
-#: src/application.rs:944 src/application.rs:945
-msgid "Start voice call"
-msgstr ""
-
-#: src/application.rs:954
-msgid "Connection lost"
-msgstr ""
-
-#: src/application.rs:1037
-msgid "Forward selected messages"
-msgstr ""
-
-#: src/application.rs:1067
-msgid "Drop Files to Attach"
-msgstr ""
-
-#: src/application.rs:1273 src/application.rs:1309
-msgid "_Remove Account…"
-msgstr ""
-
-#: src/application.rs:1274 src/application.rs:1312
-msgid "_Preferences"
-msgstr ""
-
-#: src/application.rs:1275 src/application.rs:1314
-msgid "_About ZapTide"
-msgstr ""
-
-#: src/application.rs:1276 src/application.rs:1315
-msgid "_Quit"
-msgstr ""
-
-#: src/application.rs:1308
-msgid "_New Chat"
-msgstr ""
-
-#: src/application.rs:1313
-msgid "_Keyboard Shortcuts"
-msgstr ""
-
-#: src/application.rs:1731 src/application.rs:1756
-msgid "Load older messages"
-msgstr ""
-
-#: src/application.rs:1754 src/application/transcript_view.rs:795
-msgid "Loading older messages…"
-msgstr ""
-
-#: src/application.rs:1969 src/native_media_widgets/photo.rs:451
-#: src/native_media_widgets/viewer/photo.rs:404
-#: src/native_media_widgets/viewer/video.rs:334
-msgid "Show in Folder"
-msgstr ""
-
-#: src/application.rs:1970
-msgid "Save Attachment…"
-msgstr ""
-
-#: src/application.rs:1980
-msgid "Open Link"
-msgstr ""
-
-#: src/application.rs:1984
-msgid "Go to Quoted Message"
-msgstr ""
-
-#: src/application.rs:1994 src/native_media_widgets/viewer/photo.rs:402
-msgid "Copy Image"
-msgstr ""
-
-#: src/application.rs:1997
-msgid "Copy Text"
-msgstr ""
-
-#: src/application.rs:1999
-msgid "Reply"
-msgstr ""
-
-#: src/application.rs:2001
-msgid "Edit"
-msgstr ""
-
-#: src/application.rs:2003
-msgid "Forward…"
-msgstr ""
-
-#: src/application.rs:2007
-msgid "Star"
-msgstr ""
-
-#: src/application.rs:2010
-msgid "Select"
-msgstr ""
-
-#: src/application.rs:2028
-msgid "Delete for Me"
-msgstr ""
-
-#: src/application.rs:2031
-msgid "Delete for Everyone"
-msgstr ""
-
-#: src/application.rs:2101
-msgid "Enter a question and two different poll options"
-msgstr ""
-
-#: src/application.rs:2109
-msgid "Creating poll"
-msgstr ""
-
-#: src/application.rs:2291
-msgid "Message deleted"
-msgstr ""
-
-#: src/application.rs:2298
-msgid "This chat is no longer available."
-msgstr ""
-
-#: src/application.rs:2344
-msgid "Shutdown requested"
 msgstr ""
 
 #: src/application/selection.rs:115
@@ -1227,11 +1272,11 @@ msgstr ""
 msgid "Calls"
 msgstr ""
 
-#: src/application/sidebar.rs:375
+#: src/application/sidebar.rs:374
 msgid "No Calls Yet"
 msgstr ""
 
-#: src/application/sidebar.rs:376
+#: src/application/sidebar.rs:375
 msgid "Voice and video calls appear here"
 msgstr ""
 
@@ -1280,7 +1325,7 @@ msgstr ""
 msgid "Calls are only available in one-to-one chats"
 msgstr ""
 
-#: src/backend/worker/calls.rs:418 src/backend/worker/calls/runtime.rs:355
+#: src/backend/worker/calls.rs:418 src/backend/worker/calls/runtime.rs:361
 msgid "The call could not be answered"
 msgstr ""
 
@@ -1288,12 +1333,12 @@ msgstr ""
 msgid "The camera stopped working"
 msgstr ""
 
-#: src/backend/worker/calls/runtime.rs:354
+#: src/backend/worker/calls/runtime.rs:360
 msgid "The call could not be placed"
 msgstr ""
 
-#: src/backend/worker/calls/runtime.rs:447
-#: src/backend/worker/calls/runtime.rs:484
+#: src/backend/worker/calls/runtime.rs:453
+#: src/backend/worker/calls/runtime.rs:490
 msgid "Video could not be started"
 msgstr ""
 
@@ -1595,30 +1640,13 @@ msgstr ""
 msgid "Select up to {count} answers"
 msgstr ""
 
-#: src/native_media_widgets/poll.rs:228
+#: src/native_media_widgets/poll.rs:227
 #, rust-format
 msgid "Your answer: {answer}"
 msgstr ""
 
-#: src/native_media_widgets/poll.rs:233
+#: src/native_media_widgets/poll.rs:232
 msgid "Results may be incomplete"
-msgstr ""
-
-#: src/native_media_widgets/viewer/caption.rs:54
-msgid "View Caption"
-msgstr ""
-
-#: src/native_media_widgets/viewer/photo.rs:407
-#: src/native_media_widgets/viewer/video.rs:341
-msgid "Open With Another App"
-msgstr ""
-
-#: src/native_media_widgets/viewer/photo.rs:411
-msgid "Previous Photo"
-msgstr ""
-
-#: src/native_media_widgets/viewer/photo.rs:414
-msgid "Next Photo"
 msgstr ""
 
 #: src/native_media_widgets/viewer.rs:53
@@ -1654,6 +1682,23 @@ msgstr ""
 
 #: src/native_media_widgets/viewer.rs:353
 msgid "Back"
+msgstr ""
+
+#: src/native_media_widgets/viewer/caption.rs:54
+msgid "View Caption"
+msgstr ""
+
+#: src/native_media_widgets/viewer/photo.rs:407
+#: src/native_media_widgets/viewer/video.rs:341
+msgid "Open With Another App"
+msgstr ""
+
+#: src/native_media_widgets/viewer/photo.rs:411
+msgid "Previous Photo"
+msgstr ""
+
+#: src/native_media_widgets/viewer/photo.rs:414
+msgid "Next Photo"
 msgstr ""
 
 #: src/native_media_widgets/viewer/video.rs:11
@@ -1714,91 +1759,327 @@ msgstr ""
 msgid "This link can't be opened"
 msgstr ""
 
-#: src/native_preferences.rs:420
+#: src/native_preferences.rs:351
+msgid "Preferences"
+msgstr ""
+
+#: src/native_preferences.rs:363
+msgid "Appearance"
+msgstr ""
+
+#: src/native_preferences.rs:366
+msgid "Display and input"
+msgstr ""
+
+#: src/native_preferences.rs:371
+msgid "Language"
+msgstr ""
+
+#: src/native_preferences.rs:372
+msgid "Quit and reopen ZapTide to apply the language"
+msgstr ""
+
+#: src/native_preferences.rs:374
+msgid "System default"
+msgstr ""
+
+#: src/native_preferences.rs:399
+msgid "Theme"
+msgstr ""
+
+#: src/native_preferences.rs:400
+msgid "Choose how ZapTide looks"
+msgstr ""
+
+#: src/native_preferences.rs:402
+msgid "Follow system"
+msgstr ""
+
+#: src/native_preferences.rs:403
+msgid "Light"
+msgstr ""
+
+#: src/native_preferences.rs:404
+msgid "Dark"
+msgstr ""
+
+#: src/native_preferences.rs:426
+msgid "Custom palette"
+msgstr ""
+
+#: src/native_preferences.rs:427
+msgid "Choose a palette from the themes folder"
+msgstr ""
+
+#: src/native_preferences.rs:430 src/native_preferences.rs:696
+msgid "System palette"
+msgstr ""
+
+#: src/native_preferences.rs:460 src/native_preferences.rs:464
 msgid "Open Themes Folder"
 msgstr ""
 
-#: src/native_preferences.rs:516
+#: src/native_preferences.rs:469
+msgid "Zoom"
+msgstr ""
+
+#: src/native_preferences.rs:470
+msgid "UI scale, from 0.6× to 2.0×"
+msgstr ""
+
+#: src/native_preferences.rs:477
+msgid "Send messages with Enter"
+msgstr ""
+
+#: src/native_preferences.rs:478
+msgid "Shift+Enter inserts a new line"
+msgstr ""
+
+#: src/native_preferences.rs:485
+msgid "Show sender pictures"
+msgstr ""
+
+#: src/native_preferences.rs:486
+msgid "Show avatars next to messages"
+msgstr ""
+
+#: src/native_preferences.rs:493
+msgid "Show shortcut hints"
+msgstr ""
+
+#: src/native_preferences.rs:494
+msgid "Show keyboard shortcut hints"
+msgstr ""
+
+#: src/native_preferences.rs:501
+msgid "Translucent sidebar"
+msgstr ""
+
+#: src/native_preferences.rs:503
+msgid ""
+"Blur the desktop behind the chat list. Needs a compositor that supports "
+"background blur"
+msgstr ""
+
+#: src/native_preferences.rs:511
+msgid "Account"
+msgstr ""
+
+#: src/native_preferences.rs:514
+msgid "Contacts"
+msgstr ""
+
+#: src/native_preferences.rs:519
+msgid "Prefer contact names"
+msgstr ""
+
+#: src/native_preferences.rs:520
+msgid "Use address-book names instead of profile names"
+msgstr ""
+
+#: src/native_preferences.rs:527
+msgid "Save contacts to phone"
+msgstr ""
+
+#: src/native_preferences.rs:528
+msgid "Also add saved contacts to the device address book"
+msgstr ""
+
+#: src/native_preferences.rs:535 src/native_preferences.rs:538
+msgid "Notifications"
+msgstr ""
+
+#: src/native_preferences.rs:543
+msgid "Desktop notifications"
+msgstr ""
+
+#: src/native_preferences.rs:544
+msgid "Notify when messages arrive while away"
+msgstr ""
+
+#: src/native_preferences.rs:551
+msgid "Show previews"
+msgstr ""
+
+#: src/native_preferences.rs:552
+msgid "Include the sender and message text"
+msgstr ""
+
+#: src/native_preferences.rs:558
 msgid "Notification sound"
 msgstr ""
 
-#: src/native_preferences.rs:518
+#: src/native_preferences.rs:560
 msgid "Play a short sound with notifications, where the desktop supports it"
 msgstr ""
 
-#: src/native_preferences.rs:530
+#: src/native_preferences.rs:572
 msgid "Pause between sounds"
 msgstr ""
 
-#: src/native_preferences.rs:531
+#: src/native_preferences.rs:573
 msgid "Messages that arrive sooner stay silent"
 msgstr ""
 
-#: src/native_preferences.rs:533
+#: src/native_preferences.rs:575
 msgid "No pause"
 msgstr ""
 
-#: src/native_preferences.rs:534
+#: src/native_preferences.rs:576
 msgid "10 seconds"
 msgstr ""
 
-#: src/native_preferences.rs:535
+#: src/native_preferences.rs:577
 msgid "30 seconds"
 msgstr ""
 
-#: src/native_preferences.rs:536
+#: src/native_preferences.rs:578
 msgid "1 minute"
 msgstr ""
 
-#: src/native_preferences.rs:537
+#: src/native_preferences.rs:579
 msgid "2 minutes"
 msgstr ""
 
-#: src/native_preferences.rs:742
+#: src/native_preferences.rs:610
+msgid "Storage"
+msgstr ""
+
+#: src/native_preferences.rs:613
+msgid "Downloads"
+msgstr ""
+
+#: src/native_preferences.rs:618
+msgid "Automatically download attachments"
+msgstr ""
+
+#: src/native_preferences.rs:619
+msgid "Download attachments when they enter view"
+msgstr ""
+
+#: src/native_preferences.rs:627
+msgid "Background"
+msgstr ""
+
+#: src/native_preferences.rs:630
+msgid "Background and updates"
+msgstr ""
+
+#: src/native_preferences.rs:635
+msgid "Keep running in background"
+msgstr ""
+
+#: src/native_preferences.rs:636
+msgid "Keep ZapTide available after closing its window"
+msgstr ""
+
+#: src/native_preferences.rs:643
+msgid "Messaging"
+msgstr ""
+
+#: src/native_preferences.rs:646
+msgid "Messaging and media"
+msgstr ""
+
+#: src/native_preferences.rs:650
+msgid "Voice playback speed"
+msgstr ""
+
+#: src/native_preferences.rs:784
 msgid "Free up space"
 msgstr ""
 
-#: src/native_preferences.rs:744
+#: src/native_preferences.rs:786
 msgid ""
 "Messages stay. A removed file downloads again when you open it, if WhatsApp "
 "still has it. Files you can't download again from WhatsApp are lost."
 msgstr ""
 
-#: src/native_preferences.rs:749
+#: src/native_preferences.rs:791
 msgid "Delete old downloads"
 msgstr ""
 
-#: src/native_preferences.rs:751
+#: src/native_preferences.rs:793
 msgid "Remove photos, videos, audio and files from this computer after a while"
 msgstr ""
 
-#: src/native_preferences.rs:761
+#: src/native_preferences.rs:803
 msgid "Keep downloads for"
 msgstr ""
 
-#: src/native_preferences.rs:784
+#: src/native_preferences.rs:826
 msgid "30 days"
 msgstr ""
 
-#: src/native_preferences.rs:785
+#: src/native_preferences.rs:827
 msgid "60 days"
 msgstr ""
 
-#: src/native_preferences.rs:786
+#: src/native_preferences.rs:828
 msgid "90 days"
 msgstr ""
 
-#: src/native_preferences.rs:787
+#: src/native_preferences.rs:829
 msgid "180 days"
 msgstr ""
 
-#: src/native_preferences.rs:788
+#: src/native_preferences.rs:830
 msgid "1 year"
 msgstr ""
 
-#: src/native_preferences.rs:796
+#: src/native_preferences.rs:838
 #, rust-format
 msgid "Custom ({} days)"
+msgstr ""
+
+#: src/native_preferences.rs:852
+msgid "Online status"
+msgstr ""
+
+#: src/native_preferences.rs:854
+msgid ""
+"While ZapTide shows you as online, your phone does not receive notifications."
+msgstr ""
+
+#: src/native_preferences.rs:860
+msgid "Go offline when I leave ZapTide"
+msgstr ""
+
+#: src/native_preferences.rs:861
+msgid "Switch to another app or lock the screen"
+msgstr ""
+
+#: src/native_preferences.rs:864
+msgid "After 10 seconds"
+msgstr ""
+
+#: src/native_preferences.rs:865 src/native_preferences.rs:880
+msgid "After 1 minute"
+msgstr ""
+
+#: src/native_preferences.rs:866 src/native_preferences.rs:881
+msgid "After 5 minutes"
+msgstr ""
+
+#: src/native_preferences.rs:867 src/native_preferences.rs:883
+msgid "Never"
+msgstr ""
+
+#: src/native_preferences.rs:876
+msgid "Go offline when inactive"
+msgstr ""
+
+#: src/native_preferences.rs:877
+msgid "No typing, clicks or pointer movement in ZapTide"
+msgstr ""
+
+#: src/native_preferences.rs:882
+msgid "After 15 minutes"
+msgstr ""
+
+#: src/native_preferences.rs:927
+#, rust-format
+msgid "Custom ({seconds} s)"
 msgstr ""
 
 #: src/services/media.rs:27
