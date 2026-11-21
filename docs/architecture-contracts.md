@@ -113,6 +113,39 @@ The linked-device name and icon come from `DevicePropsOverride` in `start_bot`:
 `os` names the device and platform type picks its icon. Changes take effect
 only after unlinking and pairing again.
 
+## Deletion sync
+
+A deletion reaches the phone and other linked devices only when a person
+confirmed it in a dialog. `Command::DeleteLocal`, `ClearChat` and `DeleteChat`
+are the only entry points. `backend/worker/remote_delete.rs` checks the request
+against the archive, then removes the local rows and queues the request in the
+`remote_deletions` table inside one savepoint (`Archive::atomically`).
+
+Never derive a remote deletion from what the archive lacks. A missing row, a
+reset or corrupted archive, an incomplete history sync or an incoming phone
+event must not queue, send or retry one. Incoming deletion events change only
+the archive and never queue a request, so a deletion cannot echo between
+devices. The queue is cleared with the archive on unlinking.
+
+A message request needs the archived row and a sender that can be addressed.
+A chat-level request needs at least one archived message and carries the
+newest message's timestamp as its range, so nothing newer than what the person
+saw is covered. A chat with no archived message is removed locally only, with
+a notice. Newsletters, status and broadcast lists are local only. Requests are
+keyed by their target; repeating one queues no second row, and a chat-level
+request replaces its queued twin only when it reaches a newer message.
+
+`pump_remote_deletions` runs each tick and sends one request at a time. It
+waits unless the link is `Connected`, history sync is quiet, privacy ids are
+resolved and no logout cleanup is pending. Only the phone's acceptance removes
+a row. A failure or timeout keeps it and backs off from 30 seconds to 15
+minutes. After six failures or 14 days it is dropped, leaving the local
+deletion in place. Keep this queue separate from the read-state queue.
+
+Incoming chat deletions and clears are bounded by the action's message range.
+Without one, the action's own timestamp bounds them. With neither, nothing is
+deleted: an unknown reach must never mean "everything".
+
 ## Sidebar scrolling
 
 The scrolled window owns the proxy adjustment; the list owns the real

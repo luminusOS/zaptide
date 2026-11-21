@@ -26,9 +26,11 @@ pub use encryption::{
 mod media;
 mod polls;
 mod receipts;
+mod remote_deletions;
 mod row;
 mod stars;
 pub use polls::PollVote;
+pub use remote_deletions::{NewestMessage, RemoteDeletion, RemoteDeletionKind};
 pub use stars::StarredMessage;
 
 #[derive(Clone, Debug)]
@@ -324,6 +326,7 @@ impl Archive {
         transaction.execute_batch(SCHEMA)?;
         transaction.execute_batch(polls::SCHEMA)?;
         transaction.execute_batch(stars::SCHEMA)?;
+        transaction.execute_batch(remote_deletions::SCHEMA)?;
         for (table, column, definition) in MIGRATIONS {
             let columns = transaction
                 .prepare(&format!("PRAGMA table_xinfo({table})"))?
@@ -1298,7 +1301,7 @@ impl Archive {
         let clear = (|| {
             let transaction = self.connection.unchecked_transaction()?;
             transaction.execute_batch(
-                "DELETE FROM poll_history; DELETE FROM poll_votes; DELETE FROM polls; DELETE FROM group_receipts; DELETE FROM messages; DELETE FROM chats; DELETE FROM contacts; DELETE FROM meta WHERE key <> 'logout_cleanup_required'; DELETE FROM lids; DELETE FROM stickers;",
+                "DELETE FROM remote_deletions; DELETE FROM poll_history; DELETE FROM poll_votes; DELETE FROM polls; DELETE FROM group_receipts; DELETE FROM messages; DELETE FROM chats; DELETE FROM contacts; DELETE FROM meta WHERE key <> 'logout_cleanup_required'; DELETE FROM lids; DELETE FROM stickers;",
             )?;
             transaction.commit()
         })();

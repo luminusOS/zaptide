@@ -285,6 +285,12 @@ pub enum Done {
         chat: ChatId,
         protocol_id: String,
     },
+    /// Result of sending one queued deletion to the other linked devices.
+    RemoteDeletionFinished {
+        attempt_id: u64,
+        key: String,
+        success: bool,
+    },
     /// Completes one optimistic revoke attempt, unless the phone confirmed it first.
     RevokeFinished {
         attempt_id: u64,
@@ -519,8 +525,9 @@ pub enum Command {
     },
     /// Asks for the starred messages of one chat.
     LoadStarred(ChatId),
-    /// Removes one message locally and tells the phone to do the same on
-    /// every other linked device ("Delete for me").
+    /// Removes one message locally and asks the other linked devices to do
+    /// the same ("Delete for me"). Sent only after the person confirmed it;
+    /// the worker verifies the message and queues the request.
     DeleteLocal {
         chat: ChatId,
         id: String,
