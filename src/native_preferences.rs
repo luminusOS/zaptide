@@ -856,7 +856,8 @@ fn add_attachment_type_switches(
     )));
     page.add(&group);
 
-    let rows: [(String, bool, fn(bool) -> PreferenceChange); 5] = [
+    type PreferenceRow = (String, bool, fn(bool) -> PreferenceChange);
+    let rows: [PreferenceRow; 5] = [
         (
             gettext("Images"),
             preferences.auto_download_images,
