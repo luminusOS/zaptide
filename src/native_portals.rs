@@ -152,6 +152,30 @@ impl NativePortals {
         Some(id)
     }
 
+    /// Selects one local folder. Dismissing the chooser is a normal cancellation.
+    pub fn select_folder(
+        &self,
+        parent: Option<&impl IsA<gtk::Window>>,
+        title: &str,
+        complete: impl FnOnce(Result<Option<gio::File>, PortalError>) + 'static,
+    ) -> Option<RequestId> {
+        let dialog = gtk::FileDialog::builder().title(title).build();
+        let (id, cancellable) = self.requests.borrow_mut().start()?;
+        let requests = self.requests.clone();
+        dialog.select_folder(parent, Some(&cancellable), move |result| {
+            if !requests.borrow_mut().finish(id) {
+                return;
+            }
+            let result = match result {
+                Ok(file) if file.path().is_some_and(|path| path.is_absolute()) => Ok(Some(file)),
+                Err(error) if error.matches(gtk::DialogError::Dismissed) => Ok(None),
+                _ => Err(PortalError::Failed),
+            };
+            complete(result);
+        });
+        Some(id)
+    }
+
     /// Saves small generated content through the system chooser, without a temporary copy.
     pub fn save_bytes(
         &self,

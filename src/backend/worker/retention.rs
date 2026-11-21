@@ -52,7 +52,7 @@ impl Worker {
             return;
         }
         self.retention.running = true;
-        let dir = self.dirs.media_cache_dir();
+        let dir = self.effective_media_dir();
         let commands = self.commands.clone();
         let session_generation = self.session_generation;
         tokio::spawn(async move {

@@ -119,6 +119,14 @@ impl NativeApplication {
         dialog
             .open_themes_folder_button()
             .connect_clicked(move |_| input_sender.input(Input::OpenThemesFolder));
+        let input_sender = sender.clone();
+        dialog
+            .choose_download_directory_button()
+            .connect_clicked(move |_| input_sender.input(Input::ChooseDownloadDirectory));
+        let input_sender = sender.clone();
+        dialog
+            .restore_download_directory_button()
+            .connect_clicked(move |_| input_sender.input(Input::DownloadDirectoryChosen(None)));
         self.preferences = Some(dialog);
     }
 
@@ -839,6 +847,8 @@ impl NativeApplication {
                     self.toast(&gettext("Could not open themes folder"));
                 }
             }
+            Input::ChooseDownloadDirectory => self.choose_download_directory(&sender),
+            Input::DownloadDirectoryChosen(path) => self.download_directory_chosen(path),
             Input::ShowAbout => self.show_about(),
             Input::ShowShortcuts => self.show_shortcuts(),
             Input::ApplyPreferences => self.apply_preferences(),

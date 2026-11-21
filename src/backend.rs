@@ -410,6 +410,9 @@ pub enum Command {
     /// Deletes downloaded attachments older than this many days; `None`
     /// keeps them.
     SetMediaRetention(Option<u32>),
+    /// Custom folder newly downloaded attachments are written to; `None`
+    /// returns to the application's own cache directory.
+    SetMediaDownloadDir(Option<PathBuf>),
     /// Turns link previews on or off for this account, synced with the phone.
     SetLinkPreviews(bool),
     /// Shows this account as online or offline. WhatsApp holds the phone's

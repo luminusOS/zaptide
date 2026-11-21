@@ -198,7 +198,7 @@ impl Worker {
             }
             None
         };
-        let dir = self.dirs.media_cache_dir();
+        let dir = self.effective_media_dir();
         let destination = media_path(&dir, &chat, &id, &mime, file_name.as_deref());
         let commands = self.commands.clone();
         let session_generation = self.session_generation;

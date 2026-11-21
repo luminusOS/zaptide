@@ -143,9 +143,14 @@ impl NativeApplication {
             crate::native_preferences::SettingsField::MediaRetention
                 | crate::native_preferences::SettingsField::MediaRetentionDays
         );
+        let download_dir_changed =
+            change.settings_field() == crate::native_preferences::SettingsField::DownloadDirectory;
         if change.apply(&mut self.settings).is_ok() {
             if retention_changed {
                 self.sync_media_retention();
+            }
+            if download_dir_changed {
+                self.sync_media_download_dir();
             }
             if self.save_settings().is_err() {
                 self.status = gettext("Could not save preferences");
@@ -168,6 +173,18 @@ impl NativeApplication {
             .filter_map(|session| session.backend.as_ref());
         for backend in self.backend.iter().chain(hidden) {
             backend.send(crate::backend::Command::SetMediaRetention(days));
+        }
+    }
+
+    /// Every account downloads into the one shared, user-chosen folder.
+    pub(super) fn sync_media_download_dir(&self) {
+        let dir = self.settings.download_directory.clone();
+        let hidden = self
+            .accounts
+            .values()
+            .filter_map(|session| session.backend.as_ref());
+        for backend in self.backend.iter().chain(hidden) {
+            backend.send(crate::backend::Command::SetMediaDownloadDir(dir.clone()));
         }
     }
 

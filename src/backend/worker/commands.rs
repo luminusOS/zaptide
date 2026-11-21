@@ -124,6 +124,7 @@ impl Worker {
             Command::SetLinkPreviews(enabled) => self.set_link_previews(enabled),
             Command::SetOnline(online) => self.set_online(online),
             Command::SetMediaRetention(days) => self.set_media_retention(days),
+            Command::SetMediaDownloadDir(dir) => self.set_media_download_dir(dir),
             Command::Completed(Completion {
                 done: Done::MediaSwept(swept),
                 ..

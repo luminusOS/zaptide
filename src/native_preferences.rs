@@ -36,6 +36,12 @@ pub enum SettingsField {
     VoiceSpeed,
     MediaRetention,
     MediaRetentionDays,
+    DownloadDirectory,
+    AutoDownloadImages,
+    AutoDownloadVideos,
+    AutoDownloadAudio,
+    AutoDownloadDocuments,
+    AutoDownloadOther,
 }
 
 impl SettingsField {}
@@ -85,9 +91,17 @@ pub struct NotificationPreferences {
     pub sound_interval: u32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoragePreferences {
     pub auto_download: bool,
+    pub auto_download_images: bool,
+    pub auto_download_videos: bool,
+    pub auto_download_audio: bool,
+    pub auto_download_documents: bool,
+    pub auto_download_other: bool,
+    /// Custom download folder as an absolute path, if one was chosen. The
+    /// dialog shows this; `None` means the application's own cache directory.
+    pub download_directory: Option<String>,
     pub media_retention: bool,
     pub media_retention_days: u32,
 }
@@ -133,6 +147,15 @@ impl From<&Settings> for NativePreferences {
             },
             storage: StoragePreferences {
                 auto_download: settings.auto_download,
+                auto_download_images: settings.attachment_auto_download.images,
+                auto_download_videos: settings.attachment_auto_download.videos,
+                auto_download_audio: settings.attachment_auto_download.audio,
+                auto_download_documents: settings.attachment_auto_download.documents,
+                auto_download_other: settings.attachment_auto_download.other,
+                download_directory: settings
+                    .download_directory
+                    .as_ref()
+                    .map(|path| path.display().to_string()),
                 media_retention: settings.media_retention,
                 media_retention_days: settings.media_retention_days,
             },
@@ -176,6 +199,14 @@ pub enum PreferenceChange {
     SetVoiceSpeed(f32),
     SetMediaRetention(bool),
     SetMediaRetentionDays(u32),
+    /// An absolute local folder, or `None` to go back to the application's
+    /// own cache directory.
+    SetDownloadDirectory(Option<String>),
+    SetAutoDownloadImages(bool),
+    SetAutoDownloadVideos(bool),
+    SetAutoDownloadAudio(bool),
+    SetAutoDownloadDocuments(bool),
+    SetAutoDownloadOther(bool),
 }
 
 impl std::fmt::Debug for PreferenceChange {
@@ -273,6 +304,30 @@ impl std::fmt::Debug for PreferenceChange {
                 .debug_tuple("SetMediaRetentionDays")
                 .field(value)
                 .finish(),
+            Change::SetDownloadDirectory(value) => formatter
+                .debug_tuple("SetDownloadDirectory")
+                .field(value)
+                .finish(),
+            Change::SetAutoDownloadImages(value) => formatter
+                .debug_tuple("SetAutoDownloadImages")
+                .field(value)
+                .finish(),
+            Change::SetAutoDownloadVideos(value) => formatter
+                .debug_tuple("SetAutoDownloadVideos")
+                .field(value)
+                .finish(),
+            Change::SetAutoDownloadAudio(value) => formatter
+                .debug_tuple("SetAutoDownloadAudio")
+                .field(value)
+                .finish(),
+            Change::SetAutoDownloadDocuments(value) => formatter
+                .debug_tuple("SetAutoDownloadDocuments")
+                .field(value)
+                .finish(),
+            Change::SetAutoDownloadOther(value) => formatter
+                .debug_tuple("SetAutoDownloadOther")
+                .field(value)
+                .finish(),
         }
     }
 }
@@ -306,6 +361,12 @@ impl PreferenceChange {
             Self::SetVoiceSpeed(_) => SettingsField::VoiceSpeed,
             Self::SetMediaRetention(_) => SettingsField::MediaRetention,
             Self::SetMediaRetentionDays(_) => SettingsField::MediaRetentionDays,
+            Self::SetDownloadDirectory(_) => SettingsField::DownloadDirectory,
+            Self::SetAutoDownloadImages(_) => SettingsField::AutoDownloadImages,
+            Self::SetAutoDownloadVideos(_) => SettingsField::AutoDownloadVideos,
+            Self::SetAutoDownloadAudio(_) => SettingsField::AutoDownloadAudio,
+            Self::SetAutoDownloadDocuments(_) => SettingsField::AutoDownloadDocuments,
+            Self::SetAutoDownloadOther(_) => SettingsField::AutoDownloadOther,
         }
     }
 }
@@ -321,8 +382,12 @@ pub struct NativePreferencesDialog {
     custom_theme_row: libadwaita::ComboRow,
     custom_theme_choices: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
     custom_theme_handler: gtk4::glib::SignalHandlerId,
+    download_dir_row: libadwaita::ActionRow,
+    choose_download_dir: gtk4::Button,
+    restore_download_dir: gtk4::Button,
     changes: std::rc::Rc<std::cell::RefCell<Vec<PreferenceChange>>>,
     errors: std::rc::Rc<std::cell::RefCell<Vec<ValidationError>>>,
+    on_change: std::rc::Rc<dyn Fn()>,
 }
 
 #[derive(Clone)]
@@ -614,13 +679,23 @@ impl NativePreferencesDialog {
         storage_group.set_title(&gettext("Downloads"));
         storage_page.add(&storage_group);
         dialog.add(&storage_page);
-        add_switch(
+        let auto_download_row = add_switch(
             &storage_group,
             &gettext("Automatically download attachments"),
             &gettext("Download attachments when they enter view"),
             preferences.storage.auto_download,
             change_sink.clone(),
             PreferenceChange::SetAutoDownload,
+        );
+        add_attachment_type_switches(
+            &storage_page,
+            &preferences.storage,
+            &auto_download_row,
+            &change_sink,
+        );
+        let (download_dir_row, choose_download_dir, restore_download_dir) = add_download_location(
+            &storage_page,
+            preferences.storage.download_directory.as_deref(),
         );
         add_media_retention(&storage_page, &preferences.storage, &change_sink);
 
@@ -673,8 +748,12 @@ impl NativePreferencesDialog {
             custom_theme_row,
             custom_theme_choices,
             custom_theme_handler,
+            download_dir_row,
+            choose_download_dir,
+            restore_download_dir,
             changes,
             errors,
+            on_change,
         }
     }
 
@@ -707,6 +786,33 @@ impl NativePreferencesDialog {
         self.custom_theme_row.set_selected(selected_index);
         self.custom_theme_row
             .unblock_signal(&self.custom_theme_handler);
+    }
+
+    /// Button that opens a folder picker for newly downloaded attachments.
+    pub fn choose_download_directory_button(&self) -> &gtk4::Button {
+        &self.choose_download_dir
+    }
+
+    /// Button that returns downloads to the application's own cache directory.
+    pub fn restore_download_directory_button(&self) -> &gtk4::Button {
+        &self.restore_download_dir
+    }
+
+    /// Records a folder chosen through the external picker (or `None` from
+    /// the restore-default button) and updates what the row shows. The pick
+    /// itself happens outside this module since it needs the portal and the
+    /// window, not just preference state.
+    pub fn apply_download_directory_choice(&mut self, path: Option<String>) {
+        use libadwaita::prelude::*;
+        push_change(
+            &self.changes,
+            &self.errors,
+            &self.on_change,
+            PreferenceChange::SetDownloadDirectory(path.clone()),
+        );
+        self.download_dir_row
+            .set_subtitle(&download_directory_subtitle(path.as_deref()));
+        self.restore_download_dir.set_visible(path.is_some());
     }
 
     pub fn present(&self, parent: &impl gtk4::prelude::IsA<gtk4::Widget>) {
@@ -758,6 +864,9 @@ fn push_change(
         PreferenceChange::SetMediaRetentionDays(value) if !retention_days_in_range(*value) => {
             Some(ValidationError::MediaRetentionOutOfRange)
         }
+        PreferenceChange::SetDownloadDirectory(Some(path)) if !is_absolute_path(path) => {
+            Some(ValidationError::InvalidDownloadDirectory)
+        }
         PreferenceChange::SetNotificationSoundInterval(value)
             if !crate::notification_sound::is_supported_interval(*value) =>
         {
@@ -771,6 +880,119 @@ fn push_change(
         changes.borrow_mut().push(change);
     }
     on_change();
+}
+
+/// One switch per attachment category, each sensitive only while
+/// `master` (the overall "automatically download" switch) is on. Turning a
+/// category off never blocks downloading it manually from its message.
+fn add_attachment_type_switches(
+    page: &libadwaita::PreferencesPage,
+    preferences: &StoragePreferences,
+    master: &libadwaita::SwitchRow,
+    change_sink: &PreferenceChangeSink,
+) {
+    use libadwaita::prelude::*;
+    let group = libadwaita::PreferencesGroup::new();
+    group.set_title(&gettext("Download automatically"));
+    group.set_description(Some(&gettext(
+        "Turn off a category to keep its attachments from downloading until you open them",
+    )));
+    page.add(&group);
+
+    type PreferenceRow = (String, bool, fn(bool) -> PreferenceChange);
+    let rows: [PreferenceRow; 5] = [
+        (
+            gettext("Images"),
+            preferences.auto_download_images,
+            PreferenceChange::SetAutoDownloadImages,
+        ),
+        (
+            gettext("Videos"),
+            preferences.auto_download_videos,
+            PreferenceChange::SetAutoDownloadVideos,
+        ),
+        (
+            gettext("Audio and voice messages"),
+            preferences.auto_download_audio,
+            PreferenceChange::SetAutoDownloadAudio,
+        ),
+        (
+            gettext("Documents"),
+            preferences.auto_download_documents,
+            PreferenceChange::SetAutoDownloadDocuments,
+        ),
+        (
+            gettext("Other files"),
+            preferences.auto_download_other,
+            PreferenceChange::SetAutoDownloadOther,
+        ),
+    ];
+    for (title, active, make_change) in rows {
+        let row = libadwaita::SwitchRow::new();
+        row.set_title(&title);
+        row.set_active(active);
+        row.set_sensitive(preferences.auto_download);
+        master
+            .bind_property("active", &row, "sensitive")
+            .sync_create()
+            .build();
+        let sink = change_sink.clone();
+        row.connect_active_notify(move |row| sink.push(make_change(row.is_active())));
+        group.add(&row);
+    }
+}
+
+/// Text for the current folder: the chosen path, or a note that attachments
+/// go to the application's own cache directory.
+fn download_directory_subtitle(current: Option<&str>) -> String {
+    current.map_or_else(
+        || gettext("Default location (application cache folder)"),
+        str::to_owned,
+    )
+}
+
+/// Folder row with buttons to choose a custom download location or restore
+/// the default one. The actual folder picker runs outside this module
+/// (it needs the portal and the parent window); callers wire the returned
+/// buttons and report the result back through
+/// [`NativePreferencesDialog::apply_download_directory_choice`].
+fn add_download_location(
+    page: &libadwaita::PreferencesPage,
+    current: Option<&str>,
+) -> (libadwaita::ActionRow, gtk4::Button, gtk4::Button) {
+    use libadwaita::prelude::*;
+    let group = libadwaita::PreferencesGroup::new();
+    group.set_title(&gettext("Download location"));
+    group.set_description(Some(&gettext(
+        "Where ZapTide saves newly downloaded photos, videos, audio and files",
+    )));
+    page.add(&group);
+
+    let row = libadwaita::ActionRow::new();
+    row.set_title(&gettext("Folder"));
+    row.set_subtitle(&download_directory_subtitle(current));
+
+    let choose = gtk4::Button::builder()
+        .icon_name("folder-open-symbolic")
+        .valign(gtk4::Align::Center)
+        .tooltip_text(gettext("Choose a Folder"))
+        .css_classes(["flat"])
+        .build();
+    set_accessible_label(&choose, "Choose a download folder");
+    row.add_suffix(&choose);
+
+    let restore = gtk4::Button::builder()
+        .icon_name("edit-undo-symbolic")
+        .valign(gtk4::Align::Center)
+        .tooltip_text(gettext("Restore Default Location"))
+        .css_classes(["flat"])
+        .visible(current.is_some())
+        .build();
+    set_accessible_label(&restore, "Restore the default download location");
+    row.add_suffix(&restore);
+
+    group.add(&row);
+    (row, choose, restore)
 }
 
 const RETENTION_CHOICES: [u32; 5] = [30, 60, 90, 180, 365];
@@ -939,7 +1161,7 @@ fn add_switch(
     active: bool,
     change_sink: PreferenceChangeSink,
     make_change: fn(bool) -> PreferenceChange,
-) {
+) -> libadwaita::SwitchRow {
     use libadwaita::prelude::*;
     let row = libadwaita::SwitchRow::new();
     row.set_title(title);
@@ -947,6 +1169,7 @@ fn add_switch(
     row.set_active(active);
     row.connect_active_notify(move |row| change_sink.push(make_change(row.is_active())));
     group.add(&row);
+    row
 }
 
 pub(crate) fn set_accessible_label(
@@ -985,6 +1208,7 @@ pub enum ValidationError {
     OfflineDelayOutOfRange,
     MediaRetentionOutOfRange,
     UnsupportedSoundInterval,
+    InvalidDownloadDirectory,
 }
 
 impl std::fmt::Display for ValidationError {
@@ -998,6 +1222,7 @@ impl std::fmt::Display for ValidationError {
             Self::UnsupportedSoundInterval => {
                 "notification sound interval must be 0, 10, 30, 60, or 120 seconds"
             }
+            Self::InvalidDownloadDirectory => "download folder must be an absolute local path",
         };
         formatter.write_str(message)
     }
@@ -1009,6 +1234,10 @@ const MAX_OFFLINE_SECONDS: u32 = 24 * 60 * 60;
 
 fn retention_days_in_range(days: u32) -> bool {
     (crate::media_retention::MIN_DAYS..=crate::media_retention::MAX_DAYS).contains(&days)
+}
+
+fn is_absolute_path(path: &str) -> bool {
+    !path.trim().is_empty() && std::path::Path::new(path).is_absolute()
 }
 
 fn checked_offline_delay(seconds: u32) -> Result<u32, ValidationError> {
@@ -1083,6 +1312,29 @@ impl PreferenceChange {
                 }
                 settings.media_retention_days = value;
             }
+            Self::SetDownloadDirectory(value) => {
+                if let Some(path) = &value
+                    && !is_absolute_path(path)
+                {
+                    return Err(ValidationError::InvalidDownloadDirectory);
+                }
+                settings.download_directory = value.map(std::path::PathBuf::from);
+            }
+            Self::SetAutoDownloadImages(value) => {
+                settings.attachment_auto_download.images = value;
+            }
+            Self::SetAutoDownloadVideos(value) => {
+                settings.attachment_auto_download.videos = value;
+            }
+            Self::SetAutoDownloadAudio(value) => {
+                settings.attachment_auto_download.audio = value;
+            }
+            Self::SetAutoDownloadDocuments(value) => {
+                settings.attachment_auto_download.documents = value;
+            }
+            Self::SetAutoDownloadOther(value) => {
+                settings.attachment_auto_download.other = value;
+            }
         }
         Ok(())
     }
@@ -1145,6 +1397,12 @@ mod tests {
             NativePreferences::from(&settings).storage,
             StoragePreferences {
                 auto_download: true,
+                auto_download_images: true,
+                auto_download_videos: true,
+                auto_download_audio: true,
+                auto_download_documents: true,
+                auto_download_other: true,
+                download_directory: None,
                 media_retention: true,
                 media_retention_days: 60,
             }
@@ -1364,6 +1622,12 @@ mod tests {
         let page = libadwaita::PreferencesPage::new();
         let storage = StoragePreferences {
             auto_download: true,
+            auto_download_images: true,
+            auto_download_videos: true,
+            auto_download_audio: true,
+            auto_download_documents: true,
+            auto_download_other: true,
+            download_directory: None,
             media_retention: false,
             media_retention_days: 90,
         };

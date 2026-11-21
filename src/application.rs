@@ -33,6 +33,7 @@ mod selection;
 mod sidebar;
 mod sidebar_coordinates;
 mod stars;
+mod storage_preferences;
 mod themes;
 mod transcript_view;
 
@@ -811,6 +812,11 @@ pub enum Input {
     OpenThemesFolder,
     ThemesFolderPrepared(bool),
     ThemesFolderFinished(bool),
+    /// User activated the Storage preferences' folder picker.
+    ChooseDownloadDirectory,
+    /// A new download folder was chosen, or "Restore default location" was
+    /// activated (`None`). Not sent when the picker was cancelled.
+    DownloadDirectoryChosen(Option<std::path::PathBuf>),
     SplitCollapsed(bool),
     ApplyPreferences,
     /// A per-account setting changed in the profile dialog.
@@ -2171,11 +2177,10 @@ impl NativeApplication {
     /// Stickers are small and meaningless as placeholders, so loaded history
     /// fetches them the way live messages are fetched.
     fn download_missing_stickers(&mut self) {
-        let Some(backend) = self
-            .backend
-            .as_ref()
-            .filter(|_| self.settings.auto_download)
-        else {
+        let Some(backend) = self.backend.as_ref().filter(|_| {
+            self.settings
+                .auto_download_enabled(crate::settings::AttachmentCategory::Other)
+        }) else {
             return;
         };
         for message in self.open_chat.message_snapshots.values_mut() {
