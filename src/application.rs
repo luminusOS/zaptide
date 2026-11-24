@@ -655,6 +655,19 @@ pub enum ChatFilterInput {
     Kind(crate::native_chat_list::ChatKindFilter),
 }
 
+/// What the chat list's context menu can do to one chat.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ChatRowAction {
+    Info,
+    Pin,
+    Mute,
+    Archive,
+    Close,
+    CopyTranscript,
+    Clear,
+    Delete,
+}
+
 #[derive(Debug)]
 pub enum Input {
     WindowMapped,
@@ -763,6 +776,14 @@ pub enum Input {
     ToggleSelectedStar,
     /// Keeps the selected disappearing message, or lets it run out again.
     ToggleSelectedKeep,
+    /// Opens the context menu of the chat under the pointer in the list.
+    ChatRowMenu {
+        chat: String,
+        x: f64,
+        y: f64,
+    },
+    /// An entry of that menu, for the chat it was opened on.
+    ChatRowAction(String, ChatRowAction),
     /// Pins the selected message for this many seconds.
     PinSelected(u32),
     UnpinSelected,
@@ -1415,6 +1436,7 @@ impl SimpleComponent for NativeApplication {
                 }
                 SidebarOutput::ShowCalls(active) => Input::ShowCalls(active),
                 SidebarOutput::SelectChat(account, chat) => Input::SelectChat(account, chat),
+                SidebarOutput::ChatMenu { chat, x, y } => Input::ChatRowMenu { chat, x, y },
                 SidebarOutput::NewChat => Input::ShowNewChat,
                 SidebarOutput::ShowLiveCall => Input::ShowLiveCall,
             });
@@ -1616,6 +1638,7 @@ impl SimpleComponent for NativeApplication {
             .message_menu
             .connect_closed(|_| reaction_drawer::resume());
         install_message_actions(&root, &sender);
+        install_chat_row_actions(&root, &sender);
         let selection_keys = gtk::EventControllerKey::new();
         let selection_sender = sender.clone();
         selection_keys.connect_key_pressed(move |_, key, _, _| {

@@ -125,7 +125,7 @@ impl Worker {
         let generation = self.session_generation;
         tokio::spawn(async move {
             let result = client
-                .keep_message(jid, key, kept)
+                .keep_message_raw(jid, key, kept)
                 .await
                 .map(|_| ())
                 .map_err(|error| error.to_string());

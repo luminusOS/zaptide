@@ -323,9 +323,12 @@ impl NativeApplication {
     }
 
     fn show_chat_info(&mut self, sender: ComponentSender<Self>) {
-        if let Some(chat) = self
-            .open_chat
-            .active_chat
+        let chat = self.open_chat.active_chat.clone();
+        self.show_chat_info_of(chat, sender);
+    }
+
+    fn show_chat_info_of(&mut self, id: Option<String>, sender: ComponentSender<Self>) {
+        if let Some(chat) = id
             .as_ref()
             .and_then(|id| self.chat_snapshots.iter().find(|chat| &chat.id == id))
         {
@@ -612,6 +615,10 @@ impl NativeApplication {
         let Some(chat) = self.open_chat.active_chat.clone() else {
             return;
         };
+        self.confirm_clear_chat_of(chat, sender);
+    }
+
+    fn confirm_clear_chat_of(&mut self, chat: String, sender: ComponentSender<Self>) {
         let account = self.active_account;
         let dialog = adw::AlertDialog::builder()
             .heading(gettext("Clear chat?"))
@@ -635,6 +642,10 @@ impl NativeApplication {
         let Some(chat) = self.open_chat.active_chat.clone() else {
             return;
         };
+        self.confirm_delete_chat_of(chat, sender);
+    }
+
+    fn confirm_delete_chat_of(&mut self, chat: String, sender: ComponentSender<Self>) {
         let account = self.active_account;
         let dialog = adw::AlertDialog::builder()
             .heading(gettext("Delete chat?"))
@@ -1355,6 +1366,8 @@ impl NativeApplication {
             Input::CloseChat => self.close_chat(),
             Input::ToggleSelectedStar => self.toggle_selected_star(),
             Input::ToggleSelectedKeep => self.toggle_selected_keep(),
+            Input::ChatRowMenu { chat, x, y } => self.show_chat_row_menu(&chat, x, y),
+            Input::ChatRowAction(chat, action) => self.chat_row_action(chat, action, sender),
             Input::PinSelected(seconds) => self.pin_selected(seconds),
             Input::UnpinSelected => self.unpin_selected(),
             Input::JumpToPinned => self.jump_to_pinned(),
