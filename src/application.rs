@@ -389,6 +389,7 @@ impl<S> MessageRow<S> {
         self.message == other.message
             && self.account == other.account
             && self.starred == other.starred
+            && self.notes == other.notes
             && self.album == other.album
             && self.collapsed == other.collapsed
             && self.audio == other.audio
@@ -576,6 +577,8 @@ pub struct NativeApplication {
     jump_needs_history: bool,
     /// Starred messages of the open chat.
     starred: std::collections::HashSet<String>,
+    /// Messages of the open chat that someone kept from disappearing.
+    kept: std::collections::HashSet<String>,
     pointer_sender: ComponentSender<NativeApplication>,
     audio: AudioState,
     /// About row of the open contact-info dialog, filled when the fetch returns.
@@ -650,6 +653,19 @@ pub enum ChatFilterInput {
     Archived(bool),
     Muted(bool),
     Kind(crate::native_chat_list::ChatKindFilter),
+}
+
+/// What the chat list's context menu can do to one chat.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ChatRowAction {
+    Info,
+    Pin,
+    Mute,
+    Archive,
+    Close,
+    CopyTranscript,
+    Clear,
+    Delete,
 }
 
 #[derive(Debug)]
@@ -758,6 +774,16 @@ pub enum Input {
     EscapePressed,
     CloseChat,
     ToggleSelectedStar,
+    /// Keeps the selected disappearing message, or lets it run out again.
+    ToggleSelectedKeep,
+    /// Opens the context menu of the chat under the pointer in the list.
+    ChatRowMenu {
+        chat: String,
+        x: f64,
+        y: f64,
+    },
+    /// An entry of that menu, for the chat it was opened on.
+    ChatRowAction(String, ChatRowAction),
     /// Pins the selected message for this many seconds.
     PinSelected(u32),
     UnpinSelected,
@@ -1410,6 +1436,7 @@ impl SimpleComponent for NativeApplication {
                 }
                 SidebarOutput::ShowCalls(active) => Input::ShowCalls(active),
                 SidebarOutput::SelectChat(account, chat) => Input::SelectChat(account, chat),
+                SidebarOutput::ChatMenu { chat, x, y } => Input::ChatRowMenu { chat, x, y },
                 SidebarOutput::NewChat => Input::ShowNewChat,
                 SidebarOutput::ShowLiveCall => Input::ShowLiveCall,
             });
@@ -1509,6 +1536,7 @@ impl SimpleComponent for NativeApplication {
             pending_quote_navigation: None,
             jump_needs_history: false,
             starred: std::collections::HashSet::new(),
+            kept: std::collections::HashSet::new(),
             pointer_sender: sender.clone(),
             audio: AudioState {
                 selected_voice: None,
@@ -1610,6 +1638,7 @@ impl SimpleComponent for NativeApplication {
             .message_menu
             .connect_closed(|_| reaction_drawer::resume());
         install_message_actions(&root, &sender);
+        install_chat_row_actions(&root, &sender);
         let selection_keys = gtk::EventControllerKey::new();
         let selection_sender = sender.clone();
         selection_keys.connect_key_pressed(move |_, key, _, _| {
@@ -2057,6 +2086,14 @@ impl NativeApplication {
             gettext("Star")
         };
         respond.append(Some(&star), Some("message.star"));
+        if self.keep_offered(&message.id) {
+            let keep = if self.kept.contains(&message.id) {
+                gettext("Unkeep")
+            } else {
+                gettext("Keep")
+            };
+            respond.append(Some(&keep), Some("message.keep"));
+        }
         if pins::can_pin(message) {
             if self.is_pinned(&message.id) {
                 respond.append(Some(&gettext("Unpin")), Some("message.unpin"));
@@ -2370,6 +2407,7 @@ impl NativeApplication {
     fn clear_open_chat_state(&mut self) {
         // Leaving an account screen intentionally retains its starred-message cache.
         self.starred.clear();
+        self.kept.clear();
         self.reset_open_chat_state();
         self.open_chat.reset();
         self.audio.selected_voice = None;

@@ -203,6 +203,7 @@ impl Worker {
             } => self.edit_text(chat, id, text, mentions),
             Command::Revoke { chat, id } => self.revoke(chat, id),
             Command::SetStarred { chat, id, starred } => self.set_starred(chat, id, starred),
+            Command::SetKept { chat, id, kept } => self.set_kept(chat, id, kept),
             Command::LoadStarred(chat) => match self.archive.starred_messages(&chat, STARRED_LIMIT)
             {
                 Ok(list) => self.emit(Event::StarredList(list)),
@@ -233,6 +234,16 @@ impl Worker {
                     },
                 ..
             }) => self.disappearing_set(chat, seconds, at, result),
+            Command::Completed(Completion {
+                done:
+                    Done::KeepSet {
+                        chat,
+                        id,
+                        kept,
+                        result,
+                    },
+                ..
+            }) => self.keep_set(chat, id, kept, result),
             Command::DeleteLocal { chat, id } => self.delete_message_everywhere(chat, id),
             // Starred messages stay until #20 adds a user-facing choice.
             Command::ClearChat(chat) => self.clear_chat_everywhere(chat),

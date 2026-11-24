@@ -99,6 +99,73 @@ impl Worker {
         self.emit_chat(&chat);
     }
 
+    /// `Command::SetKept`: keeps a disappearing message for everyone in the
+    /// chat, or lets it run out again. The archive changes once WhatsApp
+    /// took the request, in `keep_set`.
+    pub(super) fn set_kept(&mut self, chat: ChatId, id: String, kept: bool) {
+        let chat = self.canonical_str(&chat);
+        let Ok(Some(message)) = self.archive.message(&chat, &id) else {
+            return;
+        };
+        let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&chat)) else {
+            self.emit(Event::Error(
+                "Could not keep the message while disconnected".to_owned(),
+            ));
+            return;
+        };
+        // The phone names the sender of a group message from someone else;
+        // everywhere else the key has no participant.
+        let key = from_default!(wa::MessageKey {
+            remote_jid: Some(chat.clone()),
+            from_me: Some(message.from_me),
+            id: Some(id.clone()),
+            participant: (jid.is_group() && !message.from_me).then(|| message.sender.clone()),
+        });
+        let commands = self.commands.clone();
+        let generation = self.session_generation;
+        tokio::spawn(async move {
+            let result = client
+                .keep_message(jid, key, kept)
+                .await
+                .map(|_| ())
+                .map_err(|error| error.to_string());
+            let _ = Completion {
+                generation,
+                done: Done::KeepSet {
+                    chat,
+                    id,
+                    kept,
+                    result,
+                },
+            }
+            .send(&commands);
+        });
+    }
+
+    pub(super) fn keep_set(
+        &mut self,
+        chat: ChatId,
+        id: String,
+        kept: bool,
+        result: Result<(), String>,
+    ) {
+        match result {
+            Ok(()) => {
+                let _ = self.archive.set_kept(&chat, &id, kept);
+                self.emit(Event::KeptChanged {
+                    chat,
+                    id,
+                    kept,
+                    local: true,
+                });
+            }
+            Err(error) => {
+                log::warn!("could not change whether a message is kept: {error}");
+                self.emit(Event::Error("Could not keep the message".to_owned()));
+            }
+        }
+    }
+
     /// Stamps when a message runs out, from the timer it was sent with.
     pub(super) fn remember_expiry(
         &self,

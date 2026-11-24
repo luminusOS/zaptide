@@ -91,7 +91,14 @@ impl Worker {
             if let Some(target) = keep.key.as_option().and_then(|key| key.id.as_deref()) {
                 // A message someone kept in a disappearing chat is not removed.
                 let kept = keep.keep_type == Some(wa::KeepType::KeepForAll);
-                let _ = self.archive.set_kept(&chat, target, kept);
+                if self.archive.set_kept(&chat, target, kept).unwrap_or(false) {
+                    self.emit(Event::KeptChanged {
+                        chat: chat.clone(),
+                        id: target.to_owned(),
+                        kept,
+                        local: false,
+                    });
+                }
             }
             return;
         }

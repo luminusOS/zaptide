@@ -146,6 +146,8 @@ pub(super) struct RowFlags {
     pub show_sender: bool,
     pub show_timestamp: bool,
     pub starred: bool,
+    /// Kept from disappearing by someone in the chat.
+    pub kept: bool,
 }
 
 pub(super) fn message_row<S>(
@@ -161,6 +163,7 @@ pub(super) fn message_row<S>(
         show_sender,
         show_timestamp,
         starred,
+        kept,
     } = flags;
     const SENDER_CLASSES: [&str; 6] = [
         "zaptide-sender-blue",
@@ -213,7 +216,14 @@ pub(super) fn message_row<S>(
         .unwrap_or_default();
     let clock = crate::util::clock(message.timestamp);
     let delivery = delivery_label(message.status);
-    let notes = footer_notes(&message);
+    let mut notes = footer_notes(&message);
+    if kept {
+        notes = if notes.is_empty() {
+            "Kept ·".to_owned()
+        } else {
+            format!("Kept · {notes}")
+        };
+    }
     let reactions = reaction_summary(&message.reactions);
     let mentions = mention_labels(&message, contacts);
     let content = format!(

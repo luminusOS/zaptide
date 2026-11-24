@@ -65,6 +65,64 @@ impl NativeApplication {
         }
     }
 
+    /// Whether the open chat's timer makes a message keepable, or it already
+    /// is kept and so can be released.
+    pub(super) fn keep_offered(&self, id: &str) -> bool {
+        self.kept.contains(id)
+            || self
+                .open_chat
+                .active_chat
+                .as_deref()
+                .and_then(|chat| self.chat_snapshots.iter().find(|known| known.id == chat))
+                .is_some_and(|chat| chat.ephemeral_expiration.is_some_and(|seconds| seconds > 0))
+    }
+
+    pub(super) fn toggle_selected_keep(&mut self) {
+        let Some((chat, id)) = self
+            .open_chat
+            .active_chat
+            .clone()
+            .zip(self.selected_message_id())
+        else {
+            return;
+        };
+        let kept = !self.kept.contains(&id);
+        if let Some(backend) = &self.backend {
+            backend.send(crate::backend::Command::SetKept { chat, id, kept });
+        }
+    }
+
+    pub(super) fn kept_changed(&mut self, chat: &str, id: String, kept: bool, local: bool) {
+        if self.open_chat.active_chat.as_deref() != Some(chat) {
+            return;
+        }
+        let changed = if kept {
+            self.kept.insert(id.clone())
+        } else {
+            self.kept.remove(&id)
+        };
+        if changed && local {
+            self.add_toast(adw::Toast::new(&if kept {
+                gettext("Message kept")
+            } else {
+                gettext("Message no longer kept")
+            }));
+        }
+        if changed {
+            self.refresh_message_row(&id);
+        }
+    }
+
+    pub(super) fn kept_ids_loaded(&mut self, chat: &str, ids: Vec<String>) {
+        if self.open_chat.active_chat.as_deref() != Some(chat) {
+            return;
+        }
+        self.kept = ids.into_iter().collect();
+        if !self.open_chat.message_ids.is_empty() {
+            self.rebuild_message_rows(false);
+        }
+    }
+
     pub(super) fn show_starred(&self) {
         if let (Some(backend), Some(chat)) = (&self.backend, self.open_chat.active_chat.clone()) {
             backend.send(crate::backend::Command::LoadStarred(chat));

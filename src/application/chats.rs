@@ -366,6 +366,127 @@ impl NativeApplication {
         self.chat_menu.append_section(None, &section);
     }
 
+    /// Opens the same entries as the header's three-dot menu for the chat
+    /// under the pointer in the list. The chat is not opened by this.
+    pub(super) fn show_chat_row_menu(&self, chat: &str, x: f64, y: f64) {
+        let Some(known) = self.chat_snapshots.iter().find(|known| known.id == chat) else {
+            return;
+        };
+        let open = self.open_chat.active_chat.as_deref() == Some(chat);
+        let entry = |label: String, name: &str| {
+            let item = gtk::gio::MenuItem::new(Some(&label), None);
+            item.set_action_and_target_value(Some(name), Some(&chat.to_variant()));
+            item
+        };
+        let menu = gtk::gio::Menu::new();
+        let section = gtk::gio::Menu::new();
+        let info = if known.is_group() {
+            gettext("_Group Info")
+        } else {
+            gettext("_Contact Info")
+        };
+        section.append_item(&entry(info, "chatrow.info"));
+        menu.append_section(None, &section);
+        let section = gtk::gio::Menu::new();
+        let pin = if known.pinned {
+            gettext("Un_pin Chat")
+        } else {
+            gettext("_Pin Chat")
+        };
+        section.append_item(&entry(pin, "chatrow.pin"));
+        let mute = if known.muted(crate::util::now()) {
+            gettext("_Unmute Notifications")
+        } else {
+            gettext("_Mute Notifications")
+        };
+        section.append_item(&entry(mute, "chatrow.mute"));
+        let archive = if known.archived {
+            gettext("Un_archive Chat")
+        } else {
+            gettext("_Archive Chat")
+        };
+        section.append_item(&entry(archive, "chatrow.archive"));
+        menu.append_section(None, &section);
+        // These two work on what is on screen, so they only apply to the
+        // chat that is open.
+        if open {
+            let section = gtk::gio::Menu::new();
+            section.append_item(&entry(gettext("_Close Chat"), "chatrow.close"));
+            menu.append_section(None, &section);
+            let section = gtk::gio::Menu::new();
+            section.append_item(&entry(gettext("Copy _Transcript"), "chatrow.transcript"));
+            menu.append_section(None, &section);
+        }
+        let section = gtk::gio::Menu::new();
+        section.append_item(&entry(gettext("Clear Chat"), "chatrow.clear"));
+        section.append_item(&entry(gettext("Delete Chat"), "chatrow.delete"));
+        menu.append_section(None, &section);
+        let popover = gtk::PopoverMenu::from_model(Some(&menu));
+        popover.set_parent(&self.chats.view);
+        popover.set_has_arrow(false);
+        popover.set_halign(gtk::Align::Start);
+        popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+        popover.connect_closed(|popover| {
+            let popover = popover.clone();
+            gtk::glib::idle_add_local_once(move || popover.unparent());
+        });
+        popover.popup();
+    }
+
+    /// An entry of the chat list's context menu, for the chat it was opened on.
+    pub(super) fn chat_row_action(
+        &mut self,
+        chat: String,
+        action: ChatRowAction,
+        sender: ComponentSender<Self>,
+    ) {
+        let Some(known) = self.chat_snapshots.iter().find(|known| known.id == chat).cloned()
+        else {
+            return;
+        };
+        match action {
+            ChatRowAction::Info => self.show_chat_info_of(Some(chat), sender),
+            ChatRowAction::Pin => {
+                if let Some(backend) = &self.backend {
+                    backend.send(crate::backend::Command::SetPinned(chat, !known.pinned));
+                }
+            }
+            ChatRowAction::Mute => {
+                if let Some(backend) = &self.backend {
+                    let muted = known.muted(crate::util::now());
+                    backend.send(crate::backend::Command::SetMuted(
+                        chat,
+                        (!muted).then_some(i64::MAX),
+                    ));
+                }
+            }
+            ChatRowAction::Archive => {
+                if known.archived {
+                    sender.input(Input::ArchiveChat(chat));
+                } else {
+                    show_archive_confirmation(
+                        &self.window,
+                        &dialog_action_callback(&sender),
+                        &known,
+                    );
+                }
+            }
+            // Only offered for the open chat, so the handlers that read the
+            // open chat apply to it.
+            ChatRowAction::Close if self.open_chat.active_chat.as_deref() == Some(chat.as_str()) => {
+                sender.input(Input::CloseChat);
+            }
+            ChatRowAction::CopyTranscript
+                if self.open_chat.active_chat.as_deref() == Some(chat.as_str()) =>
+            {
+                sender.input(Input::CopyTranscript);
+            }
+            ChatRowAction::Clear => self.confirm_clear_chat_of(chat, sender),
+            ChatRowAction::Delete => self.confirm_delete_chat_of(chat, sender),
+            ChatRowAction::Close | ChatRowAction::CopyTranscript => {}
+        }
+    }
+
     /// Archived chats with unread messages, as counted on the phone.
     pub(super) fn archived_unread_count(&self) -> usize {
         self.chat_snapshots
@@ -517,7 +638,10 @@ impl NativeApplication {
         chat: String,
         delete_chat: bool,
     ) {
-        if self.active_account != account || self.open_chat.active_chat.as_ref() != Some(&chat) {
+        // The confirmation may come from the chat list's menu, for a chat
+        // that is not open; it only has to still be in the list.
+        if self.active_account != account || !self.chat_snapshots.iter().any(|known| known.id == chat)
+        {
             return;
         }
         if let Some(backend) = &self.backend {

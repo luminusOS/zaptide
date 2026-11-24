@@ -247,6 +247,13 @@ pub enum Done {
         at: i64,
         result: Result<String, String>,
     },
+    /// Result of sending a keep or unkeep for one message.
+    KeepSet {
+        chat: ChatId,
+        id: String,
+        kept: bool,
+        result: Result<(), String>,
+    },
     Downloaded {
         chat: ChatId,
         id: String,
@@ -546,6 +553,13 @@ pub enum Command {
     },
     /// Asks for the starred messages of one chat.
     LoadStarred(ChatId),
+    /// Keeps a disappearing message in its chat, or lets it run out again,
+    /// for everyone in the chat.
+    SetKept {
+        chat: ChatId,
+        id: String,
+        kept: bool,
+    },
     /// Pins a message for everyone in the chat. `seconds` is one of the
     /// durations WhatsApp offers: 24 hours, 7 days or 30 days.
     PinMessage {
@@ -846,6 +860,19 @@ pub enum Event {
         /// Whether this device's user asked for the change, as opposed to the
         /// phone syncing it.
         local: bool,
+    },
+    /// A message was kept or released here or by someone in the chat.
+    KeptChanged {
+        chat: ChatId,
+        id: String,
+        kept: bool,
+        /// Whether this device's user asked for the change.
+        local: bool,
+    },
+    /// The kept messages of a chat that was just opened.
+    KeptIds {
+        chat: ChatId,
+        ids: Vec<String>,
     },
     /// The starred messages of a chat that was just opened.
     StarredIds {

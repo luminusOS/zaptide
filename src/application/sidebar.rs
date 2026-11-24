@@ -67,6 +67,12 @@ pub(super) enum SidebarOutput {
     SetMutedFilter(bool),
     ShowCalls(bool),
     SelectChat(crate::account::AccountId, String),
+    /// A right click on a chat row, in the coordinates of the chat list.
+    ChatMenu {
+        chat: String,
+        x: f64,
+        y: f64,
+    },
     NewChat,
     ShowLiveCall,
 }
@@ -402,6 +408,34 @@ impl SimpleComponent for Sidebar {
                     .unwrap();
             }
         });
+        // A right click names the row under the pointer without opening it.
+        // Each row's root widget is named after its chat.
+        let menu_gesture = gtk::GestureClick::builder().button(3).build();
+        let menu_sender = sender.clone();
+        let menu_view = chat_view.clone();
+        menu_gesture.connect_pressed(move |gesture, _, x, y| {
+            let Some(mut widget) = menu_view.pick(x, y, gtk::PickFlags::DEFAULT) else {
+                return;
+            };
+            loop {
+                let Some(parent) = widget.parent() else {
+                    return;
+                };
+                if &parent == menu_view.upcast_ref::<gtk::Widget>() {
+                    break;
+                }
+                widget = parent;
+            }
+            let Some(root) = widget.first_child() else {
+                return;
+            };
+            let chat = root.widget_name().to_string();
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            menu_sender
+                .output(SidebarOutput::ChatMenu { chat, x, y })
+                .unwrap();
+        });
+        chat_view.add_controller(menu_gesture);
         let chat_coordinates = super::sidebar_coordinates::SidebarCoordinates::new(chat_view);
         let calls_view = &init.calls_view;
         let widgets = view_output!();

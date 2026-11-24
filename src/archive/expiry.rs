@@ -38,6 +38,16 @@ impl Archive {
         )? > 0)
     }
 
+    /// Ids of the kept messages of one chat.
+    pub fn kept_ids(&self, chat: &str) -> Result<Vec<String>> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT id FROM messages WHERE chat = ?1 AND kept = 1")?;
+        statement
+            .query_map(params![chat], |row| row.get(0))?
+            .collect()
+    }
+
     // Exercised directly by the round-trip test below; no caller needs it
     // outside tests yet.
     #[allow(dead_code)]

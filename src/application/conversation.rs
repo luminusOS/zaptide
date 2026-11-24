@@ -663,6 +663,7 @@ impl NativeApplication {
                 contacts: &self.contacts,
                 avatars: &self.avatars,
                 starred: &self.starred,
+                kept: &self.kept,
                 selection: self.message_selection.as_deref(),
                 link_previews: self.settings.link_previews,
                 pointer_sender: &self.pointer_sender,
@@ -962,6 +963,7 @@ pub(super) struct RowInputs<'a, S> {
     pub(super) contacts: &'a std::collections::HashMap<String, crate::model::Contact>,
     pub(super) avatars: &'a std::collections::HashMap<String, std::path::PathBuf>,
     pub(super) starred: &'a std::collections::HashSet<String>,
+    pub(super) kept: &'a std::collections::HashSet<String>,
     pub(super) selection: Option<&'a [String]>,
     pub(super) link_previews: bool,
     pub(super) pointer_sender: &'a S,
@@ -1019,6 +1021,7 @@ pub(super) fn message_rows<S: Clone>(
                 .then(|| inputs.avatars.get(&message.sender).cloned())
                 .flatten();
             let starred = inputs.starred.contains(&message.id);
+            let kept = inputs.kept.contains(&message.id);
             let mut row = message_row(
                 message,
                 inputs.contacts,
@@ -1029,6 +1032,7 @@ pub(super) fn message_rows<S: Clone>(
                     show_sender,
                     show_timestamp,
                     starred,
+                    kept,
                 },
                 inputs.audio_registry.clone(),
             );
@@ -1094,6 +1098,7 @@ mod tests {
         let contacts = Default::default();
         let avatars = Default::default();
         let starred = Default::default();
+        let kept = Default::default();
         let registry = Default::default();
         let rows = |messages| {
             message_rows(
@@ -1103,6 +1108,7 @@ mod tests {
                     contacts: &contacts,
                     avatars: &avatars,
                     starred: &starred,
+                    kept: &kept,
                     selection: None,
                     link_previews: true,
                     pointer_sender: &(),
@@ -1245,6 +1251,7 @@ mod batch_tests {
         pending: PendingTranscript,
         avatars: HashMap<String, std::path::PathBuf>,
         starred: HashSet<String>,
+        kept: HashSet<String>,
         registry: AudioRegistry,
         rows: Vec<MessageRow<()>>,
         text: Vec<crate::native_transcript::TranscriptRow>,
@@ -1268,6 +1275,7 @@ mod batch_tests {
                 pending: PendingTranscript::default(),
                 avatars: HashMap::new(),
                 starred: HashSet::new(),
+                kept: HashSet::new(),
                 registry: AudioRegistry::default(),
                 rows: Vec::new(),
                 text: Vec::new(),
@@ -1294,6 +1302,7 @@ mod batch_tests {
                     contacts: &self.contacts,
                     avatars: &self.avatars,
                     starred: &self.starred,
+                    kept: &self.kept,
                     selection: None,
                     link_previews: true,
                     pointer_sender: &(),
@@ -1505,6 +1514,7 @@ mod batch_tests {
                     show_sender: true,
                     show_timestamp: true,
                     starred: false,
+                    kept: false,
                 },
                 AudioRegistry::default(),
             )
