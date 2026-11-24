@@ -1,0 +1,67 @@
+name: Format Autofix
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Existing branch in this repository to format (do not use main)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: format-autofix-${{ github.event.pull_request.number || inputs.branch || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  autofix:
+    name: Cargo Format Autofix
+    if: >-
+      ${{
+        (github.event_name == 'pull_request' &&
+         github.event.pull_request.head.repo.full_name == github.repository) ||
+        (github.event_name == 'workflow_dispatch' && inputs.branch != 'main')
+      }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out the PR or selected branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref || inputs.branch }}
+          # Optional AUTOFIX_TOKEN secret lets the bot's push trigger CI again.
+          # Without it, the built-in GITHUB_TOKEN is used and the format push
+          # will not start another Actions workflow.
+          token: ${{ secrets.AUTOFIX_TOKEN || github.token }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install the repository Rust toolchain
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: rustfmt
+
+      - name: Format all Rust crates
+        run: cargo fmt --all
+
+      - name: Commit and push formatting changes
+        uses: stefanzweifel/git-auto-commit-action@04702edda442b2e678b25b537cec683a1493fcb9 # v7.1.0
+        with:
+          commit_message: "style: cargo fmt"
+          commit_user_name: github-actions[bot]
+          commit_user_email: 41898282+github-actions[bot]@users.noreply.github.com
+          commit_author: GitHub Actions <41898282+github-actions[bot]@users.noreply.github.com>
