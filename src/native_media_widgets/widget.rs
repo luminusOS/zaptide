@@ -142,6 +142,7 @@ pub(crate) fn build_media_widget_with_poll_choices(
             | NativeMediaContent::Buttons { .. }
             | NativeMediaContent::List { .. }
             | NativeMediaContent::Call { .. }
+            | NativeMediaContent::System { .. }
     ) {
         root.add_css_class("card");
         root.add_css_class("zaptide-media-card");
@@ -363,6 +364,18 @@ pub(crate) fn build_media_widget_with_poll_choices(
             let label = gtk::Label::new(Some(text));
             label.set_xalign(0.0);
             label.set_wrap(true);
+            line.append(&label);
+            root.append(&line);
+            ("", "")
+        }
+        NativeMediaContent::System { icon, text } => {
+            let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            line.add_css_class("zaptide-call-event");
+            line.append(&gtk::Image::from_icon_name(icon));
+            let label = gtk::Label::new(Some(text));
+            label.set_xalign(0.0);
+            label.set_wrap(true);
+            label.add_css_class("dim-label");
             line.append(&label);
             root.append(&line);
             ("", "")

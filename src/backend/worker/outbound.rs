@@ -1537,7 +1537,9 @@ impl Worker {
             forwarded: false,
             thumbnail,
         };
+        let stamp = (row.id.clone(), row.timestamp);
         self.store_message(row, Some(message.encode_to_vec()), None);
+        self.remember_expiry(&chat, &stamp.0, stamp.1, expiration);
         let session = OutgoingSession {
             client,
             commands: self.commands.clone(),
@@ -1627,6 +1629,7 @@ impl Worker {
         if matches!(
             source.content,
             Content::Revoked
+                | Content::System { .. }
                 | Content::Unsupported { .. }
                 | Content::Call { .. }
                 | Content::Poll { .. }
@@ -1672,7 +1675,9 @@ impl Worker {
             mentions,
             thumbnail,
         );
+        let stamp = (row.id.clone(), row.timestamp);
         self.store_message(row, Some(message.encode_to_vec()), None);
+        self.remember_expiry(&to_chat, &stamp.0, stamp.1, expiration);
         self.forward_tails.retain(|_, send| !send.is_finished());
         let previous = self.forward_tails.remove(&to_chat);
         let destination = to_chat.clone();
@@ -1786,7 +1791,9 @@ impl Worker {
         let expiration = self.apply_ephemeral(&chat, &mut message);
         let raw = message.encode_to_vec();
         let id = row.id.clone();
+        let sent_at = row.timestamp;
         self.store_message(row, Some(raw), None);
+        self.remember_expiry(&chat, &id, sent_at, expiration);
         let session_generation_shared = self.session_generation_shared.clone();
         tokio::spawn(send_outgoing(
             OutgoingSession {
@@ -1827,7 +1834,9 @@ impl Worker {
         let expiration = self.apply_ephemeral(&chat, &mut message);
         let raw = message.encode_to_vec();
         let id = row.id.clone();
+        let sent_at = row.timestamp;
         self.store_message(row, Some(raw), None);
+        self.remember_expiry(&chat, &id, sent_at, expiration);
         let commands = self.commands.clone();
         let session_generation_shared = self.session_generation_shared.clone();
         tokio::spawn(async move {

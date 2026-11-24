@@ -208,6 +208,31 @@ impl Worker {
                 Ok(list) => self.emit(Event::StarredList(list)),
                 Err(error) => log::warn!("could not list starred messages: {error}"),
             },
+            Command::PinMessage { chat, id, seconds } => self.change_pin(chat, id, Some(seconds)),
+            Command::UnpinMessage { chat, id } => self.change_pin(chat, id, None),
+            Command::SetDisappearing { chat, seconds } => self.set_disappearing(chat, seconds),
+            Command::Completed(Completion {
+                done:
+                    Done::PinFinished {
+                        chat,
+                        id,
+                        pinned,
+                        seconds,
+                        at_ms,
+                        result,
+                    },
+                ..
+            }) => self.pin_finished(chat, id, pinned, seconds, at_ms, result),
+            Command::Completed(Completion {
+                done:
+                    Done::DisappearingSet {
+                        chat,
+                        seconds,
+                        at,
+                        result,
+                    },
+                ..
+            }) => self.disappearing_set(chat, seconds, at, result),
             Command::DeleteLocal { chat, id } => self.delete_message_everywhere(chat, id),
             // Starred messages stay until #20 adds a user-facing choice.
             Command::ClearChat(chat) => self.clear_chat_everywhere(chat),
@@ -1056,6 +1081,7 @@ impl Worker {
                 generation: _,
                 done:
                     Done::GroupInfo {
+                        admin,
                         chat,
                         name,
                         participants,
@@ -1068,6 +1094,7 @@ impl Worker {
                 let _ =
                     self.archive
                         .set_group_info(&chat, name.as_deref(), &participants, read_only);
+                let _ = self.archive.set_group_admin(&chat, admin);
                 if let Some(expiration) = ephemeral_expiration {
                     let _ = self.archive.set_ephemeral(
                         &chat,

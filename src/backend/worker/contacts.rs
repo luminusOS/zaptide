@@ -53,7 +53,9 @@ impl Worker {
             forwarded: false,
             thumbnail: None,
         };
+        let stamp = (row.id.clone(), row.timestamp);
         self.store_message(row, Some(message.encode_to_vec()), None);
+        self.remember_expiry(&chat, &stamp.0, stamp.1, expiration);
         tokio::spawn(send_outgoing_with_kind(
             OutgoingSession {
                 client,

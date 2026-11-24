@@ -62,8 +62,10 @@ pub(super) fn remember_reaction(recent: &mut Vec<String>, emoji: &str) -> bool {
 /// message, or one that has not reached WhatsApp.
 pub(super) fn can_react(message: &crate::model::Message) -> bool {
     use crate::model::{Content, Delivery};
-    !matches!(message.content, Content::Revoked | Content::Call { .. })
-        && !matches!(message.status, Delivery::Pending | Delivery::Failed)
+    !matches!(
+        message.content,
+        Content::Revoked | Content::Call { .. } | Content::System { .. }
+    ) && !matches!(message.status, Delivery::Pending | Delivery::Failed)
 }
 
 /// The reaction we sent, if any.

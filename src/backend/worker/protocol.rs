@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use super::{Content, LinkPreview, first_link, media, non_empty};
+use super::{Content, LinkPreview, Media, first_link, media, non_empty};
 use crate::model::unsupported as label;
 use whatsapp_rust::prelude::{MessageExt, wa};
 
@@ -19,8 +19,14 @@ pub(super) const MAX_WRAPPER_DEPTH: usize = 4;
 /// The message a person sees. `get_base_message` removes the transport
 /// wrappers; the ones peeled here carry a normal message that it leaves alone.
 pub(super) fn base_message(message: &wa::Message) -> &wa::Message {
-    let mut current = message.get_base_message();
+    // `get_base_message` only peels each of its wrapper kinds once, in a
+    // fixed order, so two wrappers of the same family stacked on top of
+    // each other (an old view-once wrapper around a newer one, say) leave
+    // one layer in place after a single call. Re-running it alongside the
+    // wrappers it does not know about catches that.
+    let mut current = message;
     for _ in 0..MAX_WRAPPER_DEPTH {
+        current = current.get_base_message();
         let inner = [
             &current.group_mentioned_message,
             &current.associated_child_message,
@@ -30,15 +36,20 @@ pub(super) fn base_message(message: &wa::Message) -> &wa::Message {
         .into_iter()
         .find_map(|wrapper| wrapper.as_option()?.message.as_option());
         let Some(inner) = inner else {
-            break;
+            continue;
         };
-        current = inner.get_base_message();
+        current = inner;
     }
     current
 }
 
 /// Converts a protocol message to visible content, or `None` for internal traffic.
+///
+/// Pass the message as received: the view-once wrappers are peeled below, so
+/// the question whether the sender meant it to be seen once has to be asked
+/// first. The media is kept either way and only marked.
 pub(super) fn classify(message: &wa::Message) -> Option<Content> {
+    let view_once = message.is_view_once();
     let base = base_message(message);
     if let Some(text) = base.text_content() {
         let preview = base.extended_text_message.as_option().and_then(|extended| {
@@ -69,12 +80,15 @@ pub(super) fn classify(message: &wa::Message) -> Option<Content> {
     if let Some(image) = base.image_message.as_option() {
         return Some(Content::Image {
             caption: non_empty(&image.caption),
-            media: media(
-                image.mimetype.as_ref(),
-                image.file_length,
-                image.width,
-                image.height,
-            ),
+            media: Media {
+                view_once,
+                ..media(
+                    image.mimetype.as_ref(),
+                    image.file_length,
+                    image.width,
+                    image.height,
+                )
+            },
         });
     }
     if let Some(video) = base
@@ -84,19 +98,25 @@ pub(super) fn classify(message: &wa::Message) -> Option<Content> {
     {
         return Some(Content::Video {
             caption: non_empty(&video.caption),
-            media: media(
-                video.mimetype.as_ref(),
-                video.file_length,
-                video.width,
-                video.height,
-            ),
+            media: Media {
+                view_once,
+                ..media(
+                    video.mimetype.as_ref(),
+                    video.file_length,
+                    video.width,
+                    video.height,
+                )
+            },
             seconds: video.seconds,
             gif: video.gif_playback.unwrap_or(false),
         });
     }
     if let Some(audio) = base.audio_message.as_option() {
         return Some(Content::Audio {
-            media: media(audio.mimetype.as_ref(), audio.file_length, None, None),
+            media: Media {
+                view_once,
+                ..media(audio.mimetype.as_ref(), audio.file_length, None, None)
+            },
             seconds: audio.seconds,
             voice_note: audio.ptt.unwrap_or(false),
             waveform: audio.waveform.clone().unwrap_or_default(),

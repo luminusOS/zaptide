@@ -76,7 +76,9 @@ link with your phone number. History may take a few minutes to arrive.
 > Backups need the archive and its keyring credential. `archive.db` alone cannot
 > be decrypted. Downloads and settings are not encrypted. Read
 > [data and backups](docs/user-guide.md#data-and-backups) before moving or deleting files.
-> Disappearing messages remain in the local archive after they expire on your phone.
+> Disappearing messages are removed from the local archive when their timer
+> runs out, unless someone kept them. Messages received before ZapTide was linked
+> or while it was closed are removed the next time it runs.
 
 ## Documentation
 

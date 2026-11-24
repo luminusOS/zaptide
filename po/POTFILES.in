@@ -25,7 +25,6 @@ src/application/rows.rs
 src/application/selection.rs
 src/application/sidebar.rs
 src/application/stars.rs
-src/application/storage_preferences.rs
 src/application/themes.rs
 src/application/transcript_view.rs
 src/backend/worker/calls.rs

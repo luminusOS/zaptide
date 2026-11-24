@@ -32,6 +32,14 @@ pub(super) struct ParsedChat {
     pub(super) revoked: Vec<HistoryRevoke>,
     pub(super) poll_updates: Vec<HistoryPollUpdate>,
     pub(super) reactions: Vec<HistoryReaction>,
+    pub(super) pins: Vec<HistoryPin>,
+}
+
+/// A pin or unpin from history, applied without a line in the transcript.
+pub(super) struct HistoryPin {
+    pub(super) change: super::pins::PinChange,
+    pub(super) sender: Option<String>,
+    pub(super) from_me: bool,
 }
 
 pub(super) struct HistoryPollUpdate {
@@ -79,6 +87,8 @@ pub(super) struct ParsedMessage {
     pub(super) raw: Vec<u8>,
     pub(super) poll_secret: Option<Vec<u8>>,
     pub(super) poll_votes: Vec<wa::PollUpdate>,
+    /// The disappearing-messages timer the message was sent with.
+    pub(super) expiration: Option<u32>,
 }
 
 /// Decodes a history chunk off the worker thread.
@@ -117,6 +127,7 @@ pub(super) fn parse_conversation(conversation: wa::Conversation) -> ParsedChat {
     let mut revoked = Vec::new();
     let mut poll_updates = Vec::new();
     let mut reactions = Vec::new();
+    let mut pins = Vec::new();
     let mut newest = 0;
     for entry in &conversation.messages {
         let Some(info) = entry.message.as_option() else {
@@ -141,6 +152,17 @@ pub(super) fn parse_conversation(conversation: wa::Conversation) -> ParsedChat {
             .or_else(|| key.participant.clone())
             .filter(|sender| !sender.is_empty())
             .or_else(|| key.remote_jid.clone());
+        if let Some(change) = super::pins::pin_change(base, timestamp * 1000) {
+            pins.push(HistoryPin {
+                change,
+                sender,
+                from_me,
+            });
+            continue;
+        }
+        if base.keep_in_chat_message.is_set() {
+            continue;
+        }
         if let Some(protocol) = base.protocol_message.as_option() {
             if protocol.r#type == Some(wa::message::protocol_message::Type::REVOKE)
                 && let Some(target) = protocol.key.as_option().and_then(|key| key.id.clone())
@@ -203,7 +225,7 @@ pub(super) fn parse_conversation(conversation: wa::Conversation) -> ParsedChat {
             });
             continue;
         }
-        let Some(content) = classify(base) else {
+        let Some(content) = classify(message) else {
             continue;
         };
         use wa::web_message_info::Status;
@@ -283,6 +305,7 @@ pub(super) fn parse_conversation(conversation: wa::Conversation) -> ParsedChat {
             raw: message.encode_to_vec(),
             poll_secret: info.message_secret.clone(),
             poll_votes: info.poll_updates.clone(),
+            expiration: base.get_ephemeral_expiration(),
         });
     }
     let last_activity = conversation
@@ -323,6 +346,7 @@ pub(super) fn parse_conversation(conversation: wa::Conversation) -> ParsedChat {
         revoked,
         poll_updates,
         reactions,
+        pins,
     }
 }
 
@@ -682,6 +706,7 @@ impl Worker {
                     }
                 });
                 let mentions = self.mentions_of(&message.mentions);
+                let expiration = message.expiration;
                 let row = Message {
                     id: message.id,
                     chat: id.clone(),
@@ -739,6 +764,7 @@ impl Worker {
                 {
                     self.confirm_answer(&id, &quoted.id, &raw);
                 }
+                self.remember_expiry(&id, &row.id, row.timestamp, expiration);
                 if matches!(row.content, Content::Buttons { .. } | Content::List { .. }) {
                     self.confirm_answers_for(&id, &row.id);
                 }
@@ -792,6 +818,28 @@ impl Worker {
                     update.timestamp,
                     &update.update,
                 );
+            }
+            let had_pins = !chat.pins.is_empty();
+            for pin in chat.pins {
+                let by = if pin.from_me {
+                    self.me()
+                } else {
+                    pin.sender
+                        .as_deref()
+                        .map(|sender| self.canonical_str(sender))
+                        .unwrap_or_else(|| id.clone())
+                };
+                let _ = self.archive.set_pin(
+                    &id,
+                    &pin.change.target,
+                    pin.change.pinned,
+                    &by,
+                    pin.change.at_ms,
+                    pin.change.expires_at_ms(),
+                );
+            }
+            if had_pins {
+                self.emit_pin(&id);
             }
             for revoked in chat.revoked {
                 let sender = if revoked.from_me {

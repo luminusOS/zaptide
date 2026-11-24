@@ -83,6 +83,19 @@ impl Worker {
             let _ = self.archive.set_ephemeral(&chat, expiration, 0);
         }
 
+        if base.pin_in_chat_message.is_set() {
+            self.apply_pin(info, &chat, base);
+            return;
+        }
+        if let Some(keep) = base.keep_in_chat_message.as_option() {
+            if let Some(target) = keep.key.as_option().and_then(|key| key.id.as_deref()) {
+                // A message someone kept in a disappearing chat is not removed.
+                let kept = keep.keep_type == Some(wa::KeepType::KeepForAll);
+                let _ = self.archive.set_kept(&chat, target, kept);
+            }
+            return;
+        }
+
         if let Some(protocol) = base.protocol_message.as_option() {
             use wa::message::protocol_message::Type;
             if protocol.r#type == Some(Type::EPHEMERAL_SETTING) {
@@ -101,6 +114,26 @@ impl Worker {
                         "protocol timer update: duration={expiration}s timestamp={timestamp} fallback_timestamp={used_fallback} accepted={accepted}"
                     );
                     if accepted {
+                        // Only a change made now gets a line; an older setting
+                        // that merely reaches us late does not.
+                        if !self.syncing {
+                            let sender = if from_me {
+                                self.me()
+                            } else {
+                                self.canonical(&info.source.sender)
+                            };
+                            self.store_system_line(
+                                &chat,
+                                &info.id,
+                                sender,
+                                push_name.as_ref().map(ToString::to_string),
+                                from_me,
+                                info.timestamp.timestamp(),
+                                crate::model::SystemEvent::Timer {
+                                    seconds: expiration,
+                                },
+                            );
+                        }
                         self.emit_chat(&chat);
                     }
                 } else {
@@ -128,6 +161,8 @@ impl Worker {
                                 (content.media_mut(), existing.content.media())
                         {
                             new.path = old.path.clone();
+                            // An edit carries no wrapper of its own.
+                            new.view_once = old.view_once;
                         }
                         if let Ok(true) = self.archive.set_content(&chat, &target, &content, true) {
                             self.emit_message(&chat, &target);
@@ -158,7 +193,7 @@ impl Worker {
             );
             return;
         }
-        let Some(content) = classify(base) else {
+        let Some(content) = classify(message) else {
             return;
         };
         let quoted = self.quoted_of(base);
@@ -190,8 +225,10 @@ impl Worker {
             thumbnail: thumbnail_of(base),
         };
         let is_poll = matches!(row.content, Content::Poll { .. });
+        let (timestamp, expiration) = (row.timestamp, base.get_ephemeral_expiration());
         self.remember_poll(&row, message, &info.source.sender.to_non_ad_string(), None);
         self.store_message(row, Some(message.encode_to_vec()), push_name.as_deref());
+        self.remember_expiry(&chat, info.id.as_ref(), timestamp, expiration);
         if is_poll {
             self.pump_poll_votes();
         }
@@ -204,7 +241,9 @@ impl Worker {
         }
     }
 
-    pub(super) fn ingest_undecryptable(&mut self, info: &MessageInfo) {
+    /// Files a placeholder for a message whose body did not arrive; `what` is
+    /// the `Content::Unsupported` label that says why.
+    pub(super) fn ingest_unavailable(&mut self, info: &MessageInfo, what: &str) {
         if info.has_status_receipt_class() || info.source.is_from_me {
             return;
         }
@@ -228,7 +267,7 @@ impl Worker {
             from_me: false,
             timestamp: info.timestamp.timestamp(),
             content: Content::Unsupported {
-                what: crate::model::unsupported::UNDECRYPTED.to_owned(),
+                what: what.to_owned(),
             },
             status: Delivery::None,
             delivered_at: None,

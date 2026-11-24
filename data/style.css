@@ -145,6 +145,8 @@ window.translucent-sidebar .sidebar-pane .view {
 }
 .zaptide-unread-divider { font-weight: bold; font-size: 0.85em; border-radius: 9999px; padding: 3px 14px; color: var(--accent-color); background-color: color-mix(in srgb, var(--accent-bg-color) 18%, transparent); }
 .zaptide-call-event { padding: 2px 0; }
+.zaptide-pinned-bar { border-radius: 0; padding: 6px 14px; border-bottom: 1px solid var(--border-color, alpha(currentColor, 0.15)); }
+.zaptide-pinned-bar image { opacity: 0.7; }
 .zaptide-call-window button.call-control { min-height: 48px; padding: 0 22px; }
 .zaptide-call-window button.call-control image { -gtk-icon-size: 16px; }
 .zaptide-call-window button.call-control label { font-size: 15px; font-weight: 600; }

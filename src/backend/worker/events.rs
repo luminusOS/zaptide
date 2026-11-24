@@ -168,7 +168,16 @@ impl Worker {
                 }
             }
             E::UndecryptableMessage(undecryptable) => {
-                self.ingest_undecryptable(&undecryptable.info);
+                // A view-once body is never delivered to a linked device, so
+                // say what it was rather than a generic wait.
+                let what = if undecryptable.unavailable_type
+                    == whatsapp_rust::types::events::UnavailableType::ViewOnce
+                {
+                    crate::model::unsupported::VIEW_ONCE
+                } else {
+                    crate::model::unsupported::UNDECRYPTED
+                };
+                self.ingest_unavailable(&undecryptable.info, what);
             }
             E::Receipt(receipt) => self.on_receipt(receipt),
             E::ChatPresence(presence) => {
@@ -217,6 +226,30 @@ impl Worker {
                         "group timer update: duration={expiration}s timestamp={timestamp} accepted={accepted}"
                     );
                     if accepted {
+                        if !self.syncing {
+                            let participant =
+                                update.participant.as_ref().map(|jid| self.canonical(jid));
+                            let from_me = participant.as_deref() == Some(self.me().as_str());
+                            let id = format!(
+                                "timer-{}-{}",
+                                update
+                                    .notification_id
+                                    .clone()
+                                    .unwrap_or_else(|| timestamp.to_string()),
+                                update.action_index
+                            );
+                            self.store_system_line(
+                                &chat,
+                                &id,
+                                participant.unwrap_or_else(|| chat.clone()),
+                                update.notify.clone(),
+                                from_me,
+                                timestamp,
+                                crate::model::SystemEvent::Timer {
+                                    seconds: *expiration,
+                                },
+                            );
+                        }
                         self.emit_chat(&chat);
                     }
                 }

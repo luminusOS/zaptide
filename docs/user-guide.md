@@ -192,9 +192,28 @@ If phone settings cannot be read, stored chats remain available with a notice.
 Chats locked on the phone stay hidden, including their calls and starred
 messages. Manage locks on your phone; ZapTide has no lock code or bypass.
 
+## View once, pins and disappearing messages
+
+Photos, videos and voice messages sent as view once are shown like ordinary
+media and carry a **View once** note. If WhatsApp does not deliver the body to
+this device, the chat shows a placeholder instead. ZapTide does not send view
+once messages and does not delete the media after you view it.
+
+**Pin** in the message menu pins a message for everyone for 24 hours, 7 days or
+30 days; **Unpin** removes it. The newest pin shows in a bar above the
+conversation, and a click goes to the message. A line in the chat tells who
+pinned a message.
+
+Chat details show **Disappearing messages**. In a direct chat, or in a group
+where you are an admin, choose Off, 24 hours, 7 days or 90 days. Messages are
+sent with the chat's timer and removed from the local archive, with their
+downloaded file, when their own time runs out. A message that someone kept in
+the chat stays. Removal is local and never asks the phone or other devices to
+delete anything. A line in the chat reports each change of the timer.
+
 ## Other limitations
 
 Status posts, communities and group administration are not supported.
-Newsletter channels are read-only. Disappearing messages remain in the local
-archive after expiring on your phone. Keyboard shortcuts and screen-reader
-labels are available, but accessibility is incomplete.
+Newsletter channels are read-only. Keyboard shortcuts and screen-reader
+labels are available, but accessibility is incomplete. Sending "keep in chat"
+and the account-wide disappearing-messages default are not supported.

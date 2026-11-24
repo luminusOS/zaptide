@@ -13,6 +13,7 @@ fn copy_image_is_available_only_for_downloaded_images() {
         height: Some(1),
         path: Some(path.clone()),
         state: crate::model::MediaState::Idle,
+        view_once: false,
     };
     message.content = crate::model::Content::Image {
         caption: None,
@@ -401,6 +402,7 @@ fn photos_sent_together_form_one_album() {
                 height: None,
                 path: None,
                 state: MediaState::Idle,
+                view_once: false,
             },
             caption: caption.map(Into::into),
         };
@@ -439,6 +441,44 @@ fn photos_sent_together_form_one_album() {
     assert_eq!(
         &album_roles(&messages, &separated)[..3],
         [AlbumRole::Leader(2), AlbumRole::Follower, AlbumRole::Single]
+    );
+}
+
+#[test]
+fn view_once_photos_never_join_an_album() {
+    use crate::model::{Content, Media, MediaState};
+    let photo = |id: &str, timestamp: i64, view_once: bool| {
+        let mut message = grouping_message(id, "Alice", false, timestamp);
+        message.content = Content::Image {
+            media: Media {
+                mime: "image/jpeg".into(),
+                size: 1,
+                width: None,
+                height: None,
+                path: None,
+                state: MediaState::Idle,
+                view_once,
+            },
+            caption: None,
+        };
+        message
+    };
+    let messages = vec![
+        photo("a", 100, false),
+        photo("b", 101, true),
+        photo("c", 102, true),
+        photo("d", 103, false),
+        photo("e", 104, false),
+    ];
+    assert_eq!(
+        album_roles(&messages, &[false; 5]),
+        [
+            AlbumRole::Single,
+            AlbumRole::Single,
+            AlbumRole::Single,
+            AlbumRole::Leader(2),
+            AlbumRole::Follower,
+        ]
     );
 }
 
@@ -669,6 +709,7 @@ fn auto_download_requires_unfetched_idle_media_within_size_limit() {
         height: None,
         path: None,
         state: crate::model::MediaState::Idle,
+        view_once: false,
     };
     assert!(should_auto_download(Some(&media)));
 
@@ -942,6 +983,26 @@ fn footer_notes_name_forwarded_and_edited_messages_only() {
     assert_eq!(footer_notes(&message), "Forwarded · Edited ·");
     message.forwarded = false;
     assert_eq!(footer_notes(&message), "Edited ·");
+}
+
+#[test]
+fn footer_notes_mark_view_once_media_first() {
+    let mut message = grouping_message("m", "ana", false, 0);
+    message.content = crate::model::Content::Image {
+        caption: None,
+        media: crate::model::Media {
+            mime: "image/jpeg".into(),
+            size: 1,
+            width: None,
+            height: None,
+            path: None,
+            state: crate::model::MediaState::Idle,
+            view_once: true,
+        },
+    };
+    assert_eq!(footer_notes(&message), "View once ·");
+    message.forwarded = true;
+    assert_eq!(footer_notes(&message), "View once · Forwarded ·");
 }
 
 fn star_of(row: &gtk::Box) -> gtk::Image {

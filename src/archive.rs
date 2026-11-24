@@ -23,12 +23,17 @@ pub use encryption::{
     archive_key_identity, copy_archive_key, forget_archive_key, forget_handed_over_key,
     hand_over_archive_keys,
 };
+mod expiry;
 mod media;
+mod pins;
 mod polls;
 mod receipts;
 mod remote_deletions;
 mod row;
 mod stars;
+#[allow(unused_imports)]
+pub use expiry::ExpiredMessage;
+pub use pins::PinnedMessage;
 pub use polls::PollVote;
 pub use remote_deletions::{RemoteDeletion, RemoteDeletionKind};
 pub use stars::StarredMessage;
@@ -204,7 +209,7 @@ END;
 const CHAT_COLUMNS: &str =
     "c.id, c.name, c.kind, c.last_activity, c.unread, c.archived, c.pinned, c.muted_until,
                     m.from_me, m.sender_name, m.content, m.status, m.sender, c.participants, c.read_only,
-                    c.pinned_at, c.ephemeral_expiration, c.locked";
+                    c.pinned_at, c.ephemeral_expiration, c.locked, c.admin";
 
 const MIGRATIONS: &[(&str, &str, &str)] = &[
     ("messages", "thumbnail", "BLOB"),
@@ -233,6 +238,10 @@ const MIGRATIONS: &[(&str, &str, &str)] = &[
     ("chats", "mute_updated_at", "INTEGER"),
     ("chats", "locked", "INTEGER NOT NULL DEFAULT 0"),
     ("chats", "lock_updated_at", "INTEGER"),
+    // When a disappearing message runs out, in seconds; null when it never does.
+    ("messages", "expires_at", "INTEGER"),
+    ("messages", "kept", "INTEGER NOT NULL DEFAULT 0"),
+    ("chats", "admin", "INTEGER NOT NULL DEFAULT 0"),
 ];
 const CHAT_JOIN: &str = "FROM chats c
              LEFT JOIN messages m ON m.chat = c.id AND m.rowid = (
@@ -326,6 +335,7 @@ impl Archive {
         transaction.execute_batch(SCHEMA)?;
         transaction.execute_batch(polls::SCHEMA)?;
         transaction.execute_batch(stars::SCHEMA)?;
+        transaction.execute_batch(pins::SCHEMA)?;
         transaction.execute_batch(remote_deletions::SCHEMA)?;
         for (table, column, definition) in MIGRATIONS {
             let columns = transaction
@@ -346,6 +356,7 @@ impl Archive {
                  chat, (CASE WHEN json_valid(quoted) THEN json_extract(quoted, '$.id') END), status)
              WHERE from_me = 1 AND quoted IS NOT NULL AND raw IS NOT NULL;",
         )?;
+        transaction.execute_batch(expiry::INDEX)?;
         transaction.execute_batch(&calls::schema())?;
         transaction.execute_batch(media::SCHEMA)?;
         transaction.commit()?;
@@ -446,6 +457,16 @@ impl Archive {
                 serde_json::to_string(participants).unwrap_or_else(|_| "[]".into()),
                 read_only
             ],
+        )?;
+        Ok(())
+    }
+
+    /// Records whether this account administers a group, which decides who may
+    /// change its settings.
+    pub fn set_group_admin(&self, id: &str, admin: bool) -> Result<()> {
+        self.connection.execute(
+            "UPDATE chats SET admin = ?2 WHERE id = ?1",
+            params![id, admin],
         )?;
         Ok(())
     }
@@ -1337,6 +1358,7 @@ mod sticker_tests {
                     height: Some(512),
                     path: path.map(std::path::PathBuf::from),
                     state: MediaState::Idle,
+                    view_once: false,
                 },
                 animated: false,
             },
@@ -1467,6 +1489,7 @@ mod media_path_tests {
                     height: None,
                     path: None,
                     state: MediaState::Idle,
+                    view_once: false,
                 },
                 caption: None,
             },

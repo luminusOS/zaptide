@@ -107,6 +107,7 @@ fn media_viewer_uses_the_main_panel_and_releases_files_on_navigation() {
             height: Some(48),
             path: Some(path.clone()),
             state: crate::model::MediaState::Idle,
+            view_once: false,
         },
     };
     {
@@ -223,6 +224,7 @@ fn media_viewer_uses_the_main_panel_and_releases_files_on_navigation() {
                     height: Some(48),
                     path: Some(path.clone()),
                     state: crate::model::MediaState::Idle,
+                    view_once: false,
                 },
             };
             message
@@ -248,6 +250,7 @@ fn media_viewer_uses_the_main_panel_and_releases_files_on_navigation() {
             height: Some(240),
             path: Some(video.clone()),
             state: crate::model::MediaState::Idle,
+            view_once: false,
         },
         seconds: Some(3),
         gif: false,

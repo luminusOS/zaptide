@@ -251,6 +251,11 @@ pub enum NativeMediaContent {
         icon: &'static str,
         text: String,
     },
+    /// A line that reports something that happened in the chat, such as a pin.
+    System {
+        icon: &'static str,
+        text: String,
+    },
     VideoPlaceholder,
     UnsupportedPlaceholder,
     Other,
@@ -267,6 +272,7 @@ impl fmt::Debug for NativeMediaContent {
             Self::List { .. } => "List",
             Self::Template { .. } => "Template",
             Self::Call { .. } => "Call",
+            Self::System { .. } => "System",
             Self::VideoPlaceholder => "VideoPlaceholder",
             Self::UnsupportedPlaceholder => "UnsupportedPlaceholder",
             Self::Other => "Other",
@@ -456,6 +462,10 @@ pub fn project_content(message: &Message) -> NativeMessageContent {
         } => NativeMediaContent::Call {
             icon: crate::model::call::call_icon(*outgoing, *outcome),
             text: crate::model::call::call_summary(*video, *outgoing, *outcome, *seconds),
+        },
+        Content::System { event } => NativeMediaContent::System {
+            icon: event.icon(),
+            text: event.line(message.from_me, message.sender_name.as_deref()),
         },
         Content::Video { .. } => NativeMediaContent::VideoPlaceholder,
         Content::Unsupported { .. } => NativeMediaContent::UnsupportedPlaceholder,
@@ -663,6 +673,7 @@ mod tests {
             height: Some(480),
             path: Some(PathBuf::from("/private/user/photo.jpg")),
             state: MediaState::Idle,
+            view_once: false,
         }
     }
 

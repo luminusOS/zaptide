@@ -451,9 +451,11 @@ mod downloads;
 
 mod avatars;
 
+mod disappearing;
 mod previews;
 mod session;
 mod synthetic_archive;
+mod view_once;
 
 fn stored(worker: &Worker, chat: &str, id: &str) -> crate::model::Message {
     worker.archive.message(chat, id).unwrap().unwrap()
@@ -521,6 +523,7 @@ fn snapshot_history(update_id: &str, sender: &str, alias: (&str, &str)) -> Parse
         thumbnail: None,
         raw: Vec::new(),
         poll_secret: None,
+        expiration: None,
         poll_votes: vec![from_default!(wa::PollUpdate {
             poll_update_message_key: MessageField::some(from_default!(wa::MessageKey {
                 id: Some(update_id.into()),
@@ -659,7 +662,7 @@ fn group_message_id_sender_alt_cannot_poison_colliding_envelope() {
     info.source.sender_alt = Some("111@s.whatsapp.net".parse().unwrap());
     let raw = Arc::new(wa_text("forged"));
     worker.ingest(&raw, &info);
-    worker.ingest_undecryptable(&info);
+    worker.ingest_unavailable(&info, crate::model::unsupported::UNDECRYPTED);
     assert_eq!(stored(&worker, chat, "collision"), original);
     assert_eq!(
         worker.archive.raw(chat, "collision").unwrap(),
@@ -722,7 +725,7 @@ fn group_statuses_stay_out_of_the_group_chat() {
         }));
 
         worker.ingest(&Arc::new(wa_text("status")), &status);
-        worker.ingest_undecryptable(&status);
+        worker.ingest_unavailable(&status, crate::model::unsupported::UNDECRYPTED);
 
         assert!(
             worker
@@ -801,6 +804,7 @@ fn group_message_id_history_mapping_cannot_authorize_same_chunk_collision() {
         thumbnail: None,
         raw: b"forged".to_vec(),
         poll_secret: None,
+        expiration: None,
         poll_votes: Vec::new(),
     });
     let (_, committed) = worker.apply_history(
@@ -1019,6 +1023,7 @@ fn group_message_id_lookup_error_rolls_back_history_and_keeps_request_retryable(
         thumbnail: None,
         raw: Vec::new(),
         poll_secret: None,
+        expiration: None,
         poll_votes: Vec::new(),
     });
     let (filed, committed) = worker.apply_history(
@@ -4150,6 +4155,7 @@ async fn identity_merge_preserves_download_fingerprint_and_picker_ownership() {
             height: Some(2),
             path: None,
             state: Default::default(),
+            view_once: false,
         },
     };
     worker.archive.ensure_chat(ALIAS, "Contact").unwrap();
@@ -4238,6 +4244,7 @@ async fn simultaneous_download_completions_for_same_attachment_both_succeed() {
             height: Some(2),
             path: None,
             state: Default::default(),
+            view_once: false,
         },
     };
     worker.archive.ensure_chat(chat, "A").unwrap();
@@ -4303,6 +4310,7 @@ async fn archive_read_failure_preserves_download_until_revalidation() {
                 height: Some(2),
                 path: None,
                 state: Default::default(),
+                view_once: false,
             },
             animated: false,
         };
@@ -4439,6 +4447,7 @@ async fn stale_download_cannot_attach_file_to_replaced_message() {
             height: Some(2),
             path: None,
             state: Default::default(),
+            view_once: false,
         },
     };
     worker.archive.ensure_chat(chat, "A").unwrap();
@@ -4496,6 +4505,7 @@ async fn stale_download_does_not_release_replacement_picker_request() {
                 height: Some(2),
                 path: None,
                 state: Default::default(),
+                view_once: false,
             },
             animated: false,
         };
@@ -5899,6 +5909,7 @@ pub(super) mod receipt_tests {
             .handle_command(Command::Completed(Completion {
                 generation: 0,
                 done: Done::GroupInfo {
+                    admin: false,
                     chat: group.into(),
                     name: Some("Stale group name".into()),
                     participants: vec![ME.into()],

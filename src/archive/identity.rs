@@ -189,6 +189,15 @@ impl Archive {
             params![alias, canonical],
         )?;
         self.connection.execute(
+            "INSERT INTO pins (chat, id, pinned, pinned_by, pinned_at_ms, expires_at_ms)
+             SELECT ?2, id, pinned, pinned_by, pinned_at_ms, expires_at_ms FROM pins WHERE chat = ?1
+             ON CONFLICT(chat, id) DO UPDATE SET pinned = excluded.pinned,
+                 pinned_by = excluded.pinned_by, pinned_at_ms = excluded.pinned_at_ms,
+                 expires_at_ms = excluded.expires_at_ms
+             WHERE excluded.pinned_at_ms > pins.pinned_at_ms",
+            params![alias, canonical],
+        )?;
+        self.connection.execute(
             "INSERT OR IGNORE INTO polls (chat, id, creator, secret)
              SELECT ?2, id, creator, secret FROM polls WHERE chat = ?1",
             params![alias, canonical],
@@ -225,6 +234,7 @@ impl Archive {
         )?;
         for table in [
             "stars",
+            "pins",
             "polls",
             "poll_history",
             "poll_votes",
@@ -449,6 +459,7 @@ mod tests {
                         height: None,
                         path: (chat == downloaded_chat).then(|| "/synthetic/image.jpg".into()),
                         state: Default::default(),
+                        view_once: false,
                     },
                 };
                 archive.insert_message(&row, Some(chat.as_bytes())).unwrap();

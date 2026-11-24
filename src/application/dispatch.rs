@@ -1354,6 +1354,10 @@ impl NativeApplication {
             }
             Input::CloseChat => self.close_chat(),
             Input::ToggleSelectedStar => self.toggle_selected_star(),
+            Input::PinSelected(seconds) => self.pin_selected(seconds),
+            Input::UnpinSelected => self.unpin_selected(),
+            Input::JumpToPinned => self.jump_to_pinned(),
+            Input::SetDisappearing(seconds) => self.set_disappearing(seconds),
             Input::ShowStarred => self.show_starred(),
             Input::OpenStarred { chat, id } => self.open_starred(chat, id),
             Input::DeleteSelected(everyone) => self.confirm_delete(everyone, sender),

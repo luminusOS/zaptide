@@ -23,6 +23,7 @@ mod icons;
 mod link_page;
 mod linking;
 mod motion;
+mod pins;
 mod presence;
 mod presentation;
 mod profile_dialog;
@@ -97,6 +98,7 @@ fn dialog_action_callback(
             dialogs::DialogAction::UnstarSticker(path) => Input::UnstarSticker(path),
             dialogs::DialogAction::ShowStarred => Input::ShowStarred,
             dialogs::DialogAction::OpenStarred { chat, id } => Input::OpenStarred { chat, id },
+            dialogs::DialogAction::SetDisappearing(seconds) => Input::SetDisappearing(seconds),
         });
     })
 }
@@ -193,6 +195,8 @@ struct TranscriptRequests {
 #[derive(Default)]
 struct OpenChatState {
     active_chat: Option<String>,
+    /// The message the open chat has pinned, shown in the bar on top.
+    pinned: Option<crate::archive::PinnedMessage>,
     pending_edit: Option<(String, String, String)>,
     reply_to: Option<(String, String)>,
     editing: Option<(String, String)>,
@@ -754,6 +758,12 @@ pub enum Input {
     EscapePressed,
     CloseChat,
     ToggleSelectedStar,
+    /// Pins the selected message for this many seconds.
+    PinSelected(u32),
+    UnpinSelected,
+    JumpToPinned,
+    /// Changes the open chat's disappearing-messages timer; 0 turns it off.
+    SetDisappearing(u32),
     ShowStarred,
     OpenStarred {
         chat: String,
@@ -986,6 +996,29 @@ impl SimpleComponent for NativeApplication {
                                         set_orientation: gtk::Orientation::Vertical,
                                         add_css_class: "zaptide-conversation",
 
+                                         // The message this chat has pinned; a click goes to it.
+                                         append = &gtk::Button {
+                                             set_css_classes: &["flat", "zaptide-pinned-bar"],
+                                             #[watch]
+                                             set_visible: model.open_chat.pinned.is_some(),
+                                             set_tooltip_text: Some(&gettext("Go to pinned message")),
+                                             connect_clicked => Input::JumpToPinned,
+                                             #[wrap(Some)]
+                                             set_child = &gtk::Box {
+                                                 set_spacing: 8,
+                                                 append = &gtk::Image {
+                                                     set_icon_name: Some("view-pin-symbolic"),
+                                                 },
+                                                 append = &gtk::Label {
+                                                     set_hexpand: true,
+                                                     set_xalign: 0.0,
+                                                     set_single_line_mode: true,
+                                                     set_ellipsize: gtk::pango::EllipsizeMode::End,
+                                                     #[watch]
+                                                     set_label: &model.pinned_text(),
+                                                 },
+                                             },
+                                         },
                                          append = model.transcript_view.widget(),
                                          append = &gtk::Revealer {
                                              // Laid out like an incoming message row so it
@@ -1961,6 +1994,13 @@ impl NativeApplication {
         let Some(message) = self.selected_message() else {
             return menu;
         };
+        if matches!(message.content, crate::model::Content::System { .. }) {
+            // A line about the chat has nothing to reply to, copy or forward.
+            let delete = gtk::gio::Menu::new();
+            delete.append(Some(&gettext("Delete for Me")), Some("message.delete"));
+            menu.append_section(None, &delete);
+            return menu;
+        }
         let open = gtk::gio::Menu::new();
         if self.attachment_action_available() {
             let downloaded = message
@@ -2017,6 +2057,23 @@ impl NativeApplication {
             gettext("Star")
         };
         respond.append(Some(&star), Some("message.star"));
+        if pins::can_pin(message) {
+            if self.is_pinned(&message.id) {
+                respond.append(Some(&gettext("Unpin")), Some("message.unpin"));
+            } else {
+                let durations = gtk::gio::Menu::new();
+                for seconds in pins::PIN_CHOICES {
+                    let item =
+                        gtk::gio::MenuItem::new(Some(&pins::pin_choice_label(seconds)), None);
+                    item.set_action_and_target_value(
+                        Some("message.pin"),
+                        Some(&seconds.to_variant()),
+                    );
+                    durations.append_item(&item);
+                }
+                respond.append_submenu(Some(&gettext("Pin")), &durations);
+            }
+        }
         respond.append(Some(&gettext("Select")), Some("message.select"));
         let vote = gtk::gio::Menu::new();
         if self.selected_poll_can_vote() {
@@ -2323,6 +2380,7 @@ impl NativeApplication {
     fn reset_open_chat_state(&mut self) {
         self.audio.reset_for_chat();
         self.open_chat.active_chat = None;
+        self.open_chat.pinned = None;
     }
 
     /// Whether messages are being brought up to date: syncing with the phone,

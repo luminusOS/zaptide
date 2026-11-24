@@ -169,6 +169,7 @@ fn fixture_message(
             height: Some(height),
             path: Some(path),
             state: crate::model::MediaState::Idle,
+            view_once: false,
         },
     });
     message.sender_name = Some("Marina Costa".into());
@@ -531,6 +532,7 @@ fn media_message(
         height: Some(height),
         path: Some(path.to_path_buf()),
         state: crate::model::MediaState::Idle,
+        view_once: false,
     });
     message
 }
@@ -1189,6 +1191,7 @@ fn viewer_steps_zooms_and_controls_video() {
             height: Some(720),
             path: Some(video.clone()),
             state: crate::model::MediaState::Idle,
+            view_once: false,
         },
         seconds: Some(3),
         gif: false,

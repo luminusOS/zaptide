@@ -1072,6 +1072,7 @@ mod tests {
                         height: None,
                         path: None,
                         state: Default::default(),
+                        view_once: false,
                     },
                     animated: false,
                 },

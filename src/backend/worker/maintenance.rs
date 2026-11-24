@@ -156,7 +156,7 @@ impl Worker {
                 continue;
             };
             let base = base_message(&message);
-            let Some(mut content) = classify(base) else {
+            let Some(mut content) = classify(&message) else {
                 continue;
             };
             if matches!(source.content, Content::Revoked) {

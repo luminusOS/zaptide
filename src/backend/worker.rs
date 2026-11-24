@@ -45,6 +45,7 @@ mod contacts;
 mod device_store;
 mod downloads;
 mod events;
+mod expiry;
 mod failures;
 mod groups;
 mod history;
@@ -54,6 +55,7 @@ mod maintenance;
 mod newsletters;
 mod older;
 mod outbound;
+mod pins;
 mod poll_history;
 mod polls;
 mod presence;
@@ -68,6 +70,7 @@ mod revoke;
 mod session;
 mod stars;
 mod stickers;
+mod system;
 mod transport;
 use stars::STARRED_LIMIT;
 
@@ -127,7 +130,7 @@ const MAX_EARLY_HISTORY_IDS: usize = 16;
 /// Sticker download batch size for the picker.
 const STICKER_FETCH_LIMIT: usize = 40;
 /// Bump to re-derive stored rows after `classify` or `thumbnail_of` change.
-const DERIVED_VERSION: &str = "7";
+const DERIVED_VERSION: &str = "8";
 /// Rows visited per maintenance step; bounds how long a queued event waits.
 const MAINTENANCE_BATCH: usize = 256;
 /// Turns handled while maintenance waits before one step runs regardless,
@@ -973,6 +976,7 @@ struct Worker {
     presence_wish: tokio::sync::watch::Sender<presence::PresenceWish>,
     calls: calls::Calls,
     retention: retention::Retention,
+    expiry: expiry::Expiry,
     /// Custom folder for new downloads; `None` means `dirs.media_cache_dir()`.
     media_dir_override: Option<PathBuf>,
     dirs: AppDirs,
@@ -1226,6 +1230,7 @@ impl Worker {
             presence_wish: tokio::sync::watch::Sender::new(Default::default()),
             calls: Default::default(),
             retention: Default::default(),
+            expiry: Default::default(),
             media_dir_override: None,
         }
     }
@@ -1293,6 +1298,7 @@ impl Worker {
                 self.pump_poll_votes();
                 self.pump_poll_history();
                 self.pump_media_retention();
+                self.pump_expiry();
                 self.flush_stickers();
             }
             // yield_now is pending on its first poll, so anything already
@@ -1382,6 +1388,7 @@ impl Worker {
                     | Event::Contacts(_)
                     | Event::Typing { .. }
                     | Event::Calls { .. }
+                    | Event::Pinned { .. }
             )
         {
             return;
@@ -1920,6 +1927,7 @@ fn media(
         height,
         path: None,
         state: Default::default(),
+        view_once: false,
     }
 }
 

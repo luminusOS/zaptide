@@ -153,6 +153,7 @@ impl Worker {
                     id,
                 });
                 self.emit_chat(&chat);
+                self.emit_pin(&chat);
                 self.after_local_deletion(request.is_some());
             }
             Ok(false) => {}

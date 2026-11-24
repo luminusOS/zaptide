@@ -176,6 +176,7 @@ fn inline_gifs_release_playback_when_unmapped() {
             height: Some(360),
             path: Some(path),
             state: MediaState::Idle,
+            view_once: false,
         },
         seconds: Some(1),
         gif: true,

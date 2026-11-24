@@ -187,6 +187,7 @@ fn viewer_album_displays_sender_profiles_and_clears_missing_picture() {
                 height: Some(32),
                 path: Some(paths[index].clone()),
                 state: crate::model::MediaState::Idle,
+                view_once: false,
             },
         };
         message

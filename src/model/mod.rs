@@ -28,6 +28,8 @@ pub mod unsupported {
     pub const STICKER_PACK: &str = "sticker pack";
     pub const UNDECRYPTED: &str = "Waiting for this message. Open WhatsApp on your phone";
     pub const UNREADABLE: &str = "unreadable";
+    /// A view-once message whose body WhatsApp did not deliver to this device.
+    pub const VIEW_ONCE: &str = "view once";
 }
 
 /// Chat JID string: `<phone>@s.whatsapp.net`, `<id>@g.us`, or `<id>@lid`.
@@ -77,6 +79,8 @@ pub struct Chat {
     pub locked: bool,
     /// Disappearing-message duration in seconds, if enabled.
     pub ephemeral_expiration: Option<u32>,
+    /// Whether this account administers the group.
+    pub admin: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -107,6 +111,7 @@ impl Chat {
             read_only: false,
             locked: false,
             ephemeral_expiration: None,
+            admin: false,
         }
     }
 
@@ -325,10 +330,86 @@ pub enum Content {
     },
     /// "This message was deleted."
     Revoked,
+    /// A line between messages that reports something that happened in the
+    /// chat, such as a pin. It has no body to reply to, copy or forward.
+    System {
+        event: SystemEvent,
+    },
     /// Unsupported content with a user-facing description.
     Unsupported {
         what: String,
     },
+}
+
+/// Something that happened in a chat and is shown as a line in the transcript.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SystemEvent {
+    /// A message was pinned for everyone.
+    Pinned,
+    /// Disappearing messages were set to this many seconds; zero turns them off.
+    Timer { seconds: u32 },
+}
+
+/// The timers WhatsApp offers: off, 24 hours, 7 days and 90 days.
+pub const TIMER_CHOICES: [u32; 4] = [0, 86_400, 604_800, 7_776_000];
+
+/// How a disappearing-messages duration reads, `0` being off.
+pub fn timer_label(seconds: u32) -> String {
+    match seconds {
+        0 => gettext("Off"),
+        86_400 => gettext("24 hours"),
+        604_800 => gettext("7 days"),
+        7_776_000 => gettext("90 days"),
+        other => gettext("{seconds} seconds").replace("{seconds}", &other.to_string()),
+    }
+}
+
+impl SystemEvent {
+    pub fn icon(self) -> &'static str {
+        match self {
+            Self::Pinned => "view-pin-symbolic",
+            Self::Timer { .. } => "preferences-system-time-symbolic",
+        }
+    }
+
+    /// The line in the transcript. `actor` is the name of whoever did it, when
+    /// it is known and was not us.
+    pub fn line(self, from_me: bool, actor: Option<&str>) -> String {
+        let actor = actor.map(str::trim).filter(|name| !name.is_empty());
+        match (self, from_me, actor) {
+            (Self::Pinned, true, _) => gettext("You pinned a message"),
+            (Self::Pinned, false, Some(name)) => {
+                gettext("{name} pinned a message").replace("{name}", name)
+            }
+            (Self::Timer { seconds: 0 }, true, _) => {
+                gettext("You turned off disappearing messages")
+            }
+            (Self::Timer { seconds: 0 }, false, Some(name)) => {
+                gettext("{name} turned off disappearing messages").replace("{name}", name)
+            }
+            (Self::Timer { seconds }, true, _) => {
+                gettext("You set disappearing messages to {duration}")
+                    .replace("{duration}", &timer_label(seconds))
+            }
+            (Self::Timer { seconds }, false, Some(name)) => {
+                gettext("{name} set disappearing messages to {duration}")
+                    .replace("{name}", name)
+                    .replace("{duration}", &timer_label(seconds))
+            }
+            (_, false, None) => self.summary(),
+        }
+    }
+
+    /// The one-line form for the chat list, notifications and quotes.
+    pub fn summary(self) -> String {
+        match self {
+            Self::Pinned => gettext("Pinned a message"),
+            Self::Timer { seconds: 0 } => gettext("Disappearing messages turned off"),
+            Self::Timer { seconds } => gettext("Disappearing messages set to {duration}")
+                .replace("{duration}", &timer_label(seconds)),
+        }
+    }
 }
 
 fn first_line(text: &str) -> Option<&str> {
@@ -512,6 +593,7 @@ impl Content {
                 seconds,
             } => call::call_summary(*video, *outgoing, *outcome, *seconds),
             Self::Revoked => gettext("This message was deleted"),
+            Self::System { event } => event.summary(),
             Self::Unsupported { what } => unsupported_summary(what),
         }
     }
@@ -623,6 +705,14 @@ impl Content {
         }
     }
 
+    /// Whether the sender marked this photo, video or voice message view once.
+    pub fn view_once(&self) -> bool {
+        matches!(
+            self,
+            Self::Image { .. } | Self::Video { .. } | Self::Audio { .. }
+        ) && self.media().is_some_and(|media| media.view_once)
+    }
+
     pub fn media_mut(&mut self) -> Option<&mut Media> {
         match self {
             Self::Image { media, .. }
@@ -662,6 +752,9 @@ fn unsupported_summary(what: &str) -> String {
         unsupported::UNDECRYPTED => {
             gettext("Waiting for this message. Open WhatsApp on your phone")
         }
+        unsupported::VIEW_ONCE => {
+            gettext("View once message is not available here. Open WhatsApp on your phone")
+        }
         _ => gettext("Unsupported message"),
     }
 }
@@ -690,6 +783,10 @@ pub struct Media {
     /// Non-persisted download state.
     #[serde(skip)]
     pub state: MediaState,
+    /// The sender meant this photo, video or voice message to be seen once.
+    /// Omitted from the stored JSON when false, so ordinary media is unchanged.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub view_once: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -851,6 +948,7 @@ mod tests {
             height: None,
             path: None,
             state: MediaState::Idle,
+            view_once: false,
         }
     }
 
@@ -981,6 +1079,47 @@ mod tests {
             summary("a label from a newer version"),
             "Unsupported message"
         );
+    }
+
+    #[test]
+    fn view_once_flag_is_stored_only_when_set_and_read_back() {
+        let plain = Content::Image {
+            caption: None,
+            media: media(),
+        };
+        let json = serde_json::to_string(&plain).unwrap();
+        assert!(!json.contains("view_once"));
+        assert!(!plain.view_once());
+
+        let mut once = plain.clone();
+        once.media_mut().unwrap().view_once = true;
+        let json = serde_json::to_string(&once).unwrap();
+        assert!(json.contains("\"view_once\":true"));
+        let back: Content = serde_json::from_str(&json).unwrap();
+        assert!(back.view_once());
+        // Rows written before the flag existed read back as ordinary media.
+        let old: Content = serde_json::from_str(&serde_json::to_string(&plain).unwrap()).unwrap();
+        assert!(!old.view_once());
+        // The flag means nothing on a document.
+        let mut document = Content::Document {
+            media: media(),
+            file_name: "f".into(),
+            caption: None,
+            pages: None,
+        };
+        document.media_mut().unwrap().view_once = true;
+        assert!(!document.view_once());
+        assert_eq!(once.summary(), plain.summary());
+    }
+
+    #[test]
+    fn an_unavailable_view_once_message_has_its_own_summary() {
+        let summary = Content::Unsupported {
+            what: unsupported::VIEW_ONCE.into(),
+        }
+        .summary();
+        assert!(summary.starts_with("View once message"));
+        assert_ne!(summary, "Unsupported message");
     }
 
     #[test]

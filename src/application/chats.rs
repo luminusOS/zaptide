@@ -209,6 +209,7 @@ impl NativeApplication {
         self.chat_projection.select(chat.clone());
         self.chats.selection_model.set_selected(position);
         self.open_chat.active_chat = Some(chat.clone());
+        self.open_chat.pinned = None;
         self.mark_open_chat();
         self.open_chat.reply_to = None;
         self.open_chat.editing = None;

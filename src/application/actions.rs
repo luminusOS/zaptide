@@ -32,7 +32,7 @@ pub(super) fn install_message_actions(
 ) {
     let group = gtk::gio::SimpleActionGroup::new();
     type MessageAction = (&'static str, fn() -> Input);
-    let actions: [MessageAction; 14] = [
+    let actions: [MessageAction; 15] = [
         ("copy", || Input::CopySelectedText),
         ("copy-image", || Input::CopySelectedImage),
         ("attachment", || Input::ActivateSelectedAttachment),
@@ -45,6 +45,7 @@ pub(super) fn install_message_actions(
         ("forward", || Input::ShowForward),
         ("select", || Input::StartSelection),
         ("star", || Input::ToggleSelectedStar),
+        ("unpin", || Input::UnpinSelected),
         ("delete", || Input::DeleteSelected(false)),
         ("delete-everyone", || Input::DeleteSelected(true)),
     ];
@@ -62,6 +63,14 @@ pub(super) fn install_message_actions(
         }
     });
     group.add_action(&vote);
+    let pin = gtk::gio::SimpleAction::new("pin", Some(gtk::glib::VariantTy::UINT32));
+    let pin_sender = sender.clone();
+    pin.connect_activate(move |_, seconds| {
+        if let Some(seconds) = seconds.and_then(gtk::glib::Variant::get::<u32>) {
+            pin_sender.input(Input::PinSelected(seconds));
+        }
+    });
+    group.add_action(&pin);
     window.insert_action_group("message", Some(&group));
 }
 

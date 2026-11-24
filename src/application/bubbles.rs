@@ -52,12 +52,15 @@ pub(super) fn set_delivery_ticks(area: &gtk::DrawingArea, glyph: &str) {
 /// The marks that precede the time in a bubble's footer, each followed by a
 /// separator, or nothing for a plain message.
 pub(super) fn footer_notes(message: &crate::model::Message) -> String {
-    let mut notes = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
+    if message.content.view_once() {
+        notes.push(gettext("View once"));
+    }
     if message.forwarded {
-        notes.push("Forwarded");
+        notes.push("Forwarded".to_owned());
     }
     if message.edited {
-        notes.push("Edited");
+        notes.push("Edited".to_owned());
     }
     if notes.is_empty() {
         String::new()
