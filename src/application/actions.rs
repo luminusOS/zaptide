@@ -75,36 +75,6 @@ pub(super) fn install_message_actions(
     window.insert_action_group("message", Some(&group));
 }
 
-/// Entries of the chat list's context menu. Each carries the id of the chat
-/// the menu was opened on, so it never acts on whichever chat is open.
-pub(super) fn install_chat_row_actions(
-    window: &adw::ApplicationWindow,
-    sender: &ComponentSender<NativeApplication>,
-) {
-    let group = gtk::gio::SimpleActionGroup::new();
-    let entries = [
-        ("info", ChatRowAction::Info),
-        ("pin", ChatRowAction::Pin),
-        ("mute", ChatRowAction::Mute),
-        ("archive", ChatRowAction::Archive),
-        ("close", ChatRowAction::Close),
-        ("transcript", ChatRowAction::CopyTranscript),
-        ("clear", ChatRowAction::Clear),
-        ("delete", ChatRowAction::Delete),
-    ];
-    for (name, kind) in entries {
-        let action = gtk::gio::SimpleAction::new(name, Some(gtk::glib::VariantTy::STRING));
-        let sender = sender.clone();
-        action.connect_activate(move |_, chat| {
-            if let Some(chat) = chat.and_then(gtk::glib::Variant::get::<String>) {
-                sender.input(Input::ChatRowAction(chat, kind));
-            }
-        });
-        group.add_action(&action);
-    }
-    window.insert_action_group("chatrow", Some(&group));
-}
-
 pub(super) fn install_window_actions(
     window: &adw::ApplicationWindow,
     sender: &ComponentSender<NativeApplication>,
