@@ -586,11 +586,29 @@ impl Worker {
             Command::SetArchived(chat, archived) => {
                 let _ = self.archive.set_archived(&chat, archived);
                 self.emit_chat(&chat);
+                // Other devices ignore an archive patch that names no message
+                // range, so bound it by the chat's newest message.
+                let through = self
+                    .archive
+                    .newest_message(&self.canonical_str(&chat))
+                    .ok()
+                    .flatten()
+                    .map(|newest| newest.timestamp)
+                    .or_else(|| {
+                        self.archive
+                            .chat(&self.canonical_str(&chat))
+                            .ok()
+                            .flatten()
+                            .map(|row| row.last_activity)
+                            .filter(|activity| *activity > 0)
+                    });
                 self.tell_phone(&chat, move |client, jid| async move {
+                    let range = through
+                        .map(|through| whatsapp_rust::message_range(through, None, Vec::new()));
                     if archived {
-                        client.chat_actions().archive_chat(&jid, None).await
+                        client.chat_actions().archive_chat(&jid, range).await
                     } else {
-                        client.chat_actions().unarchive_chat(&jid, None).await
+                        client.chat_actions().unarchive_chat(&jid, range).await
                     }
                     .map_err(|error| error.to_string())
                 });
