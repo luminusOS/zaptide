@@ -1018,6 +1018,10 @@ struct Worker {
     /// Deferred profile-picture requests and retry counts.
     pending_avatars: HashMap<(String, bool), u32>,
     avatar_permits: Arc<tokio::sync::Semaphore>,
+    /// Profile pictures waiting for a free slot, the next one first.
+    avatar_backlog: std::collections::VecDeque<(String, bool)>,
+    /// Pictures being looked up now, at most `AVATAR_FETCHES`.
+    avatar_active: HashSet<(String, bool)>,
     /// Active recent-sticker downloads by hash.
     sticker_fetches: HashSet<String>,
     /// Active chat-sticker downloads by chat, message id, and raw fingerprint.
@@ -1209,6 +1213,8 @@ impl Worker {
             presence_subscribed: HashSet::new(),
             pending_avatars: HashMap::new(),
             avatar_permits: Arc::new(tokio::sync::Semaphore::new(AVATAR_FETCHES)),
+            avatar_backlog: std::collections::VecDeque::new(),
+            avatar_active: HashSet::new(),
             sticker_fetches: HashSet::new(),
             sticker_downloads: HashSet::new(),
             stickers_dirty: false,

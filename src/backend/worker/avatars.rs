@@ -13,6 +13,22 @@ impl Worker {
     }
 
     pub(super) fn fetch_avatar(&mut self, id: String, full: bool) {
+        self.queue_avatar(id, full, false);
+    }
+
+    /// The picture of the chat the person just opened goes before the rest.
+    pub(super) fn fetch_avatar_first(&mut self, id: String) {
+        self.queue_avatar(id, false, true);
+    }
+
+    /// Answers from the cache when it can, else queues the lookup. Queued
+    /// lookups start in order, `AVATAR_FETCHES` at a time, so the first
+    /// pictures arrive one by one instead of everything arriving together.
+    fn queue_avatar(&mut self, id: String, full: bool, first: bool) {
+        let key = (id.clone(), full);
+        if self.avatar_active.contains(&key) {
+            return;
+        }
         let path = self.avatar_file(&id, full);
         let cached = std::fs::metadata(&path).ok();
         if let Some(metadata) = &cached
@@ -26,6 +42,41 @@ impl Worker {
             self.emit(Event::Avatar { id, full, path });
             return;
         }
+        // A picture that is only due for a refresh still shows at once; the
+        // lookup below replaces it if it changed, and a missing connection
+        // no longer leaves the list without pictures.
+        if cached.as_ref().is_some_and(|metadata| metadata.len() > 0) {
+            self.emit(Event::Avatar {
+                id: id.clone(),
+                full,
+                path: Some(path.clone()),
+            });
+        }
+        match self.avatar_backlog.iter().position(|queued| *queued == key) {
+            Some(position) if first => {
+                self.avatar_backlog.remove(position);
+                self.avatar_backlog.push_front(key);
+            }
+            Some(_) => {}
+            None if first => self.avatar_backlog.push_front(key),
+            None => self.avatar_backlog.push_back(key),
+        }
+        self.pump_avatars();
+    }
+
+    /// Starts queued lookups while there is a free slot.
+    pub(super) fn pump_avatars(&mut self) {
+        while self.avatar_active.len() < AVATAR_FETCHES {
+            let Some((id, full)) = self.avatar_backlog.pop_front() else {
+                break;
+            };
+            self.start_avatar(id, full);
+        }
+    }
+
+    fn start_avatar(&mut self, id: String, full: bool) {
+        let path = self.avatar_file(&id, full);
+        let cached = std::fs::metadata(&path).ok();
         // Try both of our ids for our profile picture.
         let candidates: Vec<Jid> = if self.is_me(&id) || id == self.me() {
             [self.identity.me_pn.clone(), self.identity.me_lid.clone()]
@@ -63,6 +114,7 @@ impl Worker {
         let avatar_generation_shared = self.avatar_generation(&id, full);
         let avatar_generation = avatar_generation_shared.load(Ordering::Acquire);
         let session_cache_lock = self.session_cache_lock.clone();
+        self.avatar_active.insert((id.clone(), full));
         tokio::spawn(async move {
             let fetched = async {
                 let source = ClientPictures(client);

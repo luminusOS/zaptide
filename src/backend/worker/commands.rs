@@ -195,6 +195,7 @@ impl Worker {
             Command::LoadUntil { chat, id, before } => self.load_until(chat, id, before),
             Command::Download { chat, message } => self.download(chat, message),
             Command::FetchAvatar { id, full } => self.fetch_avatar(id, full),
+            Command::FetchAvatarFirst(id) => self.fetch_avatar_first(id),
             Command::EditText {
                 chat,
                 id,
@@ -1059,6 +1060,7 @@ impl Worker {
                         path,
                     },
             }) => {
+                self.avatar_active.remove(&(id.clone(), full));
                 if self
                     .avatar_generations
                     .get(&(id.clone(), full))
@@ -1068,6 +1070,7 @@ impl Worker {
                 {
                     self.emit(Event::Avatar { id, full, path });
                 }
+                self.pump_avatars();
             }
             Command::Completed(Completion {
                 generation: _,
@@ -1079,6 +1082,7 @@ impl Worker {
                         avatar_generation,
                     },
             }) => {
+                self.avatar_active.remove(&(id.clone(), full));
                 if self
                     .avatar_generations
                     .get(&(id.clone(), full))
@@ -1088,6 +1092,7 @@ impl Worker {
                 {
                     *self.pending_avatars.entry((id, full)).or_insert(0) += 1;
                 }
+                self.pump_avatars();
             }
             Command::Completed(Completion {
                 generation: _,

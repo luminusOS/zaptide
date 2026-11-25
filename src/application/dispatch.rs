@@ -1366,6 +1366,7 @@ impl NativeApplication {
             Input::CloseChat => self.close_chat(),
             Input::ToggleSelectedStar => self.toggle_selected_star(),
             Input::ToggleSelectedKeep => self.toggle_selected_keep(),
+            Input::ShowFullAvatar(id) => self.request_full_avatar(id),
             Input::ChatRowMenu { chat, x, y } => self.show_chat_row_menu(&chat, x, y),
             Input::ChatRowAction(chat, action) => self.chat_row_action(chat, action, sender),
             Input::PinSelected(seconds) => self.pin_selected(seconds),

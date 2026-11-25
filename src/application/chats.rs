@@ -1,6 +1,10 @@
 use super::*;
 use crate::i18n::gettext;
 
+/// How many chats from the top of the list get a picture without being
+/// opened. The rest wait until they open or have new activity.
+const EAGER_AVATAR_CHATS: usize = 30;
+
 /// Captures the displayed account and chat ID before a GTK activation is queued.
 #[derive(Default)]
 pub(super) struct ChatTargets {
@@ -206,6 +210,7 @@ impl NativeApplication {
             }
             self.composer.cancel_context(previous);
         }
+        self.request_avatar_first(&chat);
         self.chat_projection.select(chat.clone());
         self.chats.selection_model.set_selected(position);
         self.open_chat.active_chat = Some(chat.clone());
@@ -440,11 +445,7 @@ impl NativeApplication {
         action: ChatRowAction,
         sender: ComponentSender<Self>,
     ) {
-        let Some(known) = self
-            .chat_snapshots
-            .iter()
-            .find(|known| known.id == chat)
-            .cloned()
+        let Some(known) = self.chat_snapshots.iter().find(|known| known.id == chat).cloned()
         else {
             return;
         };
@@ -477,9 +478,7 @@ impl NativeApplication {
             }
             // Only offered for the open chat, so the handlers that read the
             // open chat apply to it.
-            ChatRowAction::Close
-                if self.open_chat.active_chat.as_deref() == Some(chat.as_str()) =>
-            {
+            ChatRowAction::Close if self.open_chat.active_chat.as_deref() == Some(chat.as_str()) => {
                 sender.input(Input::CloseChat);
             }
             ChatRowAction::CopyTranscript
@@ -490,6 +489,31 @@ impl NativeApplication {
             ChatRowAction::Clear => self.confirm_clear_chat_of(chat, sender),
             ChatRowAction::Delete => self.confirm_delete_chat_of(chat, sender),
             ChatRowAction::Close | ChatRowAction::CopyTranscript => {}
+        }
+    }
+
+    pub(super) fn request_full_avatar(&mut self, id: String) {
+        self.full_avatar = Some(id.clone());
+        // Show the small picture meanwhile when it is all there is.
+        if let Some(backend) = &self.backend {
+            backend.send(crate::backend::Command::FetchAvatar { id, full: true });
+        }
+    }
+
+    pub(super) fn full_avatar_loaded(&mut self, id: &str, path: Option<std::path::PathBuf>) {
+        if self.full_avatar.as_deref() != Some(id) {
+            return;
+        }
+        self.full_avatar = None;
+        let title = self
+            .chat_snapshots
+            .iter()
+            .find(|chat| chat.id == id)
+            .map_or_else(|| id.to_owned(), |chat| chat.name.clone());
+        // Without a larger picture the small one is the best there is.
+        match path.or_else(|| self.avatars.get(id).cloned()) {
+            Some(path) => dialogs::show_full_avatar_dialog(&self.window, &title, &path),
+            None => self.toast(&gettext("No profile picture")),
         }
     }
 
@@ -574,7 +598,18 @@ impl NativeApplication {
     }
 
     pub(super) fn reset_shared_chats(&mut self, chats: Vec<std::rc::Rc<crate::model::Chat>>) {
-        for chat in &chats {
+        // The open chat first, then the top of the list as it is shown, a
+        // few at a time. Chats further down get a picture when they open or
+        // see new activity, so a long list does not start hundreds of lookups.
+        if let Some(open) = self.open_chat.active_chat.clone() {
+            self.request_avatar_first(&open);
+        }
+        let mut shown: Vec<&std::rc::Rc<crate::model::Chat>> =
+            chats.iter().filter(|chat| !chat.archived).collect();
+        shown.sort_by_key(|chat| {
+            std::cmp::Reverse((chat.pinned, chat.pinned_at, chat.last_activity))
+        });
+        for chat in shown.into_iter().take(EAGER_AVATAR_CHATS) {
             self.request_avatar(&chat.id);
         }
         self.chat_snapshots = chats;
@@ -646,8 +681,7 @@ impl NativeApplication {
     ) {
         // The confirmation may come from the chat list's menu, for a chat
         // that is not open; it only has to still be in the list.
-        if self.active_account != account
-            || !self.chat_snapshots.iter().any(|known| known.id == chat)
+        if self.active_account != account || !self.chat_snapshots.iter().any(|known| known.id == chat)
         {
             return;
         }

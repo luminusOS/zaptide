@@ -447,6 +447,11 @@ pub(super) fn handle_backend_ready(
                     app.open_chat.pending_transcript.mark_rows();
                 }
             }
+            Event::Avatar {
+                id,
+                full: true,
+                path,
+            } => app.full_avatar_loaded(&id, path),
             Event::ReceiptsPrivacy { disabled } => app.account_receipts_off = disabled,
             Event::ProfileSaved { error } => {
                 if let Some(dialog) = &app.profile_dialog {

@@ -17,6 +17,7 @@ pub(super) enum DialogAction {
     ShowStarred,
     OpenStarred { chat: String, id: String },
     SetDisappearing(u32),
+    ShowFullAvatar(String),
 }
 
 pub(super) fn attach_tile(icon: &str, label: &str, tone: &str) -> gtk::Box {
@@ -1206,6 +1207,30 @@ pub(super) fn timer_picker_position(chat: &crate::model::Chat, timer: u32) -> Op
 }
 
 /// Contact or group details: photo, name, number, and group members.
+/// Shows a profile picture at its full size.
+pub(super) fn show_full_avatar_dialog(
+    parent: &adw::ApplicationWindow,
+    title: &str,
+    path: &std::path::Path,
+) {
+    let Ok(texture) = gtk::gdk::Texture::from_filename(path) else {
+        return;
+    };
+    let picture = gtk::Picture::for_paintable(&texture);
+    picture.set_content_fit(gtk::ContentFit::Contain);
+    picture.set_can_shrink(true);
+    let view = adw::ToolbarView::new();
+    view.add_top_bar(&adw::HeaderBar::new());
+    view.set_content(Some(&picture));
+    let dialog = adw::Dialog::builder()
+        .title(title)
+        .content_width(520)
+        .content_height(560)
+        .build();
+    dialog.set_child(Some(&view));
+    dialog.present(Some(parent));
+}
+
 pub(super) fn show_chat_info_dialog(
     parent: &adw::ApplicationWindow,
     chat: &crate::model::Chat,
@@ -1237,6 +1262,17 @@ pub(super) fn show_chat_info_dialog(
     let image = avatar.and_then(crate::native_media_widgets::avatar_texture);
     picture.set_custom_image(image.as_ref());
     picture.set_margin_bottom(6);
+    {
+        let open_full = on_action.clone();
+        let chat_id = chat.id.clone();
+        let click = gtk::GestureClick::new();
+        click.connect_released(move |_, _, _, _| {
+            open_full(DialogAction::ShowFullAvatar(chat_id.clone()));
+        });
+        picture.add_controller(click);
+        picture.set_cursor_from_name(Some("pointer"));
+        picture.set_tooltip_text(Some(&gettext("View larger picture")));
+    }
     header.append(&picture);
     header.append(
         &gtk::Label::builder()
