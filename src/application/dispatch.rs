@@ -327,7 +327,7 @@ impl NativeApplication {
         self.show_chat_info_of(chat, sender);
     }
 
-    fn show_chat_info_of(&mut self, id: Option<String>, sender: ComponentSender<Self>) {
+    pub(super) fn show_chat_info_of(&mut self, id: Option<String>, sender: ComponentSender<Self>) {
         if let Some(chat) = id
             .as_ref()
             .and_then(|id| self.chat_snapshots.iter().find(|chat| &chat.id == id))
@@ -618,7 +618,7 @@ impl NativeApplication {
         self.confirm_clear_chat_of(chat, sender);
     }
 
-    fn confirm_clear_chat_of(&mut self, chat: String, sender: ComponentSender<Self>) {
+    pub(super) fn confirm_clear_chat_of(&mut self, chat: String, sender: ComponentSender<Self>) {
         let account = self.active_account;
         let dialog = adw::AlertDialog::builder()
             .heading(gettext("Clear chat?"))
@@ -645,7 +645,7 @@ impl NativeApplication {
         self.confirm_delete_chat_of(chat, sender);
     }
 
-    fn confirm_delete_chat_of(&mut self, chat: String, sender: ComponentSender<Self>) {
+    pub(super) fn confirm_delete_chat_of(&mut self, chat: String, sender: ComponentSender<Self>) {
         let account = self.active_account;
         let dialog = adw::AlertDialog::builder()
             .heading(gettext("Delete chat?"))
