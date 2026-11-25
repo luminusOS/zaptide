@@ -99,6 +99,7 @@ fn dialog_action_callback(
             dialogs::DialogAction::ShowStarred => Input::ShowStarred,
             dialogs::DialogAction::OpenStarred { chat, id } => Input::OpenStarred { chat, id },
             dialogs::DialogAction::SetDisappearing(seconds) => Input::SetDisappearing(seconds),
+            dialogs::DialogAction::ShowFullAvatar(id) => Input::ShowFullAvatar(id),
         });
     })
 }
@@ -583,6 +584,8 @@ pub struct NativeApplication {
     audio: AudioState,
     /// About row of the open contact-info dialog, filled when the fetch returns.
     info_about: Option<(String, adw::ActionRow)>,
+    /// Chat whose full-size picture was asked for and has not arrived yet.
+    full_avatar: Option<String>,
     message_target: Option<String>,
     message_target_selection: Option<String>,
     /// Unread count when the chat was opened, until the first page pins it
@@ -776,6 +779,8 @@ pub enum Input {
     ToggleSelectedStar,
     /// Keeps the selected disappearing message, or lets it run out again.
     ToggleSelectedKeep,
+    /// Fetches the full-size picture of a chat and shows it.
+    ShowFullAvatar(String),
     /// Opens the context menu of the chat under the pointer in the list.
     ChatRowMenu {
         chat: String,
@@ -1555,6 +1560,7 @@ impl SimpleComponent for NativeApplication {
                 played_voice: Default::default(),
             },
             info_about: None,
+            full_avatar: None,
             message_target: None,
             message_target_selection: None,
             opened_unread: 0,
@@ -2214,6 +2220,16 @@ impl NativeApplication {
         {
             backend.send(crate::backend::Command::CreatePoll { chat, draft });
             self.status = gettext("Creating poll");
+        }
+    }
+
+    /// Asks for a picture ahead of the queue, as for the chat just opened.
+    fn request_avatar_first(&mut self, id: &str) {
+        self.avatar_requests.insert(id.to_owned());
+        if !self.avatars.contains_key(id)
+            && let Some(backend) = &self.backend
+        {
+            backend.send(crate::backend::Command::FetchAvatarFirst(id.to_owned()));
         }
     }
 

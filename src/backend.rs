@@ -527,6 +527,9 @@ pub enum Command {
         id: String,
         full: bool,
     },
+    /// Requests a profile picture ahead of everything queued, for the chat
+    /// that was just opened.
+    FetchAvatarFirst(String),
     /// Loads archived messages from `id` through the current page.
     LoadUntil {
         chat: ChatId,
