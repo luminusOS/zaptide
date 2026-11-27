@@ -245,7 +245,9 @@ const MIGRATIONS: &[(&str, &str, &str)] = &[
 ];
 const CHAT_JOIN: &str = "FROM chats c
              LEFT JOIN messages m ON m.chat = c.id AND m.rowid = (
-                 SELECT rowid FROM messages WHERE chat = c.id ORDER BY timestamp DESC, rowid DESC LIMIT 1
+                 SELECT rowid FROM messages WHERE chat = c.id
+                 AND (kept != 0 OR expires_at IS NULL OR expires_at > unixepoch())
+                 ORDER BY timestamp DESC, rowid DESC LIMIT 1
              )";
 
 const MESSAGE_COLUMNS: &str = "id, sender, sender_name, from_me, timestamp, content, status, quoted, reactions, edited, thumbnail, mentions, forwarded, delivered_at, read_at";
@@ -769,9 +771,24 @@ impl Archive {
     /// Upserts a message, preserves the furthest delivery state, and updates
     /// chat activity. `raw` contains attachment metadata.
     pub fn insert_message(&self, message: &Message, raw: Option<&[u8]>) -> Result<()> {
+        self.insert_message_with_expiry(message, raw, None)
+            .map(drop)
+    }
+
+    /// Upserts the message and its deadline in one statement. Returns whether
+    /// the stored row can be shown; an overdue row remains pending cleanup.
+    pub(crate) fn insert_message_with_expiry(
+        &self,
+        message: &Message,
+        raw: Option<&[u8]>,
+        expiration: Option<u32>,
+    ) -> Result<bool> {
         if self.sender_collision(message)? {
-            return Ok(());
+            return Ok(false);
         }
+        let expires_at = expiration
+            .filter(|seconds| *seconds != 0)
+            .map(|seconds| message.timestamp.saturating_add(i64::from(seconds)));
         // One read for everything the merge needs; SQLite compares the raw
         // blobs, so the stored one is never copied out.
         let existing: Option<StoredMessageProjection> = self
@@ -828,24 +845,26 @@ impl Archive {
                 preserve_media_path(&existing_content, &mut content);
             }
         }
-        self.connection.prepare_cached(
-            "INSERT INTO messages (chat, id, sender, sender_name, from_me, timestamp, content, status, quoted, reactions, edited, raw, thumbnail, mentions, forwarded, delivered_at, read_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+        let visible: bool = self.connection.prepare_cached(
+             "INSERT INTO messages (chat, id, sender, sender_name, from_me, timestamp, content, status, quoted, reactions, edited, raw, thumbnail, mentions, forwarded, delivered_at, read_at, expires_at)
+              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
              ON CONFLICT(chat, id) DO UPDATE SET
                 sender_name = COALESCE(excluded.sender_name, sender_name),
                 content = excluded.content,
                 status = excluded.status,
                 quoted = COALESCE(excluded.quoted, quoted),
                 reactions = excluded.reactions,
-                edited = ?18,
+                 edited = ?19,
                 raw = COALESCE(excluded.raw, raw),
                 thumbnail = COALESCE(excluded.thumbnail, thumbnail),
                 mentions = excluded.mentions,
                 forwarded = excluded.forwarded,
                 delivered_at = COALESCE(delivered_at, excluded.delivered_at),
-                read_at = COALESCE(read_at, excluded.read_at)",
+                 read_at = COALESCE(read_at, excluded.read_at),
+                 expires_at = COALESCE(expires_at, excluded.expires_at)
+              RETURNING kept != 0 OR expires_at IS NULL OR expires_at > unixepoch()",
         )?
-        .execute(params![
+        .query_row(params![
             message.chat,
             message.id,
             message.sender,
@@ -866,14 +885,17 @@ impl Archive {
             message.forwarded,
             message.delivered_at,
             message.read_at,
+            expires_at,
             edited,
-        ])?;
-        self.connection
-            .prepare_cached(
-                "UPDATE chats SET last_activity = MAX(last_activity, ?2) WHERE id = ?1",
-            )?
-            .execute(params![message.chat, message.timestamp])?;
-        Ok(())
+        ], |row| row.get(0))?;
+        if visible && !matches!(message.content, Content::System { .. }) {
+            self.connection
+                .prepare_cached(
+                    "UPDATE chats SET last_activity = MAX(last_activity, ?2) WHERE id = ?1",
+                )?
+                .execute(params![message.chat, message.timestamp])?;
+        }
+        Ok(visible)
     }
 
     /// Returns up to `limit` messages before an optional timestamp/id boundary,
@@ -887,7 +909,8 @@ impl Archive {
         let mut statement = self.connection.prepare_cached(&format!(
             "SELECT {MESSAGE_COLUMNS}
              FROM messages
-             WHERE chat = ?1 AND (timestamp < ?2 OR (timestamp = ?2 AND rowid <
+             WHERE chat = ?1 AND (kept != 0 OR expires_at IS NULL OR expires_at > unixepoch())
+             AND (timestamp < ?2 OR (timestamp = ?2 AND rowid <
                  (SELECT rowid FROM messages WHERE chat = ?1 AND id = ?3)))
              ORDER BY timestamp DESC, rowid DESC
              LIMIT ?4"
@@ -913,7 +936,8 @@ impl Archive {
         let mut statement = self.connection.prepare_cached(&format!(
             "SELECT {MESSAGE_COLUMNS}
              FROM messages
-             WHERE chat = ?1 AND timestamp >= ?2 AND (timestamp < ?3 OR (timestamp = ?3 AND rowid <
+             WHERE chat = ?1 AND (kept != 0 OR expires_at IS NULL OR expires_at > unixepoch())
+             AND timestamp >= ?2 AND (timestamp < ?3 OR (timestamp = ?3 AND rowid <
                  (SELECT rowid FROM messages WHERE chat = ?1 AND id = ?4)))
              ORDER BY timestamp ASC, rowid ASC
              LIMIT ?5"
@@ -1045,6 +1069,14 @@ impl Archive {
             })
         })?;
         rows.collect()
+    }
+
+    pub(crate) fn backfill_expiry(&self, source: &DerivedSource, seconds: u32) -> Result<bool> {
+        Ok(self.connection.execute(
+            "UPDATE messages SET expires_at = timestamp + ?3
+             WHERE rowid = ?1 AND raw = ?2 AND expires_at IS NULL",
+            params![source.rowid, source.raw, seconds],
+        )? != 0)
     }
 
     /// Replaces protobuf-derived fields while preserving local file state.
@@ -1322,7 +1354,7 @@ impl Archive {
         let clear = (|| {
             let transaction = self.connection.unchecked_transaction()?;
             transaction.execute_batch(
-                "DELETE FROM remote_deletions; DELETE FROM poll_history; DELETE FROM poll_votes; DELETE FROM polls; DELETE FROM group_receipts; DELETE FROM messages; DELETE FROM chats; DELETE FROM contacts; DELETE FROM meta WHERE key <> 'logout_cleanup_required'; DELETE FROM lids; DELETE FROM stickers;",
+                "DELETE FROM remote_deletions; DELETE FROM expiry_media_cleanup; DELETE FROM poll_history; DELETE FROM poll_votes; DELETE FROM polls; DELETE FROM group_receipts; DELETE FROM messages; DELETE FROM chats; DELETE FROM contacts; DELETE FROM meta WHERE key <> 'logout_cleanup_required'; DELETE FROM lids; DELETE FROM stickers;",
             )?;
             transaction.commit()
         })();

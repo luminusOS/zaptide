@@ -165,6 +165,75 @@ fn the_sweep_removes_only_what_ran_out_and_spares_kept_messages() {
 }
 
 #[test]
+fn an_overdue_replay_is_not_published_or_counted_as_unread() {
+    let (mut worker, events, _, _) = worker();
+    let expired = timed_text(60);
+    worker.ingest(&Arc::new(expired.clone()), &info("expired", 20));
+    worker.pump_expiry();
+    let _ = emitted(&events);
+
+    worker.ingest(&Arc::new(expired), &info("expired", 20));
+
+    assert!(
+        !emitted(&events)
+            .iter()
+            .any(|event| matches!(event, Event::Incoming { .. } | Event::Messages { .. }))
+    );
+    let chat = worker.archive.chat(CHAT).unwrap().unwrap();
+    assert_eq!(chat.unread, 0);
+}
+
+#[test]
+fn an_overdue_stored_message_does_not_appear_before_the_next_sweep() {
+    let (mut worker, _, _, _) = worker();
+    worker.ingest(&Arc::new(timed_text(60)), &info("expired", 20));
+    worker.ingest(&Arc::new(wa_text("synthetic")), &info("current", 21));
+
+    let page = worker.archive.messages(CHAT, None, 1).unwrap();
+    assert_eq!(page[0].id, "current");
+    let earlier = worker
+        .archive
+        .messages(CHAT, Some((21, "current")), 5)
+        .unwrap();
+    assert!(earlier.is_empty());
+}
+
+#[test]
+fn expiry_backfill_recovers_deadlines_from_the_stored_message_timer() {
+    let (mut worker, _, _, _) = worker();
+    worker.archive.ensure_chat(CHAT, "Fixture").unwrap();
+    worker.archive.set_ephemeral(CHAT, 90 * 86_400, 10).unwrap();
+    for (id, timestamp, wire) in [
+        ("overdue", 20, timed_text(60)),
+        ("future", 100, timed_text(60)),
+        ("untimed", 25, wa_text("synthetic")),
+    ] {
+        worker
+            .archive
+            .insert_message(
+                &crate::archive::tests::message(CHAT, id, timestamp, false),
+                Some(&wire.encode_to_vec()),
+            )
+            .unwrap();
+    }
+    worker.archive.set_meta("derived", "8").unwrap();
+    worker.backfill();
+
+    let due = |at| {
+        worker
+            .archive
+            .expired_messages(at, 10)
+            .unwrap()
+            .into_iter()
+            .map(|message| message.id)
+            .collect::<Vec<_>>()
+    };
+    assert!(due(79).is_empty());
+    assert_eq!(due(80), ["overdue"]);
+    assert_eq!(due(160), ["overdue", "future"]);
+}
+
+#[test]
 fn expiry_removes_locally_and_never_queues_a_remote_deletion() {
     let (mut worker, _events, _, _) = worker();
     worker.ingest(&Arc::new(timed_text(60)), &info("gone", 20));
@@ -223,4 +292,54 @@ fn system_lines_summarize_without_a_name() {
         "Ana pinned a message"
     );
     assert_eq!(SystemEvent::Pinned.line(false, None), "Pinned a message");
+}
+
+#[test]
+fn expiry_keeps_the_attachment_of_a_permanent_forward() {
+    let (mut worker, events, _, _) = worker();
+    let root = tempfile::tempdir().unwrap();
+    worker.dirs = AppDirs::under(root.path());
+    let media_dir = worker.dirs.media_cache_dir();
+    std::fs::create_dir_all(&media_dir).unwrap();
+    let shared = media_dir.join("shared.jpg");
+    std::fs::write(&shared, b"synthetic attachment").unwrap();
+
+    const DESTINATION: &str = "789-012@g.us";
+    for (chat, id, forwarded) in [(CHAT, "source", false), (DESTINATION, "forward", true)] {
+        worker.archive.ensure_chat(chat, "Synthetic chat").unwrap();
+        let mut message = crate::archive::tests::message(chat, id, 20, forwarded);
+        message.forwarded = forwarded;
+        message.content = Content::Image {
+            caption: None,
+            media: crate::model::Media {
+                mime: "image/jpeg".into(),
+                size: 20,
+                width: None,
+                height: None,
+                path: Some(shared.clone()),
+                state: Default::default(),
+                view_once: false,
+            },
+        };
+        worker.archive.insert_message(&message, None).unwrap();
+    }
+    worker
+        .archive
+        .set_expires_at(CHAT, "source", Some(80))
+        .unwrap();
+
+    worker.pump_expiry();
+
+    assert_eq!(deleted(&events), ["source"]);
+    assert!(worker.archive.message(CHAT, "source").unwrap().is_none());
+    assert_eq!(
+        stored(&worker, DESTINATION, "forward")
+            .content
+            .media()
+            .unwrap()
+            .path
+            .as_deref(),
+        Some(shared.as_path())
+    );
+    assert_eq!(std::fs::read(&shared).unwrap(), b"synthetic attachment");
 }

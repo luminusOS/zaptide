@@ -137,7 +137,9 @@ impl Worker {
             from_me: message.from_me,
             bound: message.timestamp,
         });
-        let request = request.filter(|_| Self::addressable(&chat));
+        let request = request.filter(|_| {
+            Self::addressable(&chat) && !matches!(message.content, Content::System { .. })
+        });
         let now = jiff::Timestamp::now().as_second();
         let result = self.archive.atomically(|archive| {
             let deleted = archive.delete_message(&chat, &id)?;
@@ -200,13 +202,14 @@ impl Worker {
                 bound: newest.timestamp,
             })
         });
-        let bound = newest.as_ref().map_or(i64::MAX, |newest| newest.timestamp);
         let now = jiff::Timestamp::now().as_second();
         let result = self.archive.atomically(|archive| {
+            // The local action also removes transcript notices, which are
+            // deliberately excluded from the range sent to the phone.
             let removed = match kind {
-                RemoteDeletionKind::Chat => archive.delete_chat(&chat, bound)?,
+                RemoteDeletionKind::Chat => archive.delete_chat(&chat, i64::MAX)?,
                 _ => {
-                    archive.clear_chat_messages(&chat, bound, true)?;
+                    archive.clear_chat_messages(&chat, i64::MAX, true)?;
                     false
                 }
             };
@@ -222,6 +225,7 @@ impl Worker {
                 } else {
                     self.emit(Event::RefreshTranscript);
                     self.emit_chat(&chat);
+                    self.emit_pin(&chat);
                 }
                 self.after_local_deletion(request.is_some());
             }

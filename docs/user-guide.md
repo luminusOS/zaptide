@@ -205,11 +205,15 @@ conversation, and a click goes to the message. A line in the chat tells who
 pinned a message.
 
 Chat details show **Disappearing messages**. In a direct chat, or in a group
-where you are an admin, choose Off, 24 hours, 7 days or 90 days. Messages are
-sent with the chat's timer and removed from the local archive, with their
-downloaded file, when their own time runs out. A message that someone kept in
-the chat stays. Removal is local and never asks the phone or other devices to
-delete anything. A line in the chat reports each change of the timer.
+where you are an admin, choose Off, 24 hours, 7 days or 90 days. ZapTide sends
+messages with the chat's timer. Messages with a known deadline no longer
+appear in new transcript pages or previews after that deadline. A periodic
+cleanup removes them from the local archive and closes any open viewer that
+contains them. ZapTide leaves on disk files that other messages still use,
+files outside its cache, and files it cannot verify as its own. Messages
+ZapTide knows were kept are exempt from cleanup. Removal is local and never
+asks other devices to delete anything. A line in the chat reports a timer
+change.
 
 ## Other limitations
 

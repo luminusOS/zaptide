@@ -195,8 +195,8 @@ struct TranscriptRequests {
 #[derive(Default)]
 struct OpenChatState {
     active_chat: Option<String>,
-    /// The message the open chat has pinned, shown in the bar on top.
-    pinned: Option<crate::archive::PinnedMessage>,
+    /// One pin snapshot for both the message menu and the bar.
+    pinned: Option<pins::OpenChatPins>,
     pending_edit: Option<(String, String, String)>,
     reply_to: Option<(String, String)>,
     editing: Option<(String, String)>,

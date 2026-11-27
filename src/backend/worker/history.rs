@@ -561,6 +561,8 @@ impl Worker {
             }
         }
         let mut filed = Vec::new();
+        let mut changed_pin_chats = HashSet::new();
+        let now_ms = jiff::Timestamp::now().as_millisecond();
         // Sent together at the end: an event per name made the window
         // rebuild the open conversation for each one.
         let mut learned = Vec::new();
@@ -658,6 +660,14 @@ impl Worker {
             if ChatKind::from_id(&id) == ChatKind::Group {
                 effects.groups.push(id.clone());
             }
+            let pin_targets = if chat.messages.is_empty() && chat.revoked.is_empty() {
+                HashSet::new()
+            } else {
+                self.archive
+                    .active_pin_targets(&id, now_ms)
+                    .unwrap_or_default()
+            };
+            let mut refresh_pin = false;
             let count = chat.messages.len();
             let mut secrets = HashMap::new();
             for message in chat.messages {
@@ -753,9 +763,19 @@ impl Worker {
                     }
                     poll_history_received = self.history_poll_votes(&row, &message.poll_votes);
                 }
-                if let Err(error) = self.archive.insert_message(&row, Some(&raw)) {
-                    log::warn!("could not store a history message: {error}");
-                } else if row.from_me
+                match self
+                    .archive
+                    .insert_message_with_expiry(&row, Some(&raw), expiration)
+                {
+                    Ok(true) => {}
+                    Ok(false) => continue,
+                    Err(error) => {
+                        log::warn!("could not store a history message: {error}");
+                        continue;
+                    }
+                }
+                refresh_pin |= pin_targets.contains(&row.id);
+                if row.from_me
                     && matches!(
                         row.status,
                         Delivery::Sent | Delivery::Delivered | Delivery::Read | Delivery::Played
@@ -764,7 +784,6 @@ impl Worker {
                 {
                     self.confirm_answer(&id, &quoted.id, &raw);
                 }
-                self.remember_expiry(&id, &row.id, row.timestamp, expiration);
                 if matches!(row.content, Content::Buttons { .. } | Content::List { .. }) {
                     self.confirm_answers_for(&id, &row.id);
                 }
@@ -819,7 +838,6 @@ impl Worker {
                     &update.update,
                 );
             }
-            let had_pins = !chat.pins.is_empty();
             for pin in chat.pins {
                 let by = if pin.from_me {
                     self.me()
@@ -829,17 +847,17 @@ impl Worker {
                         .map(|sender| self.canonical_str(sender))
                         .unwrap_or_else(|| id.clone())
                 };
-                let _ = self.archive.set_pin(
-                    &id,
-                    &pin.change.target,
-                    pin.change.pinned,
-                    &by,
-                    pin.change.at_ms,
-                    pin.change.expires_at_ms(),
-                );
-            }
-            if had_pins {
-                self.emit_pin(&id);
+                refresh_pin |= self
+                    .archive
+                    .set_pin(
+                        &id,
+                        &pin.change.target,
+                        pin.change.pinned,
+                        &by,
+                        pin.change.at_ms,
+                        pin.change.expires_at_ms(),
+                    )
+                    .unwrap_or(false);
             }
             for revoked in chat.revoked {
                 let sender = if revoked.from_me {
@@ -862,6 +880,7 @@ impl Worker {
                     self.archive
                         .set_content(&id, &revoked.target, &Content::Revoked, false)
                 {
+                    refresh_pin |= pin_targets.contains(&revoked.target);
                     self.emit_message(&id, &revoked.target);
                     self.emit_chat(&id);
                 }
@@ -882,6 +901,9 @@ impl Worker {
                     let _ = self.archive.set_unread(&id, unread);
                 }
             }
+            if refresh_pin {
+                changed_pin_chats.insert(id.clone());
+            }
             filed.push((id, count, chat.more_on_phone));
         }
         if !learned.is_empty() {
@@ -889,6 +911,9 @@ impl Worker {
         }
         for (id, _, _) in &filed {
             self.emit_chat(id);
+            if changed_pin_chats.remove(id) {
+                self.emit_pin(id);
+            }
             if id.ends_with("@newsletter") {
                 self.request_newsletter_info(id);
             }

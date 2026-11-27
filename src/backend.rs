@@ -3,6 +3,7 @@
 //! A dedicated tokio runtime owns the WhatsApp connection, archive, and media
 //! work. Commands and events cross channels, and events wake the UI.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -854,11 +855,11 @@ pub enum Event {
     },
     /// Starred messages of one chat, newest first.
     StarredList(Vec<crate::archive::StarredMessage>),
-    /// The message a chat has pinned, or `None`. Sent when the chat opens and
-    /// whenever a pin is added, removed, runs out or loses its message.
+    /// The featured pin and all active pin IDs for a chat.
     Pinned {
         chat: ChatId,
         pin: Box<Option<crate::archive::PinnedMessage>>,
+        active_ids: HashSet<String>,
     },
     /// Starred stickers, imported packs, and every distinct sticker for the picker.
     Stickers {

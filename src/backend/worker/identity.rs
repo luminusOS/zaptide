@@ -55,6 +55,7 @@ impl Worker {
                 if changed {
                     self.emit_chats();
                     self.emit(Event::RefreshTranscript);
+                    self.emit_pin(&canonical);
                 }
             }
             Err(error) => log::warn!("could not remember an id mapping: {error}"),

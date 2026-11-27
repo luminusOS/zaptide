@@ -332,6 +332,7 @@ impl Worker {
                 } else {
                     self.emit(Event::RefreshTranscript);
                     self.emit_chat(&chat);
+                    self.emit_pin(&chat);
                 }
             }
             E::ClearChatUpdate(update) => {
@@ -351,6 +352,7 @@ impl Worker {
                     .clear_chat_messages(&chat, through, !update.delete_starred);
                 self.emit(Event::RefreshTranscript);
                 self.emit_chat(&chat);
+                self.emit_pin(&chat);
             }
             E::DeleteMessageForMeUpdate(update) => {
                 let chat = self.canonical(&update.chat_jid);
@@ -364,6 +366,7 @@ impl Worker {
                         id: update.message_id.clone(),
                     });
                     self.emit_chat(&chat);
+                    self.emit_pin(&chat);
                 }
             }
             E::MarkChatAsReadUpdate(update) => {

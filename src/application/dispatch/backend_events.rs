@@ -164,6 +164,7 @@ pub(super) fn handle_backend_ready(
                 }
                 if active_alias {
                     app.open_chat.active_chat = Some(canonical);
+                    app.open_chat.pinned = None;
                     app.transcript_requests.reload();
                 }
             }
@@ -289,7 +290,11 @@ pub(super) fn handle_backend_ready(
                 starred,
                 local,
             } => app.star_changed(&chat, id, starred, local),
-            Event::Pinned { chat, pin } => app.pinned_loaded(&chat, *pin),
+            Event::Pinned {
+                chat,
+                pin,
+                active_ids,
+            } => app.pinned_loaded(&chat, *pin, active_ids),
             Event::StarredIds { chat, ids } => app.starred_ids_loaded(&chat, ids),
             Event::StarredList(list) => app.starred_list_loaded(list, &sender),
             Event::MessageDeleted { chat, id } => app.message_deleted(&chat, &id),

@@ -4,11 +4,17 @@
 
 use super::{Archive, Result};
 use rusqlite::params;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub const INDEX: &str = "
 CREATE INDEX IF NOT EXISTS messages_expiring ON messages(expires_at)
     WHERE expires_at IS NOT NULL AND kept = 0;
+CREATE TABLE IF NOT EXISTS expiry_media_cleanup (
+    name TEXT PRIMARY KEY NOT NULL,
+    identity TEXT NOT NULL,
+    retry_after INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS expiry_media_by_retry ON expiry_media_cleanup(retry_after);
 ";
 
 /// A message whose time has run out, with its downloaded file if it has one.
@@ -22,6 +28,7 @@ pub struct ExpiredMessage {
 impl Archive {
     /// Sets or clears when a message disappears, in seconds. A kept message is
     /// left alone. Returns whether anything changed.
+    #[cfg(test)]
     pub fn set_expires_at(&self, chat: &str, id: &str, expires_at: Option<i64>) -> Result<bool> {
         Ok(self.connection.execute(
             "UPDATE messages SET expires_at = ?3
@@ -69,6 +76,85 @@ impl Archive {
             })
         })?;
         rows.collect()
+    }
+
+    /// Delete the exact due row and record its file for cleanup in the same
+    /// transaction. No file may be removed when the transaction fails.
+    pub fn delete_expired_message(
+        &self,
+        message: &ExpiredMessage,
+        now: i64,
+        cleanup: Option<(&str, &str)>,
+    ) -> Result<bool> {
+        let transaction = self.connection.unchecked_transaction()?;
+        let removed = transaction.execute(
+            "DELETE FROM messages
+             WHERE chat = ?1 AND id = ?2 AND expires_at <= ?3 AND kept = 0",
+            params![message.chat, message.id, now],
+        )? > 0;
+        if removed && let Some((name, identity)) = cleanup {
+            transaction.execute(
+                "INSERT INTO expiry_media_cleanup (name, identity, retry_after) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(name) DO UPDATE SET
+                    identity = excluded.identity, retry_after = excluded.retry_after",
+                params![name, identity, now],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(removed)
+    }
+
+    pub fn pending_expiry_media(&self, now: i64, limit: usize) -> Result<Vec<(String, String)>> {
+        let mut statement = self.connection.prepare_cached(
+            "SELECT name, identity FROM expiry_media_cleanup WHERE retry_after <= ?1
+             ORDER BY retry_after, rowid LIMIT ?2",
+        )?;
+        let rows = statement.query_map(params![now, limit as i64], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?;
+        rows.collect()
+    }
+
+    pub fn finish_expiry_media(&self, name: &str, retry_after: Option<i64>) -> Result<()> {
+        match retry_after {
+            Some(at) => self.connection.execute(
+                "UPDATE expiry_media_cleanup SET retry_after = ?2 WHERE name = ?1",
+                params![name, at],
+            )?,
+            None => self.connection.execute(
+                "DELETE FROM expiry_media_cleanup WHERE name = ?1",
+                params![name],
+            )?,
+        };
+        Ok(())
+    }
+
+    pub fn expiry_media_has_exact_reference(
+        &self,
+        managed: &Path,
+        resolved: &Path,
+    ) -> Result<bool> {
+        self.connection
+            .prepare_cached("SELECT EXISTS(SELECT 1 FROM messages WHERE media_path IN (?1, ?2))")?
+            .query_row(params![managed.to_str(), resolved.to_str()], |row| {
+                row.get(0)
+            })
+    }
+
+    pub fn visit_expiry_media_references(
+        &self,
+        mut visit: impl FnMut(PathBuf) -> std::io::Result<bool>,
+    ) -> anyhow::Result<()> {
+        let mut statement = self.connection.prepare_cached(
+            "SELECT DISTINCT media_path FROM messages WHERE media_path IS NOT NULL",
+        )?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0).map(PathBuf::from))?;
+        for row in rows {
+            if !visit(row?)? {
+                break;
+            }
+        }
+        Ok(())
     }
 }
 

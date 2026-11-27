@@ -225,10 +225,13 @@ impl Worker {
             thumbnail: thumbnail_of(base),
         };
         let is_poll = matches!(row.content, Content::Poll { .. });
-        let (timestamp, expiration) = (row.timestamp, base.get_ephemeral_expiration());
         self.remember_poll(&row, message, &info.source.sender.to_non_ad_string(), None);
-        self.store_message(row, Some(message.encode_to_vec()), push_name.as_deref());
-        self.remember_expiry(&chat, info.id.as_ref(), timestamp, expiration);
+        self.store_message_with_expiry(
+            row,
+            Some(message.encode_to_vec()),
+            push_name.as_deref(),
+            base.get_ephemeral_expiration(),
+        );
         if is_poll {
             self.pump_poll_votes();
         }
@@ -285,9 +288,19 @@ impl Worker {
     /// Archives a message and emits chat and row updates.
     pub(super) fn store_message(
         &mut self,
+        message: Message,
+        raw: Option<Vec<u8>>,
+        push_name: Option<&str>,
+    ) {
+        self.store_message_with_expiry(message, raw, push_name, None);
+    }
+
+    pub(super) fn store_message_with_expiry(
+        &mut self,
         mut message: Message,
         raw: Option<Vec<u8>>,
         push_name: Option<&str>,
+        expiration: Option<u32>,
     ) {
         message.chat = self.canonical_str(&message.chat);
         match self.archive.sender_collision(&message) {
@@ -316,9 +329,16 @@ impl Worker {
             .ok()
             .flatten()
             .is_none();
-        if let Err(error) = self.archive.insert_message(&message, raw.as_deref()) {
-            log::warn!("could not store a message: {error}");
-            return;
+        match self
+            .archive
+            .insert_message_with_expiry(&message, raw.as_deref(), expiration)
+        {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(error) => {
+                log::warn!("could not store a message: {error}");
+                return;
+            }
         }
         if message.from_me
             && matches!(
@@ -368,6 +388,10 @@ impl Worker {
             .flatten()
             .unwrap_or(message);
         self.polish(&mut stored);
+        let refresh_pin = self
+            .archive
+            .active_pin_targets(&chat, jiff::Timestamp::now().as_millisecond())
+            .is_ok_and(|targets| targets.contains(&stored.id));
         // Notify only for live incoming messages, not history replay.
         let incoming = (unread && !self.syncing).then(|| stored.clone());
         self.emit(Event::Messages {
@@ -378,6 +402,9 @@ impl Worker {
             complete: false,
         });
         self.emit_chat(&chat);
+        if refresh_pin {
+            self.emit_pin(&chat);
+        }
         if let Some(message) = incoming {
             self.emit(Event::Incoming {
                 chat,
