@@ -114,6 +114,7 @@ futures-util = { version = "0.3", default-features = false }
 # Tray icon: StatusNotifierItem with its menu over com.canonical.dbusmenu.
 ksni = { version = "0.3", default-features = false, features = ["tokio", "blocking"] }
 tempfile = "3"
+phonenumber = "0.3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Sealed memory files, the only kind of descriptor the notification portal accepts.
