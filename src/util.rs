@@ -1,15 +1,15 @@
 //! Small formatting helpers shared by the views.
 
 use jiff::civil::{Date, DateTime};
-use jiff::{Timestamp, ZonedDateTime};
+use jiff::{Timestamp, Zoned};
 
-fn zoned(unix_seconds: i64) -> Option<ZonedDateTime> {
+fn zoned(unix_seconds: i64) -> Option<Zoned> {
     let timestamp = Timestamp::from_second(unix_seconds).ok()?;
-    Some(timestamp.to_zoned_datetime(jiff::tz::TimeZone::system()))
+    Some(timestamp.to_zoned(jiff::tz::TimeZone::system()))
 }
 
 fn today() -> Date {
-    ZonedDateTime::now().date()
+    Zoned::now().date()
 }
 
 /// Local message time such as "14:05".
@@ -83,7 +83,7 @@ pub fn same_day(first: i64, second: i64) -> bool {
 pub fn noon_today() -> i64 {
     today()
         .at(12, 0, 0, 0)
-        .to_zoned_datetime(jiff::tz::TimeZone::system())
+        .to_zoned(jiff::tz::TimeZone::system())
         .map(|noon| noon.timestamp().as_second())
         .unwrap_or_else(|_| now())
 }
@@ -117,10 +117,7 @@ pub fn bytes(size: u64) -> String {
 
 /// Formats an international phone number using country-specific grouping.
 pub fn phone(digits: &str) -> String {
-    let digits: String = digits
-        .chars()
-        .filter(char::is_ascii_digit)
-        .collect();
+    let digits: String = digits.chars().filter(char::is_ascii_digit).collect();
 
     if digits.is_empty() {
         return String::new();
@@ -325,14 +322,14 @@ mod tests {
         }
     }
 
-	#[test]
-	fn phone_numbers_are_grouped() {
-		assert_eq!(phone("905441234567"), "+90 544 123 45 67");
-		assert_eq!(phone("905321234567"), "+90 532 123 45 67");
-		assert_eq!(phone("393331234567"), "+39 333 123 4567");
-		assert_eq!(phone("12025550137"), "+1 202-555-0137");
-		assert_eq!(phone(""), "");
-	}
+    #[test]
+    fn phone_numbers_are_grouped() {
+        assert_eq!(phone("905441234567"), "+90 544 123 45 67");
+        assert_eq!(phone("905321234567"), "+90 532 123 45 67");
+        assert_eq!(phone("393331234567"), "+39 333 123 4567");
+        assert_eq!(phone("12025550137"), "+1 202-555-0137");
+        assert_eq!(phone(""), "");
+    }
 
     #[test]
     fn sizes_and_durations_read_naturally() {
