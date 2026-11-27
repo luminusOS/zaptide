@@ -3,6 +3,7 @@
 //! A dedicated tokio runtime owns the WhatsApp connection, archive, and media
 //! work. Commands and events cross channels, and events wake the UI.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -252,7 +253,7 @@ pub enum Done {
         chat: ChatId,
         id: String,
         kept: bool,
-        result: Result<(), String>,
+        result: Result<i64, ()>,
     },
     Downloaded {
         chat: ChatId,
@@ -374,6 +375,7 @@ pub enum Done {
     AvatarFetched {
         id: String,
         full: bool,
+        request: Option<u64>,
         avatar_generation: u64,
         path: Option<PathBuf>,
     },
@@ -381,6 +383,7 @@ pub enum Done {
     AvatarFailed {
         id: String,
         full: bool,
+        request: Option<u64>,
         avatar_generation: u64,
     },
     /// Internal result of [`Command::EditProfile`].
@@ -527,9 +530,11 @@ pub enum Command {
         id: String,
         full: bool,
     },
-    /// Requests a profile picture ahead of everything queued, for the chat
-    /// that was just opened.
-    FetchAvatarFirst(String),
+    /// Requests the large profile picture for one visible preview.
+    FetchAvatarPreview {
+        id: String,
+        request: u64,
+    },
     /// Loads archived messages from `id` through the current page.
     LoadUntil {
         chat: ChatId,
@@ -796,6 +801,8 @@ pub enum Event {
     Messages {
         chat: ChatId,
         messages: Vec<Message>,
+        /// Message ID, original deadline, and whether it was kept.
+        keep_states: Vec<(String, i64, bool)>,
         older: bool,
         complete: bool,
         request: Option<u64>,
@@ -848,6 +855,10 @@ pub enum Event {
         full: bool,
         path: Option<PathBuf>,
     },
+    AvatarPreview {
+        request: u64,
+        path: Option<PathBuf>,
+    },
     MessageDeleted {
         chat: ChatId,
         id: String,
@@ -869,13 +880,11 @@ pub enum Event {
         chat: ChatId,
         id: String,
         kept: bool,
+        deadline: i64,
         /// Whether this device's user asked for the change.
         local: bool,
-    },
-    /// The kept messages of a chat that was just opened.
-    KeptIds {
-        chat: ChatId,
-        ids: Vec<String>,
+        /// A row that was hidden by expiry before the Keep arrived.
+        restored: Option<Box<Message>>,
     },
     /// The starred messages of a chat that was just opened.
     StarredIds {
@@ -884,11 +893,11 @@ pub enum Event {
     },
     /// Starred messages of one chat, newest first.
     StarredList(Vec<crate::archive::StarredMessage>),
-    /// The message a chat has pinned, or `None`. Sent when the chat opens and
-    /// whenever a pin is added, removed, runs out or loses its message.
+    /// The featured pin and all active pin IDs for a chat.
     Pinned {
         chat: ChatId,
         pin: Box<Option<crate::archive::PinnedMessage>>,
+        active_ids: HashSet<String>,
     },
     /// Starred stickers, imported packs, and every distinct sticker for the picker.
     Stickers {
@@ -1019,6 +1028,12 @@ impl Backend {
         {
             completion.done.discard();
         }
+    }
+
+    pub(crate) fn send_avatar_preview(&self, id: String, request: u64) -> bool {
+        self.commands
+            .send(Command::FetchAvatarPreview { id, request })
+            .is_ok()
     }
 
     #[cfg(test)]

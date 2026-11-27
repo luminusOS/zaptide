@@ -97,9 +97,7 @@ impl Worker {
             forwarded: false,
             thumbnail: None,
         };
-        let stamp = (row.id.clone(), row.timestamp);
-        self.store_message(row, Some(message.encode_to_vec()), None);
-        self.remember_expiry(&chat, &stamp.0, stamp.1, expiration);
+        self.store_message_with_expiry(row, Some(message.encode_to_vec()), None, expiration);
         self.answer_sends
             .insert(id.clone(), (chat.clone(), message_id.clone()));
         tokio::spawn(send_outgoing(

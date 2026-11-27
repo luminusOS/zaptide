@@ -13,22 +13,28 @@ impl Worker {
     }
 
     pub(super) fn fetch_avatar(&mut self, id: String, full: bool) {
-        self.queue_avatar(id, full, false);
+        self.fetch_avatar_for(id, full, None);
     }
 
-    /// The picture of the chat the person just opened goes before the rest.
-    pub(super) fn fetch_avatar_first(&mut self, id: String) {
-        self.queue_avatar(id, false, true);
+    pub(super) fn fetch_avatar_preview(&mut self, id: String, request: u64) {
+        self.fetch_avatar_for(id, true, Some(request));
     }
 
-    /// Answers from the cache when it can, else queues the lookup. Queued
-    /// lookups start in order, `AVATAR_FETCHES` at a time, so the first
-    /// pictures arrive one by one instead of everything arriving together.
-    fn queue_avatar(&mut self, id: String, full: bool, first: bool) {
-        let key = (id.clone(), full);
-        if self.avatar_active.contains(&key) {
-            return;
+    pub(super) fn avatar_result(
+        &self,
+        id: String,
+        full: bool,
+        request: Option<u64>,
+        path: Option<PathBuf>,
+    ) {
+        if let Some(request) = request {
+            self.emit(Event::AvatarPreview { request, path });
+        } else {
+            self.emit(Event::Avatar { id, full, path });
         }
+    }
+
+    fn fetch_avatar_for(&mut self, id: String, full: bool, request: Option<u64>) {
         let path = self.avatar_file(&id, full);
         let cached = std::fs::metadata(&path).ok();
         if let Some(metadata) = &cached
@@ -39,44 +45,9 @@ impl Worker {
                 .is_some_and(|age| avatar_is_fresh(&id, age))
         {
             let path = (metadata.len() > 0).then_some(path);
-            self.emit(Event::Avatar { id, full, path });
+            self.avatar_result(id, full, request, path);
             return;
         }
-        // A picture that is only due for a refresh still shows at once; the
-        // lookup below replaces it if it changed, and a missing connection
-        // no longer leaves the list without pictures.
-        if cached.as_ref().is_some_and(|metadata| metadata.len() > 0) {
-            self.emit(Event::Avatar {
-                id: id.clone(),
-                full,
-                path: Some(path.clone()),
-            });
-        }
-        match self.avatar_backlog.iter().position(|queued| *queued == key) {
-            Some(position) if first => {
-                self.avatar_backlog.remove(position);
-                self.avatar_backlog.push_front(key);
-            }
-            Some(_) => {}
-            None if first => self.avatar_backlog.push_front(key),
-            None => self.avatar_backlog.push_back(key),
-        }
-        self.pump_avatars();
-    }
-
-    /// Starts queued lookups while there is a free slot.
-    pub(super) fn pump_avatars(&mut self) {
-        while self.avatar_active.len() < AVATAR_FETCHES {
-            let Some((id, full)) = self.avatar_backlog.pop_front() else {
-                break;
-            };
-            self.start_avatar(id, full);
-        }
-    }
-
-    fn start_avatar(&mut self, id: String, full: bool) {
-        let path = self.avatar_file(&id, full);
-        let cached = std::fs::metadata(&path).ok();
         // Try both of our ids for our profile picture.
         let candidates: Vec<Jid> = if self.is_me(&id) || id == self.me() {
             [self.identity.me_pn.clone(), self.identity.me_lid.clone()]
@@ -88,11 +59,7 @@ impl Worker {
             Self::jid_of(&id).into_iter().collect()
         };
         if candidates.is_empty() {
-            self.emit(Event::Avatar {
-                id,
-                full,
-                path: None,
-            });
+            self.avatar_result(id, full, request, None);
             return;
         }
         let connected = self
@@ -100,21 +67,30 @@ impl Worker {
             .as_ref()
             .is_some_and(|client| client.is_socket_connected());
         let Some(client) = self.client.clone().filter(|_| connected) else {
-            // Defer profile-picture lookup until connected.
-            self.pending_avatars.entry((id, full)).or_insert(0);
+            if request.is_some() {
+                let path = cached
+                    .is_some_and(|metadata| metadata.len() > 0)
+                    .then_some(path);
+                self.avatar_result(id, full, request, path);
+            } else {
+                self.pending_avatars.entry((id, full)).or_insert(0);
+            }
             return;
         };
         let known = cached
             .filter(|metadata| metadata.len() > 0)
             .and_then(|_| KnownPicture::read(&path));
-        let permits = self.avatar_permits.clone();
+        let permits = if request.is_some() {
+            self.avatar_preview_permits.clone()
+        } else {
+            self.avatar_permits.clone()
+        };
         let commands = self.commands.clone();
         let session_generation = self.session_generation;
         let session_generation_shared = self.session_generation_shared.clone();
         let avatar_generation_shared = self.avatar_generation(&id, full);
         let avatar_generation = avatar_generation_shared.load(Ordering::Acquire);
         let session_cache_lock = self.session_cache_lock.clone();
-        self.avatar_active.insert((id.clone(), full));
         tokio::spawn(async move {
             let fetched = async {
                 let source = ClientPictures(client);
@@ -166,7 +142,7 @@ impl Worker {
                         done: Done::AvatarFetched {
                             id,
                             full,
-
+                            request,
                             avatar_generation,
                             path,
                         },
@@ -180,7 +156,7 @@ impl Worker {
                         done: Done::AvatarFailed {
                             id,
                             full,
-
+                            request,
                             avatar_generation,
                         },
                     }

@@ -529,10 +529,14 @@ pub enum NativeMediaAction {
     },
     Open(PathBuf),
     ViewPhotos {
-        paths: Vec<PathBuf>,
+        chat: String,
+        messages: Vec<String>,
         start: usize,
     },
-    ViewVideo(PathBuf),
+    ViewVideo {
+        chat: String,
+        message: String,
+    },
     Download {
         chat: String,
         message: String,
@@ -570,7 +574,7 @@ impl fmt::Debug for NativeMediaAction {
             Self::MessageContact { .. } => formatter.write_str("MessageContact { .. }"),
             Self::Open(_) => formatter.write_str("Open(..)"),
             Self::ViewPhotos { .. } => formatter.write_str("ViewPhotos { .. }"),
-            Self::ViewVideo(_) => formatter.write_str("ViewVideo(..)"),
+            Self::ViewVideo { .. } => formatter.write_str("ViewVideo { .. }"),
             Self::Download { .. } => formatter.write_str("Download { .. }"),
             Self::VoteQuiz { .. } => formatter.write_str("VoteQuiz { .. }"),
             Self::VotePoll { .. } => formatter.write_str("VotePoll { .. }"),

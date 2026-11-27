@@ -86,7 +86,6 @@ fn dialog_action_callback(
     let sender = sender.clone();
     std::rc::Rc::new(move |action| {
         sender.input(match action {
-            dialogs::DialogAction::ArchiveChat(id) => Input::ArchiveChat(id),
             dialogs::DialogAction::UnlinkConfirmed => Input::UnlinkConfirmed,
             dialogs::DialogAction::CreatePoll(draft) => Input::CreatePoll(draft),
             dialogs::DialogAction::StartChat { id, name } => Input::StartChat { id, name },
@@ -96,10 +95,14 @@ fn dialog_action_callback(
             dialogs::DialogAction::SendSticker(path) => Input::SendSticker(path),
             dialogs::DialogAction::RemoveSticker(path) => Input::RemoveSticker(path),
             dialogs::DialogAction::UnstarSticker(path) => Input::UnstarSticker(path),
-            dialogs::DialogAction::ShowStarred => Input::ShowStarred,
-            dialogs::DialogAction::OpenStarred { chat, id } => Input::OpenStarred { chat, id },
-            dialogs::DialogAction::SetDisappearing(seconds) => Input::SetDisappearing(seconds),
-            dialogs::DialogAction::ShowFullAvatar(id) => Input::ShowFullAvatar(id),
+            dialogs::DialogAction::ShowStarred(target) => Input::ShowStarred(target),
+            dialogs::DialogAction::OpenStarred { target, id } => Input::OpenStarred { target, id },
+            dialogs::DialogAction::SetDisappearing(target, seconds) => {
+                Input::SetDisappearing(target, seconds)
+            }
+            dialogs::DialogAction::ShowFullAvatar(id, preview) => {
+                Input::ShowFullAvatar(id, preview)
+            }
         });
     })
 }
@@ -196,14 +199,17 @@ struct TranscriptRequests {
 #[derive(Default)]
 struct OpenChatState {
     active_chat: Option<String>,
-    /// The message the open chat has pinned, shown in the bar on top.
-    pinned: Option<crate::archive::PinnedMessage>,
+    /// One pin snapshot for both the message menu and the bar.
+    pinned: Option<pins::OpenChatPins>,
     pending_edit: Option<(String, String, String)>,
     reply_to: Option<(String, String)>,
     editing: Option<(String, String)>,
     message_ids: Vec<String>,
     message_snapshots: std::collections::HashMap<String, crate::model::Message>,
     editable_messages: std::collections::HashMap<String, String>,
+    /// Messages of the open transcript that someone kept from disappearing.
+    kept: std::collections::HashSet<String>,
+    keepable: std::collections::HashMap<String, i64>,
     transcript: Vec<crate::native_transcript::TranscriptRow>,
     pending_transcript: conversation::PendingTranscript,
 }
@@ -217,6 +223,8 @@ impl OpenChatState {
         self.message_ids.clear();
         self.message_snapshots.clear();
         self.editable_messages.clear();
+        self.kept.clear();
+        self.keepable.clear();
     }
 }
 
@@ -550,6 +558,7 @@ pub struct NativeApplication {
     contact_share_generation: u64,
     /// Header menu for the open chat, relabelled by `sync_chat_menu`.
     chat_menu: gtk::gio::Menu,
+    chat_row_menu: gtk::glib::WeakRef<gtk::PopoverMenu>,
     /// (group, pinned, muted, archived) the chat menu was last labelled for.
     chat_menu_state: Option<(bool, bool, bool, bool)>,
     tray: Option<crate::native_tray::TrayHandle>,
@@ -578,14 +587,14 @@ pub struct NativeApplication {
     jump_needs_history: bool,
     /// Starred messages of the open chat.
     starred: std::collections::HashSet<String>,
-    /// Messages of the open chat that someone kept from disappearing.
-    kept: std::collections::HashSet<String>,
     pointer_sender: ComponentSender<NativeApplication>,
     audio: AudioState,
     /// About row of the open contact-info dialog, filled when the fetch returns.
     info_about: Option<(String, adw::ActionRow)>,
     /// Chat whose full-size picture was asked for and has not arrived yet.
-    full_avatar: Option<String>,
+    info_dialog: gtk::glib::WeakRef<adw::Dialog>,
+    full_avatar: Option<dialogs::AvatarPreview>,
+    avatar_preview_request: u64,
     message_target: Option<String>,
     message_target_selection: Option<String>,
     /// Unread count when the chat was opened, until the first page pins it
@@ -636,6 +645,7 @@ pub struct NativeApplication {
     sidebar: relm4::Controller<Sidebar>,
     calls: calls::CallsUi,
     media_viewer: Option<crate::native_media_widgets::viewer::MediaViewer>,
+    media_viewer_messages: Vec<String>,
     media_viewer_host: gtk::Box,
     sidebar_visible: bool,
     split_view: Option<adw::NavigationSplitView>,
@@ -662,13 +672,29 @@ pub enum ChatFilterInput {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ChatRowAction {
     Info,
-    Pin,
-    Mute,
-    Archive,
+    Pin(bool),
+    Mute(bool),
+    Archive(bool),
     Close,
     CopyTranscript,
     Clear,
     Delete,
+}
+
+/// A conversation in the account that was displayed when the action began.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ChatTarget {
+    account: crate::account::AccountId,
+    chat: String,
+}
+
+impl ChatTarget {
+    fn new(account: crate::account::AccountId, chat: impl Into<String>) -> Self {
+        Self {
+            account,
+            chat: chat.into(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -780,35 +806,35 @@ pub enum Input {
     /// Keeps the selected disappearing message, or lets it run out again.
     ToggleSelectedKeep,
     /// Fetches the full-size picture of a chat and shows it.
-    ShowFullAvatar(String),
-    /// Opens the context menu of the chat under the pointer in the list.
+    ShowFullAvatar(String, dialogs::AvatarPreview),
+    /// Opens the context menu of the pointed or keyboard-focused chat.
     ChatRowMenu {
-        chat: String,
+        target: ChatTarget,
         x: f64,
         y: f64,
     },
     /// An entry of that menu, for the chat it was opened on.
-    ChatRowAction(String, ChatRowAction),
+    ChatRowAction(ChatTarget, ChatRowAction),
     /// Pins the selected message for this many seconds.
     PinSelected(u32),
     UnpinSelected,
     JumpToPinned,
-    /// Changes the open chat's disappearing-messages timer; 0 turns it off.
-    SetDisappearing(u32),
-    ShowStarred,
+    /// Changes the dialog's chat timer; 0 turns it off.
+    SetDisappearing(ChatTarget, u32),
+    ShowStarred(ChatTarget),
     OpenStarred {
-        chat: String,
+        target: ChatTarget,
         id: String,
     },
     DeleteSelected(bool),
     /// Asks to clear the open chat's messages, with a confirmation dialog.
     ClearSelectedChat,
     /// The clear was confirmed; sends `Command::ClearChat`.
-    ConfirmClearChat(crate::account::AccountId, String),
+    ConfirmClearChat(ChatTarget),
     /// Asks to delete the open chat entirely, with a confirmation dialog.
     DeleteSelectedChat,
     /// The delete was confirmed; sends `Command::DeleteChat`.
-    ConfirmDeleteChat(crate::account::AccountId, String),
+    ConfirmDeleteChat(ChatTarget),
     VoteOption(usize),
     CreatePoll(crate::model::PollDraft),
     Recording(crate::native_voice::RecordingIntent),
@@ -850,7 +876,7 @@ pub enum Input {
     ToggleSelectedPin,
     ToggleSelectedArchive,
     /// Flips this chat's archive state; archiving is confirmed first.
-    ArchiveChat(String),
+    SetChatArchived(ChatTarget, bool),
     ToggleSelectedMute,
     Close,
     Quit,
@@ -1236,9 +1262,17 @@ impl SimpleComponent for NativeApplication {
         let chat_selection = chats.selection_model.clone();
         let chat_key_sender = sender.clone();
         let key_targets = chat_targets.clone();
-        chat_keys.connect_key_pressed(move |_, key, _, _| {
+        chat_keys.connect_key_pressed(move |controller, key, _, _| {
             let selected = chat_selection.selected();
             let count = chat_selection.n_items();
+            let highlight = |position| {
+                chat_selection.set_selected(position);
+                if let Some(view) = controller.widget().and_downcast::<gtk::ListView>() {
+                    view.scroll_to(position, gtk::ListScrollFlags::FOCUS, None);
+                }
+                chat_key_sender.input(Input::HighlightChat(position));
+                gtk::glib::Propagation::Stop
+            };
             match key {
                 gtk::gdk::Key::Up if count > 0 => {
                     let current = if selected == gtk::INVALID_LIST_POSITION {
@@ -1246,9 +1280,7 @@ impl SimpleComponent for NativeApplication {
                     } else {
                         selected.saturating_sub(1)
                     };
-                    chat_selection.set_selected(current);
-                    chat_key_sender.input(Input::HighlightChat(current));
-                    gtk::glib::Propagation::Stop
+                    highlight(current)
                 }
                 gtk::gdk::Key::Down if count > 0 => {
                     let current = if selected == gtk::INVALID_LIST_POSITION {
@@ -1256,9 +1288,7 @@ impl SimpleComponent for NativeApplication {
                     } else {
                         (selected + 1).min(count - 1)
                     };
-                    chat_selection.set_selected(current);
-                    chat_key_sender.input(Input::HighlightChat(current));
-                    gtk::glib::Propagation::Stop
+                    highlight(current)
                 }
                 gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter if count > 0 => {
                     let current = if selected == gtk::INVALID_LIST_POSITION {
@@ -1441,7 +1471,7 @@ impl SimpleComponent for NativeApplication {
                 }
                 SidebarOutput::ShowCalls(active) => Input::ShowCalls(active),
                 SidebarOutput::SelectChat(account, chat) => Input::SelectChat(account, chat),
-                SidebarOutput::ChatMenu { chat, x, y } => Input::ChatRowMenu { chat, x, y },
+                SidebarOutput::ChatMenu { target, x, y } => Input::ChatRowMenu { target, x, y },
                 SidebarOutput::NewChat => Input::ShowNewChat,
                 SidebarOutput::ShowLiveCall => Input::ShowLiveCall,
             });
@@ -1518,6 +1548,7 @@ impl SimpleComponent for NativeApplication {
             contacts: std::collections::HashMap::new(),
             contact_share_generation: 0,
             chat_menu: gtk::gio::Menu::new(),
+            chat_row_menu: gtk::glib::WeakRef::new(),
             chat_menu_state: None,
             tray: None,
             tray_state: crate::native_tray::TrayState::default(),
@@ -1541,7 +1572,6 @@ impl SimpleComponent for NativeApplication {
             pending_quote_navigation: None,
             jump_needs_history: false,
             starred: std::collections::HashSet::new(),
-            kept: std::collections::HashSet::new(),
             pointer_sender: sender.clone(),
             audio: AudioState {
                 selected_voice: None,
@@ -1560,7 +1590,9 @@ impl SimpleComponent for NativeApplication {
                 played_voice: Default::default(),
             },
             info_about: None,
+            info_dialog: Default::default(),
             full_avatar: None,
+            avatar_preview_request: 0,
             message_target: None,
             message_target_selection: None,
             opened_unread: 0,
@@ -1601,6 +1633,7 @@ impl SimpleComponent for NativeApplication {
             calls,
             sidebar_visible: true,
             media_viewer: None,
+            media_viewer_messages: Vec::new(),
             media_viewer_host: gtk::Box::new(gtk::Orientation::Vertical, 0),
             split_view: None,
             phone_linking: false,
@@ -2001,10 +2034,15 @@ impl NativeApplication {
         self.message_menu.popup();
     }
 
-    fn present_media_viewer(&mut self, page: crate::native_media_widgets::viewer::MediaViewer) {
+    fn present_media_viewer(
+        &mut self,
+        page: crate::native_media_widgets::viewer::MediaViewer,
+        messages: Vec<String>,
+    ) {
         self.media_viewer_host.append(&page.widget);
         self.sidebar_visible = false;
         self.media_viewer = Some(page);
+        self.media_viewer_messages = messages;
         let host = self.media_viewer_host.downgrade();
         gtk::glib::idle_add_local_once(move || {
             if let Some(host) = host.upgrade() {
@@ -2017,6 +2055,7 @@ impl NativeApplication {
         if self.media_viewer.take().is_none() {
             return;
         }
+        self.media_viewer_messages.clear();
         while let Some(child) = self.media_viewer_host.first_child() {
             self.media_viewer_host.remove(&child);
         }
@@ -2092,8 +2131,8 @@ impl NativeApplication {
             gettext("Star")
         };
         respond.append(Some(&star), Some("message.star"));
-        if self.keep_offered(&message.id) {
-            let keep = if self.kept.contains(&message.id) {
+        if self.keep_offered(message) {
+            let keep = if self.open_chat.kept.contains(&message.id) {
                 gettext("Unkeep")
             } else {
                 gettext("Keep")
@@ -2223,16 +2262,6 @@ impl NativeApplication {
         }
     }
 
-    /// Asks for a picture ahead of the queue, as for the chat just opened.
-    fn request_avatar_first(&mut self, id: &str) {
-        self.avatar_requests.insert(id.to_owned());
-        if !self.avatars.contains_key(id)
-            && let Some(backend) = &self.backend
-        {
-            backend.send(crate::backend::Command::FetchAvatarFirst(id.to_owned()));
-        }
-    }
-
     fn request_avatar(&mut self, id: &str) {
         if self.avatar_requests.insert(id.to_owned())
             && let Some(backend) = &self.backend
@@ -2358,8 +2387,13 @@ impl NativeApplication {
         if self.open_chat.active_chat.as_deref() != Some(chat) {
             return;
         }
+        if self.media_viewer_messages.iter().any(|source| source == id) {
+            self.close_media_viewer();
+        }
         // Deferred updates land first, so the deletion changes only its row.
         self.flush_transcript();
+        self.open_chat.kept.remove(id);
+        self.open_chat.keepable.remove(id);
         if self.audio.playing_audio.as_deref() == Some(id) {
             self.audio.media.stop_playback();
             self.audio.playing_audio = None;
@@ -2423,7 +2457,6 @@ impl NativeApplication {
     fn clear_open_chat_state(&mut self) {
         // Leaving an account screen intentionally retains its starred-message cache.
         self.starred.clear();
-        self.kept.clear();
         self.reset_open_chat_state();
         self.open_chat.reset();
         self.audio.selected_voice = None;
@@ -2574,6 +2607,10 @@ mod history_runtime_tests;
 #[cfg(test)]
 #[path = "application/viewer_runtime_tests.rs"]
 mod viewer_runtime_tests;
+
+#[cfg(test)]
+#[path = "application/avatar_preview_tests.rs"]
+mod avatar_preview_tests;
 
 #[cfg(test)]
 #[path = "application/poll_runtime_tests.rs"]

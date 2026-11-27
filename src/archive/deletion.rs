@@ -36,7 +36,8 @@ impl Archive {
         // older bound, or kept starred messages, can leave one behind.
         self.connection.execute(
             "UPDATE chats SET last_activity =
-                 COALESCE((SELECT MAX(timestamp) FROM messages WHERE chat = ?1), 0)
+                 COALESCE((SELECT MAX(timestamp) FROM messages
+                           WHERE chat = ?1 AND kind IS NOT 'system'), 0)
              WHERE id = ?1",
             params![id],
         )?;

@@ -75,29 +75,36 @@ pub(super) fn install_message_actions(
     window.insert_action_group("message", Some(&group));
 }
 
-/// Entries of the chat list's context menu. Each carries the id of the chat
-/// the menu was opened on, so it never acts on whichever chat is open.
+pub(super) fn chat_row_action_target(target: &ChatTarget, desired: bool) -> gtk::glib::Variant {
+    (target.account.0, target.chat.as_str(), desired).to_variant()
+}
+
 pub(super) fn install_chat_row_actions(
     window: &adw::ApplicationWindow,
     sender: &ComponentSender<NativeApplication>,
 ) {
     let group = gtk::gio::SimpleActionGroup::new();
-    let entries = [
-        ("info", ChatRowAction::Info),
+    type ChatRowEntry = (&'static str, fn(bool) -> ChatRowAction);
+    let entries: [ChatRowEntry; 8] = [
+        ("info", |_| ChatRowAction::Info),
         ("pin", ChatRowAction::Pin),
         ("mute", ChatRowAction::Mute),
         ("archive", ChatRowAction::Archive),
-        ("close", ChatRowAction::Close),
-        ("transcript", ChatRowAction::CopyTranscript),
-        ("clear", ChatRowAction::Clear),
-        ("delete", ChatRowAction::Delete),
+        ("close", |_| ChatRowAction::Close),
+        ("transcript", |_| ChatRowAction::CopyTranscript),
+        ("clear", |_| ChatRowAction::Clear),
+        ("delete", |_| ChatRowAction::Delete),
     ];
+    let parameter_type = <(u32, String, bool)>::static_variant_type();
     for (name, kind) in entries {
-        let action = gtk::gio::SimpleAction::new(name, Some(gtk::glib::VariantTy::STRING));
+        let action = gtk::gio::SimpleAction::new(name, Some(&parameter_type));
         let sender = sender.clone();
-        action.connect_activate(move |_, chat| {
-            if let Some(chat) = chat.and_then(gtk::glib::Variant::get::<String>) {
-                sender.input(Input::ChatRowAction(chat, kind));
+        action.connect_activate(move |_, parameter| {
+            if let Some((account, chat, desired)) =
+                parameter.and_then(gtk::glib::Variant::get::<(u32, String, bool)>)
+            {
+                let target = ChatTarget::new(crate::account::AccountId(account), chat);
+                sender.input(Input::ChatRowAction(target, kind(desired)));
             }
         });
         group.add_action(&action);

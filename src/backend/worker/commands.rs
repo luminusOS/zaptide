@@ -195,7 +195,7 @@ impl Worker {
             Command::LoadUntil { chat, id, before } => self.load_until(chat, id, before),
             Command::Download { chat, message } => self.download(chat, message),
             Command::FetchAvatar { id, full } => self.fetch_avatar(id, full),
-            Command::FetchAvatarFirst(id) => self.fetch_avatar_first(id),
+            Command::FetchAvatarPreview { id, request } => self.fetch_avatar_preview(id, request),
             Command::EditText {
                 chat,
                 id,
@@ -1055,22 +1055,20 @@ impl Worker {
                     Done::AvatarFetched {
                         id,
                         full,
-
+                        request,
                         avatar_generation,
                         path,
                     },
             }) => {
-                self.avatar_active.remove(&(id.clone(), full));
-                if self
+                let current = self
                     .avatar_generations
                     .get(&(id.clone(), full))
                     .is_some_and(|generation| {
                         avatar_generation == generation.load(Ordering::Acquire)
-                    })
-                {
-                    self.emit(Event::Avatar { id, full, path });
+                    });
+                if current || request.is_some() {
+                    self.avatar_result(id, full, request, path.filter(|_| current));
                 }
-                self.pump_avatars();
             }
             Command::Completed(Completion {
                 generation: _,
@@ -1078,12 +1076,13 @@ impl Worker {
                     Done::AvatarFailed {
                         id,
                         full,
-
+                        request,
                         avatar_generation,
                     },
             }) => {
-                self.avatar_active.remove(&(id.clone(), full));
-                if self
+                if request.is_some() {
+                    self.avatar_result(id, full, request, None);
+                } else if self
                     .avatar_generations
                     .get(&(id.clone(), full))
                     .is_some_and(|generation| {
@@ -1092,7 +1091,6 @@ impl Worker {
                 {
                     *self.pending_avatars.entry((id, full)).or_insert(0) += 1;
                 }
-                self.pump_avatars();
             }
             Command::Completed(Completion {
                 generation: _,

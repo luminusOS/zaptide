@@ -391,6 +391,8 @@ impl NativeApplication {
         {
             self.open_chat.editable_messages.remove(&id);
             self.open_chat.message_snapshots.remove(&id);
+            self.open_chat.kept.remove(&id);
+            self.open_chat.keepable.remove(&id);
         }
         self.download_missing_stickers();
         self.queue_waveforms();
@@ -407,6 +409,53 @@ impl NativeApplication {
             motion::restore_reading_anchor(&self.messages.view, position as u32, anchor, offset);
         }
         self.status = gettext("Conversation loaded");
+    }
+
+    pub(super) fn restore_kept_message(&mut self, message: crate::model::Message) -> bool {
+        self.flush_transcript();
+        let ids = &mut self.open_chat.message_ids;
+        let snapshots = &mut self.open_chat.message_snapshots;
+        if !self.history_complete
+            && ids
+                .first()
+                .and_then(|id| snapshots.get(id))
+                .is_none_or(|first| message.timestamp < first.timestamp)
+        {
+            return false;
+        }
+        let anchor = motion::reading_anchor(&self.messages.view, ids);
+        let position = ids
+            .iter()
+            .position(|id| {
+                snapshots
+                    .get(id)
+                    .is_some_and(|row| row.timestamp > message.timestamp)
+            })
+            .unwrap_or(ids.len());
+        let id = message.id.clone();
+        if let Some(text) = editable_text(&message) {
+            self.open_chat.editable_messages.insert(id.clone(), text);
+        }
+        ids.insert(position, id.clone());
+        snapshots.insert(id.clone(), message);
+        for trimmed in trim_message_window(ids, false, ACTIVE_MESSAGE_LIMIT) {
+            self.open_chat.editable_messages.remove(&trimmed);
+            snapshots.remove(&trimmed);
+            self.open_chat.kept.remove(&trimmed);
+            self.open_chat.keepable.remove(&trimmed);
+        }
+        self.rebuild_message_rows(false);
+        self.sync_transcript();
+        if let Some((anchor, offset)) = anchor
+            && let Some(position) = self
+                .open_chat
+                .message_ids
+                .iter()
+                .position(|id| id == &anchor)
+        {
+            motion::restore_reading_anchor(&self.messages.view, position as u32, anchor, offset);
+        }
+        self.open_chat.message_snapshots.contains_key(&id)
     }
 
     /// Applies a message update or contact change from a backend batch.
@@ -663,7 +712,7 @@ impl NativeApplication {
                 contacts: &self.contacts,
                 avatars: &self.avatars,
                 starred: &self.starred,
-                kept: &self.kept,
+                kept: &self.open_chat.kept,
                 selection: self.message_selection.as_deref(),
                 link_previews: self.settings.link_previews,
                 pointer_sender: &self.pointer_sender,

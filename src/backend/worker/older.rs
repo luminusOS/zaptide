@@ -114,6 +114,7 @@ impl Worker {
                     request: Some(request),
                     chat: chat.clone(),
                     messages,
+                    keep_states: Vec::new(),
                     older: true,
                     complete: false,
                 })
@@ -294,14 +295,6 @@ impl Worker {
                 ids,
             });
         }
-        if before.is_none()
-            && let Ok(ids) = self.archive.kept_ids(&chat)
-        {
-            self.emit(Event::KeptIds {
-                chat: chat.clone(),
-                ids,
-            });
-        }
         if before.is_none() {
             self.emit_pin(&chat);
         }
@@ -357,6 +350,7 @@ impl Worker {
                     request: Some(request),
                     chat: chat.clone(),
                     messages,
+                    keep_states: Vec::new(),
                     older: before.is_some(),
                     complete,
                 });
@@ -395,6 +389,7 @@ impl Worker {
                 request: None,
                 chat: chat.clone(),
                 messages: Vec::new(),
+                keep_states: Vec::new(),
                 older: true,
                 complete: false,
             });
@@ -415,6 +410,7 @@ impl Worker {
                     request: None,
                     chat,
                     messages,
+                    keep_states: Vec::new(),
                     older: true,
                     complete: false,
                 });

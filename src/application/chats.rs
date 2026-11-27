@@ -1,10 +1,6 @@
 use super::*;
 use crate::i18n::gettext;
 
-/// How many chats from the top of the list get a picture without being
-/// opened. The rest wait until they open or have new activity.
-const EAGER_AVATAR_CHATS: usize = 30;
-
 /// Captures the displayed account and chat ID before a GTK activation is queued.
 #[derive(Default)]
 pub(super) struct ChatTargets {
@@ -20,6 +16,12 @@ impl ChatTargets {
 
     pub(super) fn get(&self, position: u32) -> Option<(crate::account::AccountId, String)> {
         Some((self.account?, self.ids.get(position as usize)?.clone()))
+    }
+
+    pub(super) fn for_id(&self, chat: &str) -> Option<ChatTarget> {
+        let account = self.account?;
+        self.position(account, chat)?;
+        Some(ChatTarget::new(account, chat))
     }
 
     pub(super) fn position(&self, account: crate::account::AccountId, chat: &str) -> Option<u32> {
@@ -210,7 +212,6 @@ impl NativeApplication {
             }
             self.composer.cancel_context(previous);
         }
-        self.request_avatar_first(&chat);
         self.chat_projection.select(chat.clone());
         self.chats.selection_model.set_selected(position);
         self.open_chat.active_chat = Some(chat.clone());
@@ -233,11 +234,9 @@ impl NativeApplication {
         self.recent_messages_pending = false;
         self.history_complete = false;
         self.loading_older = false;
-        self.open_chat.message_ids.clear();
+        self.open_chat.reset_messages();
         self.message_selection = None;
         self.starred.clear();
-        self.open_chat.message_snapshots.clear();
-        self.open_chat.editable_messages.clear();
         self.open_chat.transcript.clear();
         self.open_chat.pending_transcript.clear();
         self.audio.selected_voice = None;
@@ -371,16 +370,46 @@ impl NativeApplication {
         self.chat_menu.append_section(None, &section);
     }
 
-    /// Opens the same entries as the header's three-dot menu for the chat
-    /// under the pointer in the list. The chat is not opened by this.
-    pub(super) fn show_chat_row_menu(&self, chat: &str, x: f64, y: f64) {
-        let Some(known) = self.chat_snapshots.iter().find(|known| known.id == chat) else {
+    pub(super) fn targeted_chat(
+        &self,
+        target: &ChatTarget,
+    ) -> Option<&std::rc::Rc<crate::model::Chat>> {
+        if self.active_account != target.account {
+            return None;
+        }
+        self.chat_snapshots
+            .iter()
+            .find(|chat| chat.id == target.chat)
+    }
+
+    pub(super) fn close_chat_row_menu(&self) {
+        if let Some(popover) = self.chat_row_menu.upgrade() {
+            self.chat_row_menu.set(None);
+            popover.popdown();
+        }
+    }
+
+    /// Opens the menu for a pointed or focused row without opening the chat.
+    pub(super) fn show_chat_row_menu(&self, target: &ChatTarget, x: f64, y: f64) {
+        let Some(known) = self.targeted_chat(target) else {
             return;
         };
-        let open = self.open_chat.active_chat.as_deref() == Some(chat);
-        let entry = |label: String, name: &str| {
+        if self
+            .chat_targets
+            .borrow()
+            .position(target.account, &target.chat)
+            .is_none()
+        {
+            return;
+        }
+        self.close_chat_row_menu();
+        let open = self.open_chat.active_chat.as_deref() == Some(target.chat.as_str());
+        let entry = |label: String, name: &str, desired: bool| {
             let item = gtk::gio::MenuItem::new(Some(&label), None);
-            item.set_action_and_target_value(Some(name), Some(&chat.to_variant()));
+            item.set_action_and_target_value(
+                Some(name),
+                Some(&super::actions::chat_row_action_target(target, desired)),
+            );
             item
         };
         let menu = gtk::gio::Menu::new();
@@ -390,7 +419,7 @@ impl NativeApplication {
         } else {
             gettext("_Contact Info")
         };
-        section.append_item(&entry(info, "chatrow.info"));
+        section.append_item(&entry(info, "chatrow.info", false));
         menu.append_section(None, &section);
         let section = gtk::gio::Menu::new();
         let pin = if known.pinned {
@@ -398,33 +427,38 @@ impl NativeApplication {
         } else {
             gettext("_Pin Chat")
         };
-        section.append_item(&entry(pin, "chatrow.pin"));
-        let mute = if known.muted(crate::util::now()) {
+        section.append_item(&entry(pin, "chatrow.pin", !known.pinned));
+        let muted = known.muted(crate::util::now());
+        let mute = if muted {
             gettext("_Unmute Notifications")
         } else {
             gettext("_Mute Notifications")
         };
-        section.append_item(&entry(mute, "chatrow.mute"));
+        section.append_item(&entry(mute, "chatrow.mute", !muted));
         let archive = if known.archived {
             gettext("Un_archive Chat")
         } else {
             gettext("_Archive Chat")
         };
-        section.append_item(&entry(archive, "chatrow.archive"));
+        section.append_item(&entry(archive, "chatrow.archive", !known.archived));
         menu.append_section(None, &section);
         // These two work on what is on screen, so they only apply to the
         // chat that is open.
         if open {
             let section = gtk::gio::Menu::new();
-            section.append_item(&entry(gettext("_Close Chat"), "chatrow.close"));
+            section.append_item(&entry(gettext("_Close Chat"), "chatrow.close", false));
             menu.append_section(None, &section);
             let section = gtk::gio::Menu::new();
-            section.append_item(&entry(gettext("Copy _Transcript"), "chatrow.transcript"));
+            section.append_item(&entry(
+                gettext("Copy _Transcript"),
+                "chatrow.transcript",
+                false,
+            ));
             menu.append_section(None, &section);
         }
         let section = gtk::gio::Menu::new();
-        section.append_item(&entry(gettext("Clear Chat"), "chatrow.clear"));
-        section.append_item(&entry(gettext("Delete Chat"), "chatrow.delete"));
+        section.append_item(&entry(gettext("Clear Chat"), "chatrow.clear", false));
+        section.append_item(&entry(gettext("Delete Chat"), "chatrow.delete", false));
         menu.append_section(None, &section);
         let popover = gtk::PopoverMenu::from_model(Some(&menu));
         popover.set_parent(&self.chats.view);
@@ -432,95 +466,122 @@ impl NativeApplication {
         popover.set_halign(gtk::Align::Start);
         popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
         popover.connect_closed(|popover| {
-            let popover = popover.clone();
-            gtk::glib::idle_add_local_once(move || popover.unparent());
+            let popover = popover.downgrade();
+            gtk::glib::idle_add_local_once(move || {
+                if let Some(popover) = popover.upgrade()
+                    && popover.parent().is_some()
+                {
+                    popover.unparent();
+                }
+            });
         });
+        self.chat_row_menu.set(Some(&popover));
         popover.popup();
     }
 
     /// An entry of the chat list's context menu, for the chat it was opened on.
     pub(super) fn chat_row_action(
         &mut self,
-        chat: String,
+        target: ChatTarget,
         action: ChatRowAction,
         sender: ComponentSender<Self>,
     ) {
-        let Some(known) = self
-            .chat_snapshots
-            .iter()
-            .find(|known| known.id == chat)
-            .cloned()
-        else {
+        if self.targeted_chat(&target).is_none() {
             return;
-        };
+        }
+        let open = self.open_chat.active_chat.as_deref() == Some(target.chat.as_str());
         match action {
-            ChatRowAction::Info => self.show_chat_info_of(Some(chat), sender),
-            ChatRowAction::Pin => {
+            ChatRowAction::Info => self.show_chat_info_of(target, sender),
+            ChatRowAction::Pin(pinned) => {
                 if let Some(backend) = &self.backend {
-                    backend.send(crate::backend::Command::SetPinned(chat, !known.pinned));
+                    backend.send(crate::backend::Command::SetPinned(target.chat, pinned));
                 }
             }
-            ChatRowAction::Mute => {
+            ChatRowAction::Mute(muted) => {
                 if let Some(backend) = &self.backend {
-                    let muted = known.muted(crate::util::now());
                     backend.send(crate::backend::Command::SetMuted(
-                        chat,
-                        (!muted).then_some(i64::MAX),
+                        target.chat,
+                        muted.then_some(0),
                     ));
                 }
             }
-            ChatRowAction::Archive => {
-                if known.archived {
-                    sender.input(Input::ArchiveChat(chat));
-                } else {
-                    show_archive_confirmation(
-                        &self.window,
-                        &dialog_action_callback(&sender),
-                        &known,
-                    );
-                }
-            }
-            // Only offered for the open chat, so the handlers that read the
-            // open chat apply to it.
-            ChatRowAction::Close
-                if self.open_chat.active_chat.as_deref() == Some(chat.as_str()) =>
-            {
-                sender.input(Input::CloseChat);
-            }
-            ChatRowAction::CopyTranscript
-                if self.open_chat.active_chat.as_deref() == Some(chat.as_str()) =>
-            {
-                sender.input(Input::CopyTranscript);
-            }
-            ChatRowAction::Clear => self.confirm_clear_chat_of(chat, sender),
-            ChatRowAction::Delete => self.confirm_delete_chat_of(chat, sender),
+            ChatRowAction::Archive(archived) => self.archive_chat(target, archived, &sender),
+            ChatRowAction::Close if open => self.close_chat(),
+            ChatRowAction::CopyTranscript if open => self.copy_transcript(),
+            ChatRowAction::Clear => self.confirm_chat_deletion(target, false, sender),
+            ChatRowAction::Delete => self.confirm_chat_deletion(target, true, sender),
             ChatRowAction::Close | ChatRowAction::CopyTranscript => {}
         }
     }
 
-    pub(super) fn request_full_avatar(&mut self, id: String) {
-        self.full_avatar = Some(id.clone());
-        // Show the small picture meanwhile when it is all there is.
-        if let Some(backend) = &self.backend {
-            backend.send(crate::backend::Command::FetchAvatar { id, full: true });
+    pub(super) fn archive_chat(
+        &self,
+        target: ChatTarget,
+        archived: bool,
+        sender: &ComponentSender<Self>,
+    ) {
+        let Some(chat) = self.targeted_chat(&target) else {
+            return;
+        };
+        if archived {
+            let sender = sender.clone();
+            show_archive_confirmation(&self.window, chat, move || {
+                sender.input(Input::SetChatArchived(target.clone(), true));
+            });
+        } else {
+            self.set_chat_archived(target, false);
         }
     }
 
-    pub(super) fn full_avatar_loaded(&mut self, id: &str, path: Option<std::path::PathBuf>) {
-        if self.full_avatar.as_deref() != Some(id) {
+    pub(super) fn set_chat_archived(&self, target: ChatTarget, archived: bool) {
+        if self.targeted_chat(&target).is_some()
+            && let Some(backend) = &self.backend
+        {
+            backend.send(crate::backend::Command::SetArchived(target.chat, archived));
+        }
+    }
+
+    pub(super) fn request_full_avatar(&mut self, id: String, preview: dialogs::AvatarPreview) {
+        if !self.owns_avatar_preview(&preview) {
             return;
         }
-        self.full_avatar = None;
-        let title = self
-            .chat_snapshots
-            .iter()
-            .find(|chat| chat.id == id)
-            .map_or_else(|| id.to_owned(), |chat| chat.name.clone());
-        // Without a larger picture the small one is the best there is.
-        match path.or_else(|| self.avatars.get(id).cloned()) {
-            Some(path) => dialogs::show_full_avatar_dialog(&self.window, &title, &path),
-            None => self.toast(&gettext("No profile picture")),
+        self.avatar_preview_request = self.avatar_preview_request.wrapping_add(1);
+        let request = self.avatar_preview_request;
+        if !self
+            .backend
+            .as_ref()
+            .is_some_and(|backend| backend.send_avatar_preview(id, request))
+        {
+            preview.finish(None);
         }
+        self.full_avatar = Some(preview);
+    }
+
+    pub(super) fn full_avatar_loaded(&self, request: u64, path: Option<std::path::PathBuf>) {
+        if request == self.avatar_preview_request
+            && let Some(preview) = &self.full_avatar
+            && self.owns_avatar_preview(preview)
+        {
+            preview.finish(path);
+        }
+    }
+
+    fn owns_avatar_preview(&self, preview: &dialogs::AvatarPreview) -> bool {
+        self.info_dialog
+            .upgrade()
+            .filter(|dialog| self.window.visible_dialog().as_ref() == Some(dialog))
+            .is_some_and(|dialog| preview.belongs_to(&dialog))
+    }
+
+    pub(super) fn close_chat_info(&mut self) {
+        if let Some(preview) = self.full_avatar.take() {
+            preview.cancel();
+        }
+        if let Some(dialog) = self.info_dialog.upgrade() {
+            dialog.force_close();
+        }
+        self.info_dialog.set(None);
+        self.info_about = None;
     }
 
     /// Archived chats with unread messages, as counted on the phone.
@@ -604,18 +665,7 @@ impl NativeApplication {
     }
 
     pub(super) fn reset_shared_chats(&mut self, chats: Vec<std::rc::Rc<crate::model::Chat>>) {
-        // The open chat first, then the top of the list as it is shown, a
-        // few at a time. Chats further down get a picture when they open or
-        // see new activity, so a long list does not start hundreds of lookups.
-        if let Some(open) = self.open_chat.active_chat.clone() {
-            self.request_avatar_first(&open);
-        }
-        let mut shown: Vec<&std::rc::Rc<crate::model::Chat>> =
-            chats.iter().filter(|chat| !chat.archived).collect();
-        shown.sort_by_key(|chat| {
-            std::cmp::Reverse((chat.pinned, chat.pinned_at, chat.last_activity))
-        });
-        for chat in shown.into_iter().take(EAGER_AVATAR_CHATS) {
+        for chat in &chats {
             self.request_avatar(&chat.id);
         }
         self.chat_snapshots = chats;
@@ -679,24 +729,17 @@ impl NativeApplication {
         }
     }
 
-    pub(super) fn send_chat_deletion(
-        &self,
-        account: crate::account::AccountId,
-        chat: String,
-        delete_chat: bool,
-    ) {
+    pub(super) fn send_chat_deletion(&self, target: ChatTarget, delete_chat: bool) {
         // The confirmation may come from the chat list's menu, for a chat
         // that is not open; it only has to still be in the list.
-        if self.active_account != account
-            || !self.chat_snapshots.iter().any(|known| known.id == chat)
-        {
+        if self.targeted_chat(&target).is_none() {
             return;
         }
         if let Some(backend) = &self.backend {
             let command = if delete_chat {
-                crate::backend::Command::DeleteChat(chat)
+                crate::backend::Command::DeleteChat(target.chat)
             } else {
-                crate::backend::Command::ClearChat(chat)
+                crate::backend::Command::ClearChat(target.chat)
             };
             backend.send(command);
         }
@@ -759,6 +802,359 @@ impl NativeApplication {
 #[cfg(test)]
 mod account_selection_tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires an isolated graphical process"]
+    fn sidebar_menu_actions_keep_the_target_chat_and_account() {
+        use relm4::ComponentController;
+
+        fn find_widget<W: IsA<gtk::Widget>>(
+            widget: &gtk::Widget,
+            predicate: &impl Fn(&W) -> bool,
+        ) -> Option<W> {
+            if let Ok(widget) = widget.clone().downcast::<W>()
+                && predicate(&widget)
+            {
+                return Some(widget);
+            }
+            let mut child = widget.first_child();
+            while let Some(current) = child {
+                if let Some(found) = find_widget(&current, predicate) {
+                    return Some(found);
+                }
+                child = current.next_sibling();
+            }
+            None
+        }
+
+        fn menu_target(menu: &gtk::PopoverMenu, name: &str) -> Option<gtk::glib::Variant> {
+            let menu = menu.menu_model().unwrap();
+            (0..menu.n_items()).find_map(|index| {
+                let section = menu.item_link(index, "section")?;
+                (0..section.n_items()).find_map(|index| {
+                    let action = section.item_attribute_value(index, "action", None)?;
+                    (action.str() == Some(name))
+                        .then(|| section.item_attribute_value(index, "target", None))
+                        .flatten()
+                })
+            })
+        }
+
+        fn respond(dialog: &adw::AlertDialog, label: &str) {
+            find_widget(dialog.upcast_ref(), &|button: &gtk::Button| {
+                button.label().as_deref() == Some(label)
+            })
+            .unwrap()
+            .emit_clicked();
+        }
+
+        fn settle() {
+            let context = gtk::glib::MainContext::default();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(250);
+            while std::time::Instant::now() < deadline {
+                context.iteration(false);
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
+
+        fn wait_until(predicate: impl Fn() -> bool, label: &str) {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while !predicate() {
+                assert!(std::time::Instant::now() < deadline, "{label}");
+                settle();
+            }
+        }
+
+        let data = tempfile::tempdir().unwrap();
+        let _relm: RelmApp<Input> = RelmApp::new("dev.luminusos.ZapTide.SidebarTimerFixture");
+        relm4::main_application()
+            .register(None::<&gtk::gio::Cancellable>)
+            .unwrap();
+        let (mut backend, events) = Backend::detached();
+        let mut commands = backend.capture_commands();
+        TEST_BACKEND.with_borrow_mut(|slot| assert!(slot.replace(backend).is_none()));
+        let app = NativeApplication::builder().launch(Init {
+            dirs: AppDirs::under(data.path()),
+        });
+        let window = app.widget();
+        let activate = |name, target: &gtk::glib::Variant| {
+            gtk::prelude::WidgetExt::activate_action(window, name, Some(target)).unwrap();
+        };
+        gtk::Settings::default()
+            .unwrap()
+            .set_gtk_enable_animations(false);
+        window.set_default_size(1100, 760);
+        window.present();
+        settle();
+        let open = "15550000001@s.whatsapp.net";
+        let target = "15550000002@s.whatsapp.net";
+        events.send(Event::Link(LinkStatus::Connected)).unwrap();
+        events
+            .send(Event::Chats(vec![
+                crate::model::Chat::new(open.into(), "Synthetic A".into()),
+                crate::model::Chat::new(target.into(), "Synthetic B".into()),
+            ]))
+            .unwrap();
+        crate::backend::Wake::wake(&app.model().notifier);
+        let account = app.model().active_account;
+        wait_until(
+            || {
+                app.model()
+                    .chat_targets
+                    .borrow()
+                    .position(account, open)
+                    .is_some()
+            },
+            "fixture A was not projected into the sidebar",
+        );
+        app.emit(Input::SelectChat(account, open.into()));
+        wait_until(
+            || app.model().open_chat.active_chat.as_deref() == Some(open),
+            "selecting fixture A did not open it",
+        );
+        let list = app.model().chats.view.clone();
+        let row_for = |id| {
+            find_widget(list.upcast_ref(), &|widget: &gtk::Widget| {
+                widget.widget_name() == id
+            })
+            .unwrap()
+            .parent()
+            .unwrap()
+        };
+        let controllers = list.observe_controllers();
+        let gesture = (0..controllers.n_items())
+            .filter_map(|i| controllers.item(i)?.downcast::<gtk::GestureClick>().ok())
+            .find(|gesture| gesture.button() == 3)
+            .unwrap();
+        let key_controller_at = |phase| {
+            (0..controllers.n_items())
+                .filter_map(|i| {
+                    controllers
+                        .item(i)?
+                        .downcast::<gtk::EventControllerKey>()
+                        .ok()
+                })
+                .find(|controller| controller.propagation_phase() == phase)
+                .unwrap()
+        };
+        let key_controller = key_controller_at(gtk::PropagationPhase::Bubble);
+        let press = |controller: &gtk::EventControllerKey, key, modifiers| {
+            assert!(controller.emit_by_name::<bool>("key-pressed", &[&key, &0u32, &modifiers]));
+        };
+        let open_menu = |row: &gtk::Widget, key, modifiers| {
+            assert!(row.grab_focus());
+            press(&key_controller, key, modifiers);
+            settle();
+            app.model().chat_row_menu.upgrade().expect("sidebar popup")
+        };
+        let row = row_for(target);
+        let bounds = row.compute_bounds(&list).unwrap();
+        gesture.emit_by_name::<()>(
+            "pressed",
+            &[
+                &1i32,
+                &f64::from(bounds.x() + bounds.width() / 2.0),
+                &f64::from(bounds.y() + bounds.height() / 2.0),
+            ],
+        );
+        settle();
+        let menu = app.model().chat_row_menu.upgrade().expect("pointer popup");
+        let pointer_info = menu_target(&menu, "chatrow.info").unwrap();
+        menu.popdown();
+        settle();
+        let menu = open_menu(&row, gtk::gdk::Key::Menu, gtk::gdk::ModifierType::empty());
+        assert!(menu_target(&menu, "chatrow.close").is_none());
+        assert!(menu_target(&menu, "chatrow.transcript").is_none());
+        menu.popdown();
+        settle();
+        assert!(menu.parent().is_none());
+        let open_row = row_for(open);
+        assert!(open_row.grab_focus());
+        let key_navigation = key_controller_at(gtk::PropagationPhase::Capture);
+        press(
+            &key_navigation,
+            gtk::gdk::Key::Down,
+            gtk::gdk::ModifierType::empty(),
+        );
+        assert_eq!(
+            app.model()
+                .chat_targets
+                .borrow()
+                .get(app.model().chats.selection_model.selected()),
+            Some((account, target.to_owned())),
+            "Down must highlight B"
+        );
+        press(
+            &key_controller,
+            gtk::gdk::Key::F10,
+            gtk::gdk::ModifierType::SHIFT_MASK,
+        );
+        settle();
+        let menu = app.model().chat_row_menu.upgrade().expect("sidebar popup");
+        let info_target = menu_target(&menu, "chatrow.info").unwrap();
+        assert_eq!(pointer_info, info_target);
+        let bounds = row.compute_bounds(&list).unwrap();
+        let (has_anchor, anchor) = menu.pointing_to();
+        assert!(has_anchor);
+        assert_eq!(anchor.x(), (bounds.x() + bounds.width() / 2.0) as i32);
+        assert_eq!(anchor.y(), (bounds.y() + bounds.height() / 2.0) as i32);
+        assert_eq!(app.model().open_chat.active_chat.as_deref(), Some(open));
+        let pin_target = menu_target(&menu, "chatrow.pin").unwrap();
+        let mute_target = menu_target(&menu, "chatrow.mute").unwrap();
+        let archive_target = menu_target(&menu, "chatrow.archive").unwrap();
+        let clear_target = menu_target(&menu, "chatrow.clear").unwrap();
+        let delete_target = menu_target(&menu, "chatrow.delete").unwrap();
+        menu.popdown();
+        activate("chatrow.info", &info_target);
+        settle();
+        let dialog = window.visible_dialog().expect("contact info for B");
+        let timer =
+            find_widget(dialog.upcast_ref(), &|_: &adw::ComboRow| true).expect("direct chat timer");
+        timer.set_selected(1);
+        settle();
+        let mut requests = Vec::new();
+        while let Ok(command) = commands.try_recv() {
+            if let crate::backend::Command::SetDisappearing { chat, seconds } = command {
+                requests.push((chat, seconds));
+            }
+        }
+        assert_eq!(
+            requests,
+            [(target.to_owned(), crate::model::TIMER_CHOICES[1])]
+        );
+        assert_eq!(app.model().open_chat.active_chat.as_deref(), Some(open));
+        let starred = find_widget(dialog.upcast_ref(), &|row: &adw::ActionRow| {
+            row.title() == gettext("Starred Messages")
+        })
+        .unwrap();
+        starred.emit_by_name::<()>("activated", &[]);
+        settle();
+        assert!(
+            matches!(commands.try_recv().unwrap(), crate::backend::Command::LoadStarred(id) if id == target)
+        );
+
+        activate("chatrow.archive", &archive_target);
+        settle();
+        let archive = window
+            .visible_dialog()
+            .and_downcast::<adw::AlertDialog>()
+            .unwrap();
+        {
+            let mut state = app.state().get_mut();
+            let chat = state
+                .model
+                .chat_snapshots
+                .iter_mut()
+                .find(|chat| chat.id == target)
+                .unwrap();
+            let chat = std::rc::Rc::make_mut(chat);
+            chat.pinned = true;
+            chat.muted_until = Some(0);
+            chat.archived = true;
+        }
+        activate("chatrow.pin", &pin_target);
+        activate("chatrow.mute", &mute_target);
+        respond(&archive, &gettext("Archive"));
+        settle();
+        assert!(
+            matches!(commands.try_recv().unwrap(), crate::backend::Command::SetPinned(id, true) if id == target)
+        );
+        assert!(
+            matches!(commands.try_recv().unwrap(), crate::backend::Command::SetMuted(id, Some(0)) if id == target)
+        );
+        assert!(
+            matches!(commands.try_recv().unwrap(), crate::backend::Command::SetArchived(id, true) if id == target)
+        );
+
+        for (action, parameter, label) in [
+            ("chatrow.clear", &clear_target, gettext("Clear")),
+            ("chatrow.delete", &delete_target, gettext("Delete")),
+        ] {
+            activate(action, parameter);
+            settle();
+            let dialog = window
+                .visible_dialog()
+                .and_downcast::<adw::AlertDialog>()
+                .unwrap();
+            assert!(dialog.body().starts_with("Synthetic B\n"));
+            assert_eq!(
+                dialog.response_appearance("confirm"),
+                adw::ResponseAppearance::Destructive
+            );
+            assert!(
+                commands.try_recv().is_err(),
+                "confirmation must precede dispatch"
+            );
+            respond(&dialog, &label);
+            settle();
+            match (action, commands.try_recv().unwrap()) {
+                ("chatrow.clear", crate::backend::Command::ClearChat(id))
+                | ("chatrow.delete", crate::backend::Command::DeleteChat(id)) => {
+                    assert_eq!(id, target)
+                }
+                (_, other) => panic!("unexpected command: {other:?}"),
+            }
+        }
+
+        let menu = open_menu(
+            &row_for(open),
+            gtk::gdk::Key::Menu,
+            gtk::gdk::ModifierType::empty(),
+        );
+        let close = menu_target(&menu, "chatrow.close").unwrap();
+        let transcript = menu_target(&menu, "chatrow.transcript").unwrap();
+        menu.popdown();
+        app.emit(Input::SelectChat(account, target.into()));
+        wait_until(
+            || app.model().open_chat.active_chat.as_deref() == Some(target),
+            "selecting fixture B did not open it",
+        );
+        app.state().get_mut().model.open_chat.transcript =
+            vec![crate::native_transcript::TranscriptRow {
+                header: String::new(),
+                text: "Synthetic B transcript".into(),
+            }];
+        activate("chatrow.transcript", &transcript);
+        activate("chatrow.close", &close);
+        settle();
+        assert_eq!(app.model().open_chat.active_chat.as_deref(), Some(target));
+        assert_ne!(app.model().status, gettext("Transcript copied"));
+
+        let old_menu = open_menu(
+            &row_for(open),
+            gtk::gdk::Key::Menu,
+            gtk::gdk::ModifierType::empty(),
+        );
+        let other_account = app.state().get_mut().model.registry.add();
+        let mut session = super::super::accounts::AccountSession::detached_for_tests(other_account);
+        session.dirs = crate::paths::AppDirs::under(data.path()).for_account(other_account);
+        session.dirs.ensure().unwrap();
+        session.link = LinkStatus::Connected;
+        session.chat_snapshots = app.model().chat_snapshots.clone();
+        let mut other_commands = session.backend.as_mut().unwrap().capture_commands();
+        app.state()
+            .get_mut()
+            .model
+            .accounts
+            .insert(other_account, session);
+        app.emit(Input::SwitchAccount(other_account));
+        settle();
+        assert_eq!(app.model().active_account, other_account);
+        assert!(
+            old_menu.parent().is_none(),
+            "account switch dismisses popup"
+        );
+        while other_commands.try_recv().is_ok() {}
+        activate("chatrow.pin", &pin_target);
+        timer.set_selected(2);
+        app.emit(Input::ConfirmDeleteChat(ChatTarget::new(account, target)));
+        settle();
+        assert!(
+            other_commands.try_recv().is_err(),
+            "same chat ID in another account must not receive stale commands"
+        );
+        window.destroy();
+    }
 
     #[derive(Default)]
     struct ReorderCase {

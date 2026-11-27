@@ -3,6 +3,8 @@
 //! an unpin is kept as a marker so the order messages arrive in cannot undo a
 //! later change.
 
+use std::collections::HashSet;
+
 use super::{Archive, Result};
 use crate::model::{Content, Message};
 use rusqlite::params;
@@ -29,8 +31,8 @@ pub struct PinnedMessage {
 }
 
 impl Archive {
-    /// Records a pin or an unpin unless a newer change for the same message is
-    /// already stored. Returns whether the stored state changed.
+    /// Records the newest change for a message, preferring an unpin on a tie.
+    /// Returns whether the stored state changed.
     pub fn set_pin(
         &self,
         chat: &str,
@@ -46,11 +48,22 @@ impl Archive {
              ON CONFLICT (chat, id) DO UPDATE SET pinned = excluded.pinned,
                  pinned_by = excluded.pinned_by, pinned_at_ms = excluded.pinned_at_ms,
                  expires_at_ms = excluded.expires_at_ms
-             WHERE excluded.pinned_at_ms >= pins.pinned_at_ms
-               AND (excluded.pinned != pins.pinned OR excluded.pinned_at_ms > pins.pinned_at_ms)",
+             WHERE excluded.pinned_at_ms > pins.pinned_at_ms
+                OR (excluded.pinned_at_ms = pins.pinned_at_ms AND excluded.pinned < pins.pinned)",
             params![chat, id, pinned, pinned_by, at_ms, expires_at_ms],
         )?;
         Ok(changed > 0)
+    }
+
+    /// Unexpired pin targets, including messages that have not arrived yet.
+    pub(crate) fn active_pin_targets(&self, chat: &str, now_ms: i64) -> Result<HashSet<String>> {
+        let mut statement = self.connection.prepare_cached(
+            "SELECT id FROM pins
+             WHERE chat = ?1 AND pinned = 1 AND (expires_at_ms IS NULL OR expires_at_ms > ?2)",
+        )?;
+        statement
+            .query_map(params![chat, now_ms], |row| row.get(0))?
+            .collect()
     }
 
     /// The message a chat shows in its pinned bar: the newest pin that has not
@@ -174,6 +187,47 @@ mod tests {
         assert!(!archive.set_pin(CHAT, "a", true, "x", 10, None).unwrap());
         assert_eq!(pinned_id(&archive, 30), None);
         assert!(!archive.set_pin(CHAT, "a", false, "x", 20, None).unwrap());
+    }
+
+    #[test]
+    fn pin_state_equal_time_unpin_wins_in_both_replay_orders() {
+        for first in [true, false] {
+            let archive = archive_with(&["a"]);
+            assert!(archive.set_pin(CHAT, "a", first, "x", 10, None).unwrap());
+            assert_eq!(
+                archive.set_pin(CHAT, "a", !first, "y", 10, None).unwrap(),
+                first
+            );
+            assert_eq!(pinned_id(&archive, 20), None);
+        }
+    }
+
+    #[test]
+    fn pin_state_equal_time_unpin_wins_on_either_side_of_identity_merge() {
+        const LID: &str = "111@lid";
+        const PHONE: &str = "222@s.whatsapp.net";
+        for lid_pinned in [true, false] {
+            let archive = Archive::in_memory().unwrap();
+            for chat in [LID, PHONE] {
+                archive
+                    .upsert_chat(&Chat::new(chat.into(), "Chat".into()))
+                    .unwrap();
+                archive
+                    .insert_message(&crate::archive::tests::message(chat, "a", 1, true), None)
+                    .unwrap();
+            }
+            archive
+                .set_pin(LID, "a", lid_pinned, "x", 10, None)
+                .unwrap();
+            archive
+                .set_pin(PHONE, "a", !lid_pinned, "y", 10, None)
+                .unwrap();
+
+            archive.put_lid("111", "222").unwrap();
+
+            assert!(archive.message(PHONE, "a").unwrap().is_some());
+            assert!(archive.pinned_message(PHONE, 20).unwrap().is_none());
+        }
     }
 
     #[test]

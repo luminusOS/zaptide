@@ -160,15 +160,17 @@ the archive only after WhatsApp accepted it.
 
 A message with a timer remembers when it runs out in `messages.expires_at`
 (send time plus the timer it was sent with, never the chat's current timer).
-`messages.kept` marks a message someone kept; neither a replay nor the sweep
-touches it. `pump_expiry` removes due messages and their downloaded file
-inside the media directory, at most every 30 seconds and 200 messages a pass.
-Expiry is local. It never queues a remote deletion and never goes through
-`DeleteLocal`, because the other devices expire the message on their own.
+`messages.kept` records a keep event recognized by the app. A replay cannot
+extend a known deadline and newly loaded pages and previews exclude overdue
+messages unless kept. `pump_expiry` removes due rows at most every 30 seconds,
+up to 200 at a time. It queues cleanup only for files it can identify in the
+app-managed cache, and preserves files in use by another message. Expiry is
+local and never queues a remote deletion.
 
 Chat events such as a pin or a timer change are `Content::System` rows. They
 are stored like messages so they keep their place, but they skip unread
-counts, receipts and notifications.
+counts, receipts and notifications. They do not advance chat activity or
+bound archive and deletion requests sent to the phone.
 
 ## Sidebar scrolling
 

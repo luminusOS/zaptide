@@ -164,6 +164,7 @@ pub(super) fn handle_backend_ready(
                 }
                 if active_alias {
                     app.open_chat.active_chat = Some(canonical);
+                    app.open_chat.pinned = None;
                     app.transcript_requests.reload();
                 }
             }
@@ -179,9 +180,7 @@ pub(super) fn handle_backend_ready(
                 if let (Some(backend), Some(chat)) =
                     (&app.backend, app.open_chat.active_chat.clone())
                 {
-                    app.open_chat.message_ids.clear();
-                    app.open_chat.message_snapshots.clear();
-                    app.open_chat.editable_messages.clear();
+                    app.open_chat.reset_messages();
                     app.messages.clear();
                     app.open_chat.transcript.clear();
                     app.loading_older = false;
@@ -202,20 +201,25 @@ pub(super) fn handle_backend_ready(
             Event::Messages {
                 chat,
                 messages,
+                keep_states,
                 older,
                 complete,
                 request,
             } => {
-                if !app.transcript_requests.messages(
-                    app.open_chat.active_chat.as_deref() == Some(&chat),
-                    request,
-                    older,
-                    complete,
-                    &mut app.history_complete,
-                    &mut app.loading_older,
-                ) {
+                let active = app.open_chat.active_chat.as_deref() == Some(&chat);
+                if !active
+                    || !app.transcript_requests.messages(
+                        active,
+                        request,
+                        older,
+                        complete,
+                        &mut app.history_complete,
+                        &mut app.loading_older,
+                    )
+                {
                     continue;
                 }
+                app.keep_states_loaded(keep_states);
                 app.apply_messages(chat.clone(), messages, older);
                 app.continue_message_jump(&chat);
             }
@@ -289,14 +293,19 @@ pub(super) fn handle_backend_ready(
                 starred,
                 local,
             } => app.star_changed(&chat, id, starred, local),
+            Event::Pinned {
+                chat,
+                pin,
+                active_ids,
+            } => app.pinned_loaded(&chat, *pin, active_ids),
             Event::KeptChanged {
                 chat,
                 id,
                 kept,
+                deadline,
                 local,
-            } => app.kept_changed(&chat, id, kept, local),
-            Event::KeptIds { chat, ids } => app.kept_ids_loaded(&chat, ids),
-            Event::Pinned { chat, pin } => app.pinned_loaded(&chat, *pin),
+                restored,
+            } => app.kept_changed(&chat, id, kept, deadline, local, restored),
             Event::StarredIds { chat, ids } => app.starred_ids_loaded(&chat, ids),
             Event::StarredList(list) => app.starred_list_loaded(list, &sender),
             Event::MessageDeleted { chat, id } => app.message_deleted(&chat, &id),
@@ -447,11 +456,7 @@ pub(super) fn handle_backend_ready(
                     app.open_chat.pending_transcript.mark_rows();
                 }
             }
-            Event::Avatar {
-                id,
-                full: true,
-                path,
-            } => app.full_avatar_loaded(&id, path),
+            Event::AvatarPreview { request, path } => app.full_avatar_loaded(request, path),
             Event::ReceiptsPrivacy { disabled } => app.account_receipts_off = disabled,
             Event::ProfileSaved { error } => {
                 if let Some(dialog) = &app.profile_dialog {

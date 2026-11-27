@@ -40,6 +40,11 @@ selection, edits or replies before closing the chat. **Close Chat** returns
 home, keeps drafts and marks nothing as read. Choosing an emoji returns focus
 to the composer.
 
+To manage a conversation without opening it, right-click its row in the
+sidebar, or focus the row and press Shift+F10. To enlarge a contact's profile
+picture, open **Contact Info** and select the picture. Press Escape or click
+outside the preview to close it.
+
 Names take priority over numbers: saved contact name, then WhatsApp name, then
 phone number. This applies to messages, sidebar previews and notifications.
 Mentions use bold text and the theme's accent color.
@@ -205,15 +210,24 @@ conversation, and a click goes to the message. A line in the chat tells who
 pinned a message.
 
 Chat details show **Disappearing messages**. In a direct chat, or in a group
-where you are an admin, choose Off, 24 hours, 7 days or 90 days. Messages are
-sent with the chat's timer and removed from the local archive, with their
-downloaded file, when their own time runs out. A message that someone kept in
-the chat stays. Removal is local and never asks the phone or other devices to
-delete anything. A line in the chat reports each change of the timer.
+where you are an admin, choose Off, 24 hours, 7 days or 90 days. ZapTide sends
+messages with the chat's timer. Messages with a known deadline no longer
+appear in new transcript pages or previews after that deadline. A periodic
+cleanup removes them from the local archive and closes any open viewer that
+contains them. ZapTide leaves on disk files that other messages still use,
+files outside its cache, and files it cannot verify as its own. Messages
+ZapTide knows were kept are exempt from cleanup. Removal is local and never
+asks other devices to delete anything. A line in the chat reports a timer
+change.
+
+Choose **Keep** in the menu of an eligible disappearing message to keep it in
+the conversation. Kept messages show a **Kept** marker. Choose **Unkeep** to
+restore the message's original deadline. If that deadline has passed, the
+message can disappear immediately.
 
 ## Other limitations
 
 Status posts, communities and group administration are not supported.
 Newsletter channels are read-only. Keyboard shortcuts and screen-reader
-labels are available, but accessibility is incomplete. Sending "keep in chat"
-and the account-wide disappearing-messages default are not supported.
+labels are available, but accessibility is incomplete. The account-wide
+disappearing-messages default is not supported.

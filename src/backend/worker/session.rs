@@ -181,8 +181,6 @@ impl Worker {
         self.abandon_call();
         self.poll_history = Default::default();
         self.pending_avatars.clear();
-        self.avatar_backlog.clear();
-        self.avatar_active.clear();
         self.avatar_generations.clear();
         self.sticker_fetches.clear();
         self.sticker_downloads.clear();

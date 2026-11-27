@@ -115,12 +115,13 @@ impl Archive {
         }
     }
 
-    /// The newest archived message of `chat`, or `None` when it holds none.
-    /// An empty chat gives a deletion no bound, so none is requested.
+    /// The newest archived message that can bound a phone-side chat action.
+    /// Local transcript notices cannot supply a message range.
     pub fn newest_message(&self, chat: &str) -> Result<Option<NewestMessage>> {
         let chat = &*self.resolve_chat(chat)?;
         let mut statement = self.connection.prepare_cached(
-            "SELECT id, sender, from_me, timestamp FROM messages WHERE chat = ?1
+            "SELECT id, sender, from_me, timestamp FROM messages
+             WHERE chat = ?1 AND kind IS NOT 'system'
              ORDER BY timestamp DESC, rowid DESC LIMIT 1",
         )?;
         let mut rows = statement.query_map(params![chat], |row| {
@@ -384,6 +385,28 @@ mod tests {
         assert_eq!(newest.timestamp, 3);
         let empty = archive_with_messages(&[]);
         assert_eq!(empty.newest_message(CHAT).expect("newest"), None);
+    }
+
+    #[test]
+    fn transcript_notices_do_not_advance_the_phone_message_range() {
+        use crate::model::{Content, SystemEvent};
+
+        for timestamps in [&[1][..], &[]] {
+            let archive = archive_with_messages(timestamps);
+            let mut notice = message(CHAT, "local-notice", 2, false);
+            notice.content = Content::System {
+                event: SystemEvent::Timer { seconds: 86_400 },
+            };
+            archive.insert_message(&notice, None).expect("insert");
+
+            let newest = archive.newest_message(CHAT).expect("newest");
+            assert_eq!(
+                newest.map(|row| row.id),
+                timestamps.first().map(|_| "m1".into())
+            );
+            let chat = archive.chat(CHAT).expect("chat").expect("row");
+            assert_eq!(chat.last_activity, timestamps.first().copied().unwrap_or(0));
+        }
     }
 
     #[test]

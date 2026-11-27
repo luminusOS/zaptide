@@ -65,19 +65,30 @@ impl NativeApplication {
         }
     }
 
-    /// Whether the open chat's timer makes a message keepable, or it already
-    /// is kept and so can be released.
-    pub(super) fn keep_offered(&self, id: &str) -> bool {
-        self.kept.contains(id)
-            || self
-                .open_chat
-                .active_chat
-                .as_deref()
-                .and_then(|chat| self.chat_snapshots.iter().find(|known| known.id == chat))
-                .is_some_and(|chat| chat.ephemeral_expiration.is_some_and(|seconds| seconds > 0))
+    pub(super) fn keep_offered(&self, message: &crate::model::Message) -> bool {
+        let can_change = self
+            .open_chat
+            .keepable
+            .get(&message.id)
+            .is_some_and(|deadline| {
+                self.open_chat.kept.contains(&message.id)
+                    || *deadline > jiff::Timestamp::now().as_second()
+            });
+        can_change
+            && !matches!(
+                message.content,
+                crate::model::Content::Revoked | crate::model::Content::System { .. }
+            )
+            && !message.content.view_once()
     }
 
     pub(super) fn toggle_selected_keep(&mut self) {
+        if !self
+            .selected_message()
+            .is_some_and(|message| self.keep_offered(message))
+        {
+            return;
+        }
         let Some((chat, id)) = self
             .open_chat
             .active_chat
@@ -86,20 +97,33 @@ impl NativeApplication {
         else {
             return;
         };
-        let kept = !self.kept.contains(&id);
+        let kept = !self.open_chat.kept.contains(&id);
         if let Some(backend) = &self.backend {
             backend.send(crate::backend::Command::SetKept { chat, id, kept });
         }
     }
 
-    pub(super) fn kept_changed(&mut self, chat: &str, id: String, kept: bool, local: bool) {
+    pub(super) fn kept_changed(
+        &mut self,
+        chat: &str,
+        id: String,
+        kept: bool,
+        deadline: i64,
+        local: bool,
+        restored: Option<Box<crate::model::Message>>,
+    ) {
         if self.open_chat.active_chat.as_deref() != Some(chat) {
             return;
         }
+        let loaded = self.open_chat.message_snapshots.contains_key(&id);
+        if !loaded && restored.is_none() {
+            return;
+        }
+        self.open_chat.keepable.insert(id.clone(), deadline);
         let changed = if kept {
-            self.kept.insert(id.clone())
+            self.open_chat.kept.insert(id.clone())
         } else {
-            self.kept.remove(&id)
+            self.open_chat.kept.remove(&id)
         };
         if changed && local {
             self.add_toast(adw::Toast::new(&if kept {
@@ -108,23 +132,29 @@ impl NativeApplication {
                 gettext("Message no longer kept")
             }));
         }
-        if changed {
+        if !loaded && let Some(message) = restored {
+            if !self.restore_kept_message(*message) {
+                self.open_chat.kept.remove(&id);
+                self.open_chat.keepable.remove(&id);
+            }
+        } else if changed {
             self.refresh_message_row(&id);
         }
     }
 
-    pub(super) fn kept_ids_loaded(&mut self, chat: &str, ids: Vec<String>) {
-        if self.open_chat.active_chat.as_deref() != Some(chat) {
-            return;
-        }
-        self.kept = ids.into_iter().collect();
-        if !self.open_chat.message_ids.is_empty() {
-            self.rebuild_message_rows(false);
+    pub(super) fn keep_states_loaded(&mut self, states: Vec<(String, i64, bool)>) {
+        for (id, deadline, kept) in states {
+            if kept {
+                self.open_chat.kept.insert(id.clone());
+            } else {
+                self.open_chat.kept.remove(&id);
+            }
+            self.open_chat.keepable.insert(id, deadline);
         }
     }
 
-    pub(super) fn show_starred(&self) {
-        if let (Some(backend), Some(chat)) = (&self.backend, self.open_chat.active_chat.clone()) {
+    pub(super) fn show_starred(&self, chat: String) {
+        if let Some(backend) = &self.backend {
             backend.send(crate::backend::Command::LoadStarred(chat));
         }
     }
@@ -152,7 +182,12 @@ impl NativeApplication {
                 }
             })
             .collect();
-        show_starred_dialog(&self.window, &dialog_action_callback(sender), entries);
+        show_starred_dialog(
+            &self.window,
+            self.active_account,
+            &dialog_action_callback(sender),
+            entries,
+        );
     }
 
     /// Scrolls to a starred message of the open chat, loading older history
@@ -163,7 +198,9 @@ impl NativeApplication {
         }
         self.pending_quote_navigation = Some((chat.clone(), id));
         self.jump_needs_history = true;
-        self.continue_message_jump(&chat);
+        if self.transcript_requests.initial.is_none() {
+            self.continue_message_jump(&chat);
+        }
     }
 
     /// Called after a page of the open chat arrived. Scrolls to the target of

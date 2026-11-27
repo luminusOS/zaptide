@@ -33,6 +33,14 @@ pub(super) struct ParsedChat {
     pub(super) poll_updates: Vec<HistoryPollUpdate>,
     pub(super) reactions: Vec<HistoryReaction>,
     pub(super) pins: Vec<HistoryPin>,
+    keeps: Vec<HistoryKeep>,
+}
+
+struct HistoryKeep {
+    id: String,
+    sender: Option<String>,
+    from_me: bool,
+    change: super::expiry::KeepChange,
 }
 
 /// A pin or unpin from history, applied without a line in the transcript.
@@ -128,6 +136,7 @@ pub(super) fn parse_conversation(conversation: wa::Conversation) -> ParsedChat {
     let mut poll_updates = Vec::new();
     let mut reactions = Vec::new();
     let mut pins = Vec::new();
+    let mut keeps = Vec::new();
     let mut newest = 0;
     for entry in &conversation.messages {
         let Some(info) = entry.message.as_option() else {
@@ -144,8 +153,10 @@ pub(super) fn parse_conversation(conversation: wa::Conversation) -> ParsedChat {
         };
         let from_me = key.from_me.unwrap_or(false);
         let timestamp = info.message_timestamp.unwrap_or(0) as i64;
-        newest = newest.max(timestamp);
         let base = base_message(message);
+        if base.keep_in_chat_message.is_unset() {
+            newest = newest.max(timestamp);
+        }
         let sender = info
             .participant
             .clone()
@@ -161,7 +172,23 @@ pub(super) fn parse_conversation(conversation: wa::Conversation) -> ParsedChat {
             continue;
         }
         if base.keep_in_chat_message.is_set() {
+            if let Some(change) = super::expiry::keep_change(base, timestamp.saturating_mul(1000)) {
+                keeps.push(HistoryKeep {
+                    id,
+                    sender,
+                    from_me,
+                    change,
+                });
+            }
             continue;
+        }
+        if let Some(change) = super::expiry::history_keep_state(info, &id) {
+            keeps.push(HistoryKeep {
+                id: id.clone(),
+                sender: sender.clone(),
+                from_me,
+                change,
+            });
         }
         if let Some(protocol) = base.protocol_message.as_option() {
             if protocol.r#type == Some(wa::message::protocol_message::Type::REVOKE)
@@ -305,7 +332,7 @@ pub(super) fn parse_conversation(conversation: wa::Conversation) -> ParsedChat {
             raw: message.encode_to_vec(),
             poll_secret: info.message_secret.clone(),
             poll_votes: info.poll_updates.clone(),
-            expiration: base.get_ephemeral_expiration(),
+            expiration: base.get_ephemeral_expiration().or(info.ephemeral_duration),
         });
     }
     let last_activity = conversation
@@ -347,6 +374,7 @@ pub(super) fn parse_conversation(conversation: wa::Conversation) -> ParsedChat {
         poll_updates,
         reactions,
         pins,
+        keeps,
     }
 }
 
@@ -422,6 +450,9 @@ impl Worker {
                 allowed(&row.id, row.sender.as_deref(), row.from_me)
             })?;
             retain_checked(&mut chat.revoked, |row| {
+                allowed(&row.id, row.sender.as_deref(), row.from_me)
+            })?;
+            retain_checked(&mut chat.keeps, |row| {
                 allowed(&row.id, row.sender.as_deref(), row.from_me)
             })?;
             let mut missing_identity = false;
@@ -561,6 +592,9 @@ impl Worker {
             }
         }
         let mut filed = Vec::new();
+        let mut changed_pin_chats = HashSet::new();
+        let mut has_keeps = false;
+        let now_ms = jiff::Timestamp::now().as_millisecond();
         // Sent together at the end: an event per name made the window
         // rebuild the open conversation for each one.
         let mut learned = Vec::new();
@@ -658,6 +692,23 @@ impl Worker {
             if ChatKind::from_id(&id) == ChatKind::Group {
                 effects.groups.push(id.clone());
             }
+            let pin_targets = if chat.messages.is_empty() && chat.revoked.is_empty() {
+                HashSet::new()
+            } else {
+                self.archive
+                    .active_pin_targets(&id, now_ms)
+                    .unwrap_or_default()
+            };
+            let mut refresh_pin = false;
+            // Apply before message insertion so a kept, overdue target is visible on its first replay.
+            let mut keeps = chat.keeps;
+            keeps.sort_unstable_by_key(|keep| std::cmp::Reverse(keep.change.order()));
+            has_keeps |= !keeps.is_empty();
+            for keep in keeps {
+                if let Some(deadline) = self.store_keep(&id, &keep.change)? {
+                    self.emit_keep(&id, keep.change.target, keep.change.kept, deadline, false);
+                }
+            }
             let count = chat.messages.len();
             let mut secrets = HashMap::new();
             for message in chat.messages {
@@ -753,9 +804,19 @@ impl Worker {
                     }
                     poll_history_received = self.history_poll_votes(&row, &message.poll_votes);
                 }
-                if let Err(error) = self.archive.insert_message(&row, Some(&raw)) {
-                    log::warn!("could not store a history message: {error}");
-                } else if row.from_me
+                match self
+                    .archive
+                    .insert_message_with_expiry(&row, Some(&raw), expiration)
+                {
+                    Ok(true) => {}
+                    Ok(false) => continue,
+                    Err(error) => {
+                        log::warn!("could not store a history message: {error}");
+                        continue;
+                    }
+                }
+                refresh_pin |= pin_targets.contains(&row.id);
+                if row.from_me
                     && matches!(
                         row.status,
                         Delivery::Sent | Delivery::Delivered | Delivery::Read | Delivery::Played
@@ -764,7 +825,6 @@ impl Worker {
                 {
                     self.confirm_answer(&id, &quoted.id, &raw);
                 }
-                self.remember_expiry(&id, &row.id, row.timestamp, expiration);
                 if matches!(row.content, Content::Buttons { .. } | Content::List { .. }) {
                     self.confirm_answers_for(&id, &row.id);
                 }
@@ -819,7 +879,6 @@ impl Worker {
                     &update.update,
                 );
             }
-            let had_pins = !chat.pins.is_empty();
             for pin in chat.pins {
                 let by = if pin.from_me {
                     self.me()
@@ -829,17 +888,17 @@ impl Worker {
                         .map(|sender| self.canonical_str(sender))
                         .unwrap_or_else(|| id.clone())
                 };
-                let _ = self.archive.set_pin(
-                    &id,
-                    &pin.change.target,
-                    pin.change.pinned,
-                    &by,
-                    pin.change.at_ms,
-                    pin.change.expires_at_ms(),
-                );
-            }
-            if had_pins {
-                self.emit_pin(&id);
+                refresh_pin |= self
+                    .archive
+                    .set_pin(
+                        &id,
+                        &pin.change.target,
+                        pin.change.pinned,
+                        &by,
+                        pin.change.at_ms,
+                        pin.change.expires_at_ms(),
+                    )
+                    .unwrap_or(false);
             }
             for revoked in chat.revoked {
                 let sender = if revoked.from_me {
@@ -862,6 +921,7 @@ impl Worker {
                     self.archive
                         .set_content(&id, &revoked.target, &Content::Revoked, false)
                 {
+                    refresh_pin |= pin_targets.contains(&revoked.target);
                     self.emit_message(&id, &revoked.target);
                     self.emit_chat(&id);
                 }
@@ -882,13 +942,22 @@ impl Worker {
                     let _ = self.archive.set_unread(&id, unread);
                 }
             }
+            if refresh_pin {
+                changed_pin_chats.insert(id.clone());
+            }
             filed.push((id, count, chat.more_on_phone));
+        }
+        if has_keeps {
+            self.archive.prune_pending_keeps()?;
         }
         if !learned.is_empty() {
             self.emit(Event::Contacts(learned));
         }
         for (id, _, _) in &filed {
             self.emit_chat(id);
+            if changed_pin_chats.remove(id) {
+                self.emit_pin(id);
+            }
             if id.ends_with("@newsletter") {
                 self.request_newsletter_info(id);
             }

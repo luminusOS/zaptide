@@ -4634,6 +4634,28 @@ fn picture_update_invalidates_only_that_contacts_avatar_requests() {
 }
 
 #[test]
+fn offline_avatar_preview_replies_without_queueing_a_thumbnail_retry() {
+    let (mut worker, events, _, _) = worker();
+    let dir = tempfile::tempdir().expect("avatar cache fixture");
+    worker.dirs = AppDirs::under(dir.path());
+    let id = "15550000200@s.whatsapp.net";
+
+    worker.fetch_avatar_preview(id.into(), 17);
+    assert!(matches!(
+        events.try_recv().expect("offline response"),
+        Event::AvatarPreview {
+            request: 17,
+            path: None
+        }
+    ));
+    assert!(worker.pending_avatars.is_empty());
+
+    worker.fetch_avatar(id.into(), false);
+    assert!(events.try_recv().is_err());
+    assert!(worker.pending_avatars.contains_key(&(id.into(), false)));
+}
+
+#[test]
 fn logout_clears_history_sync_deadlines_requests_and_warnings() {
     let (mut worker, events, _inbox, _wa) = worker();
     let chat = "1@s.whatsapp.net".to_owned();
