@@ -126,13 +126,13 @@ pub fn phone(digits: &str) -> String {
     // WhatsApp IDs contain international digits without a leading '+'.
     let international = format!("+{digits}");
 
-    if let Ok(number) = phonenumber::parse(None, &international) {
-        if phonenumber::is_valid(&number) {
-            return number
-                .format()
-                .mode(phonenumber::Mode::International)
-                .to_string();
-        }
+    if let Ok(number) = phonenumber::parse(None, &international)
+        && phonenumber::is_valid(&number)
+    {
+        return number
+            .format()
+            .mode(phonenumber::Mode::International)
+            .to_string();
     }
 
     // Preserve the previous formatting for unrecognized numbers.
