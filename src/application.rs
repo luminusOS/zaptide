@@ -630,6 +630,7 @@ pub struct NativeApplication {
     sidebar: relm4::Controller<Sidebar>,
     calls: calls::CallsUi,
     media_viewer: Option<crate::native_media_widgets::viewer::MediaViewer>,
+    media_viewer_messages: Vec<String>,
     media_viewer_host: gtk::Box,
     sidebar_visible: bool,
     split_view: Option<adw::NavigationSplitView>,
@@ -1567,6 +1568,7 @@ impl SimpleComponent for NativeApplication {
             calls,
             sidebar_visible: true,
             media_viewer: None,
+            media_viewer_messages: Vec::new(),
             media_viewer_host: gtk::Box::new(gtk::Orientation::Vertical, 0),
             split_view: None,
             phone_linking: false,
@@ -1966,10 +1968,15 @@ impl NativeApplication {
         self.message_menu.popup();
     }
 
-    fn present_media_viewer(&mut self, page: crate::native_media_widgets::viewer::MediaViewer) {
+    fn present_media_viewer(
+        &mut self,
+        page: crate::native_media_widgets::viewer::MediaViewer,
+        messages: Vec<String>,
+    ) {
         self.media_viewer_host.append(&page.widget);
         self.sidebar_visible = false;
         self.media_viewer = Some(page);
+        self.media_viewer_messages = messages;
         let host = self.media_viewer_host.downgrade();
         gtk::glib::idle_add_local_once(move || {
             if let Some(host) = host.upgrade() {
@@ -1982,6 +1989,7 @@ impl NativeApplication {
         if self.media_viewer.take().is_none() {
             return;
         }
+        self.media_viewer_messages.clear();
         while let Some(child) = self.media_viewer_host.first_child() {
             self.media_viewer_host.remove(&child);
         }
@@ -2304,6 +2312,9 @@ impl NativeApplication {
     fn message_deleted(&mut self, chat: &str, id: &str) {
         if self.open_chat.active_chat.as_deref() != Some(chat) {
             return;
+        }
+        if self.media_viewer_messages.iter().any(|source| source == id) {
+            self.close_media_viewer();
         }
         // Deferred updates land first, so the deletion changes only its row.
         self.flush_transcript();

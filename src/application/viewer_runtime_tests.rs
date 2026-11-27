@@ -202,7 +202,10 @@ fn viewer_album_displays_sender_profiles_and_clears_missing_picture() {
         request,
     });
     app.emit(Input::MediaAction(NativeMediaAction::ViewPhotos {
-        paths,
+        chat: chat.into(),
+        messages: (0..paths.len())
+            .map(|index| format!("viewer-photo-{index}"))
+            .collect(),
         start: 0,
     }));
     settle();

@@ -1,8 +1,4 @@
-use super::{
-    video_stream::VideoStream,
-    viewer::{PhotoItem, ViewerDetails},
-    *,
-};
+use super::{video_stream::VideoStream, *};
 use crate::i18n::gettext;
 
 /// Largest side of a photo in the transcript, in logical pixels.
@@ -103,14 +99,11 @@ pub fn build_album_widget(
         })
         .collect();
     // The viewer steps through the photos already on disk.
-    let items: std::rc::Rc<Vec<PhotoItem>> = std::rc::Rc::new(
+    let items: std::rc::Rc<Vec<String>> = std::rc::Rc::new(
         messages
             .iter()
             .filter_map(|message| match attachment_action(message) {
-                Some(NativeMediaAction::Open(path)) => Some(PhotoItem {
-                    path,
-                    details: ViewerDetails::of(message),
-                }),
+                Some(NativeMediaAction::Open(_)) => Some(message.id.clone()),
                 _ => None,
             })
             .collect(),
@@ -226,7 +219,7 @@ fn append_photo_sized(
     (width, height): (i32, i32),
     token: &DecodeToken,
     on_action: std::rc::Rc<dyn Fn(NativeMediaAction)>,
-    viewer: Option<(std::rc::Rc<Vec<PhotoItem>>, usize)>,
+    viewer: Option<(std::rc::Rc<Vec<String>>, usize)>,
     download_button: bool,
 ) {
     let (picture, frame) = media_frame(message, width, height, "Photo");
@@ -248,16 +241,13 @@ fn append_photo_sized(
                 .css_classes(["flat", "zaptide-photo-button"])
                 .build();
             button.update_property(&[gtk::accessible::Property::Label(&gettext("View photo"))]);
-            let (items, start) = viewer.unwrap_or_else(|| {
-                let item = PhotoItem {
-                    path,
-                    details: ViewerDetails::of(message),
-                };
-                (std::rc::Rc::new(vec![item]), 0)
-            });
+            let (items, start) =
+                viewer.unwrap_or_else(|| (std::rc::Rc::new(vec![message.id.clone()]), 0));
+            let chat = message.chat.clone();
             button.connect_clicked(move |_| {
                 on_action(NativeMediaAction::ViewPhotos {
-                    paths: items.iter().map(|item| item.path.clone()).collect(),
+                    chat: chat.clone(),
+                    messages: items.as_ref().clone(),
                     start,
                 });
             });
@@ -286,7 +276,7 @@ fn append_photo_sized(
             | NativeMediaAction::OpenContact(_)
             | NativeMediaAction::MessageContact { .. }
             | NativeMediaAction::ViewPhotos { .. }
-            | NativeMediaAction::ViewVideo(_),
+            | NativeMediaAction::ViewVideo { .. },
         )
         | None => {
             let spinner = adw::Spinner::builder()
@@ -390,9 +380,14 @@ pub(super) fn append_video(
                 .css_classes(["flat", "zaptide-photo-button"])
                 .build();
             button.update_property(&[gtk::accessible::Property::Label(&gettext("Play video"))]);
+            let chat = message.chat.clone();
+            let message = message.id.clone();
             button.connect_clicked(move |_| {
                 if playable {
-                    on_action(NativeMediaAction::ViewVideo(path.clone()));
+                    on_action(NativeMediaAction::ViewVideo {
+                        chat: chat.clone(),
+                        message: message.clone(),
+                    });
                 } else {
                     on_action(NativeMediaAction::Open(path.clone()));
                 }
@@ -414,7 +409,7 @@ pub(super) fn append_video(
             | NativeMediaAction::OpenContact(_)
             | NativeMediaAction::MessageContact { .. }
             | NativeMediaAction::ViewPhotos { .. }
-            | NativeMediaAction::ViewVideo(_),
+            | NativeMediaAction::ViewVideo { .. },
         )
         | None => {
             frame.add_overlay(
@@ -540,7 +535,7 @@ pub(super) fn document_card(
             | NativeMediaAction::OpenContact(_)
             | NativeMediaAction::MessageContact { .. }
             | NativeMediaAction::ViewPhotos { .. }
-            | NativeMediaAction::ViewVideo(_),
+            | NativeMediaAction::ViewVideo { .. },
         )
         | None => actions.append(
             &adw::Spinner::builder()

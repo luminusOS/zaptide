@@ -122,7 +122,8 @@ fn media_viewer_uses_the_main_panel_and_releases_files_on_navigation() {
     }
     let open = || {
         app.emit(Input::MediaAction(NativeMediaAction::ViewPhotos {
-            paths: vec![path.clone()],
+            chat: "fixture-chat".into(),
+            messages: vec!["photo".into()],
             start: 0,
         }));
         settle();
@@ -208,27 +209,30 @@ fn media_viewer_uses_the_main_panel_and_releases_files_on_navigation() {
     assert!(app.model().media_viewer.is_none());
     assert!(!crate::media_retention::is_held(&path));
 
-    app.state()
-        .get_mut()
-        .model
-        .open_chat
-        .message_snapshots
-        .insert("photo".into(), {
-            let mut message = super::tests::grouping_message("photo", "sender", false, 1);
-            message.content = crate::model::Content::Image {
-                caption: None,
-                media: crate::model::Media {
-                    mime: "image/png".into(),
-                    size: 100,
-                    width: Some(64),
-                    height: Some(48),
-                    path: Some(path.clone()),
-                    state: crate::model::MediaState::Idle,
-                    view_once: false,
-                },
-            };
-            message
-        });
+    {
+        let mut state = app.state().get_mut();
+        state.model.open_chat.active_chat = Some("fixture-chat".into());
+        state
+            .model
+            .open_chat
+            .message_snapshots
+            .insert("photo".into(), {
+                let mut message = super::tests::grouping_message("photo", "sender", false, 1);
+                message.content = crate::model::Content::Image {
+                    caption: None,
+                    media: crate::model::Media {
+                        mime: "image/png".into(),
+                        size: 100,
+                        width: Some(64),
+                        height: Some(48),
+                        path: Some(path.clone()),
+                        state: crate::model::MediaState::Idle,
+                        view_once: false,
+                    },
+                };
+                message
+            });
+    }
     open();
     app.state().get_mut().model.leave_screen();
     settle();
@@ -255,15 +259,19 @@ fn media_viewer_uses_the_main_panel_and_releases_files_on_navigation() {
         seconds: Some(3),
         gif: false,
     };
-    app.state()
-        .get_mut()
-        .model
-        .open_chat
-        .message_snapshots
-        .insert(video_message.id.clone(), video_message);
-    app.emit(Input::MediaAction(NativeMediaAction::ViewVideo(
-        video.clone(),
-    )));
+    {
+        let mut state = app.state().get_mut();
+        state.model.open_chat.active_chat = Some("fixture-chat".into());
+        state
+            .model
+            .open_chat
+            .message_snapshots
+            .insert(video_message.id.clone(), video_message);
+    }
+    app.emit(Input::MediaAction(NativeMediaAction::ViewVideo {
+        chat: "fixture-chat".into(),
+        message: "video".into(),
+    }));
     settle();
     assert!(app.model().media_viewer.is_some());
     let clip = stream(app.model().media_viewer_host.upcast_ref()).expect("integrated video stream");
@@ -282,4 +290,65 @@ fn media_viewer_uses_the_main_panel_and_releases_files_on_navigation() {
     assert!(!clip.is_prepared());
     assert!(!crate::media_retention::is_held(&video));
     window.close();
+}
+
+#[test]
+#[ignore = "needs a display"]
+fn deleted_message_releases_the_open_media_viewer() {
+    use crate::native_media::NativeMediaAction;
+
+    let data = tempfile::tempdir().unwrap();
+    let path = data.path().join("fixture.png");
+    image::RgbaImage::from_pixel(16, 16, image::Rgba([20, 120, 200, 255]))
+        .save(&path)
+        .unwrap();
+    let _application: RelmApp<Input> = RelmApp::new("dev.luminusos.ZapTide.MediaExpiryTest");
+    let app = NativeApplication::builder().launch(Init {
+        dirs: crate::paths::AppDirs::under(data.path()),
+    });
+    let mut message = super::tests::grouping_message("photo", "sender", false, 1);
+    message.content = crate::model::Content::Image {
+        caption: None,
+        media: crate::model::Media {
+            mime: "image/png".into(),
+            size: 100,
+            width: Some(16),
+            height: Some(16),
+            path: Some(path.clone()),
+            state: crate::model::MediaState::Idle,
+            view_once: false,
+        },
+    };
+    {
+        let mut state = app.state().get_mut();
+        state.model.open_chat.active_chat = Some("fixture-chat".into());
+        let mut duplicate = message.clone();
+        duplicate.id = "second-photo".into();
+        state
+            .model
+            .open_chat
+            .message_snapshots
+            .insert(duplicate.id.clone(), duplicate);
+        state
+            .model
+            .open_chat
+            .message_snapshots
+            .insert(message.id.clone(), message);
+    }
+    app.emit(Input::MediaAction(NativeMediaAction::ViewPhotos {
+        chat: "fixture-chat".into(),
+        messages: vec!["photo".into(), "second-photo".into()],
+        start: 0,
+    }));
+    settle();
+    let mut state = app.state().get_mut();
+    state.model.message_deleted("different-chat", "photo");
+    state
+        .model
+        .message_deleted("fixture-chat", "different-photo");
+    assert!(state.model.media_viewer.is_some());
+    assert_eq!(state.model.media_viewer_messages, ["photo", "second-photo"]);
+    state.model.message_deleted("fixture-chat", "second-photo");
+    assert!(state.model.media_viewer.is_none());
+    assert!(!crate::media_retention::is_held(&path));
 }
