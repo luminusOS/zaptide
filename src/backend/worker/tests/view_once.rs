@@ -88,6 +88,45 @@ fn wrappers_nest_in_any_order() {
 }
 
 #[test]
+fn view_once_markers_survive_zaptide_wrappers() {
+    let group_mentioned = from_default!(wa::Message {
+        group_mentioned_message: MessageField::some(wrapper(legacy_v2(image(None)))),
+    });
+    let associated_child = from_default!(wa::Message {
+        associated_child_message: MessageField::some(wrapper(voice(Some(true)))),
+    });
+    assert!(matches!(
+        classify(&group_mentioned),
+        Some(Content::Image { media, .. }) if media.view_once
+    ));
+    assert!(matches!(
+        classify(&associated_child),
+        Some(Content::Audio { media, .. }) if media.view_once
+    ));
+}
+
+#[test]
+fn only_the_selected_media_inline_flag_marks_the_message() {
+    let mut message = image(Some(false));
+    message.audio_message = voice(Some(true)).audio_message;
+    assert!(matches!(
+        classify(&message),
+        Some(Content::Image { media, .. }) if !media.view_once
+    ));
+}
+
+#[test]
+fn view_once_inline_flag_marks_video_notes() {
+    let ptv = from_default!(wa::Message {
+        ptv_message: video(Some(true)).video_message,
+    });
+    assert!(matches!(
+        classify(&ptv),
+        Some(Content::Video { media, .. }) if media.view_once
+    ));
+}
+
+#[test]
 fn the_inline_flag_marks_photos_videos_and_voice_messages() {
     for message in [image(Some(true)), video(Some(true)), voice(Some(true))] {
         assert!(marked(&message));
