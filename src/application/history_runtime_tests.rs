@@ -26,6 +26,88 @@ fn message(chat: &str, index: i64) -> crate::model::Message {
 
 #[test]
 #[ignore = "requires an isolated graphical process"]
+fn keep_metadata_stays_with_the_current_transcript_request() {
+    let data = tempfile::tempdir().expect("private fixture");
+    let _relm: RelmApp<Input> = RelmApp::new("dev.luminusos.ZapTide.KeepFixture");
+    relm4::main_application()
+        .register(None::<&gtk::gio::Cancellable>)
+        .expect("register fixture");
+    let (backend, events) = Backend::detached();
+    TEST_BACKEND.with_borrow_mut(|slot| assert!(slot.replace(backend).is_none()));
+    let app = NativeApplication::builder().launch(Init {
+        dirs: AppDirs::under(data.path()),
+    });
+    let notifier = app.model().notifier.clone();
+    let send = |event| {
+        events.send(event).expect("fixture event");
+        crate::backend::Wake::wake(&notifier);
+        settle();
+    };
+    let account = app.model().active_account;
+    let a = "keep-first@s.whatsapp.net";
+    let b = "keep-second@s.whatsapp.net";
+    let id = message(a, 1).id;
+    let page = |chat: &str, request, kept: bool| {
+        send(Event::Messages {
+            chat: chat.into(),
+            messages: vec![message(chat, 1)],
+            keep_states: if kept {
+                vec![(id.clone(), i64::MAX, true)]
+            } else {
+                Vec::new()
+            },
+            older: false,
+            complete: true,
+            request,
+        });
+    };
+    send(Event::Link(LinkStatus::Connected));
+    send(Event::Chats(vec![
+        crate::model::Chat::new(a.into(), "First".into()),
+        crate::model::Chat::new(b.into(), "Second".into()),
+    ]));
+    let select = |chat: &str| {
+        app.emit(Input::SelectChat(account, chat.into()));
+        settle();
+        app.model().transcript_requests.initial
+    };
+    let first_request = select(a);
+    assert!(first_request.is_some());
+    page(a, first_request, true);
+    assert!(app.model().open_chat.kept.contains(&id));
+
+    let has_keep_metadata = || {
+        let model = app.model();
+        model.open_chat.kept.contains(&id) || model.open_chat.keepable.contains_key(&id)
+    };
+
+    page(b, select(b), false);
+    let leaked_to_b = has_keep_metadata();
+
+    let current_request = select(a);
+    assert_ne!(first_request, current_request);
+    page(a, first_request, true);
+    assert_eq!(app.model().transcript_requests.initial, current_request);
+    let leaked_before_current = has_keep_metadata();
+    page(a, current_request, false);
+    page(a, first_request, true);
+    let leaked_from_stale = has_keep_metadata();
+    page(b, None, true);
+    let leaked_from_inactive_live = has_keep_metadata();
+
+    assert_eq!(
+        (
+            leaked_to_b,
+            leaked_before_current,
+            leaked_from_stale,
+            leaked_from_inactive_live,
+        ),
+        (false, false, false, false)
+    );
+}
+
+#[test]
+#[ignore = "requires an isolated graphical process"]
 fn final_history_page_preserves_reading_position_and_rejects_stale_clicks() {
     let data = tempfile::tempdir().expect("private fixture");
     let _relm: RelmApp<Input> = RelmApp::new("dev.luminusos.ZapTide.HistoryFixture");
@@ -59,6 +141,7 @@ fn final_history_page_preserves_reading_position_and_rejects_stale_clicks() {
     send(Event::Messages {
         chat: chat.into(),
         messages: (60..120).map(|index| message(chat, index)).collect(),
+        keep_states: Vec::new(),
         older: false,
         complete: false,
         request,
@@ -81,6 +164,7 @@ fn final_history_page_preserves_reading_position_and_rejects_stale_clicks() {
     send(Event::Messages {
         chat: chat.into(),
         messages: (0..60).map(|index| message(chat, index)).collect(),
+        keep_states: Vec::new(),
         older: true,
         complete: true,
         request,

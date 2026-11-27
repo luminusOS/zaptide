@@ -1,10 +1,10 @@
 use super::*;
 use crate::i18n::gettext;
+use gtk::glib;
 
 pub(super) type DialogActionCallback = std::rc::Rc<dyn Fn(DialogAction)>;
 
 pub(super) enum DialogAction {
-    ArchiveChat(String),
     UnlinkConfirmed,
     CreatePoll(crate::model::PollDraft),
     StartChat { id: String, name: String },
@@ -14,9 +14,10 @@ pub(super) enum DialogAction {
     SendSticker(std::path::PathBuf),
     RemoveSticker(std::path::PathBuf),
     UnstarSticker(std::path::PathBuf),
-    ShowStarred,
-    OpenStarred { chat: String, id: String },
-    SetDisappearing(u32),
+    ShowStarred(ChatTarget),
+    OpenStarred { target: ChatTarget, id: String },
+    SetDisappearing(ChatTarget, u32),
+    ShowFullAvatar(String, AvatarPreview),
 }
 
 pub(super) fn attach_tile(icon: &str, label: &str, tone: &str) -> gtk::Box {
@@ -42,8 +43,8 @@ pub(super) fn attach_tile(icon: &str, label: &str, tone: &str) -> gtk::Box {
 
 pub(super) fn show_archive_confirmation(
     parent: &adw::ApplicationWindow,
-    on_action: &DialogActionCallback,
     chat: &crate::model::Chat,
+    on_confirm: impl Fn() + 'static,
 ) {
     let dialog = adw::AlertDialog::builder()
         .heading(gettext("Archive Chat?"))
@@ -57,12 +58,47 @@ pub(super) fn show_archive_confirmation(
     dialog.set_response_appearance("archive", adw::ResponseAppearance::Suggested);
     dialog.set_default_response(Some("archive"));
     dialog.set_close_response("cancel");
-    let (on_action, id) = (on_action.clone(), chat.id.clone());
     dialog.connect_response(None, move |_, response| {
         if response == "archive" {
-            on_action(DialogAction::ArchiveChat(id.clone()));
+            on_confirm();
         }
     });
+    dialog.present(Some(parent));
+}
+
+pub(super) fn show_chat_deletion_confirmation(
+    parent: &adw::ApplicationWindow,
+    chat: &crate::model::Chat,
+    delete_chat: bool,
+    on_confirm: impl Fn() + 'static,
+) {
+    let (heading, body, response) = if delete_chat {
+        (
+            gettext("Delete chat?"),
+            gettext(
+                "This chat will be removed from the list here and on your other linked devices. It reappears if a new message arrives.",
+            ),
+            gettext("Delete"),
+        )
+    } else {
+        (
+            gettext("Clear chat?"),
+            gettext(
+                "This chat's messages will be cleared here and on your other linked devices. Starred messages are kept.",
+            ),
+            gettext("Clear"),
+        )
+    };
+    let dialog = adw::AlertDialog::builder()
+        .heading(heading)
+        .body(format!("{}\n\n{body}", chat.name))
+        .body_use_markup(false)
+        .build();
+    dialog.add_response("cancel", &gettext("Cancel"));
+    dialog.add_response("confirm", &response);
+    dialog.set_close_response("cancel");
+    dialog.set_response_appearance("confirm", adw::ResponseAppearance::Destructive);
+    dialog.connect_response(Some("confirm"), move |_, _| on_confirm());
     dialog.present(Some(parent));
 }
 
@@ -320,6 +356,7 @@ pub(super) fn show_new_chat_dialog(
     parent: &adw::ApplicationWindow,
     on_action: &DialogActionCallback,
     contacts: Vec<(String, String, String)>,
+    contact_country: Option<usize>,
 ) {
     let dialog = adw::Dialog::builder()
         .title(gettext("New Chat"))
@@ -352,11 +389,12 @@ pub(super) fn show_new_chat_dialog(
         .build();
     add.add_prefix(&gtk::Image::from_icon_name("contact-new-symbolic"));
     add.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
-    let (close, window, contact_action) = (dialog.downgrade(), parent.clone(), on_action.clone());
+    let (close, window, contact_action) =
+        (dialog.downgrade(), parent.downgrade(), on_action.clone());
     add.connect_activated(move |_| {
-        if let Some(close) = close.upgrade() {
+        if let (Some(close), Some(window)) = (close.upgrade(), window.upgrade()) {
             close.close();
-            show_new_contact_dialog(&window, &contact_action);
+            new_contact_dialog(&window, &contact_action, contact_country).present();
         }
     });
     actions.append(&add);
@@ -429,13 +467,15 @@ pub(super) fn show_new_chat_dialog(
     dialog.present(Some(parent));
 }
 
-pub(super) fn show_new_contact_dialog(
+fn new_contact_dialog(
     parent: &adw::ApplicationWindow,
     on_action: &DialogActionCallback,
-) {
+    contact_country: Option<usize>,
+) -> gtk::Window {
     let dialog = gtk::Window::builder()
         .title(gettext("New contact"))
         .transient_for(parent)
+        .destroy_with_parent(true)
         .modal(true)
         .default_width(380)
         .build();
@@ -447,15 +487,29 @@ pub(super) fn show_new_contact_dialog(
         .margin_start(18)
         .margin_end(18)
         .build();
+    let country = country_picker();
+    if let Some(position) = contact_country {
+        country.set_selected(position as u32);
+    }
+    country.update_property(&[gtk::accessible::Property::Label(&gettext("Country"))]);
+    let phone_title = gettext("Phone number");
     let phone = gtk::Entry::builder()
-        .placeholder_text(gettext("Phone number, including country code"))
+        .placeholder_text(&phone_title)
         .input_purpose(gtk::InputPurpose::Phone)
         .activates_default(true)
+        .hexpand(true)
         .build();
+    phone.update_property(&[gtk::accessible::Property::Label(&phone_title)]);
+    let number_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    number_row.append(&country);
+    number_row.append(&phone);
+    let preview = gtk::Label::builder().xalign(0.0).wrap(true).build();
+    let name_title = gettext("Name (optional)");
     let name = gtk::Entry::builder()
-        .placeholder_text(gettext("Name (optional)"))
+        .placeholder_text(&name_title)
         .activates_default(true)
         .build();
+    name.update_property(&[gtk::accessible::Property::Label(&name_title)]);
     let buttons = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(8)
@@ -464,9 +518,11 @@ pub(super) fn show_new_contact_dialog(
     let cancel = gtk::Button::with_label(&gettext("Cancel"));
     let add = gtk::Button::with_label(&gettext("Add contact"));
     add.add_css_class("suggested-action");
+    add.set_sensitive(false);
     buttons.append(&cancel);
     buttons.append(&add);
-    content.append(&phone);
+    content.append(&number_row);
+    content.append(&preview);
     content.append(&name);
     content.append(&buttons);
     dialog.set_child(Some(&content));
@@ -477,12 +533,44 @@ pub(super) fn show_new_contact_dialog(
             close.close();
         }
     });
+    let current_number = |country: &gtk::DropDown, phone: &gtk::Entry| {
+        let region = crate::countries::COUNTRIES.get(country.selected() as usize)?;
+        new_contact_phone(&phone.text(), region.iso)
+    };
+    let invalid_number = gettext("Enter a valid phone number");
+    let refresh = glib::clone!(
+        #[weak]
+        country,
+        #[weak]
+        phone,
+        #[weak]
+        preview,
+        #[weak]
+        add,
+        move || {
+            let number = current_number(&country, &phone);
+            add.set_sensitive(number.is_some());
+            let label = match number {
+                Some((_, formatted)) => formatted,
+                None if phone.text().trim().is_empty() => String::new(),
+                None => invalid_number.clone(),
+            };
+            preview.set_label(&label);
+            phone.update_property(&[gtk::accessible::Property::Description(&label)]);
+        }
+    );
+    let refresh_country = refresh.clone();
+    country.connect_selected_notify(move |_| refresh_country());
+    phone.connect_changed(move |_| refresh());
     let close = dialog.downgrade();
     let on_action = on_action.clone();
     let phone_input = phone.clone();
     add.connect_clicked(move |_| {
+        let Some((digits, _)) = current_number(&country, &phone_input) else {
+            return;
+        };
         on_action(DialogAction::NewContact {
-            phone: phone_input.text().to_string(),
+            phone: digits,
             name: Some(name.text().to_string()),
         });
         if let Some(close) = close.upgrade() {
@@ -492,7 +580,7 @@ pub(super) fn show_new_contact_dialog(
     phone.connect_map(|entry| {
         entry.grab_focus();
     });
-    dialog.present();
+    dialog
 }
 
 pub(super) fn show_mention_dialog(
@@ -1205,10 +1293,212 @@ pub(super) fn timer_picker_position(chat: &crate::model::Chat, timer: u32) -> Op
         .map(|position| position as u32)
 }
 
+#[derive(Clone)]
+pub struct AvatarPreview {
+    popover: gtk::glib::SendWeakRef<gtk::Popover>,
+    viewport: gtk::glib::SendWeakRef<gtk::ScrolledWindow>,
+    picture: gtk::glib::SendWeakRef<gtk::Picture>,
+    spinner: gtk::glib::SendWeakRef<gtk::Spinner>,
+    status: gtk::glib::SendWeakRef<gtk::Label>,
+    token: crate::native_media::DecodeToken,
+    ticket: crate::native_media::DecodeTicket,
+}
+
+impl std::fmt::Debug for AvatarPreview {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AvatarPreview").finish_non_exhaustive()
+    }
+}
+
+impl AvatarPreview {
+    fn mapped_popover(&self) -> Option<gtk::Popover> {
+        self.popover
+            .upgrade()
+            .filter(|popover| self.ticket.is_current() && popover.is_mapped())
+    }
+
+    pub(super) fn belongs_to(&self, dialog: &adw::Dialog) -> bool {
+        self.mapped_popover()
+            .and_then(|popover| popover.ancestor(adw::Dialog::static_type()))
+            .as_ref()
+            == Some(dialog.upcast_ref())
+    }
+
+    pub(super) fn cancel(&self) {
+        self.token.cancel();
+        if let Some(popover) = self.popover.upgrade() {
+            popover.popdown();
+        }
+    }
+
+    pub(super) fn finish(&self, path: Option<std::path::PathBuf>) {
+        if let Some(path) = path {
+            let preview = self.clone();
+            crate::native_media_widgets::decode_avatar_async(
+                path,
+                self.ticket.clone(),
+                move |texture| preview.present_result(texture.as_ref()),
+            );
+        } else {
+            self.present_result(None);
+        }
+    }
+
+    fn present_result(&self, texture: Option<&gtk::gdk::Texture>) {
+        let Some(popover) = self.mapped_popover() else {
+            return;
+        };
+        let has_image = self.picture.upgrade().is_some_and(|picture| {
+            if let Some(texture) = texture {
+                picture.set_paintable(Some(texture));
+            }
+            picture.paintable().is_some()
+        });
+        if let Some(viewport) = self.viewport.upgrade() {
+            size_avatar_preview(&popover, &viewport);
+            viewport.set_visible(has_image);
+        }
+        if let Some(spinner) = self.spinner.upgrade() {
+            spinner.stop();
+            spinner.set_visible(false);
+        }
+        if let Some(status) = self.status.upgrade() {
+            if texture.is_some() {
+                status.set_visible(false);
+            } else {
+                status.set_label(&if has_image {
+                    gettext("Showing smaller picture")
+                } else {
+                    gettext("No profile picture")
+                });
+                status.set_visible(true);
+            }
+        }
+    }
+}
+
+fn size_avatar_preview(popover: &gtk::Popover, viewport: &gtk::ScrolledWindow) {
+    let Some(info) = popover
+        .ancestor(adw::ToolbarView::static_type())
+        .and_downcast::<adw::ToolbarView>()
+    else {
+        return;
+    };
+    // Reserve space for the popover's arrow, padding, Close button and feedback.
+    let width = (info.width() - 80).clamp(1, 240);
+    let height = (info.height() - 160).clamp(1, 240);
+    viewport.set_size_request(width, height);
+}
+
+fn avatar_preview_button(
+    avatar: &adw::Avatar,
+    fallback: Option<gtk::gdk::Texture>,
+    id: String,
+    on_action: DialogActionCallback,
+) -> (gtk::MenuButton, crate::native_media::DecodeToken) {
+    let label = gettext("View larger picture");
+    let button = gtk::MenuButton::builder()
+        .halign(gtk::Align::Center)
+        .tooltip_text(&label)
+        .css_classes(["flat", "circular"])
+        .build();
+    button.set_child(Some(avatar));
+    button.update_property(&[gtk::accessible::Property::Label(&label)]);
+    let popover = gtk::Popover::builder()
+        .autohide(true)
+        .position(gtk::PositionType::Bottom)
+        .build();
+    let content = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(6)
+        .margin_top(6)
+        .margin_bottom(6)
+        .margin_start(6)
+        .margin_end(6)
+        .build();
+    let picture = gtk::Picture::builder()
+        .alternative_text(gettext("Profile picture"))
+        .can_shrink(true)
+        .content_fit(gtk::ContentFit::Contain)
+        .build();
+    // A size request alone is only a minimum; the viewport drops the texture's natural size.
+    let viewport = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vscrollbar_policy(gtk::PolicyType::Never)
+        .focusable(false)
+        .propagate_natural_width(false)
+        .propagate_natural_height(false)
+        .child(&picture)
+        .build();
+    let spinner = gtk::Spinner::builder().halign(gtk::Align::Center).build();
+    let status = gtk::Label::builder().wrap(true).build();
+    let close = gtk::Button::builder()
+        .label(gettext("Close"))
+        .halign(gtk::Align::Center)
+        .build();
+    let close_popover = popover.downgrade();
+    let avatar_button = button.downgrade();
+    close.connect_clicked(move |_| {
+        if let Some(popover) = close_popover.upgrade() {
+            popover.popdown();
+        }
+        if let Some(button) = avatar_button.upgrade() {
+            button.grab_focus();
+        }
+    });
+    content.append(&viewport);
+    content.append(&spinner);
+    content.append(&status);
+    content.append(&close);
+    popover.set_child(Some(&content));
+    button.set_popover(Some(&popover));
+
+    let owner_token = crate::native_media::DecodeToken::default();
+    let token = owner_token.clone();
+    let cancel = owner_token.clone();
+    popover.connect_unmap(move |_| cancel.cancel());
+    let (viewport, picture, spinner, status) = (
+        viewport.downgrade(),
+        picture.downgrade(),
+        spinner.downgrade(),
+        status.downgrade(),
+    );
+    popover.connect_map(move |popover| {
+        let (Some(frame), Some(image), Some(progress), Some(feedback)) = (
+            viewport.upgrade(),
+            picture.upgrade(),
+            spinner.upgrade(),
+            status.upgrade(),
+        ) else {
+            return;
+        };
+        image.set_paintable(fallback.as_ref());
+        size_avatar_preview(popover, &frame);
+        frame.set_visible(fallback.is_some());
+        progress.set_visible(true);
+        progress.start();
+        feedback.set_label(&gettext("Loading profile picture…"));
+        feedback.set_visible(true);
+        on_action(DialogAction::ShowFullAvatar(
+            id.clone(),
+            AvatarPreview {
+                popover: popover.downgrade().into(),
+                viewport: viewport.clone().into(),
+                picture: picture.clone().into(),
+                spinner: spinner.clone().into(),
+                status: status.clone().into(),
+                ticket: token.issue(),
+                token: token.clone(),
+            },
+        ));
+    });
+    (button, owner_token)
+}
+
 /// Contact or group details: photo, name, number, and group members.
 pub(super) fn show_chat_info_dialog(
     parent: &adw::ApplicationWindow,
-    chat: &crate::model::Chat,
+    chat: (crate::account::AccountId, &crate::model::Chat),
     contacts: &std::collections::HashMap<String, crate::model::Contact>,
     avatar: Option<&std::path::Path>,
     presence: Option<(bool, Option<i64>)>,
@@ -1218,6 +1508,8 @@ pub(super) fn show_chat_info_dialog(
     ),
     on_action: &DialogActionCallback,
 ) -> Option<(String, adw::ActionRow)> {
+    let (account, chat) = chat;
+    let target = ChatTarget::new(account, &chat.id);
     let (chats, avatars) = directory;
     let name_of = |id: &str| {
         sender_label(
@@ -1236,8 +1528,10 @@ pub(super) fn show_chat_info_dialog(
     let picture = adw::Avatar::new(96, Some(&chat.name), true);
     let image = avatar.and_then(crate::native_media_widgets::avatar_texture);
     picture.set_custom_image(image.as_ref());
-    picture.set_margin_bottom(6);
-    header.append(&picture);
+    let (preview, preview_token) =
+        avatar_preview_button(&picture, image, chat.id.clone(), on_action.clone());
+    preview.set_margin_bottom(6);
+    header.append(&preview);
     header.append(
         &gtk::Label::builder()
             .label(&chat.name)
@@ -1331,7 +1625,6 @@ pub(super) fn show_chat_info_dialog(
     settings.add(&property(
         "Notifications",
         match chat.muted_until {
-            // Muting from the app stores `i64::MAX`, which has no date.
             Some(until) if until > now && !crate::util::moment_stamp(until).is_empty() => {
                 format!("Muted until {}", crate::util::moment_stamp(until))
             }
@@ -1358,9 +1651,10 @@ pub(super) fn show_chat_info_dialog(
                 .selected(position)
                 .build();
             let on_action = on_action.clone();
+            let target = target.clone();
             row.connect_selected_notify(move |row| {
                 if let Some(seconds) = crate::model::TIMER_CHOICES.get(row.selected() as usize) {
-                    on_action(DialogAction::SetDisappearing(*seconds));
+                    on_action(DialogAction::SetDisappearing(target.clone(), *seconds));
                 }
             });
             settings.add(&row);
@@ -1397,7 +1691,7 @@ pub(super) fn show_chat_info_dialog(
         {
             dialog.close();
         }
-        on_action(DialogAction::ShowStarred);
+        on_action(DialogAction::ShowStarred(target.clone()));
     });
     starred_group.add(&starred);
     page.add(&starred_group);
@@ -1468,6 +1762,13 @@ pub(super) fn show_chat_info_dialog(
         .content_height(if chat.is_group() { 600 } else { 560 })
         .child(&view)
         .build();
+    let preview = preview.downgrade();
+    dialog.connect_closed(move |_| {
+        preview_token.cancel();
+        if let Some(preview) = preview.upgrade() {
+            preview.popdown();
+        }
+    });
     dialog.present(Some(parent));
     chat.phone().map(|_| (chat.id.clone(), about))
 }
@@ -1484,6 +1785,7 @@ pub(super) struct StarredEntry {
 /// Starred messages of the open chat; choosing one scrolls to it.
 pub(super) fn show_starred_dialog(
     parent: &adw::ApplicationWindow,
+    account: crate::account::AccountId,
     on_action: &DialogActionCallback,
     entries: Vec<StarredEntry>,
 ) {
@@ -1529,14 +1831,18 @@ pub(super) fn show_starred_dialog(
                     .build(),
             );
             row.add_suffix(&when);
-            let (on_action, dialog, chat, id) =
-                (on_action.clone(), dialog.clone(), entry.chat, entry.id);
+            let (on_action, dialog) = (on_action.clone(), dialog.downgrade());
+            let target = ChatTarget::new(account, entry.chat);
+            let id = entry.id;
             row.connect_activated(move |_| {
-                dialog.close();
-                on_action(DialogAction::OpenStarred {
-                    chat: chat.clone(),
-                    id: id.clone(),
-                });
+                if let Some(dialog) = dialog.upgrade()
+                    && dialog.close()
+                {
+                    on_action(DialogAction::OpenStarred {
+                        target: target.clone(),
+                        id: id.clone(),
+                    });
+                }
             });
             list.append(&row);
         }
@@ -1567,6 +1873,96 @@ pub(super) fn show_starred_dialog(
 
 fn glib_escape(text: &str) -> String {
     gtk::glib::markup_escape_text(text).to_string()
+}
+
+#[cfg(test)]
+mod contact_dialog_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "needs a display"]
+    fn new_contact_only_submits_the_previewed_number_on_confirmation() {
+        adw::init().unwrap();
+        let parent = adw::ApplicationWindow::builder().build();
+        let submissions = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let observed = submissions.clone();
+        let action: DialogActionCallback = std::rc::Rc::new(move |action| {
+            if let DialogAction::NewContact { phone, .. } = action {
+                observed.borrow_mut().push(phone);
+            }
+        });
+        let brazil = contact_country_for_account("5511961234567").unwrap();
+        let dialog = new_contact_dialog(&parent, &action, Some(brazil));
+        let content = dialog.child().unwrap().downcast::<gtk::Box>().unwrap();
+        let row = content
+            .first_child()
+            .unwrap()
+            .downcast::<gtk::Box>()
+            .unwrap();
+        let picker = row
+            .first_child()
+            .unwrap()
+            .downcast::<gtk::DropDown>()
+            .unwrap();
+        let phone = row.last_child().unwrap().downcast::<gtk::Entry>().unwrap();
+        let label = row
+            .next_sibling()
+            .unwrap()
+            .downcast::<gtk::Label>()
+            .unwrap();
+        let confirm = dialog
+            .default_widget()
+            .unwrap()
+            .downcast::<gtk::Button>()
+            .unwrap();
+        dialog.present();
+        assert_eq!(picker.selected(), brazil as u32);
+        assert!(picker.enables_search());
+        assert!(!confirm.is_sensitive());
+        phone.set_text("11 2345 abcd");
+        assert_eq!(label.text(), gettext("Enter a valid phone number"));
+        assert!(!confirm.is_sensitive());
+        confirm.emit_clicked();
+
+        phone.set_text("(11) 96123-4567");
+        assert!(label.text().ends_with(" · Brazil"));
+        assert!(confirm.is_sensitive());
+        let brazilian_preview = label.text();
+        let argentina = contact_country_for_account("5491123456789").unwrap();
+        picker.set_selected(argentina as u32);
+        assert_ne!(label.text(), brazilian_preview);
+        phone.set_text("+55 (11) 96123-4567");
+        assert!(label.text().ends_with(" · Brazil"));
+        assert!(confirm.is_sensitive());
+        assert!(submissions.borrow().is_empty());
+        confirm.emit_clicked();
+        assert_eq!(&*submissions.borrow(), &["5511961234567"]);
+
+        let reopened = new_contact_dialog(&parent, &action, Some(brazil));
+        let content = reopened.child().unwrap();
+        let row = content.first_child().unwrap();
+        let phone = row.last_child().unwrap().downcast::<gtk::Entry>().unwrap();
+        let buttons = content.last_child().unwrap();
+        let cancel = buttons
+            .first_child()
+            .unwrap()
+            .downcast::<gtk::Button>()
+            .unwrap();
+        reopened.present();
+        phone.set_text("(11) 2345-6789");
+        cancel.emit_clicked();
+        assert!(!reopened.is_visible());
+        assert_eq!(&*submissions.borrow(), &["5511961234567"]);
+
+        parent.present();
+        let child = new_contact_dialog(&parent, &action, Some(brazil));
+        child.present();
+        let weak_child = child.downgrade();
+        drop(child);
+        parent.destroy();
+        drop(parent);
+        assert!(weak_child.upgrade().is_none());
+    }
 }
 
 #[cfg(test)]

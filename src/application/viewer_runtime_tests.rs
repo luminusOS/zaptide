@@ -197,6 +197,7 @@ fn viewer_album_displays_sender_profiles_and_clears_missing_picture() {
     send(Event::Messages {
         chat: chat.into(),
         messages,
+        keep_states: Vec::new(),
         older: false,
         complete: true,
         request,

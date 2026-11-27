@@ -323,21 +323,24 @@ impl NativeApplication {
     }
 
     fn show_chat_info(&mut self, sender: ComponentSender<Self>) {
-        if let Some(chat) = self
-            .open_chat
-            .active_chat
-            .as_ref()
-            .and_then(|id| self.chat_snapshots.iter().find(|chat| &chat.id == id))
-        {
+        if let Some(chat) = &self.open_chat.active_chat {
+            self.show_chat_info_of(ChatTarget::new(self.active_account, chat), sender);
+        }
+    }
+
+    pub(super) fn show_chat_info_of(&mut self, target: ChatTarget, sender: ComponentSender<Self>) {
+        if let Some(chat) = self.targeted_chat(&target).cloned() {
+            self.close_chat_info();
             self.info_about = show_chat_info_dialog(
                 &self.window,
-                chat,
+                (target.account, &chat),
                 &self.contacts,
                 self.avatars.get(&chat.id).map(std::path::PathBuf::as_path),
                 self.presence.get(&chat.id).copied(),
                 (&self.chat_snapshots, &self.avatars),
                 &dialog_action_callback(&sender),
             );
+            self.info_dialog.set(self.window.visible_dialog().as_ref());
             if self.info_about.is_some()
                 && let Some(backend) = &self.backend
             {
@@ -608,50 +611,34 @@ impl NativeApplication {
         dialog.present(Some(&self.window));
     }
 
-    fn confirm_clear_chat(&mut self, sender: ComponentSender<Self>) {
-        let Some(chat) = self.open_chat.active_chat.clone() else {
-            return;
-        };
-        let account = self.active_account;
-        let dialog = adw::AlertDialog::builder()
-            .heading(gettext("Clear chat?"))
-            .body(gettext(
-                "This chat's messages will be cleared here and on your other linked devices. Starred messages are kept.",
-            ))
-            .build();
-        dialog.add_response("cancel", &gettext("Cancel"));
-        dialog.add_response("clear", &gettext("Clear"));
-        dialog.set_response_appearance("clear", adw::ResponseAppearance::Destructive);
-        let input = sender.clone();
-        dialog.connect_response(None, move |_, response| {
-            if response == "clear" {
-                input.input(Input::ConfirmClearChat(account, chat.clone()));
-            }
-        });
-        dialog.present(Some(&self.window));
+    fn confirm_open_chat_deletion(&self, delete_chat: bool, sender: ComponentSender<Self>) {
+        if let Some(chat) = &self.open_chat.active_chat {
+            let target = ChatTarget::new(self.active_account, chat);
+            self.confirm_chat_deletion(target, delete_chat, sender);
+        }
     }
 
-    fn confirm_delete_chat(&mut self, sender: ComponentSender<Self>) {
-        let Some(chat) = self.open_chat.active_chat.clone() else {
+    pub(super) fn confirm_chat_deletion(
+        &self,
+        target: ChatTarget,
+        delete_chat: bool,
+        sender: ComponentSender<Self>,
+    ) {
+        let Some(chat) = self.targeted_chat(&target) else {
             return;
         };
-        let account = self.active_account;
-        let dialog = adw::AlertDialog::builder()
-            .heading(gettext("Delete chat?"))
-            .body(gettext(
-                "This chat will be removed from the list here and on your other linked devices. It reappears if a new message arrives.",
-            ))
-            .build();
-        dialog.add_response("cancel", &gettext("Cancel"));
-        dialog.add_response("delete", &gettext("Delete"));
-        dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
-        let input = sender.clone();
-        dialog.connect_response(None, move |_, response| {
-            if response == "delete" {
-                input.input(Input::ConfirmDeleteChat(account, chat.clone()));
-            }
-        });
-        dialog.present(Some(&self.window));
+        super::dialogs::show_chat_deletion_confirmation(
+            &self.window,
+            chat,
+            delete_chat,
+            move || {
+                sender.input(if delete_chat {
+                    Input::ConfirmDeleteChat(target.clone())
+                } else {
+                    Input::ConfirmClearChat(target.clone())
+                });
+            },
+        );
     }
 
     fn viewer_details(
@@ -1036,24 +1023,11 @@ impl NativeApplication {
             }
             Input::ToggleSelectedArchive => {
                 if let Some(chat) = self.selected_chat() {
-                    if chat.archived {
-                        sender.input(Input::ArchiveChat(chat.id.clone()));
-                    } else {
-                        show_archive_confirmation(
-                            &self.window,
-                            &dialog_action_callback(&sender),
-                            chat,
-                        );
-                    }
+                    let target = ChatTarget::new(self.active_account, &chat.id);
+                    self.archive_chat(target, !chat.archived, &sender);
                 }
             }
-            Input::ArchiveChat(id) => {
-                if let Some(chat) = self.chat_snapshots.iter().find(|chat| chat.id == id)
-                    && let Some(backend) = &self.backend
-                {
-                    backend.send(crate::backend::Command::SetArchived(id, !chat.archived));
-                }
-            }
+            Input::SetChatArchived(target, archived) => self.set_chat_archived(target, archived),
             Input::ToggleSelectedMute => {
                 if let Some(chat) = self.selected_chat().cloned()
                     && let Some(backend) = &self.backend
@@ -1061,7 +1035,7 @@ impl NativeApplication {
                     let muted = chat.muted(crate::util::now());
                     backend.send(crate::backend::Command::SetMuted(
                         chat.id,
-                        (!muted).then_some(i64::MAX),
+                        (!muted).then_some(0),
                     ));
                 }
             }
@@ -1094,6 +1068,10 @@ impl NativeApplication {
                 &self.window,
                 &dialog_action_callback(&sender),
                 new_chat_contacts(&self.contacts),
+                self.registry
+                    .entry(self.active_account)
+                    .and_then(|entry| entry.phone.as_deref())
+                    .and_then(contact_country_for_account),
             ),
             Input::StartChat { id, name } => {
                 if !self.chat_snapshots.iter().any(|chat| chat.id == id) {
@@ -1371,21 +1349,36 @@ impl NativeApplication {
             }
             Input::CloseChat => self.close_chat(),
             Input::ToggleSelectedStar => self.toggle_selected_star(),
+            Input::ToggleSelectedKeep => self.toggle_selected_keep(),
+            Input::ShowFullAvatar(id, preview) => self.request_full_avatar(id, preview),
+            Input::ChatRowMenu { target, x, y } => self.show_chat_row_menu(&target, x, y),
+            Input::ChatRowAction(target, action) => self.chat_row_action(target, action, sender),
             Input::PinSelected(seconds) => self.pin_selected(seconds),
             Input::UnpinSelected => self.unpin_selected(),
             Input::JumpToPinned => self.jump_to_pinned(),
-            Input::SetDisappearing(seconds) => self.set_disappearing(seconds),
-            Input::ShowStarred => self.show_starred(),
-            Input::OpenStarred { chat, id } => self.open_starred(chat, id),
+            Input::SetDisappearing(target, seconds) => self.set_disappearing(target, seconds),
+            Input::ShowStarred(target) => {
+                if self.targeted_chat(&target).is_some() {
+                    self.show_starred(target.chat);
+                }
+            }
+            Input::OpenStarred { target, id } => {
+                if self.targeted_chat(&target).is_some() {
+                    if self.open_chat.active_chat.as_deref() != Some(&target.chat) {
+                        self.handle_input(Input::OpenChatId(target.chat.clone()), sender);
+                    }
+                    self.open_starred(target.chat, id);
+                }
+            }
             Input::DeleteSelected(everyone) => self.confirm_delete(everyone, sender),
             Input::ConfirmDelete(everyone) => self.delete_selected(everyone),
-            Input::ClearSelectedChat => self.confirm_clear_chat(sender),
-            Input::ConfirmClearChat(account, chat) => {
-                self.send_chat_deletion(account, chat, false);
+            Input::ClearSelectedChat => self.confirm_open_chat_deletion(false, sender),
+            Input::ConfirmClearChat(target) => {
+                self.send_chat_deletion(target, false);
             }
-            Input::DeleteSelectedChat => self.confirm_delete_chat(sender),
-            Input::ConfirmDeleteChat(account, chat) => {
-                self.send_chat_deletion(account, chat, true);
+            Input::DeleteSelectedChat => self.confirm_open_chat_deletion(true, sender),
+            Input::ConfirmDeleteChat(target) => {
+                self.send_chat_deletion(target, true);
             }
             Input::VoteOption(choice) => {
                 self.poll_choice = choice;

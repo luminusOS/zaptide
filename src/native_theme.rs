@@ -99,7 +99,7 @@ pub fn css_for_palette(palette: &Palette) -> String {
         }}\n\
          window, .background {{ background-color: var(--window-bg-color); color: var(--window-fg-color); }}\n\
          headerbar, .titlebar, .sidebar {{ background-color: var(--headerbar-bg-color); color: var(--headerbar-fg-color); }}\n\
-         .view, list, listview, textview {{ background-color: var(--view-bg-color); color: var(--view-fg-color); }}\n\
+         .view, listview, textview {{ background-color: var(--view-bg-color); color: var(--view-fg-color); }}\n\
          card, .card, popover {{ background-color: var(--card-bg-color); color: var(--card-fg-color); }}\n\
          entry, textview {{ caret-color: var(--accent-color); }}\n\
          button {{ border-color: var(--border-color); }}\n\
@@ -135,6 +135,26 @@ mod tests {
         assert!(css.contains("button.suggested-action"));
         assert!(!css.contains("border-radius"));
         assert!(!css.contains("padding"));
+    }
+
+    #[test]
+    fn custom_palette_keeps_boxed_lists_on_card_backgrounds() {
+        let css = css_for_palette(&Palette::dark());
+        let view_rule = css
+            .lines()
+            .find(|line| line.contains("var(--view-bg-color);"))
+            .expect("the palette paints views");
+
+        // A bare `list` selector would also match `list.boxed-list`, replacing
+        // the card background libadwaita derives from `--card-bg-color`.
+        assert!(
+            !view_rule
+                .split('{')
+                .next()
+                .unwrap_or_default()
+                .split(',')
+                .any(|selector| selector.trim() == "list")
+        );
     }
 
     #[test]

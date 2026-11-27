@@ -113,6 +113,7 @@ fn media_viewer_uses_the_main_panel_and_releases_files_on_navigation() {
     {
         let mut state = app.state().get_mut();
         state.model.link = LinkStatus::Connecting;
+        state.model.account_known = true;
         state.model.open_chat.active_chat = Some("fixture-chat".into());
         state
             .model

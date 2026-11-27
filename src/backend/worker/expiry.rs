@@ -21,6 +21,68 @@ pub(super) struct Expiry {
     next: Option<Instant>,
 }
 
+pub(super) struct KeepChange {
+    pub(super) target: String,
+    pub(super) kept: bool,
+    at_ms: i64,
+}
+
+impl KeepChange {
+    pub(super) fn order(&self) -> (i64, bool) {
+        (self.at_ms, !self.kept)
+    }
+}
+
+fn kept_flag(kind: wa::KeepType) -> Option<bool> {
+    match kind {
+        wa::KeepType::KeepForAll => Some(true),
+        wa::KeepType::UndoKeepForAll => Some(false),
+        _ => None,
+    }
+}
+
+pub(super) fn keep_change(base: &wa::Message, fallback_ms: i64) -> Option<KeepChange> {
+    let keep = base.keep_in_chat_message.as_option()?;
+    let key = keep.key.as_option()?;
+    let target = key.id.as_ref().filter(|id| !id.is_empty())?.clone();
+    let kept = kept_flag(keep.keep_type?)?;
+    let at_ms = keep
+        .timestamp_ms
+        .filter(|at| *at > 0)
+        .unwrap_or(fallback_ms);
+    (at_ms > 0).then_some(KeepChange {
+        target,
+        kept,
+        at_ms,
+    })
+}
+
+pub(super) fn history_keep_state(info: &wa::WebMessageInfo, id: &str) -> Option<KeepChange> {
+    let snapshot = info.keep_in_chat.as_option()?;
+    let key = snapshot.key.as_option();
+    if key
+        .and_then(|key| key.id.as_deref())
+        .is_some_and(|target| target != id)
+    {
+        return None;
+    }
+    let at_ms = [
+        snapshot.client_timestamp_ms,
+        snapshot.server_timestamp_ms,
+        snapshot
+            .server_timestamp
+            .map(|seconds| seconds.saturating_mul(1000)),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|at| *at > 0)?;
+    Some(KeepChange {
+        target: id.to_owned(),
+        kept: kept_flag(snapshot.keep_type?)?,
+        at_ms,
+    })
+}
+
 struct ExpiryCache {
     root: PathBuf,
     dir: OwnedFd,
@@ -175,6 +237,146 @@ impl Worker {
         self.emit_chat(&chat);
     }
 
+    /// `Command::SetKept`: keeps a disappearing message for everyone in the
+    /// chat, or lets it run out again. The archive changes once WhatsApp
+    /// took the request, in `keep_set`.
+    pub(super) fn set_kept(&mut self, chat: ChatId, id: String, kept: bool) {
+        let chat = self.canonical_str(&chat);
+        let state = self.archive.keep_state(&chat, &id);
+        let message = self.archive.message(&chat, &id);
+        if state.is_err() || message.is_err() {
+            self.report_keep_archive_error();
+            return;
+        }
+        let (Ok(Some((deadline, current))), Ok(Some(message))) = (state, message) else {
+            return;
+        };
+        if current == kept
+            || !current && deadline <= jiff::Timestamp::now().as_second()
+            || matches!(message.content, Content::Revoked | Content::System { .. })
+            || message.content.view_once()
+        {
+            return;
+        }
+        let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&chat)) else {
+            self.emit(Event::Error(
+                "Could not change Keep in Chat while disconnected".to_owned(),
+            ));
+            return;
+        };
+        let participant = (jid.is_group() && !message.from_me)
+            .then(|| Self::jid_of(&message.sender))
+            .flatten();
+        let commands = self.commands.clone();
+        let generation = self.session_generation;
+        tokio::spawn(async move {
+            let result = async {
+                let message_id = whatsapp_rust::MessageId::new(&id).map_err(|_| ())?;
+                let target = whatsapp_rust::MessageRef::new(
+                    &jid,
+                    message_id,
+                    participant.as_ref(),
+                    message.from_me,
+                )
+                .map_err(|_| ())?;
+                let sent = client.keep_message(&target, kept).await.map_err(|_| ())?;
+                keep_change(&sent.message, 0)
+                    .map(|change| change.at_ms)
+                    .ok_or(())
+            }
+            .await;
+            let _ = Completion {
+                generation,
+                done: Done::KeepSet {
+                    chat,
+                    id,
+                    kept,
+                    result,
+                },
+            }
+            .send(&commands);
+        });
+    }
+
+    pub(super) fn keep_set(
+        &mut self,
+        chat: ChatId,
+        id: String,
+        kept: bool,
+        result: Result<i64, ()>,
+    ) {
+        let chat = self.canonical_str(&chat);
+        match result {
+            Ok(at_ms) => {
+                let change = KeepChange {
+                    target: id,
+                    kept,
+                    at_ms,
+                };
+                self.apply_live_keep(&chat, change, true);
+            }
+            Err(()) => {
+                self.emit(Event::Error("Could not change Keep in Chat".to_owned()));
+            }
+        }
+    }
+
+    pub(super) fn store_keep(
+        &self,
+        chat: &str,
+        change: &KeepChange,
+    ) -> crate::archive::Result<Option<i64>> {
+        // The add-on key uses the sender's address space. Only the envelope
+        // identifies this account's chat; in a DM the nested JID may be ours.
+        self.archive
+            .set_kept(chat, &change.target, change.kept, change.at_ms)
+    }
+
+    pub(super) fn apply_live_keep(&self, chat: &str, change: KeepChange, local: bool) {
+        match self.store_keep(chat, &change) {
+            Ok(Some(deadline)) => self.emit_keep(chat, change.target, change.kept, deadline, local),
+            Ok(None) => {}
+            Err(_) => self.report_keep_archive_error(),
+        }
+        if self.archive.prune_pending_keeps().is_err() {
+            self.report_keep_archive_error();
+        }
+    }
+
+    fn report_keep_archive_error(&self) {
+        log::warn!("could not save a Keep in Chat change");
+        self.emit(Event::Error(
+            "Could not save Keep in Chat. Request chat history after fixing archive access.".into(),
+        ));
+    }
+
+    pub(super) fn emit_keep(&self, chat: &str, id: String, kept: bool, deadline: i64, local: bool) {
+        let overdue = deadline <= jiff::Timestamp::now().as_second();
+        let restored = if kept && overdue {
+            self.updated_message(chat, &id).map(Box::new)
+        } else {
+            None
+        };
+        self.emit(Event::KeptChanged {
+            chat: chat.to_owned(),
+            id: id.clone(),
+            kept,
+            deadline,
+            local,
+            restored,
+        });
+        if overdue {
+            if !kept {
+                self.emit(Event::MessageDeleted {
+                    chat: chat.to_owned(),
+                    id,
+                });
+            }
+            self.emit_chat(chat);
+            self.emit_pin(chat);
+        }
+    }
+
     /// Called on every tick; does its work at most every half minute.
     pub(super) fn pump_expiry(&mut self) {
         let now = Instant::now();
@@ -186,6 +388,9 @@ impl Worker {
             return;
         }
         self.remove_expired();
+        if self.archive.prune_pending_keeps().is_err() {
+            log::warn!("could not prune pending Keep in Chat changes");
+        }
     }
 
     fn remove_expired(&mut self) {

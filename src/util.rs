@@ -123,19 +123,25 @@ pub fn phone(digits: &str) -> String {
         return String::new();
     }
 
-    // WhatsApp IDs contain international digits without a leading '+'.
     let international = format!("+{digits}");
 
     if let Ok(number) = phonenumber::parse(None, &international)
         && phonenumber::is_valid(&number)
     {
-        return number
+        let formatted = number
             .format()
             .mode(phonenumber::Mode::International)
             .to_string();
+        if formatted
+            .chars()
+            .filter(char::is_ascii_digit)
+            .eq(digits.chars())
+        {
+            return formatted;
+        }
     }
 
-    // Preserve the previous formatting for unrecognized numbers.
+    // Formatting a chat ID for display or copying must preserve every digit.
     let mut out = String::from("+");
 
     for (index, character) in digits.chars().enumerate() {
@@ -329,6 +335,18 @@ mod tests {
         assert_eq!(phone("393331234567"), "+39 333 123 4567");
         assert_eq!(phone("12025550137"), "+1 202-555-0137");
         assert_eq!(phone(""), "");
+    }
+
+    #[test]
+    fn phone_display_never_changes_chat_number_digits() {
+        let stored = "4402079460018";
+        assert_eq!(
+            phone(stored)
+                .chars()
+                .filter(char::is_ascii_digit)
+                .collect::<String>(),
+            stored
+        );
     }
 
     #[test]

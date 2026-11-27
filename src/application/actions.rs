@@ -32,7 +32,7 @@ pub(super) fn install_message_actions(
 ) {
     let group = gtk::gio::SimpleActionGroup::new();
     type MessageAction = (&'static str, fn() -> Input);
-    let actions: [MessageAction; 15] = [
+    let actions: [MessageAction; 16] = [
         ("copy", || Input::CopySelectedText),
         ("copy-image", || Input::CopySelectedImage),
         ("attachment", || Input::ActivateSelectedAttachment),
@@ -45,6 +45,7 @@ pub(super) fn install_message_actions(
         ("forward", || Input::ShowForward),
         ("select", || Input::StartSelection),
         ("star", || Input::ToggleSelectedStar),
+        ("keep", || Input::ToggleSelectedKeep),
         ("unpin", || Input::UnpinSelected),
         ("delete", || Input::DeleteSelected(false)),
         ("delete-everyone", || Input::DeleteSelected(true)),
@@ -72,6 +73,43 @@ pub(super) fn install_message_actions(
     });
     group.add_action(&pin);
     window.insert_action_group("message", Some(&group));
+}
+
+pub(super) fn chat_row_action_target(target: &ChatTarget, desired: bool) -> gtk::glib::Variant {
+    (target.account.0, target.chat.as_str(), desired).to_variant()
+}
+
+pub(super) fn install_chat_row_actions(
+    window: &adw::ApplicationWindow,
+    sender: &ComponentSender<NativeApplication>,
+) {
+    let group = gtk::gio::SimpleActionGroup::new();
+    type ChatRowEntry = (&'static str, fn(bool) -> ChatRowAction);
+    let entries: [ChatRowEntry; 8] = [
+        ("info", |_| ChatRowAction::Info),
+        ("pin", ChatRowAction::Pin),
+        ("mute", ChatRowAction::Mute),
+        ("archive", ChatRowAction::Archive),
+        ("close", |_| ChatRowAction::Close),
+        ("transcript", |_| ChatRowAction::CopyTranscript),
+        ("clear", |_| ChatRowAction::Clear),
+        ("delete", |_| ChatRowAction::Delete),
+    ];
+    let parameter_type = <(u32, String, bool)>::static_variant_type();
+    for (name, kind) in entries {
+        let action = gtk::gio::SimpleAction::new(name, Some(&parameter_type));
+        let sender = sender.clone();
+        action.connect_activate(move |_, parameter| {
+            if let Some((account, chat, desired)) =
+                parameter.and_then(gtk::glib::Variant::get::<(u32, String, bool)>)
+            {
+                let target = ChatTarget::new(crate::account::AccountId(account), chat);
+                sender.input(Input::ChatRowAction(target, kind(desired)));
+            }
+        });
+        group.add_action(&action);
+    }
+    window.insert_action_group("chatrow", Some(&group));
 }
 
 pub(super) fn install_window_actions(

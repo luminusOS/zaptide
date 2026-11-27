@@ -40,9 +40,21 @@ selection, edits or replies before closing the chat. **Close Chat** returns
 home, keeps drafts and marks nothing as read. Choosing an emoji returns focus
 to the composer.
 
+To manage a conversation without opening it, right-click its row in the
+sidebar, or focus the row and press Shift+F10. To enlarge a contact's profile
+picture, open **Contact Info** and select the picture. Press Escape or click
+outside the preview to close it.
+
 Names take priority over numbers: saved contact name, then WhatsApp name, then
 phone number. This applies to messages, sidebar previews and notifications.
 Mentions use bold text and the theme's accent color.
+
+To start a conversation by phone number, open **New Chat → New Contact**.
+Select the country and enter the number with its area code. For Brazil, you
+can enter a fixed line or mobile number with its DDD. If the number starts
+with `+` or `00`, ZapTide uses the country code you entered instead of the
+selected country. Check the international preview before choosing
+**Add contact**. ZapTide checks the number on WhatsApp only after you confirm.
 
 The composer and bubbles support WhatsApp formatting:
 
@@ -215,9 +227,14 @@ ZapTide knows were kept are exempt from cleanup. Removal is local and never
 asks other devices to delete anything. A line in the chat reports a timer
 change.
 
+Choose **Keep** in the menu of an eligible disappearing message to keep it in
+the conversation. Kept messages show a **Kept** marker. Choose **Unkeep** to
+restore the message's original deadline. If that deadline has passed, the
+message can disappear immediately.
+
 ## Other limitations
 
 Status posts, communities and group administration are not supported.
 Newsletter channels are read-only. Keyboard shortcuts and screen-reader
-labels are available, but accessibility is incomplete. Sending "keep in chat"
-and the account-wide disappearing-messages default are not supported.
+labels are available, but accessibility is incomplete. The account-wide
+disappearing-messages default is not supported.

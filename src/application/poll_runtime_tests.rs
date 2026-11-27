@@ -108,6 +108,7 @@ fn inline_poll_dispatches_explicit_votes_and_preserves_retry_and_identity() {
     send(Event::Messages {
         chat: chat.into(),
         messages: vec![message.clone()],
+        keep_states: Vec::new(),
         older: false,
         complete: true,
         request,

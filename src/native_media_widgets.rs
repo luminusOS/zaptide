@@ -44,6 +44,25 @@ pub(crate) fn avatar_texture(path: &std::path::Path) -> Option<gdk::Texture> {
     decoded_texture(crate::native_media::decode_avatar_file(path))
 }
 
+pub(crate) fn decode_avatar_async(
+    path: std::path::PathBuf,
+    current: crate::native_media::DecodeTicket,
+    done: impl FnOnce(Option<gdk::Texture>) + 'static,
+) {
+    let decoding = current.clone();
+    let result = gtk::gio::spawn_blocking(move || {
+        decoding
+            .is_current()
+            .then(|| crate::native_media::decode_avatar_file(&path))
+    });
+    glib::spawn_future_local(async move {
+        let decoded = result.await.ok().flatten();
+        if current.is_current() {
+            done(decoded.and_then(decoded_texture));
+        }
+    });
+}
+
 fn decoded_texture(result: ThumbnailResult) -> Option<gdk::Texture> {
     let ThumbnailResult::Image(image) = result else {
         return None;

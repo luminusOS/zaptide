@@ -147,6 +147,8 @@ pub(super) struct RowFlags {
     pub show_sender: bool,
     pub show_timestamp: bool,
     pub starred: bool,
+    /// Kept from disappearing by someone in the chat.
+    pub kept: bool,
 }
 
 pub(super) fn message_row<S>(
@@ -162,6 +164,7 @@ pub(super) fn message_row<S>(
         show_sender,
         show_timestamp,
         starred,
+        kept,
     } = flags;
     const SENDER_CLASSES: [&str; 6] = [
         "zaptide-sender-blue",
@@ -214,7 +217,15 @@ pub(super) fn message_row<S>(
         .unwrap_or_default();
     let clock = crate::util::clock(message.timestamp);
     let delivery = delivery_label(message.status);
-    let notes = footer_notes(&message);
+    let mut notes = footer_notes(&message);
+    let kept_label = kept.then(|| gettext("Kept"));
+    if let Some(label) = &kept_label {
+        notes = if notes.is_empty() {
+            format!("{label} ·")
+        } else {
+            format!("{label} · {notes}")
+        };
+    }
     let reactions = reaction_summary(&message.reactions);
     let mentions = mention_labels(&message, contacts);
     let mut content = format!(
@@ -228,6 +239,10 @@ pub(super) fn message_row<S>(
         reactions,
     );
     if let Some(marker) = view_once_label(&message) {
+        content.push_str(" · ");
+        content.push_str(&marker);
+    }
+    if let Some(marker) = kept_label {
         content.push_str(" · ");
         content.push_str(&marker);
     }
@@ -291,6 +306,7 @@ fn view_once_marker_is_announced_only_for_view_once_bubbles() {
             "",
             None,
             RowFlags {
+                kept: false,
                 show_sender: true,
                 show_timestamp: true,
                 starred: false,
@@ -303,6 +319,34 @@ fn view_once_marker_is_announced_only_for_view_once_bubbles() {
     let marker = gettext("View once");
     assert!(!plain.accessible_label.contains(&marker));
     assert!(marked.accessible_label.contains(&marker));
+    assert_eq!(plain.message.summary(), marked.message.summary());
+}
+
+#[cfg(test)]
+#[test]
+fn kept_marker_is_visible_and_announced_without_changing_the_message() {
+    let row_for = |kept| {
+        message_row(
+            super::tests::grouping_message("synthetic", "Ana", false, 0),
+            &Default::default(),
+            (),
+            "",
+            None,
+            RowFlags {
+                kept,
+                show_sender: true,
+                show_timestamp: true,
+                starred: false,
+            },
+            Default::default(),
+        )
+    };
+    let plain = row_for(false);
+    let marked = row_for(true);
+    let marker = gettext("Kept");
+    assert!(marked.notes.contains(&marker));
+    assert!(marked.accessible_label.contains(&marker));
+    assert!(!plain.accessible_label.contains(&marker));
     assert_eq!(plain.message.summary(), marked.message.summary());
 }
 

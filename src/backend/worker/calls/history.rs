@@ -110,6 +110,7 @@ impl Worker {
                 request: None,
                 chat: chat.clone(),
                 messages: vec![stored],
+                keep_states: Vec::new(),
                 older: false,
                 complete: false,
             });

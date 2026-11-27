@@ -129,6 +129,75 @@ pub(super) fn normalized_phone(input: &str) -> Option<String> {
     (7..=15).contains(&digits.len()).then_some(digits)
 }
 
+pub(super) fn new_contact_phone(input: &str, iso: &str) -> Option<(String, String)> {
+    use phonenumber::{Mode, Type, country::Source, metadata::DATABASE};
+
+    let is_space = |c| matches!(c, ' ' | '\u{a0}' | '\u{202f}');
+    let input = input.trim_matches(is_space);
+    let body = input.strip_prefix('+').unwrap_or(input);
+    if !body
+        .chars()
+        .all(|c| c.is_ascii_digit() || is_space(c) || matches!(c, '(' | ')' | '-'))
+    {
+        return None;
+    }
+    let digits: String = body.chars().filter(char::is_ascii_digit).collect();
+    let is_national = !input.starts_with('+') && !digits.starts_with("00");
+    let mut number = if input.starts_with('+') {
+        phonenumber::parse(None, format!("+{digits}")).ok()?
+    } else if let Some(digits) = digits.strip_prefix("00") {
+        phonenumber::parse(None, format!("+{digits}")).ok()?
+    } else {
+        let number = phonenumber::parse(Some(iso.parse().ok()?), digits).ok()?;
+        let source = number.code().source();
+        let is_shared_trunk_prefix = source == Source::Number
+            && DATABASE
+                .by_id(iso)
+                .and_then(|metadata| metadata.national_prefix())
+                == Some(number.code().value().to_string().as_str());
+        if source != Source::Default && !is_shared_trunk_prefix {
+            return None;
+        }
+        number
+    };
+    if !number.is_valid() {
+        return None;
+    }
+    // Infer Argentina's WhatsApp mobile form only for national input.
+    if is_national
+        && number.country().id() == Some(phonenumber::country::AR)
+        && number.number_type(&DATABASE) == Type::FixedLine
+    {
+        number = phonenumber::parse(None, format!("+549{}", number.national()))
+            .ok()
+            .filter(phonenumber::is_valid)?;
+    }
+    let e164 = number.format().mode(Mode::E164).to_string();
+    let digits = e164.strip_prefix('+')?;
+    if digits.len() > 15 {
+        return None;
+    }
+    let formatted = number.format().mode(Mode::International).to_string();
+    let preview = match number.country().id().and_then(|iso| {
+        crate::countries::COUNTRIES
+            .iter()
+            .find(|country| country.iso == iso.as_ref())
+    }) {
+        Some(country) => format!("{formatted} · {}", country.name),
+        None => formatted,
+    };
+    Some((digits.to_owned(), preview))
+}
+
+pub(super) fn contact_country_for_account(phone: &str) -> Option<usize> {
+    let number =
+        phonenumber::parse(None, format!("+{}", phone.trim().trim_start_matches('+'))).ok()?;
+    let iso = number.country().id()?;
+    crate::countries::COUNTRIES
+        .iter()
+        .position(|country| country.iso == iso.as_ref())
+}
+
 /// Notify unless the chat is on screen, muted, archived, or locked.
 pub(super) fn notification_should_show(
     enabled: bool,

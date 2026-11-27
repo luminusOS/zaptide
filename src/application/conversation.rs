@@ -391,6 +391,8 @@ impl NativeApplication {
         {
             self.open_chat.editable_messages.remove(&id);
             self.open_chat.message_snapshots.remove(&id);
+            self.open_chat.kept.remove(&id);
+            self.open_chat.keepable.remove(&id);
         }
         self.download_missing_stickers();
         self.queue_waveforms();
@@ -407,6 +409,53 @@ impl NativeApplication {
             motion::restore_reading_anchor(&self.messages.view, position as u32, anchor, offset);
         }
         self.status = gettext("Conversation loaded");
+    }
+
+    pub(super) fn restore_kept_message(&mut self, message: crate::model::Message) -> bool {
+        self.flush_transcript();
+        let ids = &mut self.open_chat.message_ids;
+        let snapshots = &mut self.open_chat.message_snapshots;
+        if !self.history_complete
+            && ids
+                .first()
+                .and_then(|id| snapshots.get(id))
+                .is_none_or(|first| message.timestamp < first.timestamp)
+        {
+            return false;
+        }
+        let anchor = motion::reading_anchor(&self.messages.view, ids);
+        let position = ids
+            .iter()
+            .position(|id| {
+                snapshots
+                    .get(id)
+                    .is_some_and(|row| row.timestamp > message.timestamp)
+            })
+            .unwrap_or(ids.len());
+        let id = message.id.clone();
+        if let Some(text) = editable_text(&message) {
+            self.open_chat.editable_messages.insert(id.clone(), text);
+        }
+        ids.insert(position, id.clone());
+        snapshots.insert(id.clone(), message);
+        for trimmed in trim_message_window(ids, false, ACTIVE_MESSAGE_LIMIT) {
+            self.open_chat.editable_messages.remove(&trimmed);
+            snapshots.remove(&trimmed);
+            self.open_chat.kept.remove(&trimmed);
+            self.open_chat.keepable.remove(&trimmed);
+        }
+        self.rebuild_message_rows(false);
+        self.sync_transcript();
+        if let Some((anchor, offset)) = anchor
+            && let Some(position) = self
+                .open_chat
+                .message_ids
+                .iter()
+                .position(|id| id == &anchor)
+        {
+            motion::restore_reading_anchor(&self.messages.view, position as u32, anchor, offset);
+        }
+        self.open_chat.message_snapshots.contains_key(&id)
     }
 
     /// Applies a message update or contact change from a backend batch.
@@ -663,6 +712,7 @@ impl NativeApplication {
                 contacts: &self.contacts,
                 avatars: &self.avatars,
                 starred: &self.starred,
+                kept: &self.open_chat.kept,
                 selection: self.message_selection.as_deref(),
                 link_previews: self.settings.link_previews,
                 pointer_sender: &self.pointer_sender,
@@ -962,6 +1012,7 @@ pub(super) struct RowInputs<'a, S> {
     pub(super) contacts: &'a std::collections::HashMap<String, crate::model::Contact>,
     pub(super) avatars: &'a std::collections::HashMap<String, std::path::PathBuf>,
     pub(super) starred: &'a std::collections::HashSet<String>,
+    pub(super) kept: &'a std::collections::HashSet<String>,
     pub(super) selection: Option<&'a [String]>,
     pub(super) link_previews: bool,
     pub(super) pointer_sender: &'a S,
@@ -1019,6 +1070,7 @@ pub(super) fn message_rows<S: Clone>(
                 .then(|| inputs.avatars.get(&message.sender).cloned())
                 .flatten();
             let starred = inputs.starred.contains(&message.id);
+            let kept = inputs.kept.contains(&message.id);
             let mut row = message_row(
                 message,
                 inputs.contacts,
@@ -1029,6 +1081,7 @@ pub(super) fn message_rows<S: Clone>(
                     show_sender,
                     show_timestamp,
                     starred,
+                    kept,
                 },
                 inputs.audio_registry.clone(),
             );
@@ -1094,6 +1147,7 @@ mod tests {
         let contacts = Default::default();
         let avatars = Default::default();
         let starred = Default::default();
+        let kept = Default::default();
         let registry = Default::default();
         let rows = |messages| {
             message_rows(
@@ -1103,6 +1157,7 @@ mod tests {
                     contacts: &contacts,
                     avatars: &avatars,
                     starred: &starred,
+                    kept: &kept,
                     selection: None,
                     link_previews: true,
                     pointer_sender: &(),
@@ -1245,6 +1300,7 @@ mod batch_tests {
         pending: PendingTranscript,
         avatars: HashMap<String, std::path::PathBuf>,
         starred: HashSet<String>,
+        kept: HashSet<String>,
         registry: AudioRegistry,
         rows: Vec<MessageRow<()>>,
         text: Vec<crate::native_transcript::TranscriptRow>,
@@ -1268,6 +1324,7 @@ mod batch_tests {
                 pending: PendingTranscript::default(),
                 avatars: HashMap::new(),
                 starred: HashSet::new(),
+                kept: HashSet::new(),
                 registry: AudioRegistry::default(),
                 rows: Vec::new(),
                 text: Vec::new(),
@@ -1294,6 +1351,7 @@ mod batch_tests {
                     contacts: &self.contacts,
                     avatars: &self.avatars,
                     starred: &self.starred,
+                    kept: &self.kept,
                     selection: None,
                     link_previews: true,
                     pointer_sender: &(),
@@ -1505,6 +1563,7 @@ mod batch_tests {
                     show_sender: true,
                     show_timestamp: true,
                     starred: false,
+                    kept: false,
                 },
                 AudioRegistry::default(),
             )

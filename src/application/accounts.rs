@@ -628,10 +628,10 @@ impl NativeApplication {
     /// Clears everything on screen that belongs to the open conversation, so
     /// nothing of one account shows or acts in another.
     pub(super) fn leave_screen(&mut self) {
+        self.close_chat_row_menu();
         self.close_media_viewer();
         // Pickers answer by chat id only; an answer must not land in another account.
         self.cancel_portal_requests();
-        // A dialog acts on whichever account is on screen when it is confirmed.
         // Stacked dialogs close one at a time.
         for _ in 0..8 {
             let Some(dialog) = self.window.visible_dialog() else {
@@ -688,7 +688,7 @@ impl NativeApplication {
         self.message_selection = None;
         self.message_target = None;
         self.message_target_selection = None;
-        self.info_about = None;
+        self.close_chat_info();
         self.history_complete = false;
         self.loading_older = false;
         self.recent_messages_pending = false;
@@ -996,6 +996,7 @@ mod tests {
             Event::Messages {
                 chat: "chat".into(),
                 messages: vec![*message("chat", "Hello")],
+                keep_states: Vec::new(),
                 older: false,
                 complete: true,
                 request: Some(7),

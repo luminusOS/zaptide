@@ -4,6 +4,11 @@ the MIT notice in LICENSE-MIT. Third-party components retain their licences.
 
 This software is based in part on the work of the Independent JPEG Group.
 
+Phone number parsing uses rust-phonenumber and libphonenumber metadata.
+Copyright (C) 2009 The Libphonenumber Authors (numbering metadata).
+Both are licensed under Apache-2.0; a copy of the license is included at
+vendor/absolute-url/LICENSE-APACHE.
+
 The notification sound is "Message Notification 4" by AnthonyRox,
 https://freesound.org/people/AnthonyRox/sounds/740423/, released under CC0:
 https://creativecommons.org/publicdomain/zero/1.0/.

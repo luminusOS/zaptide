@@ -86,6 +86,12 @@ struct StoredMessageProjection {
     reactions: String,
 }
 
+pub(crate) fn expiration_deadline(timestamp: i64, expiration: Option<u32>) -> Option<i64> {
+    expiration
+        .filter(|seconds| *seconds != 0)
+        .map(|seconds| timestamp.saturating_add(i64::from(seconds)))
+}
+
 const BATCH: &str = "archive_batch";
 
 /// Statements prepared once and reused: the hot reads and the history,
@@ -786,9 +792,7 @@ impl Archive {
         if self.sender_collision(message)? {
             return Ok(false);
         }
-        let expires_at = expiration
-            .filter(|seconds| *seconds != 0)
-            .map(|seconds| message.timestamp.saturating_add(i64::from(seconds)));
+        let expires_at = expiration_deadline(message.timestamp, expiration);
         // One read for everything the merge needs; SQLite compares the raw
         // blobs, so the stored one is never copied out.
         let existing: Option<StoredMessageProjection> = self
@@ -846,8 +850,11 @@ impl Archive {
             }
         }
         let visible: bool = self.connection.prepare_cached(
-             "INSERT INTO messages (chat, id, sender, sender_name, from_me, timestamp, content, status, quoted, reactions, edited, raw, thumbnail, mentions, forwarded, delivered_at, read_at, expires_at)
-              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+             "INSERT INTO messages (chat, id, sender, sender_name, from_me, timestamp, content, status, quoted, reactions, edited, raw, thumbnail, mentions, forwarded, delivered_at, read_at, expires_at, kept)
+              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
+                  CASE WHEN ?18 IS NOT NULL THEN COALESCE(
+                      (SELECT kept FROM message_keeps WHERE chat = ?1 AND id = ?2), 0
+                  ) ELSE 0 END)
              ON CONFLICT(chat, id) DO UPDATE SET
                 sender_name = COALESCE(excluded.sender_name, sender_name),
                 content = excluded.content,
@@ -861,7 +868,9 @@ impl Archive {
                 forwarded = excluded.forwarded,
                 delivered_at = COALESCE(delivered_at, excluded.delivered_at),
                  read_at = COALESCE(read_at, excluded.read_at),
-                 expires_at = COALESCE(expires_at, excluded.expires_at)
+                 expires_at = COALESCE(expires_at, excluded.expires_at),
+                 kept = CASE WHEN expires_at IS NULL AND excluded.expires_at IS NOT NULL
+                             THEN excluded.kept ELSE kept END
               RETURNING kept != 0 OR expires_at IS NULL OR expires_at > unixepoch()",
         )?
         .query_row(params![
@@ -1073,7 +1082,10 @@ impl Archive {
 
     pub(crate) fn backfill_expiry(&self, source: &DerivedSource, seconds: u32) -> Result<bool> {
         Ok(self.connection.execute(
-            "UPDATE messages SET expires_at = timestamp + ?3
+            "UPDATE messages SET expires_at = timestamp + ?3, kept = COALESCE(
+                 (SELECT kept FROM message_keeps WHERE chat = messages.chat AND id = messages.id),
+                 kept
+             )
              WHERE rowid = ?1 AND raw = ?2 AND expires_at IS NULL",
             params![source.rowid, source.raw, seconds],
         )? != 0)
@@ -1354,7 +1366,7 @@ impl Archive {
         let clear = (|| {
             let transaction = self.connection.unchecked_transaction()?;
             transaction.execute_batch(
-                "DELETE FROM remote_deletions; DELETE FROM expiry_media_cleanup; DELETE FROM poll_history; DELETE FROM poll_votes; DELETE FROM polls; DELETE FROM group_receipts; DELETE FROM messages; DELETE FROM chats; DELETE FROM contacts; DELETE FROM meta WHERE key <> 'logout_cleanup_required'; DELETE FROM lids; DELETE FROM stickers;",
+                "DELETE FROM remote_deletions; DELETE FROM expiry_media_cleanup; DELETE FROM message_keeps; DELETE FROM poll_history; DELETE FROM poll_votes; DELETE FROM polls; DELETE FROM group_receipts; DELETE FROM messages; DELETE FROM chats; DELETE FROM contacts; DELETE FROM meta WHERE key <> 'logout_cleanup_required'; DELETE FROM lids; DELETE FROM stickers;",
             )?;
             transaction.commit()
         })();

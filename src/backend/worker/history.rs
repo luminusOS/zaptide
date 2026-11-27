@@ -33,6 +33,14 @@ pub(super) struct ParsedChat {
     pub(super) poll_updates: Vec<HistoryPollUpdate>,
     pub(super) reactions: Vec<HistoryReaction>,
     pub(super) pins: Vec<HistoryPin>,
+    keeps: Vec<HistoryKeep>,
+}
+
+struct HistoryKeep {
+    id: String,
+    sender: Option<String>,
+    from_me: bool,
+    change: super::expiry::KeepChange,
 }
 
 /// A pin or unpin from history, applied without a line in the transcript.
@@ -128,6 +136,7 @@ pub(super) fn parse_conversation(conversation: wa::Conversation) -> ParsedChat {
     let mut poll_updates = Vec::new();
     let mut reactions = Vec::new();
     let mut pins = Vec::new();
+    let mut keeps = Vec::new();
     let mut newest = 0;
     for entry in &conversation.messages {
         let Some(info) = entry.message.as_option() else {
@@ -144,8 +153,10 @@ pub(super) fn parse_conversation(conversation: wa::Conversation) -> ParsedChat {
         };
         let from_me = key.from_me.unwrap_or(false);
         let timestamp = info.message_timestamp.unwrap_or(0) as i64;
-        newest = newest.max(timestamp);
         let base = base_message(message);
+        if base.keep_in_chat_message.is_unset() {
+            newest = newest.max(timestamp);
+        }
         let sender = info
             .participant
             .clone()
@@ -161,7 +172,23 @@ pub(super) fn parse_conversation(conversation: wa::Conversation) -> ParsedChat {
             continue;
         }
         if base.keep_in_chat_message.is_set() {
+            if let Some(change) = super::expiry::keep_change(base, timestamp.saturating_mul(1000)) {
+                keeps.push(HistoryKeep {
+                    id,
+                    sender,
+                    from_me,
+                    change,
+                });
+            }
             continue;
+        }
+        if let Some(change) = super::expiry::history_keep_state(info, &id) {
+            keeps.push(HistoryKeep {
+                id: id.clone(),
+                sender: sender.clone(),
+                from_me,
+                change,
+            });
         }
         if let Some(protocol) = base.protocol_message.as_option() {
             if protocol.r#type == Some(wa::message::protocol_message::Type::REVOKE)
@@ -305,7 +332,7 @@ pub(super) fn parse_conversation(conversation: wa::Conversation) -> ParsedChat {
             raw: message.encode_to_vec(),
             poll_secret: info.message_secret.clone(),
             poll_votes: info.poll_updates.clone(),
-            expiration: base.get_ephemeral_expiration(),
+            expiration: base.get_ephemeral_expiration().or(info.ephemeral_duration),
         });
     }
     let last_activity = conversation
@@ -347,6 +374,7 @@ pub(super) fn parse_conversation(conversation: wa::Conversation) -> ParsedChat {
         poll_updates,
         reactions,
         pins,
+        keeps,
     }
 }
 
@@ -422,6 +450,9 @@ impl Worker {
                 allowed(&row.id, row.sender.as_deref(), row.from_me)
             })?;
             retain_checked(&mut chat.revoked, |row| {
+                allowed(&row.id, row.sender.as_deref(), row.from_me)
+            })?;
+            retain_checked(&mut chat.keeps, |row| {
                 allowed(&row.id, row.sender.as_deref(), row.from_me)
             })?;
             let mut missing_identity = false;
@@ -562,6 +593,7 @@ impl Worker {
         }
         let mut filed = Vec::new();
         let mut changed_pin_chats = HashSet::new();
+        let mut has_keeps = false;
         let now_ms = jiff::Timestamp::now().as_millisecond();
         // Sent together at the end: an event per name made the window
         // rebuild the open conversation for each one.
@@ -668,6 +700,15 @@ impl Worker {
                     .unwrap_or_default()
             };
             let mut refresh_pin = false;
+            // Apply before message insertion so a kept, overdue target is visible on its first replay.
+            let mut keeps = chat.keeps;
+            keeps.sort_unstable_by_key(|keep| std::cmp::Reverse(keep.change.order()));
+            has_keeps |= !keeps.is_empty();
+            for keep in keeps {
+                if let Some(deadline) = self.store_keep(&id, &keep.change)? {
+                    self.emit_keep(&id, keep.change.target, keep.change.kept, deadline, false);
+                }
+            }
             let count = chat.messages.len();
             let mut secrets = HashMap::new();
             for message in chat.messages {
@@ -905,6 +946,9 @@ impl Worker {
                 changed_pin_chats.insert(id.clone());
             }
             filed.push((id, count, chat.more_on_phone));
+        }
+        if has_keeps {
+            self.archive.prune_pending_keeps()?;
         }
         if !learned.is_empty() {
             self.emit(Event::Contacts(learned));

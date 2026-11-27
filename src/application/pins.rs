@@ -144,21 +144,17 @@ impl NativeApplication {
 }
 
 impl NativeApplication {
-    /// The timer picked in the chat details, for the chat that is open.
-    pub(super) fn set_disappearing(&mut self, seconds: u32) {
-        let Some(chat) = self.open_chat.active_chat.clone() else {
+    pub(super) fn set_disappearing(&self, target: ChatTarget, seconds: u32) {
+        let Some(chat) = self.targeted_chat(&target) else {
             return;
         };
-        let current = self
-            .chat_snapshots
-            .iter()
-            .find(|snapshot| snapshot.id == chat)
-            .map_or(0, |snapshot| snapshot.ephemeral_expiration.unwrap_or(0));
-        if current == seconds {
-            return;
-        }
-        if let Some(backend) = &self.backend {
-            backend.send(crate::backend::Command::SetDisappearing { chat, seconds });
+        if super::dialogs::timer_picker_position(chat, seconds).is_some()
+            && let Some(backend) = &self.backend
+        {
+            backend.send(crate::backend::Command::SetDisappearing {
+                chat: target.chat,
+                seconds,
+            });
         }
     }
 }

@@ -248,6 +248,13 @@ pub enum Done {
         at: i64,
         result: Result<String, String>,
     },
+    /// Result of sending a keep or unkeep for one message.
+    KeepSet {
+        chat: ChatId,
+        id: String,
+        kept: bool,
+        result: Result<i64, ()>,
+    },
     Downloaded {
         chat: ChatId,
         id: String,
@@ -368,6 +375,7 @@ pub enum Done {
     AvatarFetched {
         id: String,
         full: bool,
+        request: Option<u64>,
         avatar_generation: u64,
         path: Option<PathBuf>,
     },
@@ -375,6 +383,7 @@ pub enum Done {
     AvatarFailed {
         id: String,
         full: bool,
+        request: Option<u64>,
         avatar_generation: u64,
     },
     /// Internal result of [`Command::EditProfile`].
@@ -521,6 +530,11 @@ pub enum Command {
         id: String,
         full: bool,
     },
+    /// Requests the large profile picture for one visible preview.
+    FetchAvatarPreview {
+        id: String,
+        request: u64,
+    },
     /// Loads archived messages from `id` through the current page.
     LoadUntil {
         chat: ChatId,
@@ -547,6 +561,13 @@ pub enum Command {
     },
     /// Asks for the starred messages of one chat.
     LoadStarred(ChatId),
+    /// Keeps a disappearing message in its chat, or lets it run out again,
+    /// for everyone in the chat.
+    SetKept {
+        chat: ChatId,
+        id: String,
+        kept: bool,
+    },
     /// Pins a message for everyone in the chat. `seconds` is one of the
     /// durations WhatsApp offers: 24 hours, 7 days or 30 days.
     PinMessage {
@@ -780,6 +801,8 @@ pub enum Event {
     Messages {
         chat: ChatId,
         messages: Vec<Message>,
+        /// Message ID, original deadline, and whether it was kept.
+        keep_states: Vec<(String, i64, bool)>,
         older: bool,
         complete: bool,
         request: Option<u64>,
@@ -832,6 +855,10 @@ pub enum Event {
         full: bool,
         path: Option<PathBuf>,
     },
+    AvatarPreview {
+        request: u64,
+        path: Option<PathBuf>,
+    },
     MessageDeleted {
         chat: ChatId,
         id: String,
@@ -847,6 +874,17 @@ pub enum Event {
         /// Whether this device's user asked for the change, as opposed to the
         /// phone syncing it.
         local: bool,
+    },
+    /// A message was kept or released here or by someone in the chat.
+    KeptChanged {
+        chat: ChatId,
+        id: String,
+        kept: bool,
+        deadline: i64,
+        /// Whether this device's user asked for the change.
+        local: bool,
+        /// A row that was hidden by expiry before the Keep arrived.
+        restored: Option<Box<Message>>,
     },
     /// The starred messages of a chat that was just opened.
     StarredIds {
@@ -990,6 +1028,12 @@ impl Backend {
         {
             completion.done.discard();
         }
+    }
+
+    pub(crate) fn send_avatar_preview(&self, id: String, request: u64) -> bool {
+        self.commands
+            .send(Command::FetchAvatarPreview { id, request })
+            .is_ok()
     }
 
     #[cfg(test)]

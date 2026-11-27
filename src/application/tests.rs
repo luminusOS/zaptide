@@ -752,6 +752,58 @@ fn pairing_and_contact_phone_numbers_normalize_to_international_digits() {
 }
 
 #[test]
+fn new_contact_phone_previews_the_number_that_will_be_checked() {
+    for (input, iso, digits, country) in [
+        ("(11) 96123-4567", "BR", "5511961234567", "Brazil"),
+        ("(11) 2345-6789", "BR", "551123456789", "Brazil"),
+        ("011 96123-4567", "BR", "5511961234567", "Brazil"),
+        ("0 21 11 96123-4567", "BR", "5511961234567", "Brazil"),
+        ("+55 (11) 96123-4567", "AR", "5511961234567", "Brazil"),
+        ("0055 11 2345-6789", "AR", "551123456789", "Brazil"),
+        ("011 15 2345-6789", "AR", "5491123456789", "Argentina"),
+        ("11 2345-6789", "AR", "5491123456789", "Argentina"),
+        ("+54 9 11 2345 6789", "BR", "5491123456789", "Argentina"),
+        ("+54 11 2345-6789", "AR", "541123456789", "Argentina"),
+        ("0054 11 2345-6789", "BR", "541123456789", "Argentina"),
+        ("+1 (202) 555-0137", "AR", "12025550137", "United States"),
+        ("0044 7981 555555", "AR", "447981555555", "United Kingdom"),
+    ] {
+        let (actual, preview) = new_contact_phone(input, iso).expect(input);
+        assert_eq!(actual, digits, "{input}");
+        let (number, label) = preview.split_once(" · ").expect(&preview);
+        assert_eq!(label, country);
+        assert_eq!(normalized_phone(number).as_deref(), Some(digits));
+        match digits {
+            "5491123456789" => assert_eq!(number, "+54 9 11 2345-6789"),
+            "5511961234567" => assert_eq!(number, "+55 11 96123-4567"),
+            "551123456789" => assert_eq!(number, "+55 11 2345-6789"),
+            _ => {}
+        }
+    }
+}
+
+#[test]
+fn new_contact_phone_accepts_a_national_trunk_equal_to_the_calling_code() {
+    let (digits, preview) = new_contact_phone("1 (202) 555-0137", "US").unwrap();
+    assert_eq!(digits, "12025550137");
+    assert_eq!(preview, "+1 202-555-0137 · United States");
+}
+
+#[test]
+fn new_contact_phone_rejects_invalid_or_incomplete_input() {
+    for input in [
+        "11 2345 abcd",
+        "11 96123–4567",
+        "96123-4567",
+        "+55+11 96123-4567",
+        "55 11 96123-4567",
+        "+1234567890123456",
+    ] {
+        assert!(new_contact_phone(input, "BR").is_none(), "{input}");
+    }
+}
+
+#[test]
 fn notifications_skip_the_visible_muted_archived_and_locked_chats() {
     assert!(notification_should_show(
         true,
