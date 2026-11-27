@@ -16,6 +16,7 @@ pub(super) enum DialogAction {
     UnstarSticker(std::path::PathBuf),
     ShowStarred,
     OpenStarred { chat: String, id: String },
+    SetDisappearing(u32),
 }
 
 pub(super) fn attach_tile(icon: &str, label: &str, tone: &str) -> gtk::Box {
@@ -1185,6 +1186,25 @@ pub(super) fn forward_chat_detail(chat: &crate::model::Chat) -> String {
     }
 }
 
+/// Where the disappearing-messages picker starts, or `None` when this chat's
+/// timer cannot be changed here: a group needs its admin, and a timer that is
+/// not one of the offered choices is only shown.
+pub(super) fn timer_picker_position(chat: &crate::model::Chat, timer: u32) -> Option<u32> {
+    let allowed = if chat.is_group() {
+        chat.admin
+    } else {
+        chat.phone().is_some()
+    };
+    allowed
+        .then(|| {
+            crate::model::TIMER_CHOICES
+                .iter()
+                .position(|choice| *choice == timer)
+        })
+        .flatten()
+        .map(|position| position as u32)
+}
+
 /// Contact or group details: photo, name, number, and group members.
 pub(super) fn show_chat_info_dialog(
     parent: &adw::ApplicationWindow,
@@ -1320,14 +1340,38 @@ pub(super) fn show_chat_info_dialog(
         }
         .as_str(),
     ));
-    if let Some(seconds) = chat.ephemeral_expiration.filter(|seconds| *seconds > 0) {
-        let label = match seconds {
-            86_400 => "24 hours".to_owned(),
-            604_800 => "7 days".to_owned(),
-            7_776_000 => "90 days".to_owned(),
-            other => format!("{other} seconds"),
-        };
-        settings.add(&property("Disappearing messages", &label));
+    let timer = chat.ephemeral_expiration.unwrap_or(0);
+    match timer_picker_position(chat, timer) {
+        Some(position) => {
+            // Direct chats may always change it; a group only for its admins.
+            let labels: Vec<String> = crate::model::TIMER_CHOICES
+                .iter()
+                .map(|seconds| crate::model::timer_label(*seconds))
+                .collect();
+            let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+            let row = adw::ComboRow::builder()
+                .title(gettext("Disappearing messages"))
+                .subtitle(gettext(
+                    "New messages in this chat disappear after this time",
+                ))
+                .model(&gtk::StringList::new(&labels))
+                .selected(position)
+                .build();
+            let on_action = on_action.clone();
+            row.connect_selected_notify(move |row| {
+                if let Some(seconds) = crate::model::TIMER_CHOICES.get(row.selected() as usize) {
+                    on_action(DialogAction::SetDisappearing(*seconds));
+                }
+            });
+            settings.add(&row);
+        }
+        None if timer > 0 => {
+            settings.add(&property(
+                &gettext("Disappearing messages"),
+                &crate::model::timer_label(timer),
+            ));
+        }
+        None => {}
     }
     let flags: Vec<&str> = [(chat.pinned, "Pinned"), (chat.archived, "Archived")]
         .into_iter()

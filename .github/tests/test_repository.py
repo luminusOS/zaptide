@@ -27,6 +27,21 @@ class RepositoryConfiguration(unittest.TestCase):
                     if action.startswith("actions/checkout@"):
                         self.assertIs(step.get("with", {}).get("persist-credentials"), False)
 
+    def test_pull_request_workflows_cannot_write_repository_contents(self):
+        for path in (ROOT / ".github/workflows").iterdir():
+            if path.suffix not in {".yml", ".yaml"}:
+                continue
+            workflow = yaml.safe_load(path.read_text())
+            events = workflow.get("on", workflow.get(True))
+            if "pull_request" not in events:
+                continue
+            self.assertIn("permissions", workflow, path)
+            for job in workflow["jobs"].values():
+                permissions = job.get("permissions", workflow["permissions"])
+                self.assertNotEqual(permissions, "write-all", path)
+                if isinstance(permissions, dict):
+                    self.assertNotEqual(permissions.get("contents"), "write", path)
+
     def test_dependency_check_runs_weekly_and_allows_only_known_git_sources(self):
         workflow = yaml.safe_load((ROOT / ".github/workflows/deny.yml").read_text())
         events = workflow.get("on", workflow.get(True))

@@ -684,27 +684,35 @@ impl NativeApplication {
         sender: ComponentSender<Self>,
     ) {
         match action {
-            crate::native_media::NativeMediaAction::ViewPhotos { paths, start } => {
+            crate::native_media::NativeMediaAction::ViewPhotos {
+                chat,
+                messages,
+                start,
+            } => {
                 use crate::native_media_widgets::viewer::{PhotoItem, build_photo};
-                let target = paths.get(start).cloned();
-                let items: Vec<_> = paths
+                if self.open_chat.active_chat.as_deref() != Some(&chat) {
+                    return;
+                }
+                let target = messages.get(start).cloned();
+                let (messages, items): (Vec<_>, Vec<_>) = messages
                     .iter()
-                    .filter_map(|path| {
-                        self.open_chat
-                            .message_snapshots
-                            .values()
-                            .find(|message| copy_image_path(message) == Some(path.as_path()))
-                            .map(|message| PhotoItem {
-                                path: path.clone(),
+                    .filter_map(|id| {
+                        let message = self.open_chat.message_snapshots.get(id)?;
+                        let path = copy_image_path(message)?.to_owned();
+                        Some((
+                            id.clone(),
+                            PhotoItem {
+                                path,
                                 details: self.viewer_details(message),
-                            })
+                            },
+                        ))
                     })
-                    .collect();
+                    .unzip();
                 if items.is_empty() {
                     return;
                 }
                 let start = target
-                    .and_then(|path| items.iter().position(|item| item.path == path))
+                    .and_then(|target| messages.iter().position(|id| *id == target))
                     .unwrap_or(0);
                 self.close_media_viewer();
                 let output = sender.clone();
@@ -716,14 +724,23 @@ impl NativeApplication {
                     std::rc::Rc::new(move |action| output.input(Input::MediaAction(action))),
                     std::rc::Rc::new(move || back.input(Input::CloseMediaViewer)),
                 );
-                self.present_media_viewer(page);
+                self.present_media_viewer(page, messages);
             }
-            crate::native_media::NativeMediaAction::ViewVideo(path) => {
+            crate::native_media::NativeMediaAction::ViewVideo { chat, message } => {
                 use crate::native_media_widgets::viewer::build_video;
-                let Some(message) = self.open_chat.message_snapshots.values().find(|message| {
-                    matches!(&message.content, crate::model::Content::Video { media, .. } if media.path.as_ref() == Some(&path))
-                }) else { return; };
-                let details = self.viewer_details(message);
+                if self.open_chat.active_chat.as_deref() != Some(&chat) {
+                    return;
+                }
+                let Some(snapshot) = self.open_chat.message_snapshots.get(&message) else {
+                    return;
+                };
+                let crate::model::Content::Video { media, .. } = &snapshot.content else {
+                    return;
+                };
+                let Some(path) = media.path.clone() else {
+                    return;
+                };
+                let details = self.viewer_details(snapshot);
                 self.close_media_viewer();
                 let output = sender.clone();
                 let back = sender.clone();
@@ -734,7 +751,7 @@ impl NativeApplication {
                     std::rc::Rc::new(move |action| output.input(Input::MediaAction(action))),
                     std::rc::Rc::new(move || back.input(Input::CloseMediaViewer)),
                 );
-                self.present_media_viewer(page);
+                self.present_media_viewer(page, vec![message]);
             }
             crate::native_media::NativeMediaAction::CopyContactPhone(number) => {
                 crate::native_portals::NativePortals::write_clipboard_text(
@@ -1354,6 +1371,10 @@ impl NativeApplication {
             }
             Input::CloseChat => self.close_chat(),
             Input::ToggleSelectedStar => self.toggle_selected_star(),
+            Input::PinSelected(seconds) => self.pin_selected(seconds),
+            Input::UnpinSelected => self.unpin_selected(),
+            Input::JumpToPinned => self.jump_to_pinned(),
+            Input::SetDisappearing(seconds) => self.set_disappearing(seconds),
             Input::ShowStarred => self.show_starred(),
             Input::OpenStarred { chat, id } => self.open_starred(chat, id),
             Input::DeleteSelected(everyone) => self.confirm_delete(everyone, sender),

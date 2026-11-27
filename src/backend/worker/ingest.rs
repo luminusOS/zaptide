@@ -83,6 +83,19 @@ impl Worker {
             let _ = self.archive.set_ephemeral(&chat, expiration, 0);
         }
 
+        if base.pin_in_chat_message.is_set() {
+            self.apply_pin(info, &chat, base);
+            return;
+        }
+        if let Some(keep) = base.keep_in_chat_message.as_option() {
+            if let Some(target) = keep.key.as_option().and_then(|key| key.id.as_deref()) {
+                // A message someone kept in a disappearing chat is not removed.
+                let kept = keep.keep_type == Some(wa::KeepType::KeepForAll);
+                let _ = self.archive.set_kept(&chat, target, kept);
+            }
+            return;
+        }
+
         if let Some(protocol) = base.protocol_message.as_option() {
             use wa::message::protocol_message::Type;
             if protocol.r#type == Some(Type::EPHEMERAL_SETTING) {
@@ -101,6 +114,26 @@ impl Worker {
                         "protocol timer update: duration={expiration}s timestamp={timestamp} fallback_timestamp={used_fallback} accepted={accepted}"
                     );
                     if accepted {
+                        // Only a change made now gets a line; an older setting
+                        // that merely reaches us late does not.
+                        if !self.syncing {
+                            let sender = if from_me {
+                                self.me()
+                            } else {
+                                self.canonical(&info.source.sender)
+                            };
+                            self.store_system_line(
+                                &chat,
+                                &info.id,
+                                sender,
+                                push_name.as_ref().map(ToString::to_string),
+                                from_me,
+                                info.timestamp.timestamp(),
+                                crate::model::SystemEvent::Timer {
+                                    seconds: expiration,
+                                },
+                            );
+                        }
                         self.emit_chat(&chat);
                     }
                 } else {
@@ -128,6 +161,8 @@ impl Worker {
                                 (content.media_mut(), existing.content.media())
                         {
                             new.path = old.path.clone();
+                            // An edit carries no wrapper of its own.
+                            new.view_once = old.view_once;
                         }
                         if let Ok(true) = self.archive.set_content(&chat, &target, &content, true) {
                             self.emit_message(&chat, &target);
@@ -158,7 +193,7 @@ impl Worker {
             );
             return;
         }
-        let Some(content) = classify(base) else {
+        let Some(content) = classify(message) else {
             return;
         };
         let quoted = self.quoted_of(base);
@@ -191,7 +226,12 @@ impl Worker {
         };
         let is_poll = matches!(row.content, Content::Poll { .. });
         self.remember_poll(&row, message, &info.source.sender.to_non_ad_string(), None);
-        self.store_message(row, Some(message.encode_to_vec()), push_name.as_deref());
+        self.store_message_with_expiry(
+            row,
+            Some(message.encode_to_vec()),
+            push_name.as_deref(),
+            base.get_ephemeral_expiration(),
+        );
         if is_poll {
             self.pump_poll_votes();
         }
@@ -204,7 +244,9 @@ impl Worker {
         }
     }
 
-    pub(super) fn ingest_undecryptable(&mut self, info: &MessageInfo) {
+    /// Files a placeholder for a message whose body did not arrive; `what` is
+    /// the `Content::Unsupported` label that says why.
+    pub(super) fn ingest_unavailable(&mut self, info: &MessageInfo, what: &str) {
         if info.has_status_receipt_class() || info.source.is_from_me {
             return;
         }
@@ -228,7 +270,7 @@ impl Worker {
             from_me: false,
             timestamp: info.timestamp.timestamp(),
             content: Content::Unsupported {
-                what: crate::model::unsupported::UNDECRYPTED.to_owned(),
+                what: what.to_owned(),
             },
             status: Delivery::None,
             delivered_at: None,
@@ -246,9 +288,19 @@ impl Worker {
     /// Archives a message and emits chat and row updates.
     pub(super) fn store_message(
         &mut self,
+        message: Message,
+        raw: Option<Vec<u8>>,
+        push_name: Option<&str>,
+    ) {
+        self.store_message_with_expiry(message, raw, push_name, None);
+    }
+
+    pub(super) fn store_message_with_expiry(
+        &mut self,
         mut message: Message,
         raw: Option<Vec<u8>>,
         push_name: Option<&str>,
+        expiration: Option<u32>,
     ) {
         message.chat = self.canonical_str(&message.chat);
         match self.archive.sender_collision(&message) {
@@ -277,9 +329,16 @@ impl Worker {
             .ok()
             .flatten()
             .is_none();
-        if let Err(error) = self.archive.insert_message(&message, raw.as_deref()) {
-            log::warn!("could not store a message: {error}");
-            return;
+        match self
+            .archive
+            .insert_message_with_expiry(&message, raw.as_deref(), expiration)
+        {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(error) => {
+                log::warn!("could not store a message: {error}");
+                return;
+            }
         }
         if message.from_me
             && matches!(
@@ -329,6 +388,10 @@ impl Worker {
             .flatten()
             .unwrap_or(message);
         self.polish(&mut stored);
+        let refresh_pin = self
+            .archive
+            .active_pin_targets(&chat, jiff::Timestamp::now().as_millisecond())
+            .is_ok_and(|targets| targets.contains(&stored.id));
         // Notify only for live incoming messages, not history replay.
         let incoming = (unread && !self.syncing).then(|| stored.clone());
         self.emit(Event::Messages {
@@ -339,6 +402,9 @@ impl Worker {
             complete: false,
         });
         self.emit_chat(&chat);
+        if refresh_pin {
+            self.emit_pin(&chat);
+        }
         if let Some(message) = incoming {
             self.emit(Event::Incoming {
                 chat,

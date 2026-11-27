@@ -294,6 +294,9 @@ impl Worker {
                 ids,
             });
         }
+        if before.is_none() {
+            self.emit_pin(&chat);
+        }
         self.send_page(&chat, before.clone(), request);
         if before.is_none() && ChatKind::from_id(&chat) == ChatKind::Group {
             self.request_group_info(&chat, false);

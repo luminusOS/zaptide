@@ -208,6 +208,31 @@ impl Worker {
                 Ok(list) => self.emit(Event::StarredList(list)),
                 Err(error) => log::warn!("could not list starred messages: {error}"),
             },
+            Command::PinMessage { chat, id, seconds } => self.change_pin(chat, id, Some(seconds)),
+            Command::UnpinMessage { chat, id } => self.change_pin(chat, id, None),
+            Command::SetDisappearing { chat, seconds } => self.set_disappearing(chat, seconds),
+            Command::Completed(Completion {
+                done:
+                    Done::PinFinished {
+                        chat,
+                        id,
+                        pinned,
+                        seconds,
+                        at_ms,
+                        result,
+                    },
+                ..
+            }) => self.pin_finished(chat, id, pinned, seconds, at_ms, result),
+            Command::Completed(Completion {
+                done:
+                    Done::DisappearingSet {
+                        chat,
+                        seconds,
+                        at,
+                        result,
+                    },
+                ..
+            }) => self.disappearing_set(chat, seconds, at, result),
             Command::DeleteLocal { chat, id } => self.delete_message_everywhere(chat, id),
             // Starred messages stay until #20 adds a user-facing choice.
             Command::ClearChat(chat) => self.clear_chat_everywhere(chat),
@@ -561,11 +586,29 @@ impl Worker {
             Command::SetArchived(chat, archived) => {
                 let _ = self.archive.set_archived(&chat, archived);
                 self.emit_chat(&chat);
+                // Other devices ignore an archive patch that names no message
+                // range, so bound it by the chat's newest message.
+                let through = self
+                    .archive
+                    .newest_message(&self.canonical_str(&chat))
+                    .ok()
+                    .flatten()
+                    .map(|newest| newest.timestamp)
+                    .or_else(|| {
+                        self.archive
+                            .chat(&self.canonical_str(&chat))
+                            .ok()
+                            .flatten()
+                            .map(|row| row.last_activity)
+                            .filter(|activity| *activity > 0)
+                    });
                 self.tell_phone(&chat, move |client, jid| async move {
+                    let range = through
+                        .map(|through| whatsapp_rust::message_range(through, None, Vec::new()));
                     if archived {
-                        client.chat_actions().archive_chat(&jid, None).await
+                        client.chat_actions().archive_chat(&jid, range).await
                     } else {
-                        client.chat_actions().unarchive_chat(&jid, None).await
+                        client.chat_actions().unarchive_chat(&jid, range).await
                     }
                     .map_err(|error| error.to_string())
                 });
@@ -1056,6 +1099,7 @@ impl Worker {
                 generation: _,
                 done:
                     Done::GroupInfo {
+                        admin,
                         chat,
                         name,
                         participants,
@@ -1068,6 +1112,7 @@ impl Worker {
                 let _ =
                     self.archive
                         .set_group_info(&chat, name.as_deref(), &participants, read_only);
+                let _ = self.archive.set_group_admin(&chat, admin);
                 if let Some(expiration) = ephemeral_expiration {
                     let _ = self.archive.set_ephemeral(
                         &chat,

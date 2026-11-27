@@ -156,7 +156,20 @@ impl Worker {
                 continue;
             };
             let base = base_message(&message);
-            let Some(mut content) = classify(base) else {
+            if let Some(seconds) = base
+                .get_ephemeral_expiration()
+                .filter(|seconds| *seconds > 0)
+            {
+                match batch.archive.backfill_expiry(&source, seconds) {
+                    Ok(true) => updated += 1,
+                    Ok(false) => {}
+                    Err(_) => {
+                        failed += 1;
+                        continue;
+                    }
+                }
+            }
+            let Some(mut content) = classify(&message) else {
                 continue;
             };
             if matches!(source.content, Content::Revoked) {

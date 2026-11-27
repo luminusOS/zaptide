@@ -20,6 +20,7 @@ impl Worker {
         if let Ok(true) = self.archive.set_content(chat, id, &Content::Revoked, false) {
             self.emit_message(chat, id);
             self.emit_chat(chat);
+            self.emit_pin(chat);
         }
     }
 
@@ -57,6 +58,7 @@ impl Worker {
         );
         self.emit_message(chat, id);
         self.emit_chat(chat);
+        self.emit_pin(chat);
         Ok(Some(attempt_id))
     }
 

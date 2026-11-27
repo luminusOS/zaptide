@@ -278,6 +278,7 @@ mod tests {
             height: Some(2),
             path: path.map(PathBuf::from),
             state,
+            view_once: false,
         }
     }
 

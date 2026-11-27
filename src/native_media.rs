@@ -251,6 +251,11 @@ pub enum NativeMediaContent {
         icon: &'static str,
         text: String,
     },
+    /// A line that reports something that happened in the chat, such as a pin.
+    System {
+        icon: &'static str,
+        text: String,
+    },
     VideoPlaceholder,
     UnsupportedPlaceholder,
     Other,
@@ -267,6 +272,7 @@ impl fmt::Debug for NativeMediaContent {
             Self::List { .. } => "List",
             Self::Template { .. } => "Template",
             Self::Call { .. } => "Call",
+            Self::System { .. } => "System",
             Self::VideoPlaceholder => "VideoPlaceholder",
             Self::UnsupportedPlaceholder => "UnsupportedPlaceholder",
             Self::Other => "Other",
@@ -457,6 +463,10 @@ pub fn project_content(message: &Message) -> NativeMessageContent {
             icon: crate::model::call::call_icon(*outgoing, *outcome),
             text: crate::model::call::call_summary(*video, *outgoing, *outcome, *seconds),
         },
+        Content::System { event } => NativeMediaContent::System {
+            icon: event.icon(),
+            text: event.line(message.from_me, message.sender_name.as_deref()),
+        },
         Content::Video { .. } => NativeMediaContent::VideoPlaceholder,
         Content::Unsupported { .. } => NativeMediaContent::UnsupportedPlaceholder,
         _ => NativeMediaContent::Other,
@@ -519,10 +529,14 @@ pub enum NativeMediaAction {
     },
     Open(PathBuf),
     ViewPhotos {
-        paths: Vec<PathBuf>,
+        chat: String,
+        messages: Vec<String>,
         start: usize,
     },
-    ViewVideo(PathBuf),
+    ViewVideo {
+        chat: String,
+        message: String,
+    },
     Download {
         chat: String,
         message: String,
@@ -560,7 +574,7 @@ impl fmt::Debug for NativeMediaAction {
             Self::MessageContact { .. } => formatter.write_str("MessageContact { .. }"),
             Self::Open(_) => formatter.write_str("Open(..)"),
             Self::ViewPhotos { .. } => formatter.write_str("ViewPhotos { .. }"),
-            Self::ViewVideo(_) => formatter.write_str("ViewVideo(..)"),
+            Self::ViewVideo { .. } => formatter.write_str("ViewVideo { .. }"),
             Self::Download { .. } => formatter.write_str("Download { .. }"),
             Self::VoteQuiz { .. } => formatter.write_str("VoteQuiz { .. }"),
             Self::VotePoll { .. } => formatter.write_str("VotePoll { .. }"),
@@ -663,6 +677,7 @@ mod tests {
             height: Some(480),
             path: Some(PathBuf::from("/private/user/photo.jpg")),
             state: MediaState::Idle,
+            view_once: false,
         }
     }
 

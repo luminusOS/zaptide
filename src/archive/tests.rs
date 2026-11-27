@@ -74,6 +74,7 @@ fn group_message_id_collision_keeps_first_sender_and_content() {
             height: None,
             path: Some("/synthetic/image.jpg".into()),
             state: Default::default(),
+            view_once: false,
         },
     };
     original.reactions.push(crate::model::Reaction {
@@ -866,6 +867,7 @@ fn media_paths_are_written_into_the_content() {
             height: None,
             path: None,
             state: Default::default(),
+            view_once: false,
         },
     };
     archive.insert_message(&picture, None).expect("insert");
@@ -1089,6 +1091,7 @@ fn history_replay_preserves_revocation_and_matching_download_path() {
             height: Some(2),
             path: None,
             state: Default::default(),
+            view_once: false,
         },
     };
     archive

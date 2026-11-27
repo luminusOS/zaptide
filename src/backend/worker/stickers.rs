@@ -411,6 +411,7 @@ mod tests {
                 height: Some(2),
                 path: Some(path.to_path_buf()),
                 state: Default::default(),
+                view_once: false,
             },
             animated: false,
         };

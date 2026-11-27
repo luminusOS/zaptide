@@ -97,7 +97,7 @@ impl Worker {
             forwarded: false,
             thumbnail: None,
         };
-        self.store_message(row, Some(message.encode_to_vec()), None);
+        self.store_message_with_expiry(row, Some(message.encode_to_vec()), None, expiration);
         self.answer_sends
             .insert(id.clone(), (chat.clone(), message_id.clone()));
         tokio::spawn(send_outgoing(

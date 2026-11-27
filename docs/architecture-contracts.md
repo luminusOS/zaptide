@@ -148,6 +148,30 @@ Incoming chat deletions and clears are bounded by the action's message range.
 Without a valid range, keep the archive unchanged. The action timestamp says
 when the deletion was requested, not which messages it covered.
 
+## Pins and disappearing messages
+
+Pins live in their own `pins` table, keyed by chat and message id. Each change
+carries the sender's timestamp, the newest wins, and an unpin is kept as a
+marker, so the order history and live events arrive in cannot undo a later
+change. Deleting a message drops its pin by trigger, and chat identity merges
+copy pins with the stars. `Event::Pinned` is private content and waits for
+privacy confirmation like the other chat events. A pin or timer change reaches
+the archive only after WhatsApp accepted it.
+
+A message with a timer remembers when it runs out in `messages.expires_at`
+(send time plus the timer it was sent with, never the chat's current timer).
+`messages.kept` records a keep event recognized by the app. A replay cannot
+extend a known deadline and newly loaded pages and previews exclude overdue
+messages unless kept. `pump_expiry` removes due rows at most every 30 seconds,
+up to 200 at a time. It queues cleanup only for files it can identify in the
+app-managed cache, and preserves files in use by another message. Expiry is
+local and never queues a remote deletion.
+
+Chat events such as a pin or a timer change are `Content::System` rows. They
+are stored like messages so they keep their place, but they skip unread
+counts, receipts and notifications. They do not advance chat activity or
+bound archive and deletion requests sent to the phone.
+
 ## Sidebar scrolling
 
 The scrolled window owns the proxy adjustment; the list owns the real

@@ -128,6 +128,7 @@ impl Worker {
                     let _ = Completion {
                         generation: session_generation,
                         done: Done::GroupInfo {
+                            admin,
                             chat,
                             name: metadata
                                 .subject

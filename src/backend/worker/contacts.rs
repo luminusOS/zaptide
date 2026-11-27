@@ -53,7 +53,7 @@ impl Worker {
             forwarded: false,
             thumbnail: None,
         };
-        self.store_message(row, Some(message.encode_to_vec()), None);
+        self.store_message_with_expiry(row, Some(message.encode_to_vec()), None, expiration);
         tokio::spawn(send_outgoing_with_kind(
             OutgoingSession {
                 client,

@@ -3,6 +3,7 @@
 //! A dedicated tokio runtime owns the WhatsApp connection, archive, and media
 //! work. Commands and events cross channels, and events wake the UI.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -229,6 +230,24 @@ pub enum Done {
         stored: tokio::sync::mpsc::UnboundedSender<bool>,
     },
     MediaSwept(MediaSwept),
+    /// Result of pinning or unpinning a message. `Ok` carries the id of the
+    /// pin message that was sent.
+    PinFinished {
+        chat: ChatId,
+        id: String,
+        pinned: bool,
+        seconds: u32,
+        at_ms: i64,
+        result: Result<String, String>,
+    },
+    /// Result of changing a chat's disappearing-messages timer. `Ok` carries
+    /// the id of the message sent for a 1:1 chat, empty for a group.
+    DisappearingSet {
+        chat: ChatId,
+        seconds: u32,
+        at: i64,
+        result: Result<String, String>,
+    },
     Downloaded {
         chat: ChatId,
         id: String,
@@ -383,6 +402,8 @@ pub enum Done {
     },
     /// Internal group metadata result.
     GroupInfo {
+        /// Whether this account is an admin of the group.
+        admin: bool,
         chat: ChatId,
         name: Option<String>,
         participants: Vec<String>,
@@ -526,6 +547,24 @@ pub enum Command {
     },
     /// Asks for the starred messages of one chat.
     LoadStarred(ChatId),
+    /// Pins a message for everyone in the chat. `seconds` is one of the
+    /// durations WhatsApp offers: 24 hours, 7 days or 30 days.
+    PinMessage {
+        chat: ChatId,
+        id: String,
+        seconds: u32,
+    },
+    /// Removes a pin for everyone in the chat.
+    UnpinMessage {
+        chat: ChatId,
+        id: String,
+    },
+    /// Sets the chat's disappearing-messages timer for everyone; `0` turns it
+    /// off. Groups accept it from admins only.
+    SetDisappearing {
+        chat: ChatId,
+        seconds: u32,
+    },
     /// Removes one message locally and asks the other linked devices to do
     /// the same ("Delete for me"). Sent only after the person confirmed it;
     /// the worker verifies the message and queues the request.
@@ -816,6 +855,12 @@ pub enum Event {
     },
     /// Starred messages of one chat, newest first.
     StarredList(Vec<crate::archive::StarredMessage>),
+    /// The featured pin and all active pin IDs for a chat.
+    Pinned {
+        chat: ChatId,
+        pin: Box<Option<crate::archive::PinnedMessage>>,
+        active_ids: HashSet<String>,
+    },
     /// Starred stickers, imported packs, and every distinct sticker for the picker.
     Stickers {
         saved: Vec<PathBuf>,

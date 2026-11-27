@@ -2,9 +2,9 @@
 
 use std::collections::HashSet;
 
-use super::{Content, LinkPreview, first_link, media, non_empty};
+use super::{Content, LinkPreview, Media, first_link, media, non_empty};
 use crate::model::unsupported as label;
-use whatsapp_rust::prelude::{MessageExt, wa};
+use whatsapp_rust::prelude::wa;
 
 /// Most buttons, list rows and characters per string kept from a sender, so
 /// one crafted message cannot build thousands of widgets.
@@ -12,15 +12,40 @@ pub(super) const MAX_INTERACTIVE_ITEMS: usize = 100;
 pub(super) const MAX_INTERACTIVE_BUTTONS: usize = 10;
 pub(super) const MAX_INTERACTIVE_CHARS: usize = 1_000;
 
-/// Wrappers nested deeper than this are left in place and read as unsupported,
-/// so a crafted chain cannot make the peeling loop long.
+/// Maximum passes through the wrapper order, including repeated wrapper kinds.
 pub(super) const MAX_WRAPPER_DEPTH: usize = 4;
 
-/// The message a person sees. `get_base_message` removes the transport
-/// wrappers; the ones peeled here carry a normal message that it leaves alone.
+/// The message a person sees after removing transport and display wrappers.
 pub(super) fn base_message(message: &wa::Message) -> &wa::Message {
-    let mut current = message.get_base_message();
+    peel_wrappers(message).0
+}
+
+fn peel_wrappers(message: &wa::Message) -> (&wa::Message, bool) {
+    let mut current = message;
+    let mut view_once = false;
+    macro_rules! peel {
+        ($field:ident, $view_once:expr) => {
+            if let Some(inner) = current
+                .$field
+                .as_option()
+                .and_then(|wrapper| wrapper.message.as_option())
+            {
+                current = inner;
+                view_once |= $view_once;
+            }
+        };
+    }
     for _ in 0..MAX_WRAPPER_DEPTH {
+        let before = current;
+        // Preserve the SDK's peeling order so the marker follows the same
+        // wrapper path as the body and download keys.
+        peel!(device_sent_message, false);
+        peel!(ephemeral_message, false);
+        peel!(view_once_message, true);
+        peel!(view_once_message_v2, true);
+        peel!(view_once_message_v2_extension, true);
+        peel!(document_with_caption_message, false);
+        peel!(edited_message, false);
         let inner = [
             &current.group_mentioned_message,
             &current.associated_child_message,
@@ -29,19 +54,29 @@ pub(super) fn base_message(message: &wa::Message) -> &wa::Message {
         ]
         .into_iter()
         .find_map(|wrapper| wrapper.as_option()?.message.as_option());
-        let Some(inner) = inner else {
+        if let Some(inner) = inner {
+            current = inner;
+        }
+        if std::ptr::eq(current, before) {
             break;
-        };
-        current = inner.get_base_message();
+        }
     }
-    current
+    (current, view_once)
 }
 
 /// Converts a protocol message to visible content, or `None` for internal traffic.
+///
+/// Pass the message as received so wrappers can mark the selected media.
 pub(super) fn classify(message: &wa::Message) -> Option<Content> {
-    let base = base_message(message);
-    if let Some(text) = base.text_content() {
-        let preview = base.extended_text_message.as_option().and_then(|extended| {
+    let (base, view_once) = peel_wrappers(message);
+    let extended = base.extended_text_message.as_option();
+    let text = base
+        .conversation
+        .as_deref()
+        .filter(|text| !text.is_empty())
+        .or_else(|| extended.and_then(|message| message.text.as_deref()));
+    if let Some(text) = text {
+        let preview = extended.and_then(|extended| {
             let title = non_empty(&extended.title);
             let description = non_empty(&extended.description);
             let has_picture = extended
@@ -69,12 +104,15 @@ pub(super) fn classify(message: &wa::Message) -> Option<Content> {
     if let Some(image) = base.image_message.as_option() {
         return Some(Content::Image {
             caption: non_empty(&image.caption),
-            media: media(
-                image.mimetype.as_ref(),
-                image.file_length,
-                image.width,
-                image.height,
-            ),
+            media: Media {
+                view_once: view_once || image.view_once == Some(true),
+                ..media(
+                    image.mimetype.as_ref(),
+                    image.file_length,
+                    image.width,
+                    image.height,
+                )
+            },
         });
     }
     if let Some(video) = base
@@ -84,19 +122,25 @@ pub(super) fn classify(message: &wa::Message) -> Option<Content> {
     {
         return Some(Content::Video {
             caption: non_empty(&video.caption),
-            media: media(
-                video.mimetype.as_ref(),
-                video.file_length,
-                video.width,
-                video.height,
-            ),
+            media: Media {
+                view_once: view_once || video.view_once == Some(true),
+                ..media(
+                    video.mimetype.as_ref(),
+                    video.file_length,
+                    video.width,
+                    video.height,
+                )
+            },
             seconds: video.seconds,
             gif: video.gif_playback.unwrap_or(false),
         });
     }
     if let Some(audio) = base.audio_message.as_option() {
         return Some(Content::Audio {
-            media: media(audio.mimetype.as_ref(), audio.file_length, None, None),
+            media: Media {
+                view_once: view_once || audio.view_once == Some(true),
+                ..media(audio.mimetype.as_ref(), audio.file_length, None, None)
+            },
             seconds: audio.seconds,
             voice_note: audio.ptt.unwrap_or(false),
             waveform: audio.waveform.clone().unwrap_or_default(),

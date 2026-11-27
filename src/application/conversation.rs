@@ -1085,6 +1085,7 @@ mod tests {
                         height: Some(16),
                         path: Some(path.clone()),
                         state: MediaState::Idle,
+                        view_once: false,
                     },
                 };
                 message

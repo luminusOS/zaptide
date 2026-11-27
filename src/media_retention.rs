@@ -157,6 +157,19 @@ pub fn is_held(path: &Path) -> bool {
     held().iter().any(|held| held == path)
 }
 
+/// The hold registry and operation must use the same lock so a viewer cannot
+/// acquire a hold between the check and the unlink.
+pub(crate) fn while_unheld<T>(path: &Path, operation: impl FnOnce() -> T) -> Option<T> {
+    let held = held();
+    if held
+        .iter()
+        .any(|held| held == path || held.canonicalize().is_ok_and(|resolved| resolved == path))
+    {
+        return None;
+    }
+    Some(operation())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

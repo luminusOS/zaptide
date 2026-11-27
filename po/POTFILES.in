@@ -18,6 +18,7 @@ src/application/dispatch/backend_events.rs
 src/application/document_safety.rs
 src/application/helpers.rs
 src/application/link_page.rs
+src/application/pins.rs
 src/application/poll_runtime_tests.rs
 src/application/profile_dialog.rs
 src/application/reaction_drawer.rs

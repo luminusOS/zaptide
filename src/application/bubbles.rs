@@ -49,15 +49,19 @@ pub(super) fn set_delivery_ticks(area: &gtk::DrawingArea, glyph: &str) {
     area.queue_draw();
 }
 
+fn view_once_label(message: &crate::model::Message) -> Option<String> {
+    message.content.view_once().then(|| gettext("View once"))
+}
+
 /// The marks that precede the time in a bubble's footer, each followed by a
 /// separator, or nothing for a plain message.
 pub(super) fn footer_notes(message: &crate::model::Message) -> String {
-    let mut notes = Vec::new();
+    let mut notes: Vec<String> = view_once_label(message).into_iter().collect();
     if message.forwarded {
-        notes.push("Forwarded");
+        notes.push("Forwarded".to_owned());
     }
     if message.edited {
-        notes.push("Edited");
+        notes.push("Edited".to_owned());
     }
     if notes.is_empty() {
         String::new()
@@ -78,8 +82,8 @@ pub(super) fn decorative_star(size: i32) -> gtk::Image {
         .build()
 }
 
-/// What a screen reader announces for a bubble: the content, then the time,
-/// the starred mark when there is one, and the delivery state.
+/// What a screen reader announces for a bubble: the content (including the
+/// view-once mark when present), the time, the starred mark, and delivery.
 pub(super) fn accessible_label(
     prefix: &str,
     sender: &str,
@@ -213,7 +217,7 @@ pub(super) fn message_row<S>(
     let notes = footer_notes(&message);
     let reactions = reaction_summary(&message.reactions);
     let mentions = mention_labels(&message, contacts);
-    let content = format!(
+    let mut content = format!(
         "{}{}{}",
         crate::safety::display_mentions(&transcript_text(&message), &mentions),
         if quote.is_empty() {
@@ -223,6 +227,10 @@ pub(super) fn message_row<S>(
         },
         reactions,
     );
+    if let Some(marker) = view_once_label(&message) {
+        content.push_str(" · ");
+        content.push_str(&marker);
+    }
     let accessible_label = accessible_label(
         prefix,
         &sender,
@@ -257,6 +265,45 @@ pub(super) fn message_row<S>(
         audio_registry,
         selected: None,
     }
+}
+
+#[cfg(test)]
+#[test]
+fn view_once_marker_is_announced_only_for_view_once_bubbles() {
+    let row_for = |view_once| {
+        let mut message = super::tests::grouping_message("synthetic", "Ana", false, 0);
+        message.content = crate::model::Content::Image {
+            caption: Some("synthetic caption".into()),
+            media: crate::model::Media {
+                mime: "image/jpeg".into(),
+                size: 0,
+                width: None,
+                height: None,
+                path: None,
+                state: Default::default(),
+                view_once,
+            },
+        };
+        message_row(
+            message,
+            &Default::default(),
+            (),
+            "",
+            None,
+            RowFlags {
+                show_sender: true,
+                show_timestamp: true,
+                starred: false,
+            },
+            Default::default(),
+        )
+    };
+    let plain = row_for(false);
+    let marked = row_for(true);
+    let marker = gettext("View once");
+    assert!(!plain.accessible_label.contains(&marker));
+    assert!(marked.accessible_label.contains(&marker));
+    assert_eq!(plain.message.summary(), marked.message.summary());
 }
 
 /// A pill under the bubble; clicking it adds this reaction, or removes ours.

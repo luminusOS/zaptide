@@ -188,6 +188,16 @@ impl Archive {
              WHERE excluded.updated_at > stars.updated_at",
             params![alias, canonical],
         )?;
+        let merged_pins = self.connection.execute(
+            "INSERT INTO pins (chat, id, pinned, pinned_by, pinned_at_ms, expires_at_ms)
+             SELECT ?2, id, pinned, pinned_by, pinned_at_ms, expires_at_ms FROM pins WHERE chat = ?1
+             ON CONFLICT(chat, id) DO UPDATE SET pinned = excluded.pinned,
+                 pinned_by = excluded.pinned_by, pinned_at_ms = excluded.pinned_at_ms,
+                 expires_at_ms = excluded.expires_at_ms
+             WHERE excluded.pinned_at_ms > pins.pinned_at_ms
+                OR (excluded.pinned_at_ms = pins.pinned_at_ms AND excluded.pinned < pins.pinned)",
+            params![alias, canonical],
+        )?;
         self.connection.execute(
             "INSERT OR IGNORE INTO polls (chat, id, creator, secret)
              SELECT ?2, id, creator, secret FROM polls WHERE chat = ?1",
@@ -225,6 +235,7 @@ impl Archive {
         )?;
         for table in [
             "stars",
+            "pins",
             "polls",
             "poll_history",
             "poll_votes",
@@ -241,7 +252,7 @@ impl Archive {
         if let Some(unread) = unread {
             self.set_unread(canonical, unread)?;
         }
-        Ok(changed > 0 || contacts > 0 || moved > 0)
+        Ok(changed > 0 || contacts > 0 || moved > 0 || merged_pins > 0)
     }
 
     fn merged_identity_unread(&self, alias: &str, canonical: &str) -> Result<u32> {
@@ -449,6 +460,7 @@ mod tests {
                         height: None,
                         path: (chat == downloaded_chat).then(|| "/synthetic/image.jpg".into()),
                         state: Default::default(),
+                        view_once: false,
                     },
                 };
                 archive.insert_message(&row, Some(chat.as_bytes())).unwrap();

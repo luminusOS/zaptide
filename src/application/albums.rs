@@ -19,7 +19,10 @@ pub(super) fn album_roles(
     const MAX_PHOTOS: usize = 10;
     const GAP_SECONDS: i64 = 2 * 60;
     let photo = |message: &crate::model::Message| {
-        matches!(message.content, Content::Image { .. }) && message.quoted.is_none()
+        // A view-once photo keeps its own bubble, and with it its marker.
+        matches!(message.content, Content::Image { .. })
+            && message.quoted.is_none()
+            && !message.content.view_once()
     };
     let captioned = |message: &crate::model::Message| matches!(&message.content, Content::Image { caption: Some(text), .. } if !text.is_empty());
     let joins = |previous: &crate::model::Message, next: &crate::model::Message, index: usize| {

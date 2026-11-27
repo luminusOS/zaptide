@@ -164,6 +164,7 @@ fn media(
         height,
         path,
         state: Default::default(),
+        view_once: false,
     }
 }
 
