@@ -1292,6 +1292,14 @@ msgstr "As chamadas de voz e de vídeo aparecem aqui"
 msgid "Message starred"
 msgstr "Mensagem favoritada"
 
+#: src/application/storage_preferences.rs:16
+msgid "Choose a Download Folder"
+msgstr "Escolher pasta de downloads"
+
+#: src/application/storage_preferences.rs:37
+msgid "Could not open the folder picker"
+msgstr "Não foi possível abrir o seletor de pastas"
+
 #: src/application/themes.rs:54
 msgid "Could not save theme preference"
 msgstr "Não foi possível salvar a preferência de tema"

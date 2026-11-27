@@ -1284,6 +1284,14 @@ msgstr ""
 msgid "Message starred"
 msgstr ""
 
+#: src/application/storage_preferences.rs:16
+msgid "Choose a Download Folder"
+msgstr ""
+
+#: src/application/storage_preferences.rs:37
+msgid "Could not open the folder picker"
+msgstr ""
+
 #: src/application/themes.rs:54
 msgid "Could not save theme preference"
 msgstr ""
