@@ -285,6 +285,13 @@ pub enum Done {
         chat: ChatId,
         protocol_id: String,
     },
+    /// Result of sending one queued deletion to the other linked devices.
+    RemoteDeletionFinished {
+        attempt_id: u64,
+        key: String,
+        bound: i64,
+        success: bool,
+    },
     /// Completes one optimistic revoke attempt, unless the phone confirmed it first.
     RevokeFinished {
         attempt_id: u64,
@@ -410,6 +417,9 @@ pub enum Command {
     /// Deletes downloaded attachments older than this many days; `None`
     /// keeps them.
     SetMediaRetention(Option<u32>),
+    /// Custom folder newly downloaded attachments are written to; `None`
+    /// returns to the application's own cache directory.
+    SetMediaDownloadDir(Option<PathBuf>),
     /// Turns link previews on or off for this account, synced with the phone.
     SetLinkPreviews(bool),
     /// Shows this account as online or offline. WhatsApp holds the phone's
@@ -516,10 +526,19 @@ pub enum Command {
     },
     /// Asks for the starred messages of one chat.
     LoadStarred(ChatId),
+    /// Removes one message locally and asks the other linked devices to do
+    /// the same ("Delete for me"). Sent only after the person confirmed it;
+    /// the worker verifies the message and queues the request.
     DeleteLocal {
         chat: ChatId,
         id: String,
     },
+    /// Clears a chat's messages, synced with the phone. Starred messages are
+    /// kept until #20 adds a user-facing choice; the chat stays in the list.
+    ClearChat(ChatId),
+    /// Deletes a chat entirely, synced with the phone. It reappears, with
+    /// default preferences, the next time new activity arrives for it.
+    DeleteChat(ChatId),
     /// Sends files with the caption on the first. Paths in `documents` go
     /// as documents even when they are images, videos, or audio.
     SendFiles {
@@ -778,6 +797,9 @@ pub enum Event {
         chat: ChatId,
         id: String,
     },
+    /// A chat was deleted here or on another device, and is now gone from
+    /// the list; it reappears on its own next activity.
+    ChatDeleted(ChatId),
     /// A message was starred or unstarred here or on another device.
     StarChanged {
         chat: ChatId,

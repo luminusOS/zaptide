@@ -282,6 +282,57 @@ impl Worker {
                         .set_locked_at(&chat, locked, update.timestamp.timestamp_millis());
                 self.emit_chat(&chat);
             }
+            E::DeleteChatUpdate(update) => {
+                let chat = self.canonical(&update.jid);
+                let Some(through) = deletion_bound(
+                    update
+                        .action
+                        .message_range
+                        .as_option()
+                        .and_then(|range| range.last_message_timestamp),
+                ) else {
+                    log::warn!("ignored a chat deletion that names no bound");
+                    return;
+                };
+                if self.archive.delete_chat(&chat, through).unwrap_or(false) {
+                    self.emit(Event::ChatDeleted(chat));
+                } else {
+                    self.emit(Event::RefreshTranscript);
+                    self.emit_chat(&chat);
+                }
+            }
+            E::ClearChatUpdate(update) => {
+                let chat = self.canonical(&update.jid);
+                let Some(through) = deletion_bound(
+                    update
+                        .action
+                        .message_range
+                        .as_option()
+                        .and_then(|range| range.last_message_timestamp),
+                ) else {
+                    log::warn!("ignored a chat clear that names no bound");
+                    return;
+                };
+                let _ = self
+                    .archive
+                    .clear_chat_messages(&chat, through, !update.delete_starred);
+                self.emit(Event::RefreshTranscript);
+                self.emit_chat(&chat);
+            }
+            E::DeleteMessageForMeUpdate(update) => {
+                let chat = self.canonical(&update.chat_jid);
+                if self
+                    .archive
+                    .delete_message(&chat, &update.message_id)
+                    .unwrap_or(false)
+                {
+                    self.emit(Event::MessageDeleted {
+                        chat: chat.clone(),
+                        id: update.message_id.clone(),
+                    });
+                    self.emit_chat(&chat);
+                }
+            }
             E::MarkChatAsReadUpdate(update) => {
                 let chat = self.canonical(&update.jid);
                 self.ensure_chat(&chat, None);
@@ -375,5 +426,31 @@ impl Worker {
             E::CallLogSync(sync) => self.on_call_log(sync),
             _ => {}
         }
+    }
+}
+
+fn deletion_bound(range_end: Option<i64>) -> Option<i64> {
+    range_end.map(seconds).filter(|bound| *bound > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_message_range_bounds_a_deletion() {
+        assert_eq!(deletion_bound(Some(100)), Some(100));
+    }
+
+    #[test]
+    fn millisecond_bounds_are_read_as_seconds() {
+        assert_eq!(deletion_bound(Some(1_700_000_000_000)), Some(1_700_000_000));
+    }
+
+    #[test]
+    fn an_unknown_reach_deletes_nothing() {
+        assert_eq!(deletion_bound(None), None);
+        assert_eq!(deletion_bound(Some(0)), None);
+        assert_eq!(deletion_bound(Some(-5)), None);
     }
 }

@@ -1037,7 +1037,7 @@ impl Worker {
     /// Clears staging files left by transfers that a crash or a quit cut
     /// short, off the async threads.
     pub(super) fn remove_stale_staging(&self) {
-        let dir = self.dirs.media_cache_dir();
+        let dir = self.effective_media_dir();
         tokio::task::spawn_blocking(move || {
             let removed =
                 remove_stale_staging_files(&dir, STALE_STAGING_AGE, std::time::SystemTime::now());
@@ -1080,7 +1080,7 @@ impl Worker {
         let session_generation = self.session_generation;
         let session_generation_shared = self.session_generation_shared.clone();
         let session_cache_lock = self.session_cache_lock.clone();
-        let dir = self.dirs.media_cache_dir();
+        let dir = self.effective_media_dir();
         let me = self.me();
         let (context, quoted) = self.quote_context(&chat, quoting.as_deref());
         tokio::spawn(async move {
@@ -1207,7 +1207,7 @@ impl Worker {
         let session_generation = self.session_generation;
         let session_generation_shared = self.session_generation_shared.clone();
         let session_cache_lock = self.session_cache_lock.clone();
-        let dir = self.dirs.media_cache_dir();
+        let dir = self.effective_media_dir();
         let me = self.me();
         let (context, quoted) = self.quote_context(&chat, request.quoting.as_deref());
         tokio::spawn(async move {
@@ -1283,7 +1283,7 @@ impl Worker {
         let session_generation = self.session_generation;
         let session_generation_shared = self.session_generation_shared.clone();
         let session_cache_lock = self.session_cache_lock.clone();
-        let dir = self.dirs.media_cache_dir();
+        let dir = self.effective_media_dir();
         let me = self.me();
         tokio::spawn(async move {
             let outcome = async {
@@ -1360,7 +1360,7 @@ impl Worker {
         let session_generation = self.session_generation;
         let session_generation_shared = self.session_generation_shared.clone();
         let session_cache_lock = self.session_cache_lock.clone();
-        let dir = self.dirs.media_cache_dir();
+        let dir = self.effective_media_dir();
         let me = self.me();
         // Show the sticker at once, as text sends do; the upload fills in
         // the same row, or marks it failed.

@@ -359,6 +359,10 @@ impl NativeApplication {
             Some("win.copy-transcript"),
         );
         self.chat_menu.append_section(None, &section);
+        let section = gtk::gio::Menu::new();
+        section.append(Some(&gettext("Clear Chat")), Some("win.chat-clear"));
+        section.append(Some(&gettext("Delete Chat")), Some("win.chat-delete"));
+        self.chat_menu.append_section(None, &section);
     }
 
     /// Archived chats with unread messages, as counted on the phone.
@@ -422,7 +426,18 @@ impl NativeApplication {
                     self.request_avatar(&chat.id);
                     self.update_chat(chat)
                 }
+                ChatChange::Remove(id) => self.remove_chat(&id),
             }
+        }
+    }
+
+    fn remove_chat(&mut self, id: &str) {
+        if let Some(index) = self.chat_snapshots.iter().position(|known| known.id == id) {
+            self.chat_snapshots.remove(index);
+            self.chats_dirty = true;
+        }
+        if self.open_chat.active_chat.as_deref() == Some(id) {
+            self.clear_active_chat();
         }
     }
 
@@ -492,6 +507,25 @@ impl NativeApplication {
                 chat: chat.to_owned(),
                 receipts: self.settings.send_read_receipts && !self.account_receipts_off,
             });
+        }
+    }
+
+    pub(super) fn send_chat_deletion(
+        &self,
+        account: crate::account::AccountId,
+        chat: String,
+        delete_chat: bool,
+    ) {
+        if self.active_account != account || self.open_chat.active_chat.as_ref() != Some(&chat) {
+            return;
+        }
+        if let Some(backend) = &self.backend {
+            let command = if delete_chat {
+                crate::backend::Command::DeleteChat(chat)
+            } else {
+                crate::backend::Command::ClearChat(chat)
+            };
+            backend.send(command);
         }
     }
 

@@ -124,6 +124,7 @@ impl Worker {
             Command::SetLinkPreviews(enabled) => self.set_link_previews(enabled),
             Command::SetOnline(online) => self.set_online(online),
             Command::SetMediaRetention(days) => self.set_media_retention(days),
+            Command::SetMediaDownloadDir(dir) => self.set_media_download_dir(dir),
             Command::Completed(Completion {
                 done: Done::MediaSwept(swept),
                 ..
@@ -207,15 +208,20 @@ impl Worker {
                 Ok(list) => self.emit(Event::StarredList(list)),
                 Err(error) => log::warn!("could not list starred messages: {error}"),
             },
-            Command::DeleteLocal { chat, id } => {
-                if let Ok(true) = self.archive.delete_message(&chat, &id) {
-                    self.emit(Event::MessageDeleted {
-                        chat: chat.clone(),
-                        id,
-                    });
-                    self.emit_chat(&chat);
-                }
-            }
+            Command::DeleteLocal { chat, id } => self.delete_message_everywhere(chat, id),
+            // Starred messages stay until #20 adds a user-facing choice.
+            Command::ClearChat(chat) => self.clear_chat_everywhere(chat),
+            Command::DeleteChat(chat) => self.delete_chat_everywhere(chat),
+            Command::Completed(Completion {
+                generation: _,
+                done:
+                    Done::RemoteDeletionFinished {
+                        attempt_id,
+                        key,
+                        bound,
+                        success,
+                    },
+            }) => self.remote_deletion_finished(attempt_id, &key, bound, success),
             Command::Completed(Completion {
                 generation: _,
                 done:

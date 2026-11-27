@@ -62,6 +62,7 @@ mod profile;
 mod protocol;
 mod reactions;
 mod reads;
+mod remote_delete;
 mod retention;
 mod revoke;
 mod session;
@@ -958,6 +959,9 @@ struct WorkerParts {
 struct Worker {
     privacy: PrivacyGate,
     read_sync: ReadSync,
+    /// Confirmed deletions on their way to the other devices; the archive
+    /// holds the durable queue.
+    remote_delete: remote_delete::RemoteDeleteSync,
     poll_decrypting: usize,
     poll_history: poll_history::Requests,
     /// Answer message id to (chat, buttons message id), until the send ends.
@@ -969,6 +973,8 @@ struct Worker {
     presence_wish: tokio::sync::watch::Sender<presence::PresenceWish>,
     calls: calls::Calls,
     retention: retention::Retention,
+    /// Custom folder for new downloads; `None` means `dirs.media_cache_dir()`.
+    media_dir_override: Option<PathBuf>,
     dirs: AppDirs,
     events: std::sync::mpsc::Sender<Event>,
     commands: mpsc::UnboundedSender<Command>,
@@ -1210,6 +1216,7 @@ impl Worker {
             deferred_incoming: std::collections::VecDeque::new(),
             read_elsewhere: Default::default(),
             read_sync: ReadSync::default(),
+            remote_delete: Default::default(),
             poll_decrypting: 0,
             poll_history: Default::default(),
             answer_sends: HashMap::new(),
@@ -1219,7 +1226,24 @@ impl Worker {
             presence_wish: tokio::sync::watch::Sender::new(Default::default()),
             calls: Default::default(),
             retention: Default::default(),
+            media_dir_override: None,
         }
+    }
+
+    /// Where new attachments go: the configured folder, as long as it can
+    /// currently be written to; the application's own cache directory
+    /// otherwise, including while none was chosen. Checked fresh each call
+    /// so a drive unplugged after the folder was chosen is noticed rather
+    /// than failing every download.
+    fn effective_media_dir(&self) -> PathBuf {
+        match &self.media_dir_override {
+            Some(custom) if crate::settings::directory_usable(custom) => custom.clone(),
+            _ => self.dirs.media_cache_dir(),
+        }
+    }
+
+    pub(super) fn set_media_download_dir(&mut self, dir: Option<PathBuf>) {
+        self.media_dir_override = dir;
     }
 
     /// Handles one command, event or timer, or else one maintenance step.
@@ -1265,6 +1289,7 @@ impl Worker {
                 self.pump_group_info();
                 self.pump_newsletter_info();
                 self.pump_read_sync();
+                self.pump_remote_deletions();
                 self.pump_poll_votes();
                 self.pump_poll_history();
                 self.pump_media_retention();

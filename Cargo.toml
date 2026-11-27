@@ -76,7 +76,7 @@ http = "1"
 tokio-websockets = { version = "0.13.3", features = ["client"] }
 # SQLCipher encrypts the archive; the device store shares the same library.
 # Bundle OpenSSL so all release platforms use the same encryption provider.
-rusqlite = { version = "0.41", features = ["bundled-sqlcipher-vendored-openssl"] }
+rusqlite = { version = "0.43", features = ["bundled-sqlcipher-vendored-openssl"] }
 # Keys the device store's pooled connections. Already included through whatsapp-rust.
 diesel = { version = "2.3", default-features = false, features = ["sqlite"] }
 getrandom = "0.4"
@@ -93,7 +93,7 @@ url = "2"
 url-batch = { package = "url", path = "vendor/absolute-url", features = ["batch-research"] }
 idna-batch = { package = "idna", path = "vendor/idna-1.1.0", features = ["research-batch"] }
 icu_normalizer = { version = "=2.3.0", default-features = false, features = ["experimental_linear_ccc"] }
-jiff = "0.2"
+jiff = "1.0"
 mime_guess = "2"
 # Promotes downloads with renameat2(RENAME_NOREPLACE). Already in the tree
 # through tempfile, polling and async-io.
@@ -132,7 +132,6 @@ png = "0.18"
 
 [patch.crates-io]
 icu_normalizer = { path = "vendor/icu_normalizer" }
-libsqlite3-sys = { path = "vendor/libsqlite3-sys-0.39.1" }
 
 [profile.release]
 lto = "thin"
