@@ -1,6 +1,7 @@
 //! Small pure helpers for the application component.
 
 use super::*;
+use phonenumber::{Mode, PhoneNumber, Type, country::Source, metadata::DATABASE};
 
 pub(super) fn selection_title(count: usize) -> String {
     match count {
@@ -130,48 +131,7 @@ pub(super) fn normalized_phone(input: &str) -> Option<String> {
 }
 
 pub(super) fn new_contact_phone(input: &str, iso: &str) -> Option<(String, String)> {
-    use phonenumber::{Mode, Type, country::Source, metadata::DATABASE};
-
-    let is_space = |c| matches!(c, ' ' | '\u{a0}' | '\u{202f}');
-    let input = input.trim_matches(is_space);
-    let body = input.strip_prefix('+').unwrap_or(input);
-    if !body
-        .chars()
-        .all(|c| c.is_ascii_digit() || is_space(c) || matches!(c, '(' | ')' | '-'))
-    {
-        return None;
-    }
-    let digits: String = body.chars().filter(char::is_ascii_digit).collect();
-    let is_national = !input.starts_with('+') && !digits.starts_with("00");
-    let mut number = if input.starts_with('+') {
-        phonenumber::parse(None, format!("+{digits}")).ok()?
-    } else if let Some(digits) = digits.strip_prefix("00") {
-        phonenumber::parse(None, format!("+{digits}")).ok()?
-    } else {
-        let number = phonenumber::parse(Some(iso.parse().ok()?), digits).ok()?;
-        let source = number.code().source();
-        let is_shared_trunk_prefix = source == Source::Number
-            && DATABASE
-                .by_id(iso)
-                .and_then(|metadata| metadata.national_prefix())
-                == Some(number.code().value().to_string().as_str());
-        if source != Source::Default && !is_shared_trunk_prefix {
-            return None;
-        }
-        number
-    };
-    if !number.is_valid() {
-        return None;
-    }
-    // Infer Argentina's WhatsApp mobile form only for national input.
-    if is_national
-        && number.country().id() == Some(phonenumber::country::AR)
-        && number.number_type(&DATABASE) == Type::FixedLine
-    {
-        number = phonenumber::parse(None, format!("+549{}", number.national()))
-            .ok()
-            .filter(phonenumber::is_valid)?;
-    }
+    let number = parse_contact_phone(input, iso)?;
     let e164 = number.format().mode(Mode::E164).to_string();
     let digits = e164.strip_prefix('+')?;
     if digits.len() > 15 {
@@ -187,6 +147,61 @@ pub(super) fn new_contact_phone(input: &str, iso: &str) -> Option<(String, Strin
         None => formatted,
     };
     Some((digits.to_owned(), preview))
+}
+
+fn parse_contact_phone(input: &str, iso: &str) -> Option<PhoneNumber> {
+    let is_space = |c| matches!(c, ' ' | '\u{a0}' | '\u{202f}');
+    let input = input.trim_matches(is_space);
+    let international = input.strip_prefix('+');
+    let body = international.unwrap_or(input);
+    if !body
+        .chars()
+        .all(|c| c.is_ascii_digit() || is_space(c) || matches!(c, '(' | ')' | '-'))
+    {
+        return None;
+    }
+    let digits: String = body.chars().filter(char::is_ascii_digit).collect();
+    let international_digits = if international.is_some() {
+        Some(digits.as_str())
+    } else {
+        digits.strip_prefix("00")
+    };
+    match international_digits {
+        Some(digits) => phonenumber::parse(None, format!("+{digits}"))
+            .ok()
+            .filter(PhoneNumber::is_valid),
+        None => parse_national_contact_phone(&digits, iso),
+    }
+}
+
+fn parse_national_contact_phone(digits: &str, iso: &str) -> Option<PhoneNumber> {
+    let number = phonenumber::parse(Some(iso.parse().ok()?), digits).ok()?;
+    match number.code().source() {
+        Source::Default => {}
+        Source::Number
+            if DATABASE
+                .by_id(iso)
+                .and_then(|metadata| metadata.national_prefix())
+                == Some(number.code().value().to_string().as_str()) => {}
+        _ => return None,
+    }
+    if !number.is_valid() {
+        return None;
+    }
+    infer_argentine_mobile(number)
+}
+
+fn infer_argentine_mobile(number: PhoneNumber) -> Option<PhoneNumber> {
+    // #264: an Argentine mobile entered without its mobile prefix can parse as a landline.
+    if number.country().id() == Some(phonenumber::country::AR)
+        && number.number_type(&DATABASE) == Type::FixedLine
+    {
+        phonenumber::parse(None, format!("+549{}", number.national()))
+            .ok()
+            .filter(PhoneNumber::is_valid)
+    } else {
+        Some(number)
+    }
 }
 
 pub(super) fn contact_country_for_account(phone: &str) -> Option<usize> {
