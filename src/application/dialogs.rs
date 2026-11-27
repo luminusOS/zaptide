@@ -1,5 +1,6 @@
 use super::*;
 use crate::i18n::gettext;
+use gtk::glib;
 
 pub(super) type DialogActionCallback = std::rc::Rc<dyn Fn(DialogAction)>;
 
@@ -355,6 +356,7 @@ pub(super) fn show_new_chat_dialog(
     parent: &adw::ApplicationWindow,
     on_action: &DialogActionCallback,
     contacts: Vec<(String, String, String)>,
+    contact_country: Option<usize>,
 ) {
     let dialog = adw::Dialog::builder()
         .title(gettext("New Chat"))
@@ -387,11 +389,12 @@ pub(super) fn show_new_chat_dialog(
         .build();
     add.add_prefix(&gtk::Image::from_icon_name("contact-new-symbolic"));
     add.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
-    let (close, window, contact_action) = (dialog.downgrade(), parent.clone(), on_action.clone());
+    let (close, window, contact_action) =
+        (dialog.downgrade(), parent.downgrade(), on_action.clone());
     add.connect_activated(move |_| {
-        if let Some(close) = close.upgrade() {
+        if let (Some(close), Some(window)) = (close.upgrade(), window.upgrade()) {
             close.close();
-            show_new_contact_dialog(&window, &contact_action);
+            new_contact_dialog(&window, &contact_action, contact_country).present();
         }
     });
     actions.append(&add);
@@ -464,13 +467,15 @@ pub(super) fn show_new_chat_dialog(
     dialog.present(Some(parent));
 }
 
-pub(super) fn show_new_contact_dialog(
+fn new_contact_dialog(
     parent: &adw::ApplicationWindow,
     on_action: &DialogActionCallback,
-) {
+    contact_country: Option<usize>,
+) -> gtk::Window {
     let dialog = gtk::Window::builder()
         .title(gettext("New contact"))
         .transient_for(parent)
+        .destroy_with_parent(true)
         .modal(true)
         .default_width(380)
         .build();
@@ -482,15 +487,29 @@ pub(super) fn show_new_contact_dialog(
         .margin_start(18)
         .margin_end(18)
         .build();
+    let country = country_picker();
+    if let Some(position) = contact_country {
+        country.set_selected(position as u32);
+    }
+    country.update_property(&[gtk::accessible::Property::Label(&gettext("Country"))]);
+    let phone_title = gettext("Phone number");
     let phone = gtk::Entry::builder()
-        .placeholder_text(gettext("Phone number, including country code"))
+        .placeholder_text(&phone_title)
         .input_purpose(gtk::InputPurpose::Phone)
         .activates_default(true)
+        .hexpand(true)
         .build();
+    phone.update_property(&[gtk::accessible::Property::Label(&phone_title)]);
+    let number_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    number_row.append(&country);
+    number_row.append(&phone);
+    let preview = gtk::Label::builder().xalign(0.0).wrap(true).build();
+    let name_title = gettext("Name (optional)");
     let name = gtk::Entry::builder()
-        .placeholder_text(gettext("Name (optional)"))
+        .placeholder_text(&name_title)
         .activates_default(true)
         .build();
+    name.update_property(&[gtk::accessible::Property::Label(&name_title)]);
     let buttons = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(8)
@@ -499,9 +518,11 @@ pub(super) fn show_new_contact_dialog(
     let cancel = gtk::Button::with_label(&gettext("Cancel"));
     let add = gtk::Button::with_label(&gettext("Add contact"));
     add.add_css_class("suggested-action");
+    add.set_sensitive(false);
     buttons.append(&cancel);
     buttons.append(&add);
-    content.append(&phone);
+    content.append(&number_row);
+    content.append(&preview);
     content.append(&name);
     content.append(&buttons);
     dialog.set_child(Some(&content));
@@ -512,12 +533,44 @@ pub(super) fn show_new_contact_dialog(
             close.close();
         }
     });
+    let current_number = |country: &gtk::DropDown, phone: &gtk::Entry| {
+        let region = crate::countries::COUNTRIES.get(country.selected() as usize)?;
+        new_contact_phone(&phone.text(), region.iso)
+    };
+    let invalid_number = gettext("Enter a valid phone number");
+    let refresh = glib::clone!(
+        #[weak]
+        country,
+        #[weak]
+        phone,
+        #[weak]
+        preview,
+        #[weak]
+        add,
+        move || {
+            let number = current_number(&country, &phone);
+            add.set_sensitive(number.is_some());
+            let label = match number {
+                Some((_, formatted)) => formatted,
+                None if phone.text().trim().is_empty() => String::new(),
+                None => invalid_number.clone(),
+            };
+            preview.set_label(&label);
+            phone.update_property(&[gtk::accessible::Property::Description(&label)]);
+        }
+    );
+    let refresh_country = refresh.clone();
+    country.connect_selected_notify(move |_| refresh_country());
+    phone.connect_changed(move |_| refresh());
     let close = dialog.downgrade();
     let on_action = on_action.clone();
     let phone_input = phone.clone();
     add.connect_clicked(move |_| {
+        let Some((digits, _)) = current_number(&country, &phone_input) else {
+            return;
+        };
         on_action(DialogAction::NewContact {
-            phone: phone_input.text().to_string(),
+            phone: digits,
             name: Some(name.text().to_string()),
         });
         if let Some(close) = close.upgrade() {
@@ -527,7 +580,7 @@ pub(super) fn show_new_contact_dialog(
     phone.connect_map(|entry| {
         entry.grab_focus();
     });
-    dialog.present();
+    dialog
 }
 
 pub(super) fn show_mention_dialog(
@@ -1820,6 +1873,96 @@ pub(super) fn show_starred_dialog(
 
 fn glib_escape(text: &str) -> String {
     gtk::glib::markup_escape_text(text).to_string()
+}
+
+#[cfg(test)]
+mod contact_dialog_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "needs a display"]
+    fn new_contact_only_submits_the_previewed_number_on_confirmation() {
+        adw::init().unwrap();
+        let parent = adw::ApplicationWindow::builder().build();
+        let submissions = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let observed = submissions.clone();
+        let action: DialogActionCallback = std::rc::Rc::new(move |action| {
+            if let DialogAction::NewContact { phone, .. } = action {
+                observed.borrow_mut().push(phone);
+            }
+        });
+        let brazil = contact_country_for_account("5511961234567").unwrap();
+        let dialog = new_contact_dialog(&parent, &action, Some(brazil));
+        let content = dialog.child().unwrap().downcast::<gtk::Box>().unwrap();
+        let row = content
+            .first_child()
+            .unwrap()
+            .downcast::<gtk::Box>()
+            .unwrap();
+        let picker = row
+            .first_child()
+            .unwrap()
+            .downcast::<gtk::DropDown>()
+            .unwrap();
+        let phone = row.last_child().unwrap().downcast::<gtk::Entry>().unwrap();
+        let label = row
+            .next_sibling()
+            .unwrap()
+            .downcast::<gtk::Label>()
+            .unwrap();
+        let confirm = dialog
+            .default_widget()
+            .unwrap()
+            .downcast::<gtk::Button>()
+            .unwrap();
+        dialog.present();
+        assert_eq!(picker.selected(), brazil as u32);
+        assert!(picker.enables_search());
+        assert!(!confirm.is_sensitive());
+        phone.set_text("11 2345 abcd");
+        assert_eq!(label.text(), gettext("Enter a valid phone number"));
+        assert!(!confirm.is_sensitive());
+        confirm.emit_clicked();
+
+        phone.set_text("(11) 96123-4567");
+        assert!(label.text().ends_with(" · Brazil"));
+        assert!(confirm.is_sensitive());
+        let brazilian_preview = label.text();
+        let argentina = contact_country_for_account("5491123456789").unwrap();
+        picker.set_selected(argentina as u32);
+        assert_ne!(label.text(), brazilian_preview);
+        phone.set_text("+55 (11) 96123-4567");
+        assert!(label.text().ends_with(" · Brazil"));
+        assert!(confirm.is_sensitive());
+        assert!(submissions.borrow().is_empty());
+        confirm.emit_clicked();
+        assert_eq!(&*submissions.borrow(), &["5511961234567"]);
+
+        let reopened = new_contact_dialog(&parent, &action, Some(brazil));
+        let content = reopened.child().unwrap();
+        let row = content.first_child().unwrap();
+        let phone = row.last_child().unwrap().downcast::<gtk::Entry>().unwrap();
+        let buttons = content.last_child().unwrap();
+        let cancel = buttons
+            .first_child()
+            .unwrap()
+            .downcast::<gtk::Button>()
+            .unwrap();
+        reopened.present();
+        phone.set_text("(11) 2345-6789");
+        cancel.emit_clicked();
+        assert!(!reopened.is_visible());
+        assert_eq!(&*submissions.borrow(), &["5511961234567"]);
+
+        parent.present();
+        let child = new_contact_dialog(&parent, &action, Some(brazil));
+        child.present();
+        let weak_child = child.downgrade();
+        drop(child);
+        parent.destroy();
+        drop(parent);
+        assert!(weak_child.upgrade().is_none());
+    }
 }
 
 #[cfg(test)]

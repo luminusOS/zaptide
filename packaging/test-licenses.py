@@ -32,6 +32,12 @@ class LicensePackaging(unittest.TestCase):
         self.assertEqual(metadata.findtext("project_license"), package["license"])
         self.assertEqual(metadata.findtext("metadata_license"), "CC0-1.0")
 
+    def test_phone_metadata_attribution_points_to_packaged_license(self):
+        notice = (ROOT / "NOTICE").read_text()
+        self.assertIn("Copyright (C) 2009 The Libphonenumber Authors", notice)
+        self.assertIn("vendor/absolute-url/LICENSE-APACHE", notice)
+        self.assertIn("vendor/absolute-url/LICENSE-APACHE", NOTICES)
+
     def assert_notices(self, destination):
         self.assertEqual(
             {str(p.relative_to(destination)) for p in destination.rglob('*') if p.is_file()},

@@ -115,20 +115,42 @@ pub fn bytes(size: u64) -> String {
     gtk4::glib::format_size(size).into()
 }
 
-/// Formats a phone number with a plus sign and grouped digits.
+/// Formats an international phone number using country-specific grouping.
 pub fn phone(digits: &str) -> String {
     let digits: String = digits.chars().filter(char::is_ascii_digit).collect();
+
     if digits.is_empty() {
         return String::new();
     }
+
+    let international = format!("+{digits}");
+
+    if let Ok(number) = phonenumber::parse(None, &international)
+        && phonenumber::is_valid(&number)
+    {
+        let formatted = number
+            .format()
+            .mode(phonenumber::Mode::International)
+            .to_string();
+        if formatted
+            .chars()
+            .filter(char::is_ascii_digit)
+            .eq(digits.chars())
+        {
+            return formatted;
+        }
+    }
+
+    // Formatting a chat ID for display or copying must preserve every digit.
     let mut out = String::from("+");
+
     for (index, character) in digits.chars().enumerate() {
-        // Approximate a country code followed by groups of three digits.
         if index == 2 || (index > 2 && (index - 2) % 3 == 0) {
             out.push(' ');
         }
         out.push(character);
     }
+
     out
 }
 
@@ -308,9 +330,23 @@ mod tests {
 
     #[test]
     fn phone_numbers_are_grouped() {
-        assert_eq!(phone("393331234567"), "+39 333 123 456 7");
-        assert_eq!(phone("15551234567"), "+15 551 234 567");
+        assert_eq!(phone("905441234567"), "+90 544 123 45 67");
+        assert_eq!(phone("905321234567"), "+90 532 123 45 67");
+        assert_eq!(phone("393331234567"), "+39 333 123 4567");
+        assert_eq!(phone("12025550137"), "+1 202-555-0137");
         assert_eq!(phone(""), "");
+    }
+
+    #[test]
+    fn phone_display_never_changes_chat_number_digits() {
+        let stored = "4402079460018";
+        assert_eq!(
+            phone(stored)
+                .chars()
+                .filter(char::is_ascii_digit)
+                .collect::<String>(),
+            stored
+        );
     }
 
     #[test]

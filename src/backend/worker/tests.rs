@@ -1184,7 +1184,7 @@ async fn deleted_contact_completion_cannot_complete_a_later_text_send() {
 fn fallback_names_read_as_phones_or_ids() {
     assert_eq!(
         fallback_name("393331234567@s.whatsapp.net"),
-        "+39 333 123 456 7"
+        "+39 333 123 4567"
     );
     assert_eq!(fallback_name("1-2@g.us"), "Group");
     assert_eq!(fallback_name("42@lid"), "42");

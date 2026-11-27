@@ -49,6 +49,13 @@ Names take priority over numbers: saved contact name, then WhatsApp name, then
 phone number. This applies to messages, sidebar previews and notifications.
 Mentions use bold text and the theme's accent color.
 
+To start a conversation by phone number, open **New Chat → New Contact**.
+Select the country and enter the number with its area code. For Brazil, you
+can enter a fixed line or mobile number with its DDD. If the number starts
+with `+` or `00`, ZapTide uses the country code you entered instead of the
+selected country. Check the international preview before choosing
+**Add contact**. ZapTide checks the number on WhatsApp only after you confirm.
+
 The composer and bubbles support WhatsApp formatting:
 
 ````text

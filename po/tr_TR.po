@@ -6,7 +6,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: zaptide\n"
 "Report-Msgid-Bugs-To: https://github.com/luminusOS/zaptide/issues\n"
-"POT-Creation-Date: 2026-11-24 22:18-0300\n"
+"POT-Creation-Date: 2026-11-26 22:30-0300\n"
 "PO-Revision-Date: 2026-11-21 02:16+0300\n"
 "Last-Translator: f4646\n"
 "Language-Team: f4646\n"
@@ -47,9 +47,9 @@ msgstr "Yeni mesajlara git"
 
 #: src/application.rs:1134 src/application.rs:2539
 #: src/application/composer.rs:235 src/application/contact_sharing.rs:442
-#: src/application/dialogs.rs:55 src/application/dialogs.rs:96
-#: src/application/dialogs.rs:115 src/application/dialogs.rs:319
-#: src/application/dialogs.rs:499 src/application/dispatch.rs:602
+#: src/application/dialogs.rs:56 src/application/dialogs.rs:97
+#: src/application/dialogs.rs:116 src/application/dialogs.rs:320
+#: src/application/dialogs.rs:518 src/application/dispatch.rs:602
 #: src/application/document_safety.rs:196 src/application/link_page.rs:85
 msgid "Cancel"
 msgstr "İptal"
@@ -58,7 +58,7 @@ msgstr "İptal"
 msgid "Forward selected messages"
 msgstr "Seçili mesajları ilet"
 
-#: src/application.rs:1151 src/application/dialogs.rs:759
+#: src/application.rs:1151 src/application/dialogs.rs:812
 msgid "Forward"
 msgstr "İlet"
 
@@ -148,7 +148,7 @@ msgstr "Düzenle"
 msgid "Forward…"
 msgstr "İlet…"
 
-#: src/application.rs:2129 src/application/dialogs.rs:1156
+#: src/application.rs:2129 src/application/dialogs.rs:1209
 msgid "Unstar"
 msgstr "Yıldızı kaldır"
 
@@ -205,7 +205,7 @@ msgstr "Bu sohbet artık kullanılamıyor."
 #: src/application.rs:2499 src/application/accounts.rs:156
 #: src/application/accounts.rs:157 src/application/dispatch.rs:233
 #: src/application/dispatch.rs:234 src/application/dispatch.rs:370
-#: src/application/dispatch/backend_events.rs:469
+#: src/application/dispatch/backend_events.rs:472
 msgid "Could not save preferences"
 msgstr "Tercihler kaydedilemedi"
 
@@ -318,7 +318,7 @@ msgid "View once"
 msgstr "Açıklamayı görüntüle"
 
 #: src/application/bubbles.rs:119 src/application/bubbles.rs:122
-#: src/application/bubbles.rs:254 src/application/dialogs.rs:1196
+#: src/application/bubbles.rs:254 src/application/dialogs.rs:1249
 msgid "Starred"
 msgstr "Yıldızlı"
 
@@ -534,20 +534,20 @@ msgstr "Sohbeti _kapat"
 msgid "Delete Chat"
 msgstr "Sil"
 
-#: src/application/chats.rs:1027 src/application/dialogs.rs:1628
-#: src/application/dialogs.rs:1740 src/application/dialogs.rs:1809
+#: src/application/chats.rs:1027 src/application/dialogs.rs:1681
+#: src/application/dialogs.rs:1793 src/application/dialogs.rs:1862
 msgid "Starred Messages"
 msgstr "Yıldızlı mesajlar"
 
-#: src/application/chats.rs:1057 src/application/dialogs.rs:56
+#: src/application/chats.rs:1057 src/application/dialogs.rs:57
 msgid "Archive"
 msgstr "Arşivle"
 
-#: src/application/chats.rs:1070 src/application/dialogs.rs:88
+#: src/application/chats.rs:1070 src/application/dialogs.rs:89
 msgid "Clear"
 msgstr ""
 
-#: src/application/chats.rs:1071 src/application/dialogs.rs:80
+#: src/application/chats.rs:1071 src/application/dialogs.rs:81
 #: src/application/dispatch.rs:603
 msgid "Delete"
 msgstr "Sil"
@@ -654,7 +654,7 @@ msgstr "Kişi gönderiliyor"
 #: src/application/dispatch.rs:413 src/application/dispatch.rs:793
 #: src/application/dispatch.rs:808 src/application/dispatch.rs:823
 #: src/application/dispatch.rs:830 src/application/dispatch.rs:1063
-#: src/application/dispatch.rs:1126
+#: src/application/dispatch.rs:1130
 msgid "Backend unavailable"
 msgstr "Arka uç kullanılamıyor"
 
@@ -687,7 +687,7 @@ msgstr "vCard dosyasını içe aktar…"
 msgid "Search names or phone numbers"
 msgstr "İsim veya telefon numarası ara"
 
-#: src/application/contact_sharing.rs:285 src/application/dialogs.rs:365
+#: src/application/contact_sharing.rs:285 src/application/dialogs.rs:367
 msgid "Search contacts"
 msgstr "Kişilerde ara"
 
@@ -780,216 +780,224 @@ msgstr "Mesaj gönderildi"
 msgid "Message could not be sent. Draft kept."
 msgstr "Mesaj gönderilemedi. Taslak korundu."
 
-#: src/application/dialogs.rs:49
+#: src/application/dialogs.rs:50
 msgid "Archive Chat?"
 msgstr "Sohbet arşivlensin mi?"
 
-#: src/application/dialogs.rs:76
+#: src/application/dialogs.rs:77
 #, fuzzy
 msgid "Delete chat?"
 msgstr "Mesaj silinsin mi?"
 
-#: src/application/dialogs.rs:78
+#: src/application/dialogs.rs:79
 msgid ""
 "This chat will be removed from the list here and on your other linked "
 "devices. It reappears if a new message arrives."
 msgstr ""
 
-#: src/application/dialogs.rs:84
+#: src/application/dialogs.rs:85
 #, fuzzy
 msgid "Clear chat?"
 msgstr "Sohbetleri filtrele"
 
-#: src/application/dialogs.rs:86
+#: src/application/dialogs.rs:87
 msgid ""
 "This chat's messages will be cleared here and on your other linked devices. "
 "Starred messages are kept."
 msgstr ""
 
-#: src/application/dialogs.rs:116 src/application/dialogs.rs:1148
+#: src/application/dialogs.rs:117 src/application/dialogs.rs:1201
 #: src/application/profile_dialog.rs:122
 msgid "Remove"
 msgstr "Kaldır"
 
-#: src/application/dialogs.rs:135
+#: src/application/dialogs.rs:136
 msgid "New Poll"
 msgstr "Yeni anket"
 
-#: src/application/dialogs.rs:140
+#: src/application/dialogs.rs:141
 msgid "Question"
 msgstr "Soru"
 
-#: src/application/dialogs.rs:148
+#: src/application/dialogs.rs:149
 msgid "Add Option"
 msgstr "Seçenek ekle"
 
-#: src/application/dialogs.rs:153
+#: src/application/dialogs.rs:154
 msgid "Allow Multiple Answers"
 msgstr "Birden fazla yanıta izin ver"
 
-#: src/application/dialogs.rs:156 src/native_media_widgets/poll.rs:43
+#: src/application/dialogs.rs:157 src/native_media_widgets/poll.rs:43
 msgid "Quiz"
 msgstr "Test"
 
-#: src/application/dialogs.rs:157 src/application/dialogs.rs:233
+#: src/application/dialogs.rs:158 src/application/dialogs.rs:234
 msgid "Choose the correct answer"
 msgstr "Doğru yanıtı seçin"
 
-#: src/application/dialogs.rs:160
+#: src/application/dialogs.rs:161
 msgid "Create"
 msgstr "Oluştur"
 
-#: src/application/dialogs.rs:221
+#: src/application/dialogs.rs:222
 #, rust-format
 msgid "Correct answer for option {number}"
 msgstr "{number} numaralı seçeneğin doğru yanıtı"
 
-#: src/application/dialogs.rs:245 src/application/dialogs.rs:249
+#: src/application/dialogs.rs:246 src/application/dialogs.rs:250
 #: src/native_media_widgets/poll.rs:59
 msgid "Correct answer"
 msgstr "Doğru yanıt"
 
-#: src/application/dialogs.rs:256
+#: src/application/dialogs.rs:257
 msgid "Remove option"
 msgstr "Seçeneği kaldır"
 
-#: src/application/dialogs.rs:310
+#: src/application/dialogs.rs:311
 msgid "Options"
 msgstr "Seçenekler"
 
-#: src/application/dialogs.rs:360
+#: src/application/dialogs.rs:362
 msgid "New Chat"
 msgstr "Yeni sohbet"
 
-#: src/application/dialogs.rs:384
+#: src/application/dialogs.rs:386
 msgid "New Contact"
 msgstr "Yeni kişi"
 
-#: src/application/dialogs.rs:385
+#: src/application/dialogs.rs:387
 msgid "Message a phone number"
 msgstr "Bir telefon numarasına mesaj gönder"
 
-#: src/application/dialogs.rs:472
+#: src/application/dialogs.rs:476
 msgid "New contact"
 msgstr "Yeni kişi"
 
-#: src/application/dialogs.rs:486
-msgid "Phone number, including country code"
-msgstr "Ülke koduyla birlikte telefon numarası"
+#: src/application/dialogs.rs:494 src/application/helpers.rs:80
+msgid "Country"
+msgstr "Ülke"
 
-#: src/application/dialogs.rs:491
+#: src/application/dialogs.rs:495 src/application/link_page.rs:180
+msgid "Phone number"
+msgstr "Telefon numarası"
+
+#: src/application/dialogs.rs:507
 msgid "Name (optional)"
 msgstr "İsim (isteğe bağlı)"
 
-#: src/application/dialogs.rs:500
+#: src/application/dialogs.rs:519
 msgid "Add contact"
 msgstr "Kişi ekle"
 
-#: src/application/dialogs.rs:540
+#: src/application/dialogs.rs:540 src/application/dialogs.rs:1923
+msgid "Enter a valid phone number"
+msgstr "Geçerli bir telefon numarası girin"
+
+#: src/application/dialogs.rs:593
 msgid "Mention"
 msgstr "Bahset"
 
-#: src/application/dialogs.rs:545
+#: src/application/dialogs.rs:598
 msgid "Search participants"
 msgstr "Katılımcılarda ara"
 
-#: src/application/dialogs.rs:561
+#: src/application/dialogs.rs:614
 msgid "No participants match this search."
 msgstr "Aramanızla eşleşen katılımcı bulunamadı."
 
-#: src/application/dialogs.rs:689
+#: src/application/dialogs.rs:742
 msgid "Forward To"
 msgstr "Şuna ilet"
 
-#: src/application/dialogs.rs:694 src/application/sidebar.rs:169
+#: src/application/dialogs.rs:747 src/application/sidebar.rs:169
 msgid "Search chats"
 msgstr "Sohbetlerde ara"
 
-#: src/application/dialogs.rs:718
+#: src/application/dialogs.rs:771
 msgid "Forwarding"
 msgstr "İletiliyor"
 
-#: src/application/dialogs.rs:1180
+#: src/application/dialogs.rs:1233
 msgid "Your recently used stickers appear here."
 msgstr "Son kullandığınız çıkartmalar burada görünür."
 
-#: src/application/dialogs.rs:1181
+#: src/application/dialogs.rs:1234
 msgid "To add your own, copy .webp files into:"
 msgstr ""
 "Kendi çıkartmalarınızı eklemek için .webp dosyalarını şu konuma kopyalayın:"
 
-#: src/application/dialogs.rs:1185
+#: src/application/dialogs.rs:1238
 msgid "No Stickers Yet"
 msgstr "Henüz çıkartma yok"
 
-#: src/application/dialogs.rs:1187 src/application/sidebar.rs:206
+#: src/application/dialogs.rs:1240 src/application/sidebar.rs:206
 #: src/application/sidebar.rs:208
 msgid "All"
 msgstr "Tümü"
 
-#: src/application/dialogs.rs:1192
+#: src/application/dialogs.rs:1245
 msgid "No Starred Stickers"
 msgstr "Yıldızlı çıkartma yok"
 
-#: src/application/dialogs.rs:1193
+#: src/application/dialogs.rs:1246
 msgid "Star a sticker in a chat to keep it here."
 msgstr "Burada saklamak için bir sohbette çıkartmaya yıldız ekleyin."
 
-#: src/application/dialogs.rs:1317
+#: src/application/dialogs.rs:1370
 #, fuzzy
 msgid "Showing smaller picture"
 msgstr "Gönderenlerin fotoğraflarını göster"
 
-#: src/application/dialogs.rs:1319
+#: src/application/dialogs.rs:1372
 msgid "No profile picture"
 msgstr ""
 
-#: src/application/dialogs.rs:1346
+#: src/application/dialogs.rs:1399
 #, fuzzy
 msgid "View larger picture"
 msgstr "Gönderenlerin fotoğraflarını göster"
 
-#: src/application/dialogs.rs:1367
+#: src/application/dialogs.rs:1420
 #, fuzzy
 msgid "Profile picture"
 msgstr "Profil kaydedildi"
 
-#: src/application/dialogs.rs:1383
+#: src/application/dialogs.rs:1436
 #, fuzzy
 msgid "Close"
 msgstr "Sohbeti _kapat"
 
-#: src/application/dialogs.rs:1427
+#: src/application/dialogs.rs:1480
 #, fuzzy
 msgid "Loading profile picture…"
 msgstr "Daha eski mesajlar yükleniyor…"
 
-#: src/application/dialogs.rs:1511
+#: src/application/dialogs.rs:1564
 msgid "Phone"
 msgstr "Telefon"
 
-#: src/application/dialogs.rs:1519 src/native_media_widgets/contacts.rs:65
+#: src/application/dialogs.rs:1572 src/native_media_widgets/contacts.rs:65
 msgid "Copy phone number"
 msgstr "Telefon numarasını kopyala"
 
-#: src/application/dialogs.rs:1593 src/application/dialogs.rs:1611
+#: src/application/dialogs.rs:1646 src/application/dialogs.rs:1664
 #, fuzzy
 msgid "Disappearing messages"
 msgstr "Mesajlar güncelleniyor"
 
-#: src/application/dialogs.rs:1595
+#: src/application/dialogs.rs:1648
 msgid "New messages in this chat disappear after this time"
 msgstr ""
 
-#: src/application/dialogs.rs:1675
+#: src/application/dialogs.rs:1728
 msgid "Participants"
 msgstr "Katılımcılar"
 
-#: src/application/dialogs.rs:1747
+#: src/application/dialogs.rs:1800
 msgid "No Starred Messages"
 msgstr "Yıldızlı mesaj yok"
 
-#: src/application/dialogs.rs:1748
+#: src/application/dialogs.rs:1801
 msgid "Star a message from its menu to find it here."
 msgstr "Bir mesajı burada bulabilmek için menüsünden yıldız ekleyin."
 
@@ -1074,7 +1082,7 @@ msgid "Refreshing messages"
 msgstr "Mesajlar yenileniyor"
 
 #: src/application/dispatch.rs:393 src/application/dispatch.rs:394
-#: src/application/dispatch.rs:1118 src/application/dispatch.rs:1119
+#: src/application/dispatch.rs:1122 src/application/dispatch.rs:1123
 msgid "Enter valid phone number with country code"
 msgstr "Ülke koduyla birlikte geçerli bir telefon numarası girin"
 
@@ -1110,31 +1118,31 @@ msgstr "WhatsApp'a yeniden bağlanılıyor"
 msgid "Unlinking this computer"
 msgstr "Bu bilgisayarın bağlantısı kaldırılıyor"
 
-#: src/application/dispatch.rs:1102 src/application/dispatch.rs:1110
+#: src/application/dispatch.rs:1106 src/application/dispatch.rs:1114
 msgid "Code copied"
 msgstr "Kod kopyalandı"
 
-#: src/application/dispatch.rs:1124
+#: src/application/dispatch.rs:1128
 msgid "Requesting a pairing code from WhatsApp"
 msgstr "WhatsApp'tan eşleştirme kodu isteniyor"
 
-#: src/application/dispatch.rs:1193
+#: src/application/dispatch.rs:1197
 msgid "Contact opened"
 msgstr "Kişi açıldı"
 
-#: src/application/dispatch.rs:1254
+#: src/application/dispatch.rs:1258
 msgid "Could not save attachment"
 msgstr "Ek kaydedilemedi"
 
-#: src/application/dispatch.rs:1259
+#: src/application/dispatch.rs:1263
 msgid "Clipboard or portal action failed"
 msgstr "Pano veya portal işlemi başarısız oldu"
 
-#: src/application/dispatch.rs:1282
+#: src/application/dispatch.rs:1286
 msgid "Copied"
 msgstr "Kopyalandı"
 
-#: src/application/dispatch.rs:1406
+#: src/application/dispatch.rs:1410
 msgid "Shutdown complete"
 msgstr "Kapatma tamamlandı"
 
@@ -1157,7 +1165,7 @@ msgid "The poll was sent, but its voting key could not be saved."
 msgstr "Anket gönderildi ancak oylama anahtarı kaydedilemedi."
 
 #: src/application/dispatch/backend_events.rs:13
-#: src/application/dispatch/backend_events.rs:547
+#: src/application/dispatch/backend_events.rs:550
 msgid "Poll creation could not be completed."
 msgstr "Anket oluşturma işlemi tamamlanamadı."
 
@@ -1166,20 +1174,20 @@ msgid "Your vote was sent, but could not be saved locally."
 msgstr "Oyunuz gönderildi ancak yerel olarak kaydedilemedi."
 
 #: src/application/dispatch/backend_events.rs:20
-#: src/application/dispatch/backend_events.rs:551
+#: src/application/dispatch/backend_events.rs:554
 #: src/application/poll_runtime_tests.rs:131
 msgid "Could not send your vote."
 msgstr "Oyunuz gönderilemedi."
 
-#: src/application/dispatch/backend_events.rs:237
+#: src/application/dispatch/backend_events.rs:240
 msgid "No older messages available"
 msgstr "Daha eski mesaj bulunamadı"
 
-#: src/application/dispatch/backend_events.rs:463
+#: src/application/dispatch/backend_events.rs:466
 msgid "Profile saved"
 msgstr "Profil kaydedildi"
 
-#: src/application/dispatch/backend_events.rs:494
+#: src/application/dispatch/backend_events.rs:497
 msgid "Contact is on WhatsApp"
 msgstr "Kişi WhatsApp kullanıyor"
 
@@ -1201,24 +1209,20 @@ msgstr ""
 msgid "Open"
 msgstr "Aç"
 
-#: src/application/helpers.rs:80
-msgid "Country"
-msgstr "Ülke"
-
-#: src/application/helpers.rs:221
+#: src/application/helpers.rs:290
 msgid "Connection failed. Check your network and try again."
 msgstr "Bağlantı kurulamadı. Ağ bağlantınızı kontrol edip tekrar deneyin."
 
-#: src/application/helpers.rs:223
+#: src/application/helpers.rs:292
 msgid "Permission denied. Check access and try again."
 msgstr "İzin reddedildi. Erişim izinlerini kontrol edip tekrar deneyin."
 
-#: src/application/helpers.rs:225
+#: src/application/helpers.rs:294
 msgid "Storage operation failed. Check available disk space."
 msgstr ""
 "Depolama işlemi başarısız oldu. Kullanılabilir disk alanını kontrol edin."
 
-#: src/application/helpers.rs:227
+#: src/application/helpers.rs:296
 msgid "Action failed. Check connection and try again."
 msgstr "İşlem başarısız oldu. Bağlantınızı kontrol edip tekrar deneyin."
 
@@ -1234,10 +1238,6 @@ msgstr "WhatsApp cihaz bağlama QR kodu"
 #: src/application/link_page.rs:155
 msgid "Copy Code"
 msgstr "Kodu kopyala"
-
-#: src/application/link_page.rs:180
-msgid "Phone number"
-msgstr "Telefon numarası"
 
 #: src/application/link_page.rs:189
 msgid "Get Code"
@@ -2359,3 +2359,6 @@ msgid "Playing faster needs the GStreamer scaletempo plugin (gst-plugins-good)"
 msgstr ""
 "Daha hızlı oynatma için GStreamer scaletempo eklentisi (gst-plugins-good) "
 "gereklidir"
+
+#~ msgid "Phone number, including country code"
+#~ msgstr "Ülke koduyla birlikte telefon numarası"

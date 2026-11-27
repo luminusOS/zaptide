@@ -1068,6 +1068,10 @@ impl NativeApplication {
                 &self.window,
                 &dialog_action_callback(&sender),
                 new_chat_contacts(&self.contacts),
+                self.registry
+                    .entry(self.active_account)
+                    .and_then(|entry| entry.phone.as_deref())
+                    .and_then(contact_country_for_account),
             ),
             Input::StartChat { id, name } => {
                 if !self.chat_snapshots.iter().any(|chat| chat.id == id) {
