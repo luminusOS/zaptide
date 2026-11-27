@@ -76,7 +76,7 @@ http = "1"
 tokio-websockets = { version = "0.13.3", features = ["client"] }
 # SQLCipher encrypts the archive; the device store shares the same library.
 # Bundle OpenSSL so all release platforms use the same encryption provider.
-rusqlite = { version = "0.41", features = ["bundled-sqlcipher-vendored-openssl"] }
+rusqlite = { version = "0.43", features = ["bundled-sqlcipher-vendored-openssl"] }
 # Keys the device store's pooled connections. Already included through whatsapp-rust.
 diesel = { version = "2.3", default-features = false, features = ["sqlite"] }
 getrandom = "0.4"
