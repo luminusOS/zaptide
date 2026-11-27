@@ -463,6 +463,7 @@ fn identity_merge_redirect_fixture(edit: bool, mixed_attachments: bool) {
         Event::Messages {
             chat: ALIAS.into(),
             messages: vec![crate::archive::tests::message(ALIAS, "message", 10, true)],
+            keep_states: Vec::new(),
             older: false,
             complete: true,
             request: old_request,
@@ -585,6 +586,7 @@ fn identity_merge_redirect_fixture(edit: bool, mixed_attachments: bool) {
         Event::Messages {
             chat: PHONE.into(),
             messages: vec![crate::archive::tests::message(PHONE, "stale", 1, false)],
+            keep_states: Vec::new(),
             older: false,
             complete: true,
             request: old_request,
@@ -918,6 +920,23 @@ fn wheel_and_keyboard_survive_backend_reorder(animations: bool) {
     wait_until("native Down selection", || {
         app.model().chats.selection_model.selected() == 151
     });
+    native_x11_input(window.upcast_ref(), &scroller, "Shift+F10");
+    wait_until("native keyboard context menu", || {
+        app.model().chat_row_menu.upgrade().is_some()
+    });
+    let menu = app.model().chat_row_menu.upgrade().unwrap();
+    let info_target = menu
+        .menu_model()
+        .and_then(|model| model.item_link(0, "section"))
+        .and_then(|section| section.item_attribute_value(0, "target", None))
+        .and_then(|target| target.get::<(u32, String, bool)>());
+    assert_eq!(info_target, Some((account.0, expected[151].clone(), false)));
+    assert_eq!(
+        app.model().open_chat.active_chat.as_deref(),
+        Some(selected_id.as_str())
+    );
+    menu.popdown();
+    wait_until("native context menu closes", || menu.parent().is_none());
     native_x11_input(window.upcast_ref(), &scroller, "Up");
     wait_until("native Up selection", || {
         app.model().chats.selection_model.selected() == 150

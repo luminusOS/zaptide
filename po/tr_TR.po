@@ -6,7 +6,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: zaptide\n"
 "Report-Msgid-Bugs-To: https://github.com/luminusOS/zaptide/issues\n"
-"POT-Creation-Date: 2026-11-15 15:17-0300\n"
+"POT-Creation-Date: 2026-11-24 22:18-0300\n"
 "PO-Revision-Date: 2026-11-21 02:16+0300\n"
 "Last-Translator: f4646\n"
 "Language-Team: f4646\n"
@@ -16,191 +16,213 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 
-#: src/application.rs:900
+#: src/application.rs:984
 msgid "Chat"
 msgstr "Sohbet"
 
-#: src/application.rs:913
+#: src/application.rs:997
 msgid "Chat details"
 msgstr "Sohbet bilgisi"
 
-#: src/application.rs:930
+#: src/application.rs:1014
 msgid "Chat menu"
 msgstr "Sohbet menüsü"
 
-#: src/application.rs:937 src/application.rs:938
+#: src/application.rs:1021 src/application.rs:1022
 msgid "Start video call"
 msgstr "Görüntülü arama başlat"
 
-#: src/application.rs:947 src/application.rs:948
+#: src/application.rs:1031 src/application.rs:1032
 msgid "Start voice call"
 msgstr "Sesli arama başlat"
 
-#: src/application.rs:957
+#: src/application.rs:1041
 msgid "Connection lost"
 msgstr "Bağlantı kesildi"
 
-#: src/application.rs:1027 src/application.rs:2378
+#: src/application.rs:1061
+#, fuzzy
+msgid "Go to pinned message"
+msgstr "Yeni mesajlara git"
+
+#: src/application.rs:1134 src/application.rs:2539
 #: src/application/composer.rs:235 src/application/contact_sharing.rs:442
-#: src/application/dialogs.rs:54 src/application/dialogs.rs:79
-#: src/application/dialogs.rs:283 src/application/dialogs.rs:463
-#: src/application/dispatch.rs:591 src/application/document_safety.rs:196
-#: src/application/link_page.rs:85
+#: src/application/dialogs.rs:55 src/application/dialogs.rs:96
+#: src/application/dialogs.rs:115 src/application/dialogs.rs:319
+#: src/application/dialogs.rs:499 src/application/dispatch.rs:602
+#: src/application/document_safety.rs:196 src/application/link_page.rs:85
 msgid "Cancel"
 msgstr "İptal"
 
-#: src/application.rs:1040
+#: src/application.rs:1147
 msgid "Forward selected messages"
 msgstr "Seçili mesajları ilet"
 
-#: src/application.rs:1044 src/application/dialogs.rs:723
+#: src/application.rs:1151 src/application/dialogs.rs:759
 msgid "Forward"
 msgstr "İlet"
 
-#: src/application.rs:1070
+#: src/application.rs:1177
 msgid "Drop Files to Attach"
 msgstr "Eklemek için dosyaları buraya bırakın"
 
-#: src/application.rs:1276 src/application.rs:1312
+#: src/application.rs:1387 src/application.rs:1423
 msgid "_Remove Account…"
 msgstr "Hesabı _Kaldır…"
 
-#: src/application.rs:1277 src/application.rs:1315
+#: src/application.rs:1388 src/application.rs:1426
 msgid "_Preferences"
 msgstr "_Tercihler"
 
-#: src/application.rs:1278 src/application.rs:1317
+#: src/application.rs:1389 src/application.rs:1428
 msgid "_About ZapTide"
 msgstr "ZapTide _Hakkında"
 
-#: src/application.rs:1279 src/application.rs:1318
+#: src/application.rs:1390 src/application.rs:1429
 msgid "_Quit"
 msgstr "_Çıkış"
 
-#: src/application.rs:1311
+#: src/application.rs:1422
 msgid "_New Chat"
 msgstr "_Yeni Sohbet"
 
-#: src/application.rs:1316
+#: src/application.rs:1427
 msgid "_Keyboard Shortcuts"
 msgstr "_Klavye Kısayolları"
 
-#: src/application.rs:1734 src/application.rs:1759
+#: src/application.rs:1852 src/application.rs:1877
 msgid "Load older messages"
 msgstr "Daha eski mesajları yükle"
 
-#: src/application.rs:1757 src/application/transcript_view.rs:806
+#: src/application.rs:1875 src/application/transcript_view.rs:806
 msgid "Loading older messages…"
 msgstr "Daha eski mesajlar yükleniyor…"
 
-#: src/application.rs:1955
+#: src/application.rs:2074 src/application.rs:2180
+msgid "Delete for Me"
+msgstr "Benden sil"
+
+#: src/application.rs:2086
 msgid "Open Attachment"
 msgstr "Eki aç"
 
-#: src/application.rs:1957
+#: src/application.rs:2088
 msgid "Download Attachment"
 msgstr "Eki indir"
 
-#: src/application.rs:1962 src/native_media_widgets/photo.rs:451
+#: src/application.rs:2093 src/native_media_widgets/photo.rs:446
 #: src/native_media_widgets/viewer/photo.rs:404
 #: src/native_media_widgets/viewer/video.rs:334
 msgid "Show in Folder"
 msgstr "Klasörde göster"
 
-#: src/application.rs:1963
+#: src/application.rs:2094
 msgid "Save Attachment…"
 msgstr "Eki kaydet…"
 
-#: src/application.rs:1973
+#: src/application.rs:2104
 msgid "Open Link"
 msgstr "Bağlantıyı aç"
 
-#: src/application.rs:1977
+#: src/application.rs:2108
 msgid "Go to Quoted Message"
 msgstr "Alıntılanan mesaja git"
 
-#: src/application.rs:1987 src/native_media_widgets/viewer/photo.rs:402
+#: src/application.rs:2118 src/native_media_widgets/viewer/photo.rs:402
 msgid "Copy Image"
 msgstr "Görseli kopyala"
 
-#: src/application.rs:1990
+#: src/application.rs:2121
 msgid "Copy Text"
 msgstr "Metni kopyala"
 
-#: src/application.rs:1992
+#: src/application.rs:2123
 msgid "Reply"
 msgstr "Yanıtla"
 
-#: src/application.rs:1994
+#: src/application.rs:2125
 msgid "Edit"
 msgstr "Düzenle"
 
-#: src/application.rs:1996
+#: src/application.rs:2127
 msgid "Forward…"
 msgstr "İlet…"
 
-#: src/application.rs:1998 src/application/dialogs.rs:1120
+#: src/application.rs:2129 src/application/dialogs.rs:1156
 msgid "Unstar"
 msgstr "Yıldızı kaldır"
 
-#: src/application.rs:2000
+#: src/application.rs:2131
 msgid "Star"
 msgstr "Yıldız ekle"
 
-#: src/application.rs:2003
+#: src/application.rs:2136
+msgid "Unkeep"
+msgstr ""
+
+#: src/application.rs:2138
+msgid "Keep"
+msgstr ""
+
+#: src/application.rs:2144
+msgid "Unpin"
+msgstr ""
+
+#: src/application.rs:2156
+#, fuzzy
+msgid "Pin"
+msgstr "Sabitlenmiş"
+
+#: src/application.rs:2159
 msgid "Select"
 msgstr "Seç"
 
-#: src/application.rs:2013
+#: src/application.rs:2169
 #, rust-format
 msgid "Vote: {option}"
 msgstr "Oy ver: {option}"
 
-#: src/application.rs:2024
-msgid "Delete for Me"
-msgstr "Benden sil"
-
-#: src/application.rs:2027
+#: src/application.rs:2183
 msgid "Delete for Everyone"
 msgstr "Herkesten sil"
 
-#: src/application.rs:2097
+#: src/application.rs:2253
 msgid "Enter a question and two different poll options"
 msgstr "Bir soru ve birbirinden farklı iki anket seçeneği girin"
 
-#: src/application.rs:2105
+#: src/application.rs:2261
 msgid "Creating poll"
 msgstr "Anket oluşturuluyor"
 
-#: src/application.rs:2287
+#: src/application.rs:2447
 msgid "Message deleted"
 msgstr "Mesaj silindi"
 
-#: src/application.rs:2294
+#: src/application.rs:2454
 msgid "This chat is no longer available."
 msgstr "Bu sohbet artık kullanılamıyor."
 
-#: src/application.rs:2338 src/application/accounts.rs:151
-#: src/application/accounts.rs:152 src/application/dispatch.rs:225
-#: src/application/dispatch.rs:226 src/application/dispatch.rs:359
-#: src/application/dispatch/backend_events.rs:447
+#: src/application.rs:2499 src/application/accounts.rs:156
+#: src/application/accounts.rs:157 src/application/dispatch.rs:233
+#: src/application/dispatch.rs:234 src/application/dispatch.rs:370
+#: src/application/dispatch/backend_events.rs:469
 msgid "Could not save preferences"
 msgstr "Tercihler kaydedilemedi"
 
-#: src/application.rs:2340
+#: src/application.rs:2501
 msgid "Shutdown requested"
 msgstr "Kapatma isteği alındı"
 
-#: src/application.rs:2379 src/application/dispatch.rs:166
+#: src/application.rs:2540 src/application/dispatch.rs:174
 msgid "Quit"
 msgstr "Çıkış"
 
-#: src/application/accounts.rs:154
+#: src/application/accounts.rs:159
 msgid "Preferences saved"
 msgstr "Tercihler kaydedildi"
 
-#: src/application/accounts.rs:157 src/application/accounts.rs:158
-#: src/application/dispatch.rs:230 src/application/dispatch.rs:231
+#: src/application/accounts.rs:162 src/application/accounts.rs:163
+#: src/application/dispatch.rs:238 src/application/dispatch.rs:239
 msgid "Preference value is invalid"
 msgstr "Tercih değeri geçersiz"
 
@@ -290,16 +312,25 @@ msgstr "Sesli mesaj kaydedilemedi"
 msgid "Audio playback could not continue."
 msgstr "Ses oynatılmaya devam edilemedi."
 
-#: src/application/bubbles.rs:115 src/application/bubbles.rs:118
-#: src/application/bubbles.rs:231 src/application/dialogs.rs:1160
+#: src/application/bubbles.rs:53 src/application/bubbles.rs:319
+#, fuzzy
+msgid "View once"
+msgstr "Açıklamayı görüntüle"
+
+#: src/application/bubbles.rs:119 src/application/bubbles.rs:122
+#: src/application/bubbles.rs:254 src/application/dialogs.rs:1196
 msgid "Starred"
 msgstr "Yıldızlı"
 
-#: src/application/bubbles.rs:346 src/application/reaction_drawer.rs:467
+#: src/application/bubbles.rs:221 src/application/bubbles.rs:346
+msgid "Kept"
+msgstr ""
+
+#: src/application/bubbles.rs:437 src/application/reaction_drawer.rs:469
 msgid "Remove reaction"
 msgstr "Tepkiyi kaldır"
 
-#: src/application/bubbles.rs:365 src/application/reaction_drawer.rs:301
+#: src/application/bubbles.rs:456 src/application/reaction_drawer.rs:303
 msgid "More Reactions"
 msgstr "Daha fazla tepki"
 
@@ -311,7 +342,7 @@ msgstr "Arama seçilmedi"
 msgid "Pick a call to see its details"
 msgstr "Ayrıntılarını görmek için bir arama seçin"
 
-#: src/application/calls.rs:157 src/application/dispatch.rs:174
+#: src/application/calls.rs:157 src/application/dispatch.rs:182
 msgid "Open chat"
 msgstr "Sohbeti aç"
 
@@ -444,54 +475,86 @@ msgstr "Kamera önizlemeniz"
 msgid "Camera off"
 msgstr "Kamera kapalı"
 
-#: src/application/calls/window.rs:498 src/application/stars.rs:84
-#: src/native_media_widgets/viewer/details.rs:19
+#: src/application/calls/window.rs:498 src/application/pins.rs:69
+#: src/application/stars.rs:172 src/native_media_widgets/viewer/details.rs:19
 msgid "You"
 msgstr "Siz"
 
-#: src/application/chats.rs:245
+#: src/application/chats.rs:250
 msgid "Loading messages"
 msgstr "Mesajlar yükleniyor"
 
-#: src/application/chats.rs:327
+#: src/application/chats.rs:332 src/application/chats.rs:418
 msgid "_Group Info"
 msgstr "_Grup bilgisi"
 
-#: src/application/chats.rs:329
+#: src/application/chats.rs:334 src/application/chats.rs:420
 msgid "_Contact Info"
 msgstr "_Kişi bilgisi"
 
-#: src/application/chats.rs:335
+#: src/application/chats.rs:340 src/application/chats.rs:426
 msgid "Un_pin Chat"
 msgstr "Sohbetin _sabitlenmesini kaldır"
 
-#: src/application/chats.rs:337
+#: src/application/chats.rs:342 src/application/chats.rs:428
 msgid "_Pin Chat"
 msgstr "Sohbeti _sabitle"
 
-#: src/application/chats.rs:341
+#: src/application/chats.rs:346 src/application/chats.rs:433
 msgid "_Unmute Notifications"
 msgstr "Bildirimlerin _sesini aç"
 
-#: src/application/chats.rs:343
+#: src/application/chats.rs:348 src/application/chats.rs:435
 msgid "_Mute Notifications"
 msgstr "Bildirimleri _sessize al"
 
-#: src/application/chats.rs:347
+#: src/application/chats.rs:352 src/application/chats.rs:439
 msgid "Un_archive Chat"
 msgstr "Sohbeti arşivden _çıkar"
 
-#: src/application/chats.rs:349
+#: src/application/chats.rs:354 src/application/chats.rs:441
 msgid "_Archive Chat"
 msgstr "Sohbeti _arşivle"
 
-#: src/application/chats.rs:354
+#: src/application/chats.rs:359 src/application/chats.rs:449
 msgid "_Close Chat"
 msgstr "Sohbeti _kapat"
 
-#: src/application/chats.rs:358
+#: src/application/chats.rs:363 src/application/chats.rs:453
 msgid "Copy _Transcript"
 msgstr "Sohbet _geçmişini kopyala"
+
+#: src/application/chats.rs:368 src/application/chats.rs:460
+#, fuzzy
+msgid "Clear Chat"
+msgstr "Sohbeti _kapat"
+
+#: src/application/chats.rs:369 src/application/chats.rs:461
+#, fuzzy
+msgid "Delete Chat"
+msgstr "Sil"
+
+#: src/application/chats.rs:1027 src/application/dialogs.rs:1628
+#: src/application/dialogs.rs:1740 src/application/dialogs.rs:1809
+msgid "Starred Messages"
+msgstr "Yıldızlı mesajlar"
+
+#: src/application/chats.rs:1057 src/application/dialogs.rs:56
+msgid "Archive"
+msgstr "Arşivle"
+
+#: src/application/chats.rs:1070 src/application/dialogs.rs:88
+msgid "Clear"
+msgstr ""
+
+#: src/application/chats.rs:1071 src/application/dialogs.rs:80
+#: src/application/dispatch.rs:603
+msgid "Delete"
+msgstr "Sil"
+
+#: src/application/chats.rs:1121 src/application/conversation.rs:850
+msgid "Transcript copied"
+msgstr "Sohbet geçmişi kopyalandı"
 
 #: src/application/composer.rs:172
 msgid "Discard recording"
@@ -537,7 +600,7 @@ msgstr "Kişi paylaş"
 msgid "Emoji"
 msgstr "Emoji"
 
-#: src/application/composer.rs:387 src/model/mod.rs:485
+#: src/application/composer.rs:387 src/model/mod.rs:566
 #: src/native_media_widgets/sticker.rs:12
 #: src/native_media_widgets/sticker.rs:21
 #: src/native_media_widgets/sticker.rs:23
@@ -553,7 +616,8 @@ msgstr "Mesaj yazma alanı"
 msgid ""
 "Write a message. Return inserts a line; use Send to submit when using IME."
 msgstr ""
-"Bir mesaj yazın. Enter tuşu yeni satır ekler; giriş yöntemi düzenleyicisini (IME) kullanırken mesajı göndermek için Gönder'e basın."
+"Bir mesaj yazın. Enter tuşu yeni satır ekler; giriş yöntemi düzenleyicisini "
+"(IME) kullanırken mesajı göndermek için Gönder'e basın."
 
 #: src/application/composer.rs:423
 msgid "Record voice message"
@@ -574,7 +638,9 @@ msgstr "Panodaki görsel"
 
 #: src/application/contact_sharing.rs:24
 msgid "Choose a writable chat while connected to share a contact"
-msgstr "Kişi paylaşmak için bağlantı kurulduğunda mesaj gönderebileceğiniz bir sohbet seçin"
+msgstr ""
+"Kişi paylaşmak için bağlantı kurulduğunda mesaj gönderebileceğiniz bir "
+"sohbet seçin"
 
 #: src/application/contact_sharing.rs:66
 msgid "Contact not sent: the conversation or linked account changed"
@@ -584,11 +650,11 @@ msgstr "Kişi gönderilemedi: Sohbet veya bağlı hesap değişti"
 msgid "Sending contact"
 msgstr "Kişi gönderiliyor"
 
-#: src/application/contact_sharing.rs:78 src/application/dispatch.rs:258
-#: src/application/dispatch.rs:402 src/application/dispatch.rs:735
-#: src/application/dispatch.rs:750 src/application/dispatch.rs:765
-#: src/application/dispatch.rs:772 src/application/dispatch.rs:1016
-#: src/application/dispatch.rs:1079
+#: src/application/contact_sharing.rs:78 src/application/dispatch.rs:266
+#: src/application/dispatch.rs:413 src/application/dispatch.rs:793
+#: src/application/dispatch.rs:808 src/application/dispatch.rs:823
+#: src/application/dispatch.rs:830 src/application/dispatch.rs:1063
+#: src/application/dispatch.rs:1126
 msgid "Backend unavailable"
 msgstr "Arka uç kullanılamıyor"
 
@@ -621,7 +687,7 @@ msgstr "vCard dosyasını içe aktar…"
 msgid "Search names or phone numbers"
 msgstr "İsim veya telefon numarası ara"
 
-#: src/application/contact_sharing.rs:285 src/application/dialogs.rs:329
+#: src/application/contact_sharing.rs:285 src/application/dialogs.rs:365
 msgid "Search contacts"
 msgstr "Kişilerde ara"
 
@@ -694,337 +760,381 @@ msgstr "Mesaj gönderiliyor"
 msgid "Backend unavailable. Draft kept."
 msgstr "Arka uç kullanılamıyor. Taslak korundu."
 
-#: src/application/conversation.rs:409
+#: src/application/conversation.rs:411
 msgid "Conversation loaded"
 msgstr "Sohbet yüklendi"
 
-#: src/application/conversation.rs:458
+#: src/application/conversation.rs:507
 msgid "Message updated"
 msgstr "Mesaj güncellendi"
 
-#: src/application/conversation.rs:466
+#: src/application/conversation.rs:515
 msgid "Edit could not be saved. Draft kept."
 msgstr "Düzenleme kaydedilemedi. Taslak korundu."
 
-#: src/application/conversation.rs:546
+#: src/application/conversation.rs:595
 msgid "Message sent"
 msgstr "Mesaj gönderildi"
 
-#: src/application/conversation.rs:572
+#: src/application/conversation.rs:621
 msgid "Message could not be sent. Draft kept."
 msgstr "Mesaj gönderilemedi. Taslak korundu."
 
-#: src/application/conversation.rs:800
-msgid "Transcript copied"
-msgstr "Sohbet geçmişi kopyalandı"
-
-#: src/application/dialogs.rs:48
+#: src/application/dialogs.rs:49
 msgid "Archive Chat?"
 msgstr "Sohbet arşivlensin mi?"
 
-#: src/application/dialogs.rs:55
-msgid "Archive"
-msgstr "Arşivle"
+#: src/application/dialogs.rs:76
+#, fuzzy
+msgid "Delete chat?"
+msgstr "Mesaj silinsin mi?"
 
-#: src/application/dialogs.rs:80 src/application/dialogs.rs:1112
+#: src/application/dialogs.rs:78
+msgid ""
+"This chat will be removed from the list here and on your other linked "
+"devices. It reappears if a new message arrives."
+msgstr ""
+
+#: src/application/dialogs.rs:84
+#, fuzzy
+msgid "Clear chat?"
+msgstr "Sohbetleri filtrele"
+
+#: src/application/dialogs.rs:86
+msgid ""
+"This chat's messages will be cleared here and on your other linked devices. "
+"Starred messages are kept."
+msgstr ""
+
+#: src/application/dialogs.rs:116 src/application/dialogs.rs:1148
 #: src/application/profile_dialog.rs:122
 msgid "Remove"
 msgstr "Kaldır"
 
-#: src/application/dialogs.rs:99
+#: src/application/dialogs.rs:135
 msgid "New Poll"
 msgstr "Yeni anket"
 
-#: src/application/dialogs.rs:104
+#: src/application/dialogs.rs:140
 msgid "Question"
 msgstr "Soru"
 
-#: src/application/dialogs.rs:112
+#: src/application/dialogs.rs:148
 msgid "Add Option"
 msgstr "Seçenek ekle"
 
-#: src/application/dialogs.rs:117
+#: src/application/dialogs.rs:153
 msgid "Allow Multiple Answers"
 msgstr "Birden fazla yanıta izin ver"
 
-#: src/application/dialogs.rs:120 src/native_media_widgets/poll.rs:43
+#: src/application/dialogs.rs:156 src/native_media_widgets/poll.rs:43
 msgid "Quiz"
 msgstr "Test"
 
-#: src/application/dialogs.rs:121 src/application/dialogs.rs:197
+#: src/application/dialogs.rs:157 src/application/dialogs.rs:233
 msgid "Choose the correct answer"
 msgstr "Doğru yanıtı seçin"
 
-#: src/application/dialogs.rs:124
+#: src/application/dialogs.rs:160
 msgid "Create"
 msgstr "Oluştur"
 
-#: src/application/dialogs.rs:185
+#: src/application/dialogs.rs:221
 #, rust-format
 msgid "Correct answer for option {number}"
 msgstr "{number} numaralı seçeneğin doğru yanıtı"
 
-#: src/application/dialogs.rs:209 src/application/dialogs.rs:213
+#: src/application/dialogs.rs:245 src/application/dialogs.rs:249
 #: src/native_media_widgets/poll.rs:59
 msgid "Correct answer"
 msgstr "Doğru yanıt"
 
-#: src/application/dialogs.rs:220
+#: src/application/dialogs.rs:256
 msgid "Remove option"
 msgstr "Seçeneği kaldır"
 
-#: src/application/dialogs.rs:274
+#: src/application/dialogs.rs:310
 msgid "Options"
 msgstr "Seçenekler"
 
-#: src/application/dialogs.rs:324
+#: src/application/dialogs.rs:360
 msgid "New Chat"
 msgstr "Yeni sohbet"
 
-#: src/application/dialogs.rs:348
+#: src/application/dialogs.rs:384
 msgid "New Contact"
 msgstr "Yeni kişi"
 
-#: src/application/dialogs.rs:349
+#: src/application/dialogs.rs:385
 msgid "Message a phone number"
 msgstr "Bir telefon numarasına mesaj gönder"
 
-#: src/application/dialogs.rs:436
+#: src/application/dialogs.rs:472
 msgid "New contact"
 msgstr "Yeni kişi"
 
-#: src/application/dialogs.rs:450
+#: src/application/dialogs.rs:486
 msgid "Phone number, including country code"
 msgstr "Ülke koduyla birlikte telefon numarası"
 
-#: src/application/dialogs.rs:455
+#: src/application/dialogs.rs:491
 msgid "Name (optional)"
 msgstr "İsim (isteğe bağlı)"
 
-#: src/application/dialogs.rs:464
+#: src/application/dialogs.rs:500
 msgid "Add contact"
 msgstr "Kişi ekle"
 
-#: src/application/dialogs.rs:504
+#: src/application/dialogs.rs:540
 msgid "Mention"
 msgstr "Bahset"
 
-#: src/application/dialogs.rs:509
+#: src/application/dialogs.rs:545
 msgid "Search participants"
 msgstr "Katılımcılarda ara"
 
-#: src/application/dialogs.rs:525
+#: src/application/dialogs.rs:561
 msgid "No participants match this search."
 msgstr "Aramanızla eşleşen katılımcı bulunamadı."
 
-#: src/application/dialogs.rs:653
+#: src/application/dialogs.rs:689
 msgid "Forward To"
 msgstr "Şuna ilet"
 
-#: src/application/dialogs.rs:658 src/application/sidebar.rs:140
+#: src/application/dialogs.rs:694 src/application/sidebar.rs:169
 msgid "Search chats"
 msgstr "Sohbetlerde ara"
 
-#: src/application/dialogs.rs:682
+#: src/application/dialogs.rs:718
 msgid "Forwarding"
 msgstr "İletiliyor"
 
-#: src/application/dialogs.rs:1144
+#: src/application/dialogs.rs:1180
 msgid "Your recently used stickers appear here."
 msgstr "Son kullandığınız çıkartmalar burada görünür."
 
-#: src/application/dialogs.rs:1145
+#: src/application/dialogs.rs:1181
 msgid "To add your own, copy .webp files into:"
-msgstr "Kendi çıkartmalarınızı eklemek için .webp dosyalarını şu konuma kopyalayın:"
+msgstr ""
+"Kendi çıkartmalarınızı eklemek için .webp dosyalarını şu konuma kopyalayın:"
 
-#: src/application/dialogs.rs:1149
+#: src/application/dialogs.rs:1185
 msgid "No Stickers Yet"
 msgstr "Henüz çıkartma yok"
 
-#: src/application/dialogs.rs:1151 src/application/sidebar.rs:177
-#: src/application/sidebar.rs:179
+#: src/application/dialogs.rs:1187 src/application/sidebar.rs:206
+#: src/application/sidebar.rs:208
 msgid "All"
 msgstr "Tümü"
 
-#: src/application/dialogs.rs:1156
+#: src/application/dialogs.rs:1192
 msgid "No Starred Stickers"
 msgstr "Yıldızlı çıkartma yok"
 
-#: src/application/dialogs.rs:1157
+#: src/application/dialogs.rs:1193
 msgid "Star a sticker in a chat to keep it here."
 msgstr "Burada saklamak için bir sohbette çıkartmaya yıldız ekleyin."
 
-#: src/application/dialogs.rs:1250
+#: src/application/dialogs.rs:1317
+#, fuzzy
+msgid "Showing smaller picture"
+msgstr "Gönderenlerin fotoğraflarını göster"
+
+#: src/application/dialogs.rs:1319
+msgid "No profile picture"
+msgstr ""
+
+#: src/application/dialogs.rs:1346
+#, fuzzy
+msgid "View larger picture"
+msgstr "Gönderenlerin fotoğraflarını göster"
+
+#: src/application/dialogs.rs:1367
+#, fuzzy
+msgid "Profile picture"
+msgstr "Profil kaydedildi"
+
+#: src/application/dialogs.rs:1383
+#, fuzzy
+msgid "Close"
+msgstr "Sohbeti _kapat"
+
+#: src/application/dialogs.rs:1427
+#, fuzzy
+msgid "Loading profile picture…"
+msgstr "Daha eski mesajlar yükleniyor…"
+
+#: src/application/dialogs.rs:1511
 msgid "Phone"
 msgstr "Telefon"
 
-#: src/application/dialogs.rs:1258 src/native_media_widgets/contacts.rs:65
+#: src/application/dialogs.rs:1519 src/native_media_widgets/contacts.rs:65
 msgid "Copy phone number"
 msgstr "Telefon numarasını kopyala"
 
-#: src/application/dialogs.rs:1343 src/application/dialogs.rs:1447
-#: src/application/dialogs.rs:1512
-msgid "Starred Messages"
-msgstr "Yıldızlı mesajlar"
+#: src/application/dialogs.rs:1593 src/application/dialogs.rs:1611
+#, fuzzy
+msgid "Disappearing messages"
+msgstr "Mesajlar güncelleniyor"
 
-#: src/application/dialogs.rs:1390
+#: src/application/dialogs.rs:1595
+msgid "New messages in this chat disappear after this time"
+msgstr ""
+
+#: src/application/dialogs.rs:1675
 msgid "Participants"
 msgstr "Katılımcılar"
 
-#: src/application/dialogs.rs:1454
+#: src/application/dialogs.rs:1747
 msgid "No Starred Messages"
 msgstr "Yıldızlı mesaj yok"
 
-#: src/application/dialogs.rs:1455
+#: src/application/dialogs.rs:1748
 msgid "Star a message from its menu to find it here."
 msgstr "Bir mesajı burada bulabilmek için menüsünden yıldız ekleyin."
 
-#: src/application/dispatch.rs:163
+#: src/application/dispatch.rs:171
 msgid "General"
 msgstr "Genel"
 
-#: src/application/dispatch.rs:165
+#: src/application/dispatch.rs:173
 msgid "Close window"
 msgstr "Pencereyi kapat"
 
-#: src/application/dispatch.rs:170
+#: src/application/dispatch.rs:178
 msgid "Chat List"
 msgstr "Sohbet listesi"
 
-#: src/application/dispatch.rs:172
+#: src/application/dispatch.rs:180
 msgid "Previous chat"
 msgstr "Önceki sohbet"
 
-#: src/application/dispatch.rs:173
+#: src/application/dispatch.rs:181
 msgid "Next chat"
 msgstr "Sonraki sohbet"
 
-#: src/application/dispatch.rs:178
+#: src/application/dispatch.rs:186
 msgid "Composer"
 msgstr "Mesaj yazma alanı"
 
-#: src/application/dispatch.rs:180
+#: src/application/dispatch.rs:188
 msgid "Send message"
 msgstr "Mesaj gönder"
 
-#: src/application/dispatch.rs:181
+#: src/application/dispatch.rs:189
 msgid "New line"
 msgstr "Yeni satır"
 
-#: src/application/dispatch.rs:185
+#: src/application/dispatch.rs:193
 msgid "Messages"
 msgstr "Mesajlar"
 
-#: src/application/dispatch.rs:187
+#: src/application/dispatch.rs:195
 msgid "Open message menu"
 msgstr "Mesaj menüsünü aç"
 
-#: src/application/dispatch.rs:188
+#: src/application/dispatch.rs:196
 msgid "Copy selected text"
 msgstr "Seçili metni kopyala"
 
-#: src/application/dispatch.rs:192
+#: src/application/dispatch.rs:200
 msgid "Media viewer"
 msgstr "Medya görüntüleyici"
 
-#: src/application/dispatch.rs:194
+#: src/application/dispatch.rs:202
 msgid "Previous photo"
 msgstr "Önceki fotoğraf"
 
-#: src/application/dispatch.rs:195
+#: src/application/dispatch.rs:203
 msgid "Next photo"
 msgstr "Sonraki fotoğraf"
 
-#: src/application/dispatch.rs:196
+#: src/application/dispatch.rs:204
 msgid "Zoom in"
 msgstr "Yakınlaştır"
 
-#: src/application/dispatch.rs:197
+#: src/application/dispatch.rs:205
 msgid "Zoom out"
 msgstr "Uzaklaştır"
 
-#: src/application/dispatch.rs:198
+#: src/application/dispatch.rs:206
 msgid "Fit to window"
 msgstr "Pencereye sığdır"
 
-#: src/application/dispatch.rs:199
+#: src/application/dispatch.rs:207
 msgid "Actual size"
 msgstr "Gerçek boyut"
 
-#: src/application/dispatch.rs:241
+#: src/application/dispatch.rs:249
 msgid "Starting backend"
 msgstr "Arka uç başlatılıyor"
 
-#: src/application/dispatch.rs:309
+#: src/application/dispatch.rs:317
 msgid "Refreshing messages"
 msgstr "Mesajlar yenileniyor"
 
-#: src/application/dispatch.rs:382 src/application/dispatch.rs:383
-#: src/application/dispatch.rs:1071 src/application/dispatch.rs:1072
+#: src/application/dispatch.rs:393 src/application/dispatch.rs:394
+#: src/application/dispatch.rs:1118 src/application/dispatch.rs:1119
 msgid "Enter valid phone number with country code"
 msgstr "Ülke koduyla birlikte geçerli bir telefon numarası girin"
 
-#: src/application/dispatch.rs:400
+#: src/application/dispatch.rs:411
 msgid "Checking contact on WhatsApp"
 msgstr "Kişi WhatsApp'ta kontrol ediliyor"
 
-#: src/application/dispatch.rs:584
+#: src/application/dispatch.rs:595
 msgid "Delete message?"
 msgstr "Mesaj silinsin mi?"
 
-#: src/application/dispatch.rs:592
-msgid "Delete"
-msgstr "Sil"
-
-#: src/application/dispatch.rs:690
+#: src/application/dispatch.rs:748
 msgid "Phone number copied"
 msgstr "Telefon numarası kopyalandı"
 
-#: src/application/dispatch.rs:820
+#: src/application/dispatch.rs:878
 msgid "Not connected to WhatsApp"
 msgstr "WhatsApp'a bağlı değil"
 
-#: src/application/dispatch.rs:828 src/application/dispatch.rs:829
-#: src/application/dispatch.rs:839 src/application/themes.rs:105
+#: src/application/dispatch.rs:886 src/application/dispatch.rs:887
+#: src/application/dispatch.rs:897 src/application/themes.rs:105
 #: src/application/themes.rs:106 src/application/themes.rs:120
 #: src/application/themes.rs:121 src/application/themes.rs:145
 #: src/application/themes.rs:146
 msgid "Could not open themes folder"
 msgstr "Temalar klasörü açılamadı"
 
-#: src/application/dispatch.rs:998
+#: src/application/dispatch.rs:1045
 msgid "Reconnecting to WhatsApp"
 msgstr "WhatsApp'a yeniden bağlanılıyor"
 
-#: src/application/dispatch.rs:1014
+#: src/application/dispatch.rs:1061
 msgid "Unlinking this computer"
 msgstr "Bu bilgisayarın bağlantısı kaldırılıyor"
 
-#: src/application/dispatch.rs:1055 src/application/dispatch.rs:1063
+#: src/application/dispatch.rs:1102 src/application/dispatch.rs:1110
 msgid "Code copied"
 msgstr "Kod kopyalandı"
 
-#: src/application/dispatch.rs:1077
+#: src/application/dispatch.rs:1124
 msgid "Requesting a pairing code from WhatsApp"
 msgstr "WhatsApp'tan eşleştirme kodu isteniyor"
 
-#: src/application/dispatch.rs:1146
+#: src/application/dispatch.rs:1193
 msgid "Contact opened"
 msgstr "Kişi açıldı"
 
-#: src/application/dispatch.rs:1207
+#: src/application/dispatch.rs:1254
 msgid "Could not save attachment"
 msgstr "Ek kaydedilemedi"
 
-#: src/application/dispatch.rs:1212
+#: src/application/dispatch.rs:1259
 msgid "Clipboard or portal action failed"
 msgstr "Pano veya portal işlemi başarısız oldu"
 
-#: src/application/dispatch.rs:1235
+#: src/application/dispatch.rs:1282
 msgid "Copied"
 msgstr "Kopyalandı"
 
-#: src/application/dispatch.rs:1332
+#: src/application/dispatch.rs:1406
 msgid "Shutdown complete"
 msgstr "Kapatma tamamlandı"
 
@@ -1047,7 +1157,7 @@ msgid "The poll was sent, but its voting key could not be saved."
 msgstr "Anket gönderildi ancak oylama anahtarı kaydedilemedi."
 
 #: src/application/dispatch/backend_events.rs:13
-#: src/application/dispatch/backend_events.rs:525
+#: src/application/dispatch/backend_events.rs:547
 msgid "Poll creation could not be completed."
 msgstr "Anket oluşturma işlemi tamamlanamadı."
 
@@ -1056,20 +1166,20 @@ msgid "Your vote was sent, but could not be saved locally."
 msgstr "Oyunuz gönderildi ancak yerel olarak kaydedilemedi."
 
 #: src/application/dispatch/backend_events.rs:20
-#: src/application/dispatch/backend_events.rs:529
-#: src/application/poll_runtime_tests.rs:130
+#: src/application/dispatch/backend_events.rs:551
+#: src/application/poll_runtime_tests.rs:131
 msgid "Could not send your vote."
 msgstr "Oyunuz gönderilemedi."
 
-#: src/application/dispatch/backend_events.rs:233
+#: src/application/dispatch/backend_events.rs:237
 msgid "No older messages available"
 msgstr "Daha eski mesaj bulunamadı"
 
-#: src/application/dispatch/backend_events.rs:441
+#: src/application/dispatch/backend_events.rs:463
 msgid "Profile saved"
 msgstr "Profil kaydedildi"
 
-#: src/application/dispatch/backend_events.rs:472
+#: src/application/dispatch/backend_events.rs:494
 msgid "Contact is on WhatsApp"
 msgstr "Kişi WhatsApp kullanıyor"
 
@@ -1086,7 +1196,7 @@ msgstr ""
 "“{name}” dosyası programlar veya etkin içerik barındırabilir. Yalnızca "
 "gönderen kişiye güveniyorsanız açın."
 
-#: src/application/document_safety.rs:197 src/native_media_widgets/photo.rs:517
+#: src/application/document_safety.rs:197 src/native_media_widgets/photo.rs:512
 #: src/native_notifications/adapters.rs:228
 msgid "Open"
 msgstr "Aç"
@@ -1105,14 +1215,15 @@ msgstr "İzin reddedildi. Erişim izinlerini kontrol edip tekrar deneyin."
 
 #: src/application/helpers.rs:225
 msgid "Storage operation failed. Check available disk space."
-msgstr "Depolama işlemi başarısız oldu. Kullanılabilir disk alanını kontrol edin."
+msgstr ""
+"Depolama işlemi başarısız oldu. Kullanılabilir disk alanını kontrol edin."
 
 #: src/application/helpers.rs:227
 msgid "Action failed. Check connection and try again."
 msgstr "İşlem başarısız oldu. Bağlantınızı kontrol edip tekrar deneyin."
 
-#: src/application/link_page.rs:92 src/application/sidebar.rs:93
-#: src/application/sidebar.rs:94
+#: src/application/link_page.rs:92 src/application/sidebar.rs:122
+#: src/application/sidebar.rs:123
 msgid "Main menu"
 msgstr "Ana menü"
 
@@ -1135,6 +1246,29 @@ msgstr "Kod al"
 #: src/application/link_page.rs:209
 msgid "Try Again"
 msgstr "Tekrar dene"
+
+#: src/application/pins.rs:18 src/model/mod.rs:361
+msgid "24 hours"
+msgstr ""
+
+#: src/application/pins.rs:19 src/model/mod.rs:362
+#, fuzzy
+msgid "7 days"
+msgstr "30 gün"
+
+#: src/application/pins.rs:20 src/native_preferences.rs:1049
+msgid "30 days"
+msgstr "30 gün"
+
+#: src/application/pins.rs:21 src/model/mod.rs:364
+#, rust-format
+msgid "{seconds} seconds"
+msgstr ""
+
+#: src/application/pins.rs:141
+#, fuzzy
+msgid "Loading pinned message"
+msgstr "Alıntılanan mesaj yükleniyor"
 
 #: src/application/profile_dialog.rs:29
 msgid "Privacy"
@@ -1188,7 +1322,7 @@ msgstr "Kaydet"
 msgid "Profile"
 msgstr "Profil"
 
-#: src/application/profile_dialog.rs:228
+#: src/application/profile_dialog.rs:228 src/native_preferences.rs:905
 msgid "Images"
 msgstr "Görseller"
 
@@ -1196,7 +1330,7 @@ msgstr "Görseller"
 msgid "Choose a Profile Photo"
 msgstr "Profil fotoğrafı seçin"
 
-#: src/application/reaction_drawer.rs:469
+#: src/application/reaction_drawer.rs:471
 #, rust-format
 msgid "React with {emoji}"
 msgstr "{emoji} ile tepki ver"
@@ -1217,74 +1351,93 @@ msgstr "Mesaj herkesten siliniyor"
 msgid "Deleting message"
 msgstr "Mesaj siliniyor"
 
-#: src/application/sidebar.rs:87
+#: src/application/sidebar.rs:116
 msgid "Updating messages"
 msgstr "Mesajlar güncelleniyor"
 
-#: src/application/sidebar.rs:100 src/application/sidebar.rs:101
+#: src/application/sidebar.rs:129 src/application/sidebar.rs:130
 msgid "New chat"
 msgstr "Yeni sohbet"
 
-#: src/application/sidebar.rs:109 src/application/sidebar.rs:110
-#: src/application/sidebar.rs:123
+#: src/application/sidebar.rs:138 src/application/sidebar.rs:139
+#: src/application/sidebar.rs:152
 msgid "Return to call"
 msgstr "Aramaya dön"
 
-#: src/application/sidebar.rs:147
+#: src/application/sidebar.rs:176
 msgid "Filters"
 msgstr "Filtreler"
 
-#: src/application/sidebar.rs:148
+#: src/application/sidebar.rs:177
 msgid "Filter chats"
 msgstr "Sohbetleri filtrele"
 
-#: src/application/sidebar.rs:162
+#: src/application/sidebar.rs:191
 msgid "Chat Type"
 msgstr "Sohbet türü"
 
-#: src/application/sidebar.rs:190 src/application/sidebar.rs:192
+#: src/application/sidebar.rs:219 src/application/sidebar.rs:221
 msgid "Private"
 msgstr "Kişisel"
 
-#: src/application/sidebar.rs:204 src/application/sidebar.rs:206
+#: src/application/sidebar.rs:233 src/application/sidebar.rs:235
 msgid "Groups"
 msgstr "Gruplar"
 
-#: src/application/sidebar.rs:216
+#: src/application/sidebar.rs:245
 msgid "Show Only"
 msgstr "Yalnızca şunları göster"
 
-#: src/application/sidebar.rs:230 src/application/sidebar.rs:232
+#: src/application/sidebar.rs:259 src/application/sidebar.rs:261
 msgid "Unread"
 msgstr "Okunmamış"
 
-#: src/application/sidebar.rs:243 src/application/sidebar.rs:245
+#: src/application/sidebar.rs:272 src/application/sidebar.rs:274
 msgid "Pinned"
 msgstr "Sabitlenmiş"
 
-#: src/application/sidebar.rs:256 src/application/sidebar.rs:258
+#: src/application/sidebar.rs:285 src/application/sidebar.rs:287
 msgid "Muted"
 msgstr "Sessize alınmış"
 
-#: src/application/sidebar.rs:287
+#: src/application/sidebar.rs:316
 msgid "Archived"
 msgstr "Arşivlenmiş"
 
-#: src/application/sidebar.rs:310
+#: src/application/sidebar.rs:339
 msgid "Calls"
 msgstr "Aramalar"
 
-#: src/application/sidebar.rs:374
+#: src/application/sidebar.rs:403
 msgid "No Calls Yet"
 msgstr "Henüz arama yok"
 
-#: src/application/sidebar.rs:375
+#: src/application/sidebar.rs:404
 msgid "Voice and video calls appear here"
 msgstr "Sesli ve görüntülü aramalar burada görünür"
 
 #: src/application/stars.rs:14
 msgid "Message starred"
 msgstr "Mesaja yıldız eklendi"
+
+#: src/application/stars.rs:130
+#, fuzzy
+msgid "Message kept"
+msgstr "Mesaj gönderildi"
+
+#: src/application/stars.rs:132
+#, fuzzy
+msgid "Message no longer kept"
+msgstr "Bir telefon numarasına mesaj gönder"
+
+#: src/application/storage_preferences.rs:16
+msgid "Choose a Download Folder"
+msgstr ""
+
+#: src/application/storage_preferences.rs:37
+#, fuzzy
+msgid "Could not open the folder picker"
+msgstr "Temalar klasörü açılamadı"
 
 #: src/application/themes.rs:54
 msgid "Could not save theme preference"
@@ -1372,13 +1525,15 @@ msgstr "Sistem kamera portalı kullanılamıyor"
 msgid ""
 "Video calls need an H.264 encoder (the GStreamer x264 or OpenH264 plugin)"
 msgstr ""
-"Görüntülü aramalar için bir H.264 kodlayıcı (GStreamer x264 veya OpenH264 eklentisi) gerekir"
+"Görüntülü aramalar için bir H.264 kodlayıcı (GStreamer x264 veya OpenH264 "
+"eklentisi) gerekir"
 
 #: src/calls/mod.rs:55
 msgid ""
 "Video calls need an H.264 decoder (the GStreamer libav or OpenH264 plugin)"
 msgstr ""
-"Görüntülü aramalar için bir H.264 kod çözücü (GStreamer libav veya OpenH264 eklentisi) gerekir"
+"Görüntülü aramalar için bir H.264 kod çözücü (GStreamer libav veya OpenH264 "
+"eklentisi) gerekir"
 
 #: src/calls/mod.rs:57
 msgid "Call audio is unavailable"
@@ -1452,112 +1607,168 @@ msgstr "Gelen sesli arama"
 msgid "Incoming video call"
 msgstr "Gelen görüntülü arama"
 
-#: src/model/mod.rs:458
+#: src/model/mod.rs:360
+msgid "Off"
+msgstr ""
+
+#: src/model/mod.rs:363 src/native_preferences.rs:1051
+msgid "90 days"
+msgstr "90 gün"
+
+#: src/model/mod.rs:381
+#, fuzzy
+msgid "You pinned a message"
+msgstr "Sesli mesaj"
+
+#: src/model/mod.rs:383
+#, fuzzy, rust-format
+msgid "{name} pinned a message"
+msgstr "Mesaj gönder"
+
+#: src/model/mod.rs:386
+msgid "You turned off disappearing messages"
+msgstr ""
+
+#: src/model/mod.rs:389
+#, rust-format
+msgid "{name} turned off disappearing messages"
+msgstr ""
+
+#: src/model/mod.rs:392
+#, rust-format
+msgid "You set disappearing messages to {duration}"
+msgstr ""
+
+#: src/model/mod.rs:396
+#, rust-format
+msgid "{name} set disappearing messages to {duration}"
+msgstr ""
+
+#: src/model/mod.rs:407
+#, fuzzy
+msgid "Pinned a message"
+msgstr "Mesaj gönder"
+
+#: src/model/mod.rs:408
+msgid "Disappearing messages turned off"
+msgstr ""
+
+#: src/model/mod.rs:409
+#, rust-format
+msgid "Disappearing messages set to {duration}"
+msgstr ""
+
+#: src/model/mod.rs:539
 msgid "Photo"
 msgstr "Fotoğraf"
 
-#: src/model/mod.rs:461
+#: src/model/mod.rs:542
 msgid "GIF"
 msgstr "GIF"
 
-#: src/model/mod.rs:463
+#: src/model/mod.rs:544
 msgid "Video"
 msgstr "Video"
 
-#: src/model/mod.rs:473
+#: src/model/mod.rs:554
 msgid "Voice message"
 msgstr "Sesli mesaj"
 
-#: src/model/mod.rs:475
+#: src/model/mod.rs:556
 msgid "Audio"
 msgstr "Ses"
 
-#: src/model/mod.rs:483
+#: src/model/mod.rs:564
 #, rust-format
 msgid "Document: {name}"
 msgstr "Belge: {name}"
 
-#: src/model/mod.rs:487
+#: src/model/mod.rs:568
 #, rust-format
 msgid "Location: {name}"
 msgstr "Konum: {name}"
 
-#: src/model/mod.rs:488
+#: src/model/mod.rs:569
 msgid "Location"
 msgstr "Konum"
 
-#: src/model/mod.rs:491
+#: src/model/mod.rs:572
 #, rust-format
 msgid "Contact: {name}"
 msgstr "Kişi: {name}"
 
-#: src/model/mod.rs:494
+#: src/model/mod.rs:575
 #, rust-format
 msgid "Poll: {question}"
 msgstr "Anket: {question}"
 
-#: src/model/mod.rs:498
+#: src/model/mod.rs:579
 msgid "Buttons"
 msgstr "Düğmeler"
 
-#: src/model/mod.rs:502
+#: src/model/mod.rs:583
 #, rust-format
 msgid "List: {title}"
 msgstr "Liste: {title}"
 
-#: src/model/mod.rs:503
+#: src/model/mod.rs:584
 msgid "List"
 msgstr "Liste"
 
-#: src/model/mod.rs:514
+#: src/model/mod.rs:595
 msgid "This message was deleted"
 msgstr "Bu mesaj silindi"
 
-#: src/model/mod.rs:522
+#: src/model/mod.rs:604
 msgid "Message"
 msgstr "Mesaj"
 
-#: src/model/mod.rs:640
+#: src/model/mod.rs:743
 msgid "Animated sticker"
 msgstr "Hareketli çıkartma"
 
-#: src/model/mod.rs:641
+#: src/model/mod.rs:744
 msgid "Call"
 msgstr "Arama"
 
-#: src/model/mod.rs:642
+#: src/model/mod.rs:745
 msgid "Event"
 msgstr "Etkinlik"
 
-#: src/model/mod.rs:643
+#: src/model/mod.rs:746
 msgid "Group invitation"
 msgstr "Grup daveti"
 
-#: src/model/mod.rs:644
+#: src/model/mod.rs:747
 msgid "Interactive message"
 msgstr "Etkileşimli mesaj"
 
-#: src/model/mod.rs:645
+#: src/model/mod.rs:748
 msgid "List message"
 msgstr "Liste mesajı"
 
-#: src/model/mod.rs:646
+#: src/model/mod.rs:749
 msgid "Payment"
 msgstr "Ödeme"
 
-#: src/model/mod.rs:647
+#: src/model/mod.rs:750
 msgid "Product"
 msgstr "Ürün"
 
-#: src/model/mod.rs:648
+#: src/model/mod.rs:751
 msgid "Sticker pack"
 msgstr "Çıkartma paketi"
 
-#: src/model/mod.rs:650
+#: src/model/mod.rs:753
 msgid "Waiting for this message. Open WhatsApp on your phone"
 msgstr "Bu mesaj bekleniyor. Telefonunuzda WhatsApp'ı açın"
 
-#: src/model/mod.rs:652
+#: src/model/mod.rs:756
+#, fuzzy
+msgid "View once message is not available here. Open WhatsApp on your phone"
+msgstr "Bu mesaj bekleniyor. Telefonunuzda WhatsApp'ı açın"
+
+#: src/model/mod.rs:758
 msgid "Unsupported message"
 msgstr "Desteklenmeyen mesaj"
 
@@ -1577,23 +1788,23 @@ msgstr "Seste ileri veya geri git"
 msgid "No phone number"
 msgstr "Telefon numarası yok"
 
-#: src/native_media_widgets/photo.rs:213
+#: src/native_media_widgets/photo.rs:206
 msgid "Download all photos"
 msgstr "Tüm fotoğrafları indir"
 
-#: src/native_media_widgets/photo.rs:247 src/native_media_widgets/photo.rs:250
+#: src/native_media_widgets/photo.rs:240 src/native_media_widgets/photo.rs:243
 msgid "View photo"
 msgstr "Fotoğrafı görüntüle"
 
-#: src/native_media_widgets/photo.rs:269
+#: src/native_media_widgets/photo.rs:259
 msgid "Download photo"
 msgstr "Fotoğrafı indir"
 
-#: src/native_media_widgets/photo.rs:392
+#: src/native_media_widgets/photo.rs:382
 msgid "Play video"
 msgstr "Videoyu oynat"
 
-#: src/native_media_widgets/photo.rs:550
+#: src/native_media_widgets/photo.rs:545
 msgid "Downloading"
 msgstr "İndiriliyor"
 
@@ -1747,119 +1958,119 @@ msgstr "Bunun yerine başka bir uygulamayla açın"
 msgid "Open in Another App"
 msgstr "Başka bir uygulamada aç"
 
-#: src/native_media_widgets/widget.rs:373
+#: src/native_media_widgets/widget.rs:386
 msgid "This message type cannot be displayed"
 msgstr "Bu mesaj türü görüntülenemiyor"
 
-#: src/native_media_widgets/widget.rs:396
+#: src/native_media_widgets/widget.rs:409
 msgid "Image preview"
 msgstr "Görsel önizlemesi"
 
-#: src/native_media_widgets/widget.rs:408
+#: src/native_media_widgets/widget.rs:421
 msgid "Open or download attachment"
 msgstr "Eki aç veya indir"
 
-#: src/native_media_widgets/widget.rs:472
+#: src/native_media_widgets/widget.rs:485
 msgid "This link can't be opened"
 msgstr "Bu bağlantı açılamıyor"
 
-#: src/native_preferences.rs:351
+#: src/native_preferences.rs:416
 msgid "Preferences"
 msgstr "Tercihler"
 
-#: src/native_preferences.rs:363
+#: src/native_preferences.rs:428
 msgid "Appearance"
 msgstr "Görünüm"
 
-#: src/native_preferences.rs:366
+#: src/native_preferences.rs:431
 msgid "Display and input"
 msgstr "Görüntüleme ve giriş"
 
-#: src/native_preferences.rs:371
+#: src/native_preferences.rs:436 src/native_preferences.rs:1565
 msgid "Language"
 msgstr "Dil"
 
-#: src/native_preferences.rs:372
+#: src/native_preferences.rs:437
 msgid "Quit and reopen ZapTide to apply the language"
 msgstr "Dil değişikliğini uygulamak için ZapTide'dan çıkıp yeniden açın"
 
-#: src/native_preferences.rs:374
+#: src/native_preferences.rs:439
 msgid "System default"
 msgstr "Sistem varsayılanı"
 
-#: src/native_preferences.rs:399
+#: src/native_preferences.rs:465
 msgid "Theme"
 msgstr "Tema"
 
-#: src/native_preferences.rs:400
+#: src/native_preferences.rs:466
 msgid "Choose how ZapTide looks"
 msgstr "ZapTide'ın görünümünü seçin"
 
-#: src/native_preferences.rs:402
+#: src/native_preferences.rs:468
 msgid "Follow system"
 msgstr "Sistem ayarlarını kullan"
 
-#: src/native_preferences.rs:403
+#: src/native_preferences.rs:469
 msgid "Light"
 msgstr "Açık"
 
-#: src/native_preferences.rs:404
+#: src/native_preferences.rs:470
 msgid "Dark"
 msgstr "Koyu"
 
-#: src/native_preferences.rs:426
+#: src/native_preferences.rs:492
 msgid "Custom palette"
 msgstr "Özel renk paleti"
 
-#: src/native_preferences.rs:427
+#: src/native_preferences.rs:493
 msgid "Choose a palette from the themes folder"
 msgstr "Temalar klasöründen bir renk paleti seçin"
 
-#: src/native_preferences.rs:430 src/native_preferences.rs:696
+#: src/native_preferences.rs:496 src/native_preferences.rs:776
 msgid "System palette"
 msgstr "Sistem renk paleti"
 
-#: src/native_preferences.rs:460 src/native_preferences.rs:464
+#: src/native_preferences.rs:526 src/native_preferences.rs:530
 msgid "Open Themes Folder"
 msgstr "Temalar klasörünü aç"
 
-#: src/native_preferences.rs:469
+#: src/native_preferences.rs:535
 msgid "Zoom"
 msgstr "Yakınlaştırma"
 
-#: src/native_preferences.rs:470
+#: src/native_preferences.rs:536
 msgid "UI scale, from 0.6× to 2.0×"
 msgstr "Arayüz ölçeği: 0,6× ile 2,0× arasında"
 
-#: src/native_preferences.rs:477
+#: src/native_preferences.rs:543
 msgid "Send messages with Enter"
 msgstr "Enter tuşuyla mesaj gönder"
 
-#: src/native_preferences.rs:478
+#: src/native_preferences.rs:544
 msgid "Shift+Enter inserts a new line"
 msgstr "Shift+Enter yeni satır ekler"
 
-#: src/native_preferences.rs:485
+#: src/native_preferences.rs:551
 msgid "Show sender pictures"
 msgstr "Gönderenlerin fotoğraflarını göster"
 
-#: src/native_preferences.rs:486
+#: src/native_preferences.rs:552
 msgid "Show avatars next to messages"
 msgstr "Mesajların yanında profil fotoğraflarını göster"
 
-#: src/native_preferences.rs:493
+#: src/native_preferences.rs:559
 msgid "Show shortcut hints"
 msgstr "Klavye kısayollarını göster"
 
-#: src/native_preferences.rs:494
+#: src/native_preferences.rs:560
 msgid "Show keyboard shortcut hints"
 msgstr "Klavye kısayollarıyla ilgili ipuçlarını göster"
 
-#: src/native_preferences.rs:501
+#: src/native_preferences.rs:567
 msgid "Translucent sidebar"
 msgstr "Yarı saydam kenar çubuğu"
 
-#: src/native_preferences.rs:503
+#: src/native_preferences.rs:569
 msgid ""
 "Blur the desktop behind the chat list. Needs a compositor that supports "
 "background blur"
@@ -1867,135 +2078,193 @@ msgstr ""
 "Sohbet listesinin arkasındaki masaüstünü bulanıklaştırır. Arka plan "
 "bulanıklaştırmayı destekleyen bir birleştirici gerektirir."
 
-#: src/native_preferences.rs:511
+#: src/native_preferences.rs:577
 msgid "Account"
 msgstr "Hesap"
 
-#: src/native_preferences.rs:514
+#: src/native_preferences.rs:580
 msgid "Contacts"
 msgstr "Kişiler"
 
-#: src/native_preferences.rs:519
+#: src/native_preferences.rs:585
 msgid "Prefer contact names"
 msgstr "Kişi adlarını tercih et"
 
-#: src/native_preferences.rs:520
+#: src/native_preferences.rs:586
 msgid "Use address-book names instead of profile names"
 msgstr "Profil adları yerine adres defterindeki adları kullan"
 
-#: src/native_preferences.rs:527
+#: src/native_preferences.rs:593
 msgid "Save contacts to phone"
 msgstr "Kişileri telefona kaydet"
 
-#: src/native_preferences.rs:528
+#: src/native_preferences.rs:594
 msgid "Also add saved contacts to the device address book"
 msgstr "Kaydedilen kişileri cihazın adres defterine de ekle"
 
-#: src/native_preferences.rs:535 src/native_preferences.rs:538
+#: src/native_preferences.rs:601 src/native_preferences.rs:604
 msgid "Notifications"
 msgstr "Bildirimler"
 
-#: src/native_preferences.rs:543
+#: src/native_preferences.rs:609
 msgid "Desktop notifications"
 msgstr "Masaüstü bildirimleri"
 
-#: src/native_preferences.rs:544
+#: src/native_preferences.rs:610
 msgid "Notify when messages arrive while away"
 msgstr "Uzakta olduğunuzda yeni mesajlar geldiğinde bildirim gönder"
 
-#: src/native_preferences.rs:551
+#: src/native_preferences.rs:617
 msgid "Show previews"
 msgstr "Önizlemeleri göster"
 
-#: src/native_preferences.rs:552
+#: src/native_preferences.rs:618
 msgid "Include the sender and message text"
 msgstr "Göndereni ve mesaj metnini göster"
 
-#: src/native_preferences.rs:558
+#: src/native_preferences.rs:624
 msgid "Notification sound"
 msgstr "Bildirim sesi"
 
-#: src/native_preferences.rs:560
+#: src/native_preferences.rs:626
 msgid "Play a short sound with notifications, where the desktop supports it"
 msgstr "Masaüstü desteklediğinde bildirimlerle birlikte kısa bir ses çal"
 
-#: src/native_preferences.rs:572
+#: src/native_preferences.rs:638
 msgid "Pause between sounds"
 msgstr "Sesler arasındaki bekleme süresi"
 
-#: src/native_preferences.rs:573
+#: src/native_preferences.rs:639
 msgid "Messages that arrive sooner stay silent"
 msgstr "Bu süre dolmadan gelen mesajlar için ses çalınmaz"
 
-#: src/native_preferences.rs:575
+#: src/native_preferences.rs:641
 msgid "No pause"
 msgstr "Bekleme yok"
 
-#: src/native_preferences.rs:576
+#: src/native_preferences.rs:642
 msgid "10 seconds"
 msgstr "10 saniye"
 
-#: src/native_preferences.rs:577
+#: src/native_preferences.rs:643
 msgid "30 seconds"
 msgstr "30 saniye"
 
-#: src/native_preferences.rs:578
+#: src/native_preferences.rs:644
 msgid "1 minute"
 msgstr "1 dakika"
 
-#: src/native_preferences.rs:579
+#: src/native_preferences.rs:645
 msgid "2 minutes"
 msgstr "2 dakika"
 
-#: src/native_preferences.rs:610
+#: src/native_preferences.rs:676
 msgid "Storage"
 msgstr "Depolama"
 
-#: src/native_preferences.rs:613
+#: src/native_preferences.rs:679
 msgid "Downloads"
 msgstr "İndirilenler"
 
-#: src/native_preferences.rs:618
+#: src/native_preferences.rs:684
 msgid "Automatically download attachments"
 msgstr "Ekleri otomatik indir"
 
-#: src/native_preferences.rs:619
+#: src/native_preferences.rs:685
 msgid "Download attachments when they enter view"
 msgstr "Ekler görüntülendiğinde otomatik olarak indir"
 
-#: src/native_preferences.rs:627
+#: src/native_preferences.rs:703
 msgid "Background"
 msgstr "Arka plan"
 
-#: src/native_preferences.rs:630
+#: src/native_preferences.rs:706
 msgid "Background and updates"
 msgstr "Arka plan ve güncellemeler"
 
-#: src/native_preferences.rs:635
+#: src/native_preferences.rs:711
 msgid "Keep running in background"
 msgstr "Arka planda çalışmaya devam et"
 
-#: src/native_preferences.rs:636
+#: src/native_preferences.rs:712
 msgid "Keep ZapTide available after closing its window"
 msgstr "Pencereyi kapattıktan sonra da ZapTide çalışmaya devam etsin"
 
-#: src/native_preferences.rs:643
+#: src/native_preferences.rs:719
 msgid "Messaging"
 msgstr "Mesajlaşma"
 
-#: src/native_preferences.rs:646
+#: src/native_preferences.rs:722
 msgid "Messaging and media"
 msgstr "Mesajlaşma ve medya"
 
-#: src/native_preferences.rs:650
+#: src/native_preferences.rs:726
 msgid "Voice playback speed"
 msgstr "Sesli mesaj oynatma hızı"
 
-#: src/native_preferences.rs:784
+#: src/native_preferences.rs:896
+#, fuzzy
+msgid "Download automatically"
+msgstr "Sesli mesaj indiriliyor"
+
+#: src/native_preferences.rs:898
+msgid ""
+"Turn off a category to keep its attachments from downloading until you open "
+"them"
+msgstr ""
+
+#: src/native_preferences.rs:910
+#, fuzzy
+msgid "Videos"
+msgstr "Video"
+
+#: src/native_preferences.rs:915
+#, fuzzy
+msgid "Audio and voice messages"
+msgstr "Sesli mesaj gönder"
+
+#: src/native_preferences.rs:920
+#, fuzzy
+msgid "Documents"
+msgstr "Belge: {name}"
+
+#: src/native_preferences.rs:925
+msgid "Other files"
+msgstr ""
+
+#: src/native_preferences.rs:949
+msgid "Default location (application cache folder)"
+msgstr ""
+
+#: src/native_preferences.rs:965
+#, fuzzy
+msgid "Download location"
+msgstr "Fotoğrafı indir"
+
+#: src/native_preferences.rs:967
+msgid "Where ZapTide saves newly downloaded photos, videos, audio and files"
+msgstr ""
+
+#: src/native_preferences.rs:972
+#, fuzzy
+msgid "Folder"
+msgstr "Klasörde göster"
+
+#: src/native_preferences.rs:978
+#, fuzzy
+msgid "Choose a Folder"
+msgstr "Klasörde göster"
+
+#: src/native_preferences.rs:987
+#, fuzzy
+msgid "Restore Default Location"
+msgstr "Tepkiyi kaldır"
+
+#: src/native_preferences.rs:1007
 msgid "Free up space"
 msgstr "Yer aç"
 
-#: src/native_preferences.rs:786
+#: src/native_preferences.rs:1009
 msgid ""
 "Messages stay. A removed file downloads again when you open it, if WhatsApp "
 "still has it. Files you can't download again from WhatsApp are lost."
@@ -2004,94 +2273,89 @@ msgstr ""
 "mevcutsa yeniden indirilir. WhatsApp'tan tekrar indirilemeyen dosyalar ise "
 "kalıcı olarak kaybolur."
 
-#: src/native_preferences.rs:791
+#: src/native_preferences.rs:1014
 msgid "Delete old downloads"
 msgstr "Eski indirilenleri sil"
 
-#: src/native_preferences.rs:793
+#: src/native_preferences.rs:1016
 msgid "Remove photos, videos, audio and files from this computer after a while"
-msgstr "Fotoğrafları, videoları, sesleri ve dosyaları bir süre sonra bu bilgisayardan kaldır"
+msgstr ""
+"Fotoğrafları, videoları, sesleri ve dosyaları bir süre sonra bu "
+"bilgisayardan kaldır"
 
-#: src/native_preferences.rs:803
+#: src/native_preferences.rs:1026
 msgid "Keep downloads for"
 msgstr "İndirilenleri şu süre boyunca sakla"
 
-#: src/native_preferences.rs:826
-msgid "30 days"
-msgstr "30 gün"
-
-#: src/native_preferences.rs:827
+#: src/native_preferences.rs:1050
 msgid "60 days"
 msgstr "60 gün"
 
-#: src/native_preferences.rs:828
-msgid "90 days"
-msgstr "90 gün"
-
-#: src/native_preferences.rs:829
+#: src/native_preferences.rs:1052
 msgid "180 days"
 msgstr "180 gün"
 
-#: src/native_preferences.rs:830
+#: src/native_preferences.rs:1053
 msgid "1 year"
 msgstr "1 yıl"
 
-#: src/native_preferences.rs:838
+#: src/native_preferences.rs:1061
 #, rust-format
 msgid "Custom ({} days)"
 msgstr "Özel ({} gün)"
 
-#: src/native_preferences.rs:852
+#: src/native_preferences.rs:1075
 msgid "Online status"
 msgstr "Çevrimiçi durumu"
 
-#: src/native_preferences.rs:854
+#: src/native_preferences.rs:1077
 msgid ""
 "While ZapTide shows you as online, your phone does not receive notifications."
-msgstr ""
-"ZapTide sizi çevrimiçi gösterdiği sürece telefonunuza bildirim gelmez."
+msgstr "ZapTide sizi çevrimiçi gösterdiği sürece telefonunuza bildirim gelmez."
 
-#: src/native_preferences.rs:860
+#: src/native_preferences.rs:1083
 msgid "Go offline when I leave ZapTide"
 msgstr "ZapTide'dan ayrıldığımda çevrimdışı ol"
 
-#: src/native_preferences.rs:861
+#: src/native_preferences.rs:1084
 msgid "Switch to another app or lock the screen"
 msgstr "Başka bir uygulamaya geçtiğimde veya ekranı kilitlediğimde"
 
-#: src/native_preferences.rs:864
+#: src/native_preferences.rs:1087
 msgid "After 10 seconds"
 msgstr "10 saniye sonra"
 
-#: src/native_preferences.rs:865 src/native_preferences.rs:880
+#: src/native_preferences.rs:1088 src/native_preferences.rs:1103
 msgid "After 1 minute"
 msgstr "1 dakika sonra"
 
-#: src/native_preferences.rs:866 src/native_preferences.rs:881
+#: src/native_preferences.rs:1089 src/native_preferences.rs:1104
 msgid "After 5 minutes"
 msgstr "5 dakika sonra"
 
-#: src/native_preferences.rs:867 src/native_preferences.rs:883
+#: src/native_preferences.rs:1090 src/native_preferences.rs:1106
 msgid "Never"
 msgstr "Asla"
 
-#: src/native_preferences.rs:876
+#: src/native_preferences.rs:1099
 msgid "Go offline when inactive"
 msgstr "Etkin olmadığımda çevrimdışı ol"
 
-#: src/native_preferences.rs:877
+#: src/native_preferences.rs:1100
 msgid "No typing, clicks or pointer movement in ZapTide"
 msgstr "ZapTide'da yazma, tıklama veya işaretçi hareketi olmadığında"
 
-#: src/native_preferences.rs:882
+#: src/native_preferences.rs:1105
 msgid "After 15 minutes"
 msgstr "15 dakika sonra"
 
-#: src/native_preferences.rs:927
+#: src/native_preferences.rs:1150
 #, rust-format
 msgid "Custom ({seconds} s)"
 msgstr "Özel ({seconds} sn)"
 
 #: src/services/media.rs:27
 msgid "Playing faster needs the GStreamer scaletempo plugin (gst-plugins-good)"
-msgstr "Daha hızlı oynatma için GStreamer scaletempo eklentisi (gst-plugins-good) gereklidir"
+msgstr ""
+"Daha hızlı oynatma için GStreamer scaletempo eklentisi (gst-plugins-good) "
+"gereklidir"

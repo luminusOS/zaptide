@@ -588,9 +588,8 @@ impl PictureSource for ClientPictures {
 }
 
 /// Looks the picture up for each candidate id, the requested size first,
-/// and downloads it. At most `AVATAR_FETCHES` run at once per account, so a
-/// chat list full of stale pictures cannot start hundreds of requests and
-/// blocking threads together.
+/// and downloads it. Separate permits for background avatars and interactive
+/// previews prevent the chat list from delaying a requested preview.
 async fn fetch_picture(
     source: &impl PictureSource,
     permits: &tokio::sync::Semaphore,
@@ -1018,6 +1017,7 @@ struct Worker {
     /// Deferred profile-picture requests and retry counts.
     pending_avatars: HashMap<(String, bool), u32>,
     avatar_permits: Arc<tokio::sync::Semaphore>,
+    avatar_preview_permits: Arc<tokio::sync::Semaphore>,
     /// Active recent-sticker downloads by hash.
     sticker_fetches: HashSet<String>,
     /// Active chat-sticker downloads by chat, message id, and raw fingerprint.
@@ -1209,6 +1209,7 @@ impl Worker {
             presence_subscribed: HashSet::new(),
             pending_avatars: HashMap::new(),
             avatar_permits: Arc::new(tokio::sync::Semaphore::new(AVATAR_FETCHES)),
+            avatar_preview_permits: Arc::new(tokio::sync::Semaphore::new(1)),
             sticker_fetches: HashSet::new(),
             sticker_downloads: HashSet::new(),
             stickers_dirty: false,
@@ -1367,6 +1368,7 @@ impl Worker {
             | Event::MessageDeleted { chat, .. }
             | Event::OlderFetched { chat, .. }
             | Event::PollCreated { chat, .. }
+            | Event::KeptChanged { chat, .. }
             | Event::PollVoted { chat, .. } => *chat = self.canonical_str(chat),
             _ => {}
         }
@@ -1389,9 +1391,24 @@ impl Worker {
                     | Event::Typing { .. }
                     | Event::Calls { .. }
                     | Event::Pinned { .. }
+                    | Event::KeptChanged { .. }
             )
         {
             return;
+        }
+        if let Event::Messages {
+            chat,
+            messages,
+            keep_states,
+            ..
+        } = &mut event
+            && !messages.is_empty()
+        {
+            let archived_chat = self.canonical_str(chat);
+            match self.archive.keep_states(&archived_chat, messages) {
+                Ok(states) => *keep_states = states,
+                Err(_) => log::warn!("could not read Keep in Chat state"),
+            }
         }
         if let Some(uncommitted) = self.uncommitted().as_mut() {
             uncommitted.push(event);

@@ -28,6 +28,257 @@ fn timed_text(expiration: u32) -> wa::Message {
     })
 }
 
+fn keep_of(target: &str, kind: Option<wa::KeepType>, at_ms: i64) -> Arc<wa::Message> {
+    Arc::new(from_default!(wa::Message {
+        keep_in_chat_message: MessageField::some(from_default!(wa::message::KeepInChatMessage {
+            key: MessageField::some(from_default!(wa::MessageKey {
+                id: Some(target.into()),
+            })),
+            keep_type: kind,
+            timestamp_ms: Some(at_ms),
+        })),
+    }))
+}
+
+#[test]
+fn keep_pending_target_survives_an_overdue_replay() {
+    let (mut worker, events, _, _) = worker();
+    worker.ingest(
+        &keep_of("target", Some(wa::KeepType::KeepForAll), 21_001),
+        &info("keep", 21),
+    );
+    let target = Arc::new(timed_text(60));
+    let target_info = info("target", 20);
+    worker.ingest(&target, &target_info);
+    worker.pump_expiry();
+
+    assert!(worker.archive.is_kept(CHAT, "target").unwrap());
+    assert_eq!(worker.archive.messages(CHAT, None, 5).unwrap().len(), 1);
+    assert_eq!(worker.archive.chat(CHAT).unwrap().unwrap().unread, 0);
+    let updates = emitted(&events);
+    assert!(!updates.iter().any(|event| matches!(
+        event,
+        Event::Incoming { .. } | Event::MessageDeleted { .. } | Event::Messages { .. }
+    )));
+    assert!(updates.iter().any(|event| matches!(
+        event, Event::KeptChanged { restored: Some(message), .. } if message.id == "target"
+    )));
+
+    worker.ingest(&target, &target_info);
+
+    let updates = emitted(&events);
+    assert!(!updates.iter().any(|event| matches!(
+        event,
+        Event::Incoming { .. } | Event::MessageDeleted { .. } | Event::Messages { .. }
+    )));
+    assert!(
+        updates
+            .iter()
+            .any(|event| matches!(event, Event::MessageUpdated(message) if message.id == "target"))
+    );
+    assert_eq!(worker.archive.chat(CHAT).unwrap().unwrap().unread, 0);
+}
+
+#[test]
+fn keep_unknown_and_older_changes_do_not_undo_a_confirmed_keep() {
+    let (mut worker, _, _, _) = worker();
+    worker.ingest(&Arc::new(timed_text(60)), &info("target", 20));
+    for (id, kind, at_ms) in [
+        ("keep", Some(wa::KeepType::KeepForAll), 24_005),
+        ("unknown", None, 25_000),
+        ("old-undo", Some(wa::KeepType::UndoKeepForAll), 24_001),
+    ] {
+        worker.ingest(&keep_of("target", kind, at_ms), &info(id, at_ms / 1000));
+    }
+
+    assert!(worker.archive.is_kept(CHAT, "target").unwrap());
+}
+
+#[test]
+fn keep_change_cannot_retain_a_message_sent_without_a_timer() {
+    let (mut worker, _, _, _) = worker();
+    worker.ingest(&Arc::new(wa_text("synthetic")), &info("plain", 20));
+    worker.ingest(
+        &keep_of("plain", Some(wa::KeepType::KeepForAll), 21_000),
+        &info("keep", 21),
+    );
+
+    assert!(!worker.archive.is_kept(CHAT, "plain").unwrap());
+}
+
+#[test]
+fn direct_keep_uses_the_envelope_chat_not_the_senders_target_address() {
+    let (mut worker, _, _, _) = worker();
+    let direct = |id, timestamp| MessageInfo {
+        id,
+        source: MessageSource {
+            chat: SENDER.parse().unwrap(),
+            sender: SENDER.parse().unwrap(),
+            ..Default::default()
+        },
+        timestamp: whatsapp_rust::wacore::time::from_secs(timestamp).unwrap(),
+        ..Default::default()
+    };
+    worker.ingest(&Arc::new(timed_text(60)), &direct("target".into(), 20));
+    let mut keep = keep_of("target", Some(wa::KeepType::KeepForAll), 21_000);
+    Arc::make_mut(&mut keep)
+        .keep_in_chat_message
+        .as_option_mut()
+        .unwrap()
+        .key
+        .as_option_mut()
+        .unwrap()
+        .remote_jid = Some(worker.me());
+
+    worker.ingest(&keep, &direct("keep".into(), 21));
+
+    assert!(worker.archive.is_kept(SENDER, "target").unwrap());
+}
+
+fn history_message(id: &str, message: wa::Message) -> wa::HistorySyncMsg {
+    from_default!(wa::HistorySyncMsg {
+        message: MessageField::some(from_default!(wa::WebMessageInfo {
+            key: MessageField::some(from_default!(wa::MessageKey {
+                id: Some(id.into()),
+                remote_jid: Some(CHAT.into()),
+                participant: Some(SENDER.into()),
+            })),
+            message: MessageField::some(message),
+            message_timestamp: Some(20),
+        })),
+    })
+}
+
+#[test]
+fn keep_in_history_retains_its_target_without_adding_an_action_row() {
+    let (mut worker, _, _, _) = worker();
+    let keep = keep_of("target", Some(wa::KeepType::KeepForAll), 25_000);
+    let chat = parse_conversation(from_default!(wa::Conversation {
+        id: CHAT.into(),
+        messages: vec![
+            history_message("keep", (*keep).clone()),
+            history_message("target", timed_text(60)),
+        ],
+    }));
+    let (_, committed) = worker.apply_history(
+        ParsedHistory {
+            chats: vec![chat],
+            push_names: Vec::new(),
+            lids: Vec::new(),
+            stickers: Vec::new(),
+        },
+        true,
+    );
+
+    assert!(committed);
+    assert!(worker.archive.is_kept(CHAT, "target").unwrap());
+    let page = worker.archive.messages(CHAT, None, 5).unwrap();
+    assert_eq!(page.len(), 1);
+    assert_eq!(page[0].id, "target");
+}
+
+#[test]
+fn keep_snapshot_with_message_duration_is_restored_from_history() {
+    let (mut worker, _, _, _) = worker();
+    let mut target = history_message("target", wa_text("synthetic"));
+    let info = target.message.as_option_mut().unwrap();
+    info.ephemeral_duration = Some(60);
+    info.keep_in_chat = MessageField::some(from_default!(wa::KeepInChat {
+        keep_type: Some(wa::KeepType::KeepForAll),
+        client_timestamp_ms: Some(25_000),
+    }));
+    let chat = parse_conversation(from_default!(wa::Conversation {
+        id: CHAT.into(),
+        messages: vec![target],
+    }));
+    let (_, committed) = worker.apply_history(
+        ParsedHistory {
+            chats: vec![chat],
+            push_names: Vec::new(),
+            lids: Vec::new(),
+            stickers: Vec::new(),
+        },
+        true,
+    );
+
+    assert!(committed);
+    assert_eq!(
+        worker.archive.keep_state(CHAT, "target").unwrap(),
+        Some((80, true))
+    );
+}
+
+#[test]
+fn keep_completion_does_not_override_newer_incoming_unkeep() {
+    let (mut worker, events, _, _) = worker();
+    worker.ingest(&Arc::new(timed_text(60)), &info("target", 20));
+    worker.ingest(
+        &keep_of("target", Some(wa::KeepType::UndoKeepForAll), 25_000),
+        &info("undo", 25),
+    );
+    let _ = emitted(&events);
+    worker.keep_set(CHAT.into(), "target".into(), true, Ok(24_000));
+
+    assert!(!worker.archive.is_kept(CHAT, "target").unwrap());
+    assert!(
+        !emitted(&events)
+            .iter()
+            .any(|event| matches!(event, Event::KeptChanged { .. }))
+    );
+}
+
+#[test]
+fn keep_archive_failure_does_not_publish_a_success() {
+    let (mut worker, events, _, _) = worker();
+    worker.ingest(&Arc::new(timed_text(60)), &info("target", 20));
+    worker
+        .archive
+        .execute_batch_for_test(
+            "CREATE TRIGGER fail_keep BEFORE UPDATE OF kept ON messages
+         BEGIN SELECT RAISE(ABORT, 'synthetic'); END;",
+        )
+        .unwrap();
+    let _ = emitted(&events);
+    worker.keep_set(CHAT.into(), "target".into(), true, Ok(24_000));
+
+    assert!(!worker.archive.is_kept(CHAT, "target").unwrap());
+    let events = emitted(&events);
+    assert!(events.iter().any(|event| matches!(event, Event::Error(_))));
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::KeptChanged { .. }))
+    );
+}
+
+#[test]
+fn keep_restores_a_hidden_row_without_publishing_a_new_arrival() {
+    let (mut worker, events, _, _) = worker();
+    worker.ingest(&Arc::new(timed_text(60)), &info("target", 20));
+    let _ = emitted(&events);
+    worker.ingest(
+        &keep_of("target", Some(wa::KeepType::KeepForAll), 21_000),
+        &info("keep", 21),
+    );
+
+    let updates = emitted(&events);
+    assert!(updates.iter().any(|event| matches!(
+        event, Event::KeptChanged { restored: Some(message), .. } if message.id == "target"
+    )));
+    assert!(
+        !updates
+            .iter()
+            .any(|event| matches!(event, Event::Incoming { .. } | Event::Messages { .. }))
+    );
+
+    worker.ingest(
+        &keep_of("target", Some(wa::KeepType::UndoKeepForAll), 22_000),
+        &info("undo", 22),
+    );
+    assert_eq!(deleted(&events), ["target"]);
+    assert!(worker.archive.messages(CHAT, None, 5).unwrap().is_empty());
+}
+
 fn pin_of(target: &str, kind: wa::message::pin_in_chat_message::Type, at_ms: i64) -> wa::Message {
     from_default!(wa::Message {
         pin_in_chat_message: MessageField::some(from_default!(wa::message::PinInChatMessage {

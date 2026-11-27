@@ -666,6 +666,7 @@ pub(super) fn start(
                 send(Event::Messages {
                     chat: chat.into(),
                     messages,
+                    keep_states: Vec::new(),
                     older: false,
                     complete: true,
                     request: None,

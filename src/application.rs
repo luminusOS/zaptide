@@ -86,7 +86,6 @@ fn dialog_action_callback(
     let sender = sender.clone();
     std::rc::Rc::new(move |action| {
         sender.input(match action {
-            dialogs::DialogAction::ArchiveChat(id) => Input::ArchiveChat(id),
             dialogs::DialogAction::UnlinkConfirmed => Input::UnlinkConfirmed,
             dialogs::DialogAction::CreatePoll(draft) => Input::CreatePoll(draft),
             dialogs::DialogAction::StartChat { id, name } => Input::StartChat { id, name },
@@ -96,9 +95,14 @@ fn dialog_action_callback(
             dialogs::DialogAction::SendSticker(path) => Input::SendSticker(path),
             dialogs::DialogAction::RemoveSticker(path) => Input::RemoveSticker(path),
             dialogs::DialogAction::UnstarSticker(path) => Input::UnstarSticker(path),
-            dialogs::DialogAction::ShowStarred => Input::ShowStarred,
-            dialogs::DialogAction::OpenStarred { chat, id } => Input::OpenStarred { chat, id },
-            dialogs::DialogAction::SetDisappearing(seconds) => Input::SetDisappearing(seconds),
+            dialogs::DialogAction::ShowStarred(target) => Input::ShowStarred(target),
+            dialogs::DialogAction::OpenStarred { target, id } => Input::OpenStarred { target, id },
+            dialogs::DialogAction::SetDisappearing(target, seconds) => {
+                Input::SetDisappearing(target, seconds)
+            }
+            dialogs::DialogAction::ShowFullAvatar(id, preview) => {
+                Input::ShowFullAvatar(id, preview)
+            }
         });
     })
 }
@@ -203,6 +207,9 @@ struct OpenChatState {
     message_ids: Vec<String>,
     message_snapshots: std::collections::HashMap<String, crate::model::Message>,
     editable_messages: std::collections::HashMap<String, String>,
+    /// Messages of the open transcript that someone kept from disappearing.
+    kept: std::collections::HashSet<String>,
+    keepable: std::collections::HashMap<String, i64>,
     transcript: Vec<crate::native_transcript::TranscriptRow>,
     pending_transcript: conversation::PendingTranscript,
 }
@@ -216,6 +223,8 @@ impl OpenChatState {
         self.message_ids.clear();
         self.message_snapshots.clear();
         self.editable_messages.clear();
+        self.kept.clear();
+        self.keepable.clear();
     }
 }
 
@@ -389,6 +398,7 @@ impl<S> MessageRow<S> {
         self.message == other.message
             && self.account == other.account
             && self.starred == other.starred
+            && self.notes == other.notes
             && self.album == other.album
             && self.collapsed == other.collapsed
             && self.audio == other.audio
@@ -548,6 +558,7 @@ pub struct NativeApplication {
     contact_share_generation: u64,
     /// Header menu for the open chat, relabelled by `sync_chat_menu`.
     chat_menu: gtk::gio::Menu,
+    chat_row_menu: gtk::glib::WeakRef<gtk::PopoverMenu>,
     /// (group, pinned, muted, archived) the chat menu was last labelled for.
     chat_menu_state: Option<(bool, bool, bool, bool)>,
     tray: Option<crate::native_tray::TrayHandle>,
@@ -580,6 +591,10 @@ pub struct NativeApplication {
     audio: AudioState,
     /// About row of the open contact-info dialog, filled when the fetch returns.
     info_about: Option<(String, adw::ActionRow)>,
+    /// Chat whose full-size picture was asked for and has not arrived yet.
+    info_dialog: gtk::glib::WeakRef<adw::Dialog>,
+    full_avatar: Option<dialogs::AvatarPreview>,
+    avatar_preview_request: u64,
     message_target: Option<String>,
     message_target_selection: Option<String>,
     /// Unread count when the chat was opened, until the first page pins it
@@ -651,6 +666,35 @@ pub enum ChatFilterInput {
     Archived(bool),
     Muted(bool),
     Kind(crate::native_chat_list::ChatKindFilter),
+}
+
+/// What the chat list's context menu can do to one chat.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ChatRowAction {
+    Info,
+    Pin(bool),
+    Mute(bool),
+    Archive(bool),
+    Close,
+    CopyTranscript,
+    Clear,
+    Delete,
+}
+
+/// A conversation in the account that was displayed when the action began.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ChatTarget {
+    account: crate::account::AccountId,
+    chat: String,
+}
+
+impl ChatTarget {
+    fn new(account: crate::account::AccountId, chat: impl Into<String>) -> Self {
+        Self {
+            account,
+            chat: chat.into(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -759,26 +803,38 @@ pub enum Input {
     EscapePressed,
     CloseChat,
     ToggleSelectedStar,
+    /// Keeps the selected disappearing message, or lets it run out again.
+    ToggleSelectedKeep,
+    /// Fetches the full-size picture of a chat and shows it.
+    ShowFullAvatar(String, dialogs::AvatarPreview),
+    /// Opens the context menu of the pointed or keyboard-focused chat.
+    ChatRowMenu {
+        target: ChatTarget,
+        x: f64,
+        y: f64,
+    },
+    /// An entry of that menu, for the chat it was opened on.
+    ChatRowAction(ChatTarget, ChatRowAction),
     /// Pins the selected message for this many seconds.
     PinSelected(u32),
     UnpinSelected,
     JumpToPinned,
-    /// Changes the open chat's disappearing-messages timer; 0 turns it off.
-    SetDisappearing(u32),
-    ShowStarred,
+    /// Changes the dialog's chat timer; 0 turns it off.
+    SetDisappearing(ChatTarget, u32),
+    ShowStarred(ChatTarget),
     OpenStarred {
-        chat: String,
+        target: ChatTarget,
         id: String,
     },
     DeleteSelected(bool),
     /// Asks to clear the open chat's messages, with a confirmation dialog.
     ClearSelectedChat,
     /// The clear was confirmed; sends `Command::ClearChat`.
-    ConfirmClearChat(crate::account::AccountId, String),
+    ConfirmClearChat(ChatTarget),
     /// Asks to delete the open chat entirely, with a confirmation dialog.
     DeleteSelectedChat,
     /// The delete was confirmed; sends `Command::DeleteChat`.
-    ConfirmDeleteChat(crate::account::AccountId, String),
+    ConfirmDeleteChat(ChatTarget),
     VoteOption(usize),
     CreatePoll(crate::model::PollDraft),
     Recording(crate::native_voice::RecordingIntent),
@@ -820,7 +876,7 @@ pub enum Input {
     ToggleSelectedPin,
     ToggleSelectedArchive,
     /// Flips this chat's archive state; archiving is confirmed first.
-    ArchiveChat(String),
+    SetChatArchived(ChatTarget, bool),
     ToggleSelectedMute,
     Close,
     Quit,
@@ -1206,9 +1262,17 @@ impl SimpleComponent for NativeApplication {
         let chat_selection = chats.selection_model.clone();
         let chat_key_sender = sender.clone();
         let key_targets = chat_targets.clone();
-        chat_keys.connect_key_pressed(move |_, key, _, _| {
+        chat_keys.connect_key_pressed(move |controller, key, _, _| {
             let selected = chat_selection.selected();
             let count = chat_selection.n_items();
+            let highlight = |position| {
+                chat_selection.set_selected(position);
+                if let Some(view) = controller.widget().and_downcast::<gtk::ListView>() {
+                    view.scroll_to(position, gtk::ListScrollFlags::FOCUS, None);
+                }
+                chat_key_sender.input(Input::HighlightChat(position));
+                gtk::glib::Propagation::Stop
+            };
             match key {
                 gtk::gdk::Key::Up if count > 0 => {
                     let current = if selected == gtk::INVALID_LIST_POSITION {
@@ -1216,9 +1280,7 @@ impl SimpleComponent for NativeApplication {
                     } else {
                         selected.saturating_sub(1)
                     };
-                    chat_selection.set_selected(current);
-                    chat_key_sender.input(Input::HighlightChat(current));
-                    gtk::glib::Propagation::Stop
+                    highlight(current)
                 }
                 gtk::gdk::Key::Down if count > 0 => {
                     let current = if selected == gtk::INVALID_LIST_POSITION {
@@ -1226,9 +1288,7 @@ impl SimpleComponent for NativeApplication {
                     } else {
                         (selected + 1).min(count - 1)
                     };
-                    chat_selection.set_selected(current);
-                    chat_key_sender.input(Input::HighlightChat(current));
-                    gtk::glib::Propagation::Stop
+                    highlight(current)
                 }
                 gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter if count > 0 => {
                     let current = if selected == gtk::INVALID_LIST_POSITION {
@@ -1411,6 +1471,7 @@ impl SimpleComponent for NativeApplication {
                 }
                 SidebarOutput::ShowCalls(active) => Input::ShowCalls(active),
                 SidebarOutput::SelectChat(account, chat) => Input::SelectChat(account, chat),
+                SidebarOutput::ChatMenu { target, x, y } => Input::ChatRowMenu { target, x, y },
                 SidebarOutput::NewChat => Input::ShowNewChat,
                 SidebarOutput::ShowLiveCall => Input::ShowLiveCall,
             });
@@ -1487,6 +1548,7 @@ impl SimpleComponent for NativeApplication {
             contacts: std::collections::HashMap::new(),
             contact_share_generation: 0,
             chat_menu: gtk::gio::Menu::new(),
+            chat_row_menu: gtk::glib::WeakRef::new(),
             chat_menu_state: None,
             tray: None,
             tray_state: crate::native_tray::TrayState::default(),
@@ -1528,6 +1590,9 @@ impl SimpleComponent for NativeApplication {
                 played_voice: Default::default(),
             },
             info_about: None,
+            info_dialog: Default::default(),
+            full_avatar: None,
+            avatar_preview_request: 0,
             message_target: None,
             message_target_selection: None,
             opened_unread: 0,
@@ -1612,6 +1677,7 @@ impl SimpleComponent for NativeApplication {
             .message_menu
             .connect_closed(|_| reaction_drawer::resume());
         install_message_actions(&root, &sender);
+        install_chat_row_actions(&root, &sender);
         let selection_keys = gtk::EventControllerKey::new();
         let selection_sender = sender.clone();
         selection_keys.connect_key_pressed(move |_, key, _, _| {
@@ -2065,6 +2131,14 @@ impl NativeApplication {
             gettext("Star")
         };
         respond.append(Some(&star), Some("message.star"));
+        if self.keep_offered(message) {
+            let keep = if self.open_chat.kept.contains(&message.id) {
+                gettext("Unkeep")
+            } else {
+                gettext("Keep")
+            };
+            respond.append(Some(&keep), Some("message.keep"));
+        }
         if pins::can_pin(message) {
             if self.is_pinned(&message.id) {
                 respond.append(Some(&gettext("Unpin")), Some("message.unpin"));
@@ -2318,6 +2392,8 @@ impl NativeApplication {
         }
         // Deferred updates land first, so the deletion changes only its row.
         self.flush_transcript();
+        self.open_chat.kept.remove(id);
+        self.open_chat.keepable.remove(id);
         if self.audio.playing_audio.as_deref() == Some(id) {
             self.audio.media.stop_playback();
             self.audio.playing_audio = None;
@@ -2531,6 +2607,10 @@ mod history_runtime_tests;
 #[cfg(test)]
 #[path = "application/viewer_runtime_tests.rs"]
 mod viewer_runtime_tests;
+
+#[cfg(test)]
+#[path = "application/avatar_preview_tests.rs"]
+mod avatar_preview_tests;
 
 #[cfg(test)]
 #[path = "application/poll_runtime_tests.rs"]

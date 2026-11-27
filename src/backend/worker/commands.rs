@@ -195,6 +195,7 @@ impl Worker {
             Command::LoadUntil { chat, id, before } => self.load_until(chat, id, before),
             Command::Download { chat, message } => self.download(chat, message),
             Command::FetchAvatar { id, full } => self.fetch_avatar(id, full),
+            Command::FetchAvatarPreview { id, request } => self.fetch_avatar_preview(id, request),
             Command::EditText {
                 chat,
                 id,
@@ -203,6 +204,7 @@ impl Worker {
             } => self.edit_text(chat, id, text, mentions),
             Command::Revoke { chat, id } => self.revoke(chat, id),
             Command::SetStarred { chat, id, starred } => self.set_starred(chat, id, starred),
+            Command::SetKept { chat, id, kept } => self.set_kept(chat, id, kept),
             Command::LoadStarred(chat) => match self.archive.starred_messages(&chat, STARRED_LIMIT)
             {
                 Ok(list) => self.emit(Event::StarredList(list)),
@@ -233,6 +235,16 @@ impl Worker {
                     },
                 ..
             }) => self.disappearing_set(chat, seconds, at, result),
+            Command::Completed(Completion {
+                done:
+                    Done::KeepSet {
+                        chat,
+                        id,
+                        kept,
+                        result,
+                    },
+                ..
+            }) => self.keep_set(chat, id, kept, result),
             Command::DeleteLocal { chat, id } => self.delete_message_everywhere(chat, id),
             // Starred messages stay until #20 adds a user-facing choice.
             Command::ClearChat(chat) => self.clear_chat_everywhere(chat),
@@ -1043,19 +1055,19 @@ impl Worker {
                     Done::AvatarFetched {
                         id,
                         full,
-
+                        request,
                         avatar_generation,
                         path,
                     },
             }) => {
-                if self
+                let current = self
                     .avatar_generations
                     .get(&(id.clone(), full))
                     .is_some_and(|generation| {
                         avatar_generation == generation.load(Ordering::Acquire)
-                    })
-                {
-                    self.emit(Event::Avatar { id, full, path });
+                    });
+                if current || request.is_some() {
+                    self.avatar_result(id, full, request, path.filter(|_| current));
                 }
             }
             Command::Completed(Completion {
@@ -1064,11 +1076,13 @@ impl Worker {
                     Done::AvatarFailed {
                         id,
                         full,
-
+                        request,
                         avatar_generation,
                     },
             }) => {
-                if self
+                if request.is_some() {
+                    self.avatar_result(id, full, request, None);
+                } else if self
                     .avatar_generations
                     .get(&(id.clone(), full))
                     .is_some_and(|generation| {

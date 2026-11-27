@@ -146,6 +146,10 @@ impl Archive {
                     thumbnail = COALESCE(?13, ?14), forwarded = ?15,
                     delivered_at = COALESCE(delivered_at, ?16),
                     read_at = COALESCE(read_at, ?17),
+                    kept = MAX(kept, COALESCE(
+                        (SELECT kept FROM messages WHERE chat = ?18 AND id = ?2), 0)),
+                    expires_at = COALESCE(expires_at,
+                        (SELECT expires_at FROM messages WHERE chat = ?18 AND id = ?2)),
                     sender = CASE WHEN sender = ?18 THEN ?1 ELSE sender END
                  WHERE chat = ?1 AND id = ?2",
                 params![
@@ -181,6 +185,7 @@ impl Archive {
                 sender = CASE WHEN sender = ?1 THEN ?2 ELSE sender END WHERE chat = ?1",
             params![alias, canonical],
         )?;
+        let merged_keeps = self.merge_keeps(alias, canonical)?;
         self.connection.execute(
             "INSERT INTO stars (chat, id, starred, updated_at)
              SELECT ?2, id, starred, updated_at FROM stars WHERE chat = ?1
@@ -252,7 +257,7 @@ impl Archive {
         if let Some(unread) = unread {
             self.set_unread(canonical, unread)?;
         }
-        Ok(changed > 0 || contacts > 0 || moved > 0 || merged_pins > 0)
+        Ok(changed > 0 || contacts > 0 || moved > 0 || merged_pins > 0 || merged_keeps)
     }
 
     fn merged_identity_unread(&self, alias: &str, canonical: &str) -> Result<u32> {

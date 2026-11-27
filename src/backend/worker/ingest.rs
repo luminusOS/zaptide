@@ -71,6 +71,14 @@ impl Worker {
         };
         let push_name = (!info.push_name.is_empty()).then(|| info.push_name.clone());
         let base = base_message(message);
+        if base.keep_in_chat_message.is_set() {
+            if let Some(change) =
+                super::expiry::keep_change(base, info.timestamp.timestamp_millis())
+            {
+                self.apply_live_keep(&chat, change, false);
+            }
+            return;
+        }
         if let Some(expiration) = base.get_ephemeral_expiration()
             && self
                 .archive
@@ -85,14 +93,6 @@ impl Worker {
 
         if base.pin_in_chat_message.is_set() {
             self.apply_pin(info, &chat, base);
-            return;
-        }
-        if let Some(keep) = base.keep_in_chat_message.as_option() {
-            if let Some(target) = keep.key.as_option().and_then(|key| key.id.as_deref()) {
-                // A message someone kept in a disappearing chat is not removed.
-                let kept = keep.keep_type == Some(wa::KeepType::KeepForAll);
-                let _ = self.archive.set_kept(&chat, target, kept);
-            }
             return;
         }
 
@@ -355,6 +355,21 @@ impl Worker {
         ) {
             self.confirm_answers_for(&chat, &message.id);
         }
+        let now = jiff::Timestamp::now().as_second();
+        if is_new
+            && crate::archive::expiration_deadline(message.timestamp, expiration)
+                .is_some_and(|deadline| deadline <= now)
+        {
+            // A pending Keep can make an overdue replay visible, but it did not just arrive.
+            match self.archive.keep_state(&chat, &message.id) {
+                Ok(Some((deadline, true))) => {
+                    self.emit_keep(&chat, message.id, true, deadline, false);
+                }
+                Ok(_) => {}
+                Err(_) => log::warn!("could not read Keep in Chat state for a replay"),
+            }
+            return;
+        }
         let read_elsewhere = is_new && !message.from_me && self.read_elsewhere.take(&message.id);
         let unread = is_new
             && !message.from_me
@@ -394,13 +409,24 @@ impl Worker {
             .is_ok_and(|targets| targets.contains(&stored.id));
         // Notify only for live incoming messages, not history replay.
         let incoming = (unread && !self.syncing).then(|| stored.clone());
-        self.emit(Event::Messages {
-            request: None,
-            chat: chat.clone(),
-            messages: vec![stored],
-            older: false,
-            complete: false,
-        });
+        if !is_new
+            && self
+                .archive
+                .keep_state(&chat, &stored.id)
+                .is_ok_and(|state| state.is_some_and(|(deadline, kept)| kept && deadline <= now))
+        {
+            // Refresh a loaded row without appending it outside the loaded history.
+            self.emit(Event::MessageUpdated(Box::new(stored)));
+        } else {
+            self.emit(Event::Messages {
+                request: None,
+                chat: chat.clone(),
+                messages: vec![stored],
+                keep_states: Vec::new(),
+                older: false,
+                complete: false,
+            });
+        }
         self.emit_chat(&chat);
         if refresh_pin {
             self.emit_pin(&chat);

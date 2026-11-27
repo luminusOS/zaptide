@@ -67,8 +67,37 @@ pub(super) enum SidebarOutput {
     SetMutedFilter(bool),
     ShowCalls(bool),
     SelectChat(crate::account::AccountId, String),
+    /// A popup for the pointed or focused row, in chat list coordinates.
+    ChatMenu {
+        target: super::ChatTarget,
+        x: f64,
+        y: f64,
+    },
     NewChat,
     ShowLiveCall,
+}
+
+fn chat_list_row(list: &gtk::ListView, mut widget: gtk::Widget) -> Option<gtk::Widget> {
+    if &widget == list.upcast_ref::<gtk::Widget>() {
+        return None;
+    }
+    loop {
+        let parent = widget.parent()?;
+        if &parent == list.upcast_ref::<gtk::Widget>() {
+            return Some(widget);
+        }
+        widget = parent;
+    }
+}
+
+fn row_target(row: &gtk::Widget, targets: &super::chats::ChatTargets) -> Option<super::ChatTarget> {
+    targets.for_id(&row.first_child()?.widget_name())
+}
+
+fn keyboard_menu_key(key: gtk::gdk::Key, modifiers: gtk::gdk::ModifierType) -> bool {
+    let modifiers = modifiers & gtk::accelerator_get_default_mod_mask();
+    (key == gtk::gdk::Key::Menu && modifiers.is_empty())
+        || (key == gtk::gdk::Key::F10 && modifiers == gtk::gdk::ModifierType::SHIFT_MASK)
 }
 
 #[relm4::component(pub(super))]
@@ -390,7 +419,7 @@ impl SimpleComponent for Sidebar {
             search_entry: None,
         };
         let chat_view = &init.chat_view;
-        let chat_targets = init.chat_targets;
+        let chat_targets = init.chat_targets.clone();
         chat_view.add_css_class("navigation-sidebar");
         chat_view.add_css_class("zaptide-chat-list");
         chat_view.set_single_click_activate(true);
@@ -402,6 +431,61 @@ impl SimpleComponent for Sidebar {
                     .unwrap();
             }
         });
+        let menu_gesture = gtk::GestureClick::builder().button(3).build();
+        let menu_sender = sender.clone();
+        let menu_view = chat_view.downgrade();
+        let menu_targets = init.chat_targets.clone();
+        menu_gesture.connect_pressed(move |gesture, _, x, y| {
+            let Some(list) = menu_view.upgrade() else {
+                return;
+            };
+            let Some(target) = list
+                .pick(x, y, gtk::PickFlags::DEFAULT)
+                .and_then(|widget| chat_list_row(&list, widget))
+                .and_then(|row| row_target(&row, &menu_targets.borrow()))
+            else {
+                return;
+            };
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            menu_sender
+                .output(SidebarOutput::ChatMenu { target, x, y })
+                .unwrap();
+        });
+        chat_view.add_controller(menu_gesture);
+        let menu_keys = gtk::EventControllerKey::new();
+        let menu_sender = sender.clone();
+        let menu_view = chat_view.downgrade();
+        let menu_targets = init.chat_targets;
+        menu_keys.connect_key_pressed(move |_, key, _, modifiers| {
+            if !keyboard_menu_key(key, modifiers) {
+                return gtk::glib::Propagation::Proceed;
+            }
+            let Some(list) = menu_view.upgrade() else {
+                return gtk::glib::Propagation::Proceed;
+            };
+            let Some(row) = list
+                .root()
+                .and_then(|root| root.focus())
+                .and_then(|focus| chat_list_row(&list, focus))
+            else {
+                return gtk::glib::Propagation::Proceed;
+            };
+            let (Some(target), Some(bounds)) = (
+                row_target(&row, &menu_targets.borrow()),
+                row.compute_bounds(&list),
+            ) else {
+                return gtk::glib::Propagation::Proceed;
+            };
+            menu_sender
+                .output(SidebarOutput::ChatMenu {
+                    target,
+                    x: f64::from(bounds.x() + bounds.width() / 2.0),
+                    y: f64::from(bounds.y() + bounds.height() / 2.0),
+                })
+                .unwrap();
+            gtk::glib::Propagation::Stop
+        });
+        chat_view.add_controller(menu_keys);
         let chat_coordinates = super::sidebar_coordinates::SidebarCoordinates::new(chat_view);
         let calls_view = &init.calls_view;
         let widgets = view_output!();
