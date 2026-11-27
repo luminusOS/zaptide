@@ -54,8 +54,10 @@ class RepositoryConfiguration(unittest.TestCase):
                     if s.get("uses", "").startswith("EmbarkStudios/cargo-deny-action@"))
         checks = step["with"]["command-arguments"].split()
         self.assertTrue({"advisories", "bans", "sources"} <= set(checks))
+        self.assertIn("--warn unmaintained", step["with"]["command-arguments"])
         self.assertNotIn("licenses", checks)
         deny = tomllib.loads((ROOT / "deny.toml").read_text())
+        self.assertEqual(deny["advisories"].get("unmaintained"), "all")
         lock = tomllib.loads((ROOT / "Cargo.lock").read_text())
         git = {re.split(r"[?#]", package["source"][len("git+"):])[0]
                for package in lock["package"]
