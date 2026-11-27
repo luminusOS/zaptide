@@ -132,7 +132,6 @@ png = "0.18"
 
 [patch.crates-io]
 icu_normalizer = { path = "vendor/icu_normalizer" }
-libsqlite3-sys = { path = "vendor/libsqlite3-sys-0.39.1" }
 
 [profile.release]
 lto = "thin"
