@@ -34,6 +34,7 @@ pub fn unread_label(count: usize) -> Option<String> {
 
 mod imp {
     use super::{TrayAction, TrayState, unread_label};
+    use crate::i18n::gettext;
     use ashpd::desktop::settings::{ColorScheme, Settings};
     use futures_util::StreamExt;
     use gtk::glib;
@@ -120,7 +121,7 @@ mod imp {
                 menu.push(MenuItem::Separator);
             }
             menu.extend([
-                Self::item("Show Window", "", TrayAction::ShowWindow),
+                Self::item(&gettext("Show Window"), "", TrayAction::ShowWindow),
                 MenuItem::Separator,
                 Self::item(
                     "New Chat…",
@@ -333,10 +334,51 @@ mod imp {
                         _ => None,
                     })
                     .expect("an enabled item");
-                assert_eq!(first.label, "Show Window", "unread={unread_chats}");
+                assert_eq!(
+                    first.label,
+                    super::gettext("Show Window"),
+                    "unread={unread_chats}"
+                );
                 (first.activate)(&mut tray);
                 assert_eq!(receiver.recv_sync(), Some(TrayAction::ShowWindow));
             }
+        }
+
+        #[test]
+        #[ignore = "compile the catalogues with just locale first"]
+        fn show_window_uses_the_selected_language() {
+            const CHILD: &str = "ZAPTIDE_TEST_TRAY_TRANSLATION_CHILD";
+            const TEST: &str = "native_tray::imp::tests::show_window_uses_the_selected_language";
+            if std::env::var_os(CHILD).is_none() {
+                let output = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", TEST, "--ignored"])
+                    .env(CHILD, "1")
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "{}\n{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+                return;
+            }
+
+            let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/locale");
+            crate::i18n::select_catalog_for_test(&dir, crate::settings::Language::PortugueseBrazil);
+            let (mut tray, receiver) = tray_with(0);
+            let first = tray
+                .menu()
+                .into_iter()
+                .find_map(|item| match item {
+                    MenuItem::Standard(item) if item.enabled => Some(item),
+                    _ => None,
+                })
+                .expect("an enabled item");
+            assert_eq!(first.label, "Mostrar janela");
+            (first.activate)(&mut tray);
+            assert_eq!(receiver.recv_sync(), Some(TrayAction::ShowWindow));
         }
 
         #[test]

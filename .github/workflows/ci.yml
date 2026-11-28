@@ -58,13 +58,27 @@ jobs:
         with:
           components: clippy
       - name: System dependencies
-        run: dnf install -y --setopt=install_weak_deps=False gcc gcc-c++ git gtk4-devel libadwaita-devel gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugins-bad-free gstreamer1-plugin-openh264 xorg-x11-server-Xvfb dbus-daemon python3 libXtst cmake libseccomp-devel fontconfig-devel perl make tar zstd
+        run: dnf install -y --setopt=install_weak_deps=False gcc gcc-c++ git gettext gtk4-devel libadwaita-devel gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugins-bad-free gstreamer1-plugin-openh264 xorg-x11-server-Xvfb dbus-daemon python3 libXtst cmake libseccomp-devel fontconfig-devel perl make tar zstd
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked --all-targets
         env:
           ZAPTIDE_REQUIRE_GST: '1'
+      - name: Translation regressions
+        shell: bash
+        run: |
+          for lang in $(cat po/LINGUAS); do
+            mkdir -p "target/locale/$lang/LC_MESSAGES"
+            msgfmt -o "target/locale/$lang/LC_MESSAGES/zaptide.mo" "po/$lang.po"
+          done
+          for test in \
+            i18n::tests::explicit_languages_use_their_own_catalogues \
+            native_tray::imp::tests::show_window_uses_the_selected_language; do
+            output=$(cargo test --locked --lib "$test" -- --ignored --exact)
+            printf '%s\n' "$output"
+            grep -F 'test result: ok. 1 passed;' <<< "$output"
+          done
       - name: GIF playback lifecycle
         env:
           GDK_BACKEND: x11

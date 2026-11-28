@@ -6,7 +6,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: zaptide\n"
 "Report-Msgid-Bugs-To: https://github.com/luminusOS/zaptide/issues\n"
-"POT-Creation-Date: 2026-11-26 22:30-0300\n"
+"POT-Creation-Date: 2026-11-28 14:42-0300\n"
 "PO-Revision-Date: 2026-10-13 17:25-0300\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -48,7 +48,7 @@ msgstr "Ir para a mensagem fixada"
 #: src/application/composer.rs:235 src/application/contact_sharing.rs:442
 #: src/application/dialogs.rs:56 src/application/dialogs.rs:97
 #: src/application/dialogs.rs:116 src/application/dialogs.rs:320
-#: src/application/dialogs.rs:518 src/application/dispatch.rs:602
+#: src/application/dialogs.rs:518 src/application/dispatch.rs:603
 #: src/application/document_safety.rs:196 src/application/link_page.rs:85
 msgid "Cancel"
 msgstr "Cancelar"
@@ -202,7 +202,7 @@ msgstr "Esta conversa não está mais disponível."
 
 #: src/application.rs:2499 src/application/accounts.rs:156
 #: src/application/accounts.rs:157 src/application/dispatch.rs:233
-#: src/application/dispatch.rs:234 src/application/dispatch.rs:370
+#: src/application/dispatch.rs:234 src/application/dispatch.rs:371
 #: src/application/dispatch/backend_events.rs:472
 msgid "Could not save preferences"
 msgstr "Não foi possível salvar as preferências"
@@ -543,7 +543,7 @@ msgid "Clear"
 msgstr "Limpar"
 
 #: src/application/chats.rs:1071 src/application/dialogs.rs:81
-#: src/application/dispatch.rs:603
+#: src/application/dispatch.rs:604
 msgid "Delete"
 msgstr "Apagar"
 
@@ -646,10 +646,10 @@ msgid "Sending contact"
 msgstr "Enviando contato"
 
 #: src/application/contact_sharing.rs:78 src/application/dispatch.rs:266
-#: src/application/dispatch.rs:413 src/application/dispatch.rs:793
-#: src/application/dispatch.rs:808 src/application/dispatch.rs:823
-#: src/application/dispatch.rs:830 src/application/dispatch.rs:1063
-#: src/application/dispatch.rs:1130
+#: src/application/dispatch.rs:414 src/application/dispatch.rs:794
+#: src/application/dispatch.rs:809 src/application/dispatch.rs:824
+#: src/application/dispatch.rs:831 src/application/dispatch.rs:1064
+#: src/application/dispatch.rs:1131
 msgid "Backend unavailable"
 msgstr "Serviço indisponível"
 
@@ -870,7 +870,7 @@ msgstr "Enviar mensagem a um número"
 msgid "New contact"
 msgstr "Novo contato"
 
-#: src/application/dialogs.rs:494 src/application/helpers.rs:80
+#: src/application/dialogs.rs:494 src/application/helpers.rs:81
 msgid "Country"
 msgstr "País"
 
@@ -1073,68 +1073,68 @@ msgstr "Iniciando o serviço"
 msgid "Refreshing messages"
 msgstr "Atualizando mensagens"
 
-#: src/application/dispatch.rs:393 src/application/dispatch.rs:394
-#: src/application/dispatch.rs:1122 src/application/dispatch.rs:1123
+#: src/application/dispatch.rs:394 src/application/dispatch.rs:395
+#: src/application/dispatch.rs:1123 src/application/dispatch.rs:1124
 msgid "Enter valid phone number with country code"
 msgstr "Informe um número de telefone válido, com o código do país"
 
-#: src/application/dispatch.rs:411
+#: src/application/dispatch.rs:412
 msgid "Checking contact on WhatsApp"
 msgstr "Verificando o contato no WhatsApp"
 
-#: src/application/dispatch.rs:595
+#: src/application/dispatch.rs:596
 msgid "Delete message?"
 msgstr "Apagar mensagem?"
 
-#: src/application/dispatch.rs:748
+#: src/application/dispatch.rs:749
 msgid "Phone number copied"
 msgstr "Número de telefone copiado"
 
-#: src/application/dispatch.rs:878
+#: src/application/dispatch.rs:879
 msgid "Not connected to WhatsApp"
 msgstr "Sem conexão com o WhatsApp"
 
-#: src/application/dispatch.rs:886 src/application/dispatch.rs:887
-#: src/application/dispatch.rs:897 src/application/themes.rs:105
+#: src/application/dispatch.rs:887 src/application/dispatch.rs:888
+#: src/application/dispatch.rs:898 src/application/themes.rs:105
 #: src/application/themes.rs:106 src/application/themes.rs:120
 #: src/application/themes.rs:121 src/application/themes.rs:145
 #: src/application/themes.rs:146
 msgid "Could not open themes folder"
 msgstr "Não foi possível abrir a pasta de temas"
 
-#: src/application/dispatch.rs:1045
+#: src/application/dispatch.rs:1046
 msgid "Reconnecting to WhatsApp"
 msgstr "Reconectando ao WhatsApp"
 
-#: src/application/dispatch.rs:1061
+#: src/application/dispatch.rs:1062
 msgid "Unlinking this computer"
 msgstr "Desvinculando este computador"
 
-#: src/application/dispatch.rs:1106 src/application/dispatch.rs:1114
+#: src/application/dispatch.rs:1107 src/application/dispatch.rs:1115
 msgid "Code copied"
 msgstr "Código copiado"
 
-#: src/application/dispatch.rs:1128
+#: src/application/dispatch.rs:1129
 msgid "Requesting a pairing code from WhatsApp"
 msgstr "Pedindo um código de pareamento ao WhatsApp"
 
-#: src/application/dispatch.rs:1197
+#: src/application/dispatch.rs:1198
 msgid "Contact opened"
 msgstr "Contato aberto"
 
-#: src/application/dispatch.rs:1258
+#: src/application/dispatch.rs:1259
 msgid "Could not save attachment"
 msgstr "Não foi possível salvar o anexo"
 
-#: src/application/dispatch.rs:1263
+#: src/application/dispatch.rs:1264
 msgid "Clipboard or portal action failed"
 msgstr "A área de transferência ou o portal falhou"
 
-#: src/application/dispatch.rs:1286
+#: src/application/dispatch.rs:1287
 msgid "Copied"
 msgstr "Copiado"
 
-#: src/application/dispatch.rs:1410
+#: src/application/dispatch.rs:1411
 msgid "Shutdown complete"
 msgstr "Encerramento concluído"
 
@@ -1202,19 +1202,19 @@ msgstr ""
 msgid "Open"
 msgstr "Abrir"
 
-#: src/application/helpers.rs:290
+#: src/application/helpers.rs:305
 msgid "Connection failed. Check your network and try again."
 msgstr "Falha na conexão. Verifique sua rede e tente novamente."
 
-#: src/application/helpers.rs:292
+#: src/application/helpers.rs:307
 msgid "Permission denied. Check access and try again."
 msgstr "Permissão negada. Verifique o acesso e tente novamente."
 
-#: src/application/helpers.rs:294
+#: src/application/helpers.rs:309
 msgid "Storage operation failed. Check available disk space."
 msgstr "Falha no armazenamento. Verifique o espaço disponível em disco."
 
-#: src/application/helpers.rs:296
+#: src/application/helpers.rs:311
 msgid "Action failed. Check connection and try again."
 msgstr "A ação falhou. Verifique a conexão e tente novamente."
 
@@ -2343,6 +2343,10 @@ msgstr "Após 15 minutos"
 #, rust-format
 msgid "Custom ({seconds} s)"
 msgstr "Personalizado ({seconds} s)"
+
+#: src/native_tray.rs:124 src/native_tray.rs:337
+msgid "Show Window"
+msgstr "Mostrar janela"
 
 #: src/services/media.rs:27
 msgid "Playing faster needs the GStreamer scaletempo plugin (gst-plugins-good)"

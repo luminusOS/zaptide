@@ -49,4 +49,5 @@ src/native_media_widgets/widget.rs
 src/native_notifications.rs
 src/native_notifications/adapters.rs
 src/native_preferences.rs
+src/native_tray.rs
 src/services/media.rs
