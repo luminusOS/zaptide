@@ -76,6 +76,12 @@ fn selected_catalog(dir: &Path, language: Language) -> std::io::Result<Option<Ca
 }
 
 #[cfg(test)]
+pub(crate) fn select_catalog_for_test(dir: &Path, language: Language) {
+    let catalog = selected_catalog(dir, language).unwrap().unwrap();
+    assert!(SELECTED.set(catalog).is_ok());
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -90,6 +96,16 @@ mod tests {
             (Language::PortugueseBrazil, "Encaminhar…"),
             (Language::Turkish, "İlet…"),
             (Language::English, "Forward…"),
+        ] {
+            let catalog = selected_catalog(&dir, language).unwrap().unwrap();
+            assert_eq!(catalog.gettext(source), label);
+        }
+        let source = "Show Window";
+        for (language, label) in [
+            (Language::Spanish, "Mostrar ventana"),
+            (Language::PortugueseBrazil, "Mostrar janela"),
+            (Language::Turkish, "Pencereyi göster"),
+            (Language::English, "Show Window"),
         ] {
             let catalog = selected_catalog(&dir, language).unwrap().unwrap();
             assert_eq!(catalog.gettext(source), label);

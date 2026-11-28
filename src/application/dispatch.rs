@@ -360,6 +360,7 @@ impl NativeApplication {
         match action {
             TrayAction::ToggleWindow if self.window.is_visible() => self.window.set_visible(false),
             TrayAction::ToggleWindow => self.window.present(),
+            TrayAction::ShowWindow => self.window.present(),
             TrayAction::NewChat => {
                 self.window.present();
                 sender.input(Input::ShowNewChat);
