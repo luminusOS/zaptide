@@ -6,6 +6,8 @@
 pub enum TrayAction {
     /// Clicking the icon shows or hides the window.
     ToggleWindow,
+    /// Shows and raises the window, without toggling it.
+    ShowWindow,
     NewChat,
     ToggleNotifications,
     Preferences,
@@ -118,6 +120,8 @@ mod imp {
                 menu.push(MenuItem::Separator);
             }
             menu.extend([
+                Self::item("Show Window", "", TrayAction::ShowWindow),
+                MenuItem::Separator,
                 Self::item(
                     "New Chat…",
                     "chat-message-new-symbolic",
@@ -300,6 +304,41 @@ mod imp {
 
     #[cfg(test)]
     mod tests {
+        use super::{Tray, TrayAction, TrayState};
+        use ksni::{MenuItem, Tray as _};
+
+        fn tray_with(unread_chats: usize) -> (Tray, relm4::Receiver<TrayAction>) {
+            let (actions, receiver) = relm4::channel::<TrayAction>();
+            let tray = Tray {
+                state: TrayState {
+                    unread_chats,
+                    notifications: true,
+                },
+                light_theme: true,
+                icon_dir: String::new(),
+                actions,
+            };
+            (tray, receiver)
+        }
+
+        #[test]
+        fn show_window_is_the_first_enabled_item() {
+            for unread_chats in [0, 3] {
+                let (mut tray, receiver) = tray_with(unread_chats);
+                let menu = tray.menu();
+                let first = menu
+                    .into_iter()
+                    .find_map(|item| match item {
+                        MenuItem::Standard(item) if item.enabled => Some(item),
+                        _ => None,
+                    })
+                    .expect("an enabled item");
+                assert_eq!(first.label, "Show Window", "unread={unread_chats}");
+                (first.activate)(&mut tray);
+                assert_eq!(receiver.recv_sync(), Some(TrayAction::ShowWindow));
+            }
+        }
+
         #[test]
         fn normal_and_unread_pixmaps_have_contrast_in_both_desktop_schemes() {
             let directory = tempfile::tempdir().unwrap();
